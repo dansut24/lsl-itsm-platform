@@ -1,5 +1,6 @@
 import {
   AlertCircle,
+  ArrowLeft,
   BookOpen,
   CalendarClock,
   CheckCircle2,
@@ -15,7 +16,9 @@ import {
   LogIn,
   LogOut,
   MessageSquarePlus,
+  Monitor,
   Moon,
+  Palette,
   Plus,
   Search,
   Send,
@@ -28,10 +31,11 @@ import {
   Users,
   Wrench
 } from 'lucide-react'
-import { loginProfiles, priorities, statusOptions, teams, types } from '../../data/demoData.jsx'
+import { accentOptions, loginProfiles, priorities, statusOptions, teams, types } from '../../data/demoData.jsx'
 import { priorityClass, statusClass } from '../../lib/workspace.js'
 
 export function LoginScreen({
+  accent,
   fillCredentials,
   loginError,
   loginForm,
@@ -45,7 +49,7 @@ export function LoginScreen({
   const activeProfile = loginProfiles[loginMode]
 
   return (
-    <main className="login-shell" data-theme={theme}>
+    <main className="login-shell" data-accent={accent} data-theme={theme}>
       <section className="login-panel">
         <div className="login-brand">
           <img src={`${import.meta.env.BASE_URL}hi5central-logo.png`} alt="Hi5Central" />
@@ -140,9 +144,13 @@ export function LoginScreen({
 }
 
 export function SelfServiceShell({
+  accent,
+  activeRequest,
   currentUser,
   handleLogout,
   handlePortalSubmit,
+  openPortalHome,
+  openPortalRequest,
   portalDraft,
   portalQuery,
   portalResults,
@@ -155,7 +163,7 @@ export function SelfServiceShell({
   toast,
 }) {
   return (
-    <div className="portal-shell" data-theme={theme}>
+    <div className="portal-shell" data-accent={accent} data-theme={theme}>
       <header className="portal-shell-header">
         <div className="portal-shell-brand">
           <img src={`${import.meta.env.BASE_URL}hi5central-logo.png`} alt="Hi5Central" />
@@ -181,17 +189,25 @@ export function SelfServiceShell({
       </header>
 
       <main className="portal-page">
-        <SelfServicePortal
-          currentUser={currentUser}
-          handlePortalSubmit={handlePortalSubmit}
-          portalDraft={portalDraft}
-          portalQuery={portalQuery}
-          portalResults={portalResults}
-          serviceCatalog={serviceCatalog}
-          setPortalDraft={setPortalDraft}
-          setPortalQuery={setPortalQuery}
-          tickets={tickets}
-        />
+        {activeRequest ? (
+          <PortalRequestView
+            onBack={openPortalHome}
+            request={activeRequest}
+          />
+        ) : (
+          <SelfServicePortal
+            currentUser={currentUser}
+            handlePortalSubmit={handlePortalSubmit}
+            openPortalRequest={openPortalRequest}
+            portalDraft={portalDraft}
+            portalQuery={portalQuery}
+            portalResults={portalResults}
+            serviceCatalog={serviceCatalog}
+            setPortalDraft={setPortalDraft}
+            setPortalQuery={setPortalQuery}
+            tickets={tickets}
+          />
+        )}
       </main>
 
       {toast && (
@@ -200,6 +216,51 @@ export function SelfServiceShell({
           {toast}
         </div>
       )}
+    </div>
+  )
+}
+
+
+export function PortalRequestView({ onBack, request }) {
+  return (
+    <div className="portal-request-detail">
+      <button className="text-button portal-back-button" onClick={onBack} type="button">
+        <ArrowLeft size={16} aria-hidden="true" />
+        Back to Self-Service
+      </button>
+
+      <section className="portal-request-card">
+        <div className="detail-header">
+          <div>
+            <span className="eyebrow">{request.id}</span>
+            <h2>{request.title}</h2>
+          </div>
+          <span className={`status-pill ${statusClass(request.status)}`}>{request.status}</span>
+        </div>
+
+        <div className="detail-grid">
+          <InfoItem label="Type" value={request.type} icon={Inbox} />
+          <InfoItem label="Service" value={request.service} icon={Server} />
+          <InfoItem label="Priority" value={request.priority} icon={CircleGauge} />
+          <InfoItem label="Updated" value={request.updated} icon={Clock3} />
+        </div>
+
+        <p className="detail-copy">{request.description}</p>
+
+        <div className="next-step">
+          <strong>What happens next</strong>
+          <span>{request.nextStep}</span>
+        </div>
+
+        <div className="timeline">
+          {request.comments.map((comment, index) => (
+            <div className="timeline-item" key={`${request.id}-portal-${index}-${comment}`}>
+              <span></span>
+              <p>{comment}</p>
+            </div>
+          ))}
+        </div>
+      </section>
     </div>
   )
 }
@@ -323,6 +384,7 @@ export function DashboardView({ metrics, openRecordTab, openTab, tickets }) {
 export function TicketRecordView({
   addComment,
   newComment,
+  openAssetByName,
   selectedTicket,
   setNewComment,
   updateTicket,
@@ -375,7 +437,13 @@ export function TicketRecordView({
           <span className="eyebrow">Linked CIs</span>
           <div className="linked-ci-list">
             {(selectedTicket.linkedAssets?.length ? selectedTicket.linkedAssets : ['No CI linked']).map((asset) => (
-              <span key={asset}>{asset}</span>
+              asset === 'No CI linked' ? (
+                <span key={asset}>{asset}</span>
+              ) : (
+                <button className="linked-ci-button" key={asset} onClick={() => openAssetByName?.(asset)} type="button">
+                  {asset}
+                </button>
+              )
             ))}
           </div>
         </div>
@@ -494,6 +562,7 @@ export function TicketsView({
   handleTicketSubmit,
   moduleConfig,
   newComment,
+  openNewRecord,
   openRecordTab,
   query,
   selectedTicket,
@@ -523,7 +592,11 @@ export function TicketsView({
             <span className="eyebrow">{filteredTickets.length} of {moduleTickets.length} {recordLabel}</span>
             <h2>{queueTitle}</h2>
           </div>
-          <button className="primary-action compact" type="submit" form="new-ticket-form">
+          <button
+            className="primary-action compact"
+            onClick={() => openNewRecord?.(moduleConfig?.type || ticketDraft.type)}
+            type="button"
+          >
             <Plus size={16} aria-hidden="true" />
             {createLabel}
           </button>
@@ -656,8 +729,116 @@ export function TicketsView({
               value={ticketDraft.description}
             />
           </label>
+          <button className="primary-action compact" type="submit">
+            <Plus size={16} aria-hidden="true" />
+            Quick create
+          </button>
         </form>
       </aside>
+    </div>
+  )
+}
+
+
+export function NewRecordView({
+  handleTicketSubmit,
+  recordType,
+  setTicketDraft,
+  ticketDraft,
+}) {
+  const title = {
+    Incident: 'New Incident',
+    'Service Request': 'New Service Request',
+    Problem: 'New Problem',
+    Change: 'New Change',
+  }[recordType] || 'New Record'
+
+  return (
+    <div className="new-record-page">
+      <section className="new-record-panel">
+        <div className="section-heading">
+          <div>
+            <span className="eyebrow">Create record</span>
+            <h2>{title}</h2>
+          </div>
+          <span className="type-chip">{recordType}</span>
+        </div>
+
+        <form className="new-record-form" onSubmit={handleTicketSubmit}>
+          <div className="form-row">
+            <label>
+              Priority
+              <select
+                value={ticketDraft.priority}
+                onChange={(event) => setTicketDraft({ ...ticketDraft, priority: event.target.value })}
+              >
+                {priorities.map((priority) => (
+                  <option key={priority}>{priority}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Requester
+              <input
+                onChange={(event) => setTicketDraft({ ...ticketDraft, requester: event.target.value })}
+                placeholder="Person or team"
+                value={ticketDraft.requester}
+              />
+            </label>
+          </div>
+
+          <label>
+            Summary
+            <input
+              autoFocus
+              onChange={(event) => setTicketDraft({ ...ticketDraft, title: event.target.value })}
+              placeholder="What needs attention?"
+              value={ticketDraft.title}
+            />
+          </label>
+
+          <div className="form-row">
+            <label>
+              Service
+              <select
+                value={ticketDraft.service}
+                onChange={(event) => setTicketDraft({ ...ticketDraft, service: event.target.value })}
+              >
+                {['Collaboration', 'Identity', 'Hardware', 'Network Security', 'Wireless', 'Access'].map((service) => (
+                  <option key={service}>{service}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Team
+              <select
+                value={ticketDraft.team}
+                onChange={(event) => setTicketDraft({ ...ticketDraft, team: event.target.value })}
+              >
+                {teams.map((team) => (
+                  <option key={team}>{team}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <label>
+            Description
+            <textarea
+              onChange={(event) => setTicketDraft({ ...ticketDraft, description: event.target.value })}
+              placeholder="Impact, symptoms, desired outcome"
+              value={ticketDraft.description}
+            />
+          </label>
+
+          <div className="new-record-actions">
+            <button className="primary-action" type="submit">
+              <Plus size={17} aria-hidden="true" />
+              Create {recordType}
+            </button>
+          </div>
+        </form>
+      </section>
     </div>
   )
 }
@@ -665,6 +846,7 @@ export function TicketsView({
 export function SelfServicePortal({
   currentUser,
   handlePortalSubmit,
+  openPortalRequest,
   portalDraft,
   portalQuery,
   portalResults,
@@ -735,7 +917,7 @@ export function SelfServicePortal({
               autoComplete="email"
               inputMode="email"
               onChange={(event) => setPortalDraft({ ...portalDraft, email: event.target.value })}
-              placeholder="you@lsl.co.uk"
+              placeholder="you@hi5central.com"
               type="text"
               value={requesterEmail}
             />
@@ -817,11 +999,16 @@ export function SelfServicePortal({
             </div>
             <div className="mini-request-list">
               {visibleRequests.map((ticket) => (
-                <div className="mini-request" key={ticket.id}>
+                <button
+                  className="mini-request mini-request-button"
+                  key={ticket.id}
+                  onClick={() => openPortalRequest?.(ticket)}
+                  type="button"
+                >
                   <span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span>
                   <strong>{ticket.title}</strong>
                   <small>{ticket.id} - {ticket.updated}</small>
-                </div>
+                </button>
               ))}
             </div>
           </div>
@@ -831,9 +1018,19 @@ export function SelfServicePortal({
   )
 }
 
-export function ChangesView({ approveChange, openRecordTab, tickets }) {
+export function ChangesView({ approveChange, openNewRecord, openRecordTab, tickets }) {
   return (
     <div className="changes-view">
+      <div className="changes-toolbar">
+        <div>
+          <span className="eyebrow">Change Management</span>
+          <h2>Planned Changes</h2>
+        </div>
+        <button className="primary-action compact" onClick={() => openNewRecord('Change')} type="button">
+          <Plus size={16} aria-hidden="true" />
+          New Change
+        </button>
+      </div>
       {tickets.map((ticket) => (
         <article className="change-card" key={ticket.id}>
           <div className="change-main">
@@ -866,7 +1063,7 @@ export function ChangesView({ approveChange, openRecordTab, tickets }) {
   )
 }
 
-export function CmdbView({ assets, tickets }) {
+export function CmdbView({ assets, openAsset, tickets }) {
   return (
     <div className="cmdb-view">
       <section className="asset-grid">
@@ -889,6 +1086,10 @@ export function CmdbView({ assets, tickets }) {
                 <span key={item}>{item}</span>
               ))}
             </div>
+            <button className="text-button asset-open-button" onClick={() => openAsset(asset)} type="button">
+              Open CI
+              <ChevronRight size={16} aria-hidden="true" />
+            </button>
           </article>
         ))}
       </section>
@@ -918,7 +1119,90 @@ export function CmdbView({ assets, tickets }) {
   )
 }
 
-export function KnowledgeView({ portalQuery, portalResults, setPortalQuery }) {
+
+export function CmdbRecordView({ asset, openRecordTab, tickets }) {
+  const linkedTickets = tickets.filter((ticket) => ticket.linkedAssets?.includes(asset.name) || ticket.linkedAssets?.includes(asset.id))
+
+  return (
+    <div className="entity-detail-view">
+      <section className="entity-detail-card">
+        <div className="detail-header">
+          <div>
+            <span className="eyebrow">{asset.className}</span>
+            <h2>{asset.name}</h2>
+          </div>
+          <span className={`health-pill ${asset.health.toLowerCase().replace(/\s+/g, '-')}`}>{asset.health}</span>
+        </div>
+
+        <div className="detail-grid">
+          <InfoItem label="CI identifier" value={asset.id} icon={Server} />
+          <InfoItem label="Owner" value={asset.owner} icon={Users} />
+          <InfoItem label="Open incidents" value={asset.incidents} icon={AlertCircle} />
+          <InfoItem label="Relationships" value={asset.related.length} icon={CircleGauge} />
+        </div>
+
+        <div className="record-context-block">
+          <span className="eyebrow">Relationships</span>
+          <div className="linked-ci-list">
+            {asset.related.map((item) => (
+              <span key={item}>{item}</span>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="entity-related-card">
+        <div className="section-heading">
+          <div>
+            <span className="eyebrow">Operational context</span>
+            <h2>Linked Records</h2>
+          </div>
+        </div>
+        <div className="quick-record-list">
+          {linkedTickets.length ? linkedTickets.map((ticket) => (
+            <button key={ticket.id} onClick={() => openRecordTab(ticket)} type="button">
+              <span>{ticket.id}</span>
+              <strong>{ticket.title}</strong>
+              <small>{ticket.status} - {ticket.team}</small>
+            </button>
+          )) : (
+            <div className="empty-inline-state">No records are linked to this CI in the prototype data.</div>
+          )}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+export function KnowledgeArticleView({ article }) {
+  return (
+    <div className="knowledge-article-view">
+      <article className="knowledge-article-card">
+        <div className="knowledge-article-heading">
+          <BookOpen size={24} aria-hidden="true" />
+          <div>
+            <span className="eyebrow">{article.category}</span>
+            <h2>{article.title}</h2>
+            <p>{article.updated} · {article.reads} reads</p>
+          </div>
+        </div>
+
+        <p className="knowledge-summary">{article.summary}</p>
+
+        <div className="article-steps">
+          <span className="eyebrow">Guidance</span>
+          <ol>
+            {article.steps.map((step) => (
+              <li key={step}>{step}</li>
+            ))}
+          </ol>
+        </div>
+      </article>
+    </div>
+  )
+}
+
+export function KnowledgeView({ openArticle, portalQuery, portalResults, setPortalQuery }) {
   return (
     <div className="knowledge-view">
       <section className="portal-hero slim">
@@ -943,7 +1227,7 @@ export function KnowledgeView({ portalQuery, portalResults, setPortalQuery }) {
             <span className="eyebrow">{article.category}</span>
             <h2>{article.title}</h2>
             <p>{article.reads} reads - {article.updated}</p>
-            <button className="text-button" type="button">
+            <button className="text-button" onClick={() => openArticle(article)} type="button">
               Open article
               <ChevronRight size={16} aria-hidden="true" />
             </button>
@@ -1002,90 +1286,159 @@ export function ReportsView({ metrics, tickets }) {
 }
 
 export function SettingsView({
+  accent,
   density,
+  openSettingsSection,
+  resolvedTheme,
   session,
+  setAccent,
   setDensity,
   setSidebarMode,
   setTheme,
+  settingsSection = 'appearance',
   sidebarMode,
   theme,
 }) {
+  const sections = [
+    { id: 'appearance', label: 'Appearance' },
+    { id: 'workspace', label: 'Workspace' },
+    { id: 'profile', label: 'Profile' },
+  ]
+
   return (
-    <div className="settings-view">
-      <section className="settings-panel">
-        <div className="section-heading">
-          <div>
-            <span className="eyebrow">Preferences</span>
-            <h2>Workspace Settings</h2>
-          </div>
-          <SlidersHorizontal size={20} aria-hidden="true" />
-        </div>
+    <div className="settings-view settings-routed-view">
+      <nav className="settings-subnav" aria-label="Settings sections">
+        {sections.map((section) => (
+          <button
+            className={settingsSection === section.id ? 'active' : ''}
+            key={section.id}
+            onClick={() => openSettingsSection(section.id)}
+            type="button"
+          >
+            {section.label}
+          </button>
+        ))}
+      </nav>
 
-        <div className="setting-row">
-          <div>
-            <strong>Theme</strong>
-            <span>Switch between light and dark mode.</span>
+      {settingsSection === 'appearance' && (
+        <section className="settings-panel">
+          <div className="section-heading">
+            <div>
+              <span className="eyebrow">Personalisation</span>
+              <h2>Appearance</h2>
+            </div>
+            <Palette size={20} aria-hidden="true" />
           </div>
-          <div className="segmented-control">
-            <button className={theme === 'light' ? 'active' : ''} onClick={() => setTheme('light')} type="button">
-              <Sun size={15} aria-hidden="true" />
-              Light
-            </button>
-            <button className={theme === 'dark' ? 'active' : ''} onClick={() => setTheme('dark')} type="button">
-              <Moon size={15} aria-hidden="true" />
-              Dark
-            </button>
-          </div>
-        </div>
 
-        <div className="setting-row">
-          <div>
-            <strong>Sidebar</strong>
-            <span>Choose the left navigation layout.</span>
+          <div className="setting-row">
+            <div>
+              <strong>Theme</strong>
+              <span>Follow your device automatically, or force a light or dark workspace.</span>
+              <small>Current appearance: {resolvedTheme}</small>
+            </div>
+            <div className="segmented-control three">
+              <button className={theme === 'system' ? 'active' : ''} onClick={() => setTheme('system')} type="button">
+                <Monitor size={15} aria-hidden="true" />
+                System
+              </button>
+              <button className={theme === 'light' ? 'active' : ''} onClick={() => setTheme('light')} type="button">
+                <Sun size={15} aria-hidden="true" />
+                Light
+              </button>
+              <button className={theme === 'dark' ? 'active' : ''} onClick={() => setTheme('dark')} type="button">
+                <Moon size={15} aria-hidden="true" />
+                Dark
+              </button>
+            </div>
           </div>
-          <div className="segmented-control three">
-            <button className={sidebarMode === 'expanded' ? 'active' : ''} onClick={() => setSidebarMode('expanded')} type="button">
-              Expanded
-            </button>
-            <button className={sidebarMode === 'collapsed' ? 'active' : ''} onClick={() => setSidebarMode('collapsed')} type="button">
-              Collapsed
-            </button>
-            <button className={sidebarMode === 'hidden' ? 'active' : ''} onClick={() => setSidebarMode('hidden')} type="button">
-              Hidden
-            </button>
-          </div>
-        </div>
 
-        <div className="setting-row">
-          <div>
-            <strong>Density</strong>
-            <span>Choose how much information is visible in each viewport.</span>
+          <div className="setting-row accent-setting-row">
+            <div>
+              <strong>Accent colour</strong>
+              <span>Change highlights, active tabs, avatars, and primary workspace accents.</span>
+            </div>
+            <div className="accent-picker" role="group" aria-label="Accent colour">
+              {accentOptions.map((option) => (
+                <button
+                  aria-label={`${option.label} accent`}
+                  aria-pressed={accent === option.id}
+                  className={accent === option.id ? 'accent-swatch active' : 'accent-swatch'}
+                  key={option.id}
+                  onClick={() => setAccent(option.id)}
+                  style={{ '--swatch': option.value }}
+                  title={option.label}
+                  type="button"
+                >
+                  <span></span>
+                  <small>{option.label}</small>
+                </button>
+              ))}
+            </div>
           </div>
-          <div className="segmented-control">
-            <button className={density === 'comfortable' ? 'active' : ''} onClick={() => setDensity('comfortable')} type="button">
-              Comfortable
-            </button>
-            <button className={density === 'compact' ? 'active' : ''} onClick={() => setDensity('compact')} type="button">
-              Compact
-            </button>
-          </div>
-        </div>
-      </section>
+        </section>
+      )}
 
-      <section className="settings-panel">
-        <div className="section-heading">
-          <div>
-            <span className="eyebrow">Signed in</span>
-            <h2>{session.name}</h2>
+      {settingsSection === 'workspace' && (
+        <section className="settings-panel">
+          <div className="section-heading">
+            <div>
+              <span className="eyebrow">Workspace</span>
+              <h2>Layout & Density</h2>
+            </div>
+            <SlidersHorizontal size={20} aria-hidden="true" />
           </div>
-          <span className="avatar-large">{session.initials}</span>
-        </div>
-        <div className="credential-readout">
-          <span>{loginProfiles[session.profile].label}</span>
-          <strong>{session.username}</strong>
-          <small>Prototype authentication is backed by baked-in credentials only.</small>
-        </div>
-      </section>
+
+          <div className="setting-row">
+            <div>
+              <strong>Sidebar</strong>
+              <span>Choose the left navigation layout.</span>
+            </div>
+            <div className="segmented-control three">
+              <button className={sidebarMode === 'expanded' ? 'active' : ''} onClick={() => setSidebarMode('expanded')} type="button">
+                Expanded
+              </button>
+              <button className={sidebarMode === 'collapsed' ? 'active' : ''} onClick={() => setSidebarMode('collapsed')} type="button">
+                Collapsed
+              </button>
+              <button className={sidebarMode === 'hidden' ? 'active' : ''} onClick={() => setSidebarMode('hidden')} type="button">
+                Hidden
+              </button>
+            </div>
+          </div>
+
+          <div className="setting-row">
+            <div>
+              <strong>Density</strong>
+              <span>Choose how much information is visible in each viewport.</span>
+            </div>
+            <div className="segmented-control">
+              <button className={density === 'comfortable' ? 'active' : ''} onClick={() => setDensity('comfortable')} type="button">
+                Comfortable
+              </button>
+              <button className={density === 'compact' ? 'active' : ''} onClick={() => setDensity('compact')} type="button">
+                Compact
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {settingsSection === 'profile' && (
+        <section className="settings-panel">
+          <div className="section-heading">
+            <div>
+              <span className="eyebrow">Signed in</span>
+              <h2>{session.name}</h2>
+            </div>
+            <span className="avatar-large">{session.initials}</span>
+          </div>
+          <div className="credential-readout">
+            <span>{loginProfiles[session.profile].label}</span>
+            <strong>{session.username}</strong>
+            <small>Prototype authentication is backed by baked-in credentials only.</small>
+          </div>
+        </section>
+      )}
     </div>
   )
 }
