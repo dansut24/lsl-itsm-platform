@@ -32,7 +32,7 @@ import {
   Users,
   Wrench
 } from 'lucide-react'
-import { accentOptions, loginProfiles, priorities, statusOptions, teams, types } from '../../data/demoData.jsx'
+import { accentOptions, demoUsers, incidentServices, loginProfiles, priorities, statusOptions, teams, types } from '../../data/demoData.jsx'
 import { priorityClass, statusClass } from '../../lib/workspace.js'
 
 export function LoginScreen({
@@ -549,6 +549,16 @@ export function TicketRecordView({
           </div>
         </div>
 
+        {selectedTicket.requesterEmail && (
+          <div className="record-context-block requester-record-context">
+            <span className="eyebrow">Requester</span>
+            <strong>{selectedTicket.requester}</strong>
+            <span>{selectedTicket.requesterEmail}</span>
+            {selectedTicket.requesterStaffNumber && <small>{selectedTicket.requesterStaffNumber}</small>}
+            {selectedTicket.requesterDepartment && <small>{selectedTicket.requesterDepartment}</small>}
+          </div>
+        )}
+
         <div className="record-context-block">
           <span className="eyebrow">Requester Location</span>
           <strong>{selectedTicket.location}</strong>
@@ -581,6 +591,15 @@ function TicketDetailContent({
         <InfoItem label="Team" value={ticket.team} icon={Users} />
         <InfoItem label="Assignee" value={ticket.assignee} icon={Headphones} />
       </div>
+
+      {(ticket.category || ticket.impact || ticket.urgency) && (
+        <div className="detail-grid incident-classification-grid">
+          {ticket.category && <InfoItem label="Category" value={ticket.category} icon={ClipboardCheck} />}
+          {ticket.impact && <InfoItem label="Impact" value={ticket.impact} icon={CircleGauge} />}
+          {ticket.urgency && <InfoItem label="Urgency" value={ticket.urgency} icon={Clock3} />}
+          <InfoItem label="Priority" value={ticket.priority} icon={AlertCircle} />
+        </div>
+      )}
 
       <p className="detail-copy">{ticket.description}</p>
 
@@ -841,7 +860,348 @@ export function TicketsView({
 }
 
 
-export function NewRecordView({
+function incidentPriority(impact, urgency) {
+  const score = {
+    High: 3,
+    Medium: 2,
+    Low: 1,
+  }
+  const total = (score[impact] || 2) + (score[urgency] || 2)
+  if (impact === 'High' && urgency === 'High') return 'Critical'
+  if (total >= 5) return 'High'
+  if (total >= 4) return 'Medium'
+  return 'Low'
+}
+
+function userInitials(name) {
+  return String(name || '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join('')
+    .toUpperCase()
+}
+
+function IncidentIntakeView({
+  handleTicketSubmit,
+  hasUnsavedChanges,
+  setTicketDraft,
+  ticketDraft,
+}) {
+  const [userQuery, setUserQuery] = useState('')
+  const selectedUser = ticketDraft.requesterId
+    ? demoUsers.find((user) => user.id === ticketDraft.requesterId)
+    : null
+  const normalizedQuery = userQuery.trim().toLowerCase()
+  const userResults = normalizedQuery
+    ? demoUsers
+        .filter((user) =>
+          [
+            user.name,
+            user.email,
+            user.staffNumber,
+            user.department,
+            user.location,
+          ]
+            .join(' ')
+            .toLowerCase()
+            .includes(normalizedQuery),
+        )
+        .slice(0, 6)
+    : []
+
+  const selectUser = (user) => {
+    setTicketDraft({
+      ...ticketDraft,
+      type: 'Incident',
+      requesterId: user.id,
+      requester: user.name,
+      requesterEmail: user.email,
+      requesterStaffNumber: user.staffNumber,
+      requesterJobTitle: user.jobTitle,
+      requesterDepartment: user.department,
+      requesterLocation: user.location,
+      requesterManager: user.manager,
+    })
+    setUserQuery('')
+  }
+
+  const clearUser = () => {
+    setTicketDraft({
+      ...ticketDraft,
+      requesterId: '',
+      requester: '',
+      requesterEmail: '',
+      requesterStaffNumber: '',
+      requesterJobTitle: '',
+      requesterDepartment: '',
+      requesterLocation: '',
+      requesterManager: '',
+    })
+    setUserQuery('')
+  }
+
+  const updateIncidentField = (field, value) => {
+    const next = { ...ticketDraft, [field]: value }
+    if (field === 'impact' || field === 'urgency') {
+      next.priority = incidentPriority(
+        field === 'impact' ? value : next.impact,
+        field === 'urgency' ? value : next.urgency,
+      )
+    }
+    if (field === 'service') {
+      next.category = incidentServices.find((service) => service.name === value)?.categories[0] || ''
+    }
+    setTicketDraft(next)
+  }
+
+  const activeService =
+    incidentServices.find((service) => service.name === ticketDraft.service) || incidentServices[0]
+
+  return (
+    <div className="new-record-page incident-intake-page">
+      <section className="incident-intake-shell">
+        <header className="incident-intake-header">
+          <div>
+            <span className="eyebrow">Create incident</span>
+            <h2>New Incident</h2>
+            <p>Identify the affected user, capture the issue, then submit it into the same workspace tab.</p>
+          </div>
+          {hasUnsavedChanges && <span className="draft-status">Unsaved changes</span>}
+        </header>
+
+        <ol className="incident-stepper" aria-label="Incident creation progress">
+          <li className="complete">
+            <span>1</span>
+            <div>
+              <strong>Find user</strong>
+              <small>Name, email or staff number</small>
+            </div>
+          </li>
+          <li className={selectedUser ? 'active' : ''}>
+            <span>2</span>
+            <div>
+              <strong>Incident details</strong>
+              <small>Impact and symptoms</small>
+            </div>
+          </li>
+          <li>
+            <span>3</span>
+            <div>
+              <strong>Submitted</strong>
+              <small>Incident workspace</small>
+            </div>
+          </li>
+        </ol>
+
+        {!selectedUser ? (
+          <section className="incident-stage-card user-lookup-stage">
+            <div className="incident-stage-heading">
+              <span className="stage-number">1</span>
+              <div>
+                <span className="eyebrow">Affected user</span>
+                <h3>Who is experiencing the issue?</h3>
+                <p>Search the people directory before recording any incident information.</p>
+              </div>
+            </div>
+
+            <label className="incident-user-search">
+              <Search size={20} aria-hidden="true" />
+              <input
+                autoFocus
+                onChange={(event) => setUserQuery(event.target.value)}
+                placeholder="Search name, email, staff number, department..."
+                type="search"
+                value={userQuery}
+              />
+            </label>
+
+            {!normalizedQuery ? (
+              <div className="incident-search-empty">
+                <UserRound size={28} aria-hidden="true" />
+                <strong>Start typing to find a user</strong>
+                <span>Try “Eleanor”, “HC-10482” or an email address.</span>
+              </div>
+            ) : userResults.length ? (
+              <div className="incident-user-results" aria-live="polite">
+                {userResults.map((user) => (
+                  <button key={user.id} onClick={() => selectUser(user)} type="button">
+                    <span className="directory-avatar">{userInitials(user.name)}</span>
+                    <span className="directory-primary">
+                      <strong>{user.name}</strong>
+                      <small>{user.email}</small>
+                    </span>
+                    <span className="directory-secondary">
+                      <strong>{user.staffNumber}</strong>
+                      <small>{user.jobTitle}</small>
+                    </span>
+                    <span className="directory-location">
+                      <strong>{user.department}</strong>
+                      <small>{user.location}</small>
+                    </span>
+                    <ChevronRight size={18} aria-hidden="true" />
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="incident-search-empty">
+                <Search size={28} aria-hidden="true" />
+                <strong>No matching users</strong>
+                <span>Check the spelling, email address or staff number and try again.</span>
+              </div>
+            )}
+          </section>
+        ) : (
+          <div className="incident-details-layout">
+            <aside className="incident-requester-card">
+              <div className="incident-stage-heading compact">
+                <span className="stage-number complete">1</span>
+                <div>
+                  <span className="eyebrow">Affected user</span>
+                  <h3>{selectedUser.name}</h3>
+                </div>
+              </div>
+
+              <div className="requester-profile">
+                <span className="directory-avatar large">{userInitials(selectedUser.name)}</span>
+                <div>
+                  <strong>{selectedUser.name}</strong>
+                  <span>{selectedUser.jobTitle}</span>
+                </div>
+              </div>
+
+              <dl className="requester-facts">
+                <div><dt>Email</dt><dd>{selectedUser.email}</dd></div>
+                <div><dt>Staff number</dt><dd>{selectedUser.staffNumber}</dd></div>
+                <div><dt>Department</dt><dd>{selectedUser.department}</dd></div>
+                <div><dt>Location</dt><dd>{selectedUser.location}</dd></div>
+                <div><dt>Manager</dt><dd>{selectedUser.manager}</dd></div>
+              </dl>
+
+              <button className="secondary-action full-width" onClick={clearUser} type="button">
+                Change user
+              </button>
+            </aside>
+
+            <section className="incident-stage-card incident-form-stage">
+              <div className="incident-stage-heading">
+                <span className="stage-number">2</span>
+                <div>
+                  <span className="eyebrow">Incident information</span>
+                  <h3>What is happening?</h3>
+                  <p>Capture enough detail for triage without leaving this workspace.</p>
+                </div>
+              </div>
+
+              <form className="new-record-form incident-form" onSubmit={handleTicketSubmit}>
+                <label>
+                  Short description
+                  <input
+                    autoFocus
+                    onChange={(event) => updateIncidentField('title', event.target.value)}
+                    placeholder="Briefly describe the issue"
+                    value={ticketDraft.title}
+                  />
+                </label>
+
+                <label>
+                  Description
+                  <textarea
+                    onChange={(event) => updateIncidentField('description', event.target.value)}
+                    placeholder="Symptoms, business impact, error messages and what the user was trying to do"
+                    value={ticketDraft.description}
+                  />
+                </label>
+
+                <div className="form-row">
+                  <label>
+                    Service
+                    <select
+                      onChange={(event) => updateIncidentField('service', event.target.value)}
+                      value={ticketDraft.service}
+                    >
+                      {incidentServices.map((service) => (
+                        <option key={service.name}>{service.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Category
+                    <select
+                      onChange={(event) => updateIncidentField('category', event.target.value)}
+                      value={ticketDraft.category}
+                    >
+                      {activeService.categories.map((category) => (
+                        <option key={category}>{category}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                <div className="incident-priority-grid">
+                  <label>
+                    Impact
+                    <select
+                      onChange={(event) => updateIncidentField('impact', event.target.value)}
+                      value={ticketDraft.impact}
+                    >
+                      {['High', 'Medium', 'Low'].map((value) => <option key={value}>{value}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    Urgency
+                    <select
+                      onChange={(event) => updateIncidentField('urgency', event.target.value)}
+                      value={ticketDraft.urgency}
+                    >
+                      {['High', 'Medium', 'Low'].map((value) => <option key={value}>{value}</option>)}
+                    </select>
+                  </label>
+                  <div className="calculated-priority" aria-live="polite">
+                    <span>Calculated priority</span>
+                    <strong className={`priority-text ${priorityClass(ticketDraft.priority)}`}>
+                      {ticketDraft.priority}
+                    </strong>
+                  </div>
+                </div>
+
+                <div className="form-row">
+                  <label>
+                    Assignment group
+                    <select
+                      onChange={(event) => updateIncidentField('team', event.target.value)}
+                      value={ticketDraft.team}
+                    >
+                      {teams.map((team) => <option key={team}>{team}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    Affected location
+                    <input readOnly value={ticketDraft.requesterLocation || selectedUser.location} />
+                  </label>
+                </div>
+
+                <div className="incident-submit-strip">
+                  <div>
+                    <span className="eyebrow">Next</span>
+                    <strong>The tab will become the submitted incident.</strong>
+                  </div>
+                  <button className="primary-action" type="submit">
+                    <Plus size={17} aria-hidden="true" />
+                    Create Incident
+                  </button>
+                </div>
+              </form>
+            </section>
+          </div>
+        )}
+      </section>
+    </div>
+  )
+}
+
+function GenericNewRecordView({
   handleTicketSubmit,
   hasUnsavedChanges,
   recordType,
@@ -849,7 +1209,6 @@ export function NewRecordView({
   ticketDraft,
 }) {
   const title = {
-    Incident: 'New Incident',
     'Service Request': 'New Service Request',
     Problem: 'New Problem',
     Change: 'New Change',
@@ -946,6 +1305,14 @@ export function NewRecordView({
       </section>
     </div>
   )
+}
+
+export function NewRecordView(props) {
+  if (props.recordType === 'Incident') {
+    return <IncidentIntakeView {...props} />
+  }
+
+  return <GenericNewRecordView {...props} />
 }
 
 export function SelfServicePortal({
