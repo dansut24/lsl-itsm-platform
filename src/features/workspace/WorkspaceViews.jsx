@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import {
   AlertCircle,
   ArrowLeft,
@@ -265,47 +266,147 @@ export function PortalRequestView({ onBack, request }) {
   )
 }
 
-export function NewTabView({ navItems, openRecordTab, openTab, tickets }) {
+export function NewTabView({ navItems, openNewRecord, openRecordTab, openTab, tickets }) {
+  const [launcherQuery, setLauncherQuery] = useState('')
   const quickLinks = [
     ...navItems.filter((item) => item.id !== 'settings'),
     { id: 'settings', label: 'Settings' },
   ]
+  const createActions = [
+    ['Incident', 'Report and manage an interruption'],
+    ['Service Request', 'Request access, hardware or a service'],
+    ['Problem', 'Investigate a recurring root cause'],
+    ['Change', 'Plan and approve a controlled change'],
+  ]
+  const normalizedQuery = launcherQuery.trim().toLowerCase()
+  const matchingRecords = normalizedQuery
+    ? tickets
+        .filter((ticket) =>
+          [ticket.id, ticket.title, ticket.requester, ticket.service, ticket.team]
+            .join(' ')
+            .toLowerCase()
+            .includes(normalizedQuery),
+        )
+        .slice(0, 8)
+    : []
+  const matchingWorkspaces = normalizedQuery
+    ? quickLinks.filter((item) => item.label.toLowerCase().includes(normalizedQuery))
+    : []
 
   return (
-    <div className="new-tab-view">
-      <section className="quick-open-panel">
-        <div className="section-heading">
-          <div>
-            <span className="eyebrow">Navigation</span>
-            <h2>Open Workspace</h2>
-          </div>
+    <div className="new-tab-view launcher-view">
+      <section className="launcher-shell">
+        <div className="launcher-heading">
+          <span className="eyebrow">Workspace launcher</span>
+          <h2>What would you like to open?</h2>
+          <p>Search records, create work or jump straight to another Hi5Central workspace.</p>
         </div>
-        <div className="quick-open-list">
-          {quickLinks.map((item) => (
-            <button key={item.id} onClick={() => openTab(item.id)} type="button">
-              <strong>{item.label}</strong>
-              <span>{item.id === 'home' ? 'Operational dashboard' : `Open ${item.label.toLowerCase()}`}</span>
-            </button>
-          ))}
-        </div>
-      </section>
 
-      <section className="quick-open-panel">
-        <div className="section-heading">
-          <div>
-            <span className="eyebrow">Recent</span>
-            <h2>Open Record</h2>
+        <label className="launcher-search">
+          <Search size={18} aria-hidden="true" />
+          <input
+            autoFocus
+            onChange={(event) => setLauncherQuery(event.target.value)}
+            placeholder="Search records or workspaces"
+            type="search"
+            value={launcherQuery}
+          />
+          <span>Search</span>
+        </label>
+
+        {normalizedQuery ? (
+          <div className="launcher-results">
+            <section className="launcher-section">
+              <div className="launcher-section-heading">
+                <strong>Records</strong>
+                <span>{matchingRecords.length} result{matchingRecords.length === 1 ? '' : 's'}</span>
+              </div>
+              <div className="launcher-record-list">
+                {matchingRecords.map((ticket) => (
+                  <button key={ticket.id} onClick={() => openRecordTab(ticket)} type="button">
+                    <span className={`priority-dot ${priorityClass(ticket.priority)}`} />
+                    <span className="launcher-record-id">{ticket.id}</span>
+                    <strong>{ticket.title}</strong>
+                    <small>{ticket.status} · {ticket.team}</small>
+                    <ChevronRight size={16} aria-hidden="true" />
+                  </button>
+                ))}
+                {!matchingRecords.length && (
+                  <div className="launcher-empty">No records match “{launcherQuery.trim()}”.</div>
+                )}
+              </div>
+            </section>
+
+            {!!matchingWorkspaces.length && (
+              <section className="launcher-section">
+                <div className="launcher-section-heading">
+                  <strong>Workspaces</strong>
+                </div>
+                <div className="launcher-workspace-grid compact">
+                  {matchingWorkspaces.map((item) => (
+                    <button key={item.id} onClick={() => openTab(item.id)} type="button">
+                      <strong>{item.label}</strong>
+                      <span>Open workspace</span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
           </div>
-        </div>
-        <div className="quick-record-list">
-          {tickets.slice(0, 6).map((ticket) => (
-            <button key={ticket.id} onClick={() => openRecordTab(ticket)} type="button">
-              <span>{ticket.id}</span>
-              <strong>{ticket.title}</strong>
-              <small>{ticket.status} - {ticket.team}</small>
-            </button>
-          ))}
-        </div>
+        ) : (
+          <div className="launcher-default-grid">
+            <section className="launcher-section launcher-create-section">
+              <div className="launcher-section-heading">
+                <strong>Create</strong>
+                <span>Start new work</span>
+              </div>
+              <div className="launcher-create-grid">
+                {createActions.map(([recordType, description]) => (
+                  <button key={recordType} onClick={() => openNewRecord(recordType)} type="button">
+                    <span className="launcher-create-icon"><Plus size={16} aria-hidden="true" /></span>
+                    <span>
+                      <strong>{recordType}</strong>
+                      <small>{description}</small>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section className="launcher-section">
+              <div className="launcher-section-heading">
+                <strong>Open</strong>
+                <span>Workspace</span>
+              </div>
+              <div className="launcher-workspace-grid">
+                {quickLinks.map((item) => (
+                  <button key={item.id} onClick={() => openTab(item.id)} type="button">
+                    <strong>{item.label}</strong>
+                    <span>{item.id === 'home' ? 'Operational dashboard' : `Open ${item.label.toLowerCase()}`}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section className="launcher-section launcher-recent-section">
+              <div className="launcher-section-heading">
+                <strong>Recent</strong>
+                <span>Records</span>
+              </div>
+              <div className="launcher-record-list">
+                {tickets.slice(0, 6).map((ticket) => (
+                  <button key={ticket.id} onClick={() => openRecordTab(ticket)} type="button">
+                    <span className={`priority-dot ${priorityClass(ticket.priority)}`} />
+                    <span className="launcher-record-id">{ticket.id}</span>
+                    <strong>{ticket.title}</strong>
+                    <small>{ticket.status} · {ticket.team}</small>
+                    <ChevronRight size={16} aria-hidden="true" />
+                  </button>
+                ))}
+              </div>
+            </section>
+          </div>
+        )}
       </section>
     </div>
   )
@@ -742,6 +843,7 @@ export function TicketsView({
 
 export function NewRecordView({
   handleTicketSubmit,
+  hasUnsavedChanges,
   recordType,
   setTicketDraft,
   ticketDraft,
@@ -761,7 +863,10 @@ export function NewRecordView({
             <span className="eyebrow">Create record</span>
             <h2>{title}</h2>
           </div>
-          <span className="type-chip">{recordType}</span>
+          <div className="new-record-heading-status">
+            {hasUnsavedChanges && <span className="draft-status">Unsaved changes</span>}
+            <span className="type-chip">{recordType}</span>
+          </div>
         </div>
 
         <form className="new-record-form" onSubmit={handleTicketSubmit}>
