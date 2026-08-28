@@ -27,7 +27,10 @@ export const statusOptions = [
 export const viewMeta = {
   home: { id: 'home', label: 'Dashboard', icon: LayoutDashboard },
   newtab: { id: 'newtab', label: 'New Tab', icon: Plus },
-  tickets: { id: 'tickets', label: 'Tickets', icon: Inbox },
+  tickets: { id: 'tickets', label: 'All Records', icon: Inbox },
+  incidents: { id: 'incidents', label: 'Incidents', icon: AlertCircle },
+  requests: { id: 'requests', label: 'Service Requests', icon: BriefcaseBusiness },
+  problems: { id: 'problems', label: 'Problems', icon: ShieldCheck },
   portal: { id: 'portal', label: 'Self-Service', icon: LifeBuoy },
   changes: { id: 'changes', label: 'Changes', icon: ClipboardCheck },
   cmdb: { id: 'cmdb', label: 'CMDB', icon: Database },
@@ -36,7 +39,51 @@ export const viewMeta = {
   settings: { id: 'settings', label: 'Settings', icon: Settings },
 }
 
-export const analystNavIds = ['home', 'tickets', 'changes', 'cmdb', 'knowledge', 'reports', 'settings']
+export const serviceDeskModules = {
+  incidents: {
+    id: 'incidents',
+    type: 'Incident',
+    label: 'Incidents',
+    singular: 'Incident',
+    queueTitle: 'Incident Queue',
+    createTitle: 'New Incident',
+    createLabel: 'Create Incident',
+    searchPlaceholder: 'Incident, requester, service',
+  },
+  requests: {
+    id: 'requests',
+    type: 'Service Request',
+    label: 'Service Requests',
+    singular: 'Service Request',
+    queueTitle: 'Service Request Queue',
+    createTitle: 'New Service Request',
+    createLabel: 'Create Request',
+    searchPlaceholder: 'Request, requester, service',
+  },
+  problems: {
+    id: 'problems',
+    type: 'Problem',
+    label: 'Problems',
+    singular: 'Problem',
+    queueTitle: 'Problem Queue',
+    createTitle: 'New Problem',
+    createLabel: 'Create Problem',
+    searchPlaceholder: 'Problem, requester, service',
+  },
+}
+
+export const analystNavGroups = [
+  { id: 'workspace', items: ['home'] },
+  {
+    id: 'service-desk',
+    label: 'Service Desk',
+    items: ['incidents', 'requests', 'problems', 'changes'],
+  },
+  { id: 'platform', items: ['knowledge', 'cmdb', 'reports'] },
+  { id: 'administration', items: ['settings'], separated: true },
+]
+
+export const analystNavIds = analystNavGroups.flatMap((group) => group.items)
 
 export const loginProfiles = {
   analyst: {
