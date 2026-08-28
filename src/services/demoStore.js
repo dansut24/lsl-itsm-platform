@@ -62,6 +62,23 @@ export function loadSidebarMode() {
   return ['expanded', 'collapsed', 'hidden'].includes(storedMode) ? storedMode : 'expanded'
 }
 
+
+
+export function loadWorkspace() {
+  const stored = readJson('hi5central-workspace-analyst', null)
+  if (!stored || !Array.isArray(stored.tabs)) return null
+
+  return {
+    tabs: stored.tabs,
+    activeTabKey: typeof stored.activeTabKey === 'string' ? stored.activeTabKey : null,
+  }
+}
+
+export function saveWorkspace(workspace) {
+  if (!workspace || !Array.isArray(workspace.tabs)) return
+  writeJson('hi5central-workspace-analyst', workspace)
+}
+
 export function saveTickets(tickets) {
   writeJson('hi5central-tickets', tickets)
 }
