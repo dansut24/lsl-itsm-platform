@@ -112,12 +112,22 @@ const MAX_WORKSPACE_TABS = 12
 function emptyTicketDraft(type = 'Incident') {
   return {
     type,
-    title: '',
+    requesterId: '',
     requester: '',
+    requesterEmail: '',
+    requesterStaffNumber: '',
+    requesterJobTitle: '',
+    requesterDepartment: '',
+    requesterLocation: '',
+    requesterManager: '',
+    title: '',
+    description: '',
+    impact: 'Medium',
+    urgency: 'Medium',
     priority: 'Medium',
     service: 'Collaboration',
+    category: 'Email & Messaging',
     team: 'Service Desk',
-    description: '',
   }
 }
 
@@ -757,12 +767,21 @@ function App() {
       type: ticketDraft.type,
       title: ticketDraft.title.trim(),
       requester: ticketDraft.requester.trim(),
+      requesterId: ticketDraft.requesterId || undefined,
+      requesterEmail: ticketDraft.requesterEmail || undefined,
+      requesterStaffNumber: ticketDraft.requesterStaffNumber || undefined,
+      requesterJobTitle: ticketDraft.requesterJobTitle || undefined,
+      requesterDepartment: ticketDraft.requesterDepartment || undefined,
+      requesterManager: ticketDraft.requesterManager || undefined,
+      impact: ticketDraft.impact || undefined,
+      urgency: ticketDraft.urgency || undefined,
       priority: ticketDraft.priority,
+      category: ticketDraft.category || undefined,
       status: ticketDraft.type === 'Change' ? 'Pending Approval' : 'New',
       team: ticketDraft.team,
       assignee: 'Unassigned',
       service: ticketDraft.service,
-      location: 'Unconfirmed',
+      location: ticketDraft.requesterLocation || 'Unconfirmed',
       sla: ticketDraft.priority === 'Critical' ? '1 hr' : '8 hr',
       slaPercent: ticketDraft.priority === 'Critical' ? 72 : 18,
       created: 'Just now',
@@ -778,11 +797,28 @@ function App() {
 
     setTickets((currentTickets) => [createdTicket, ...currentTickets])
     setTicketDraft(emptyTicketDraft(createdTicket.type))
-    openTab(
-      'tickets',
-      { key: `ticket-${createdTicket.id}`, title: createdTicket.id, recordId: createdTicket.id },
-      { skipUnsavedCheck: true },
-    )
+
+    const createdTab = makeTab('tickets', {
+      key: `ticket-${createdTicket.id}`,
+      title: createdTicket.id,
+      recordId: createdTicket.id,
+    })
+
+    if (activeView === 'newrecord') {
+      setTabs((currentTabs) =>
+        currentTabs.map((tab) => (tab.key === activeTabKey ? createdTab : tab)),
+      )
+      setActiveTabKey(createdTab.key)
+      setSelectedTicketId(createdTicket.id)
+      writeRoute(pathForTab(createdTab, [createdTicket, ...tickets]), { replace: true })
+    } else {
+      openTab(
+        'tickets',
+        { key: createdTab.key, title: createdTab.title, recordId: createdTab.recordId },
+        { skipUnsavedCheck: true },
+      )
+    }
+
     setToast(`${createdTicket.id} created`)
   }
 
