@@ -27,6 +27,7 @@ export const statusOptions = [
 export const viewMeta = {
   home: { id: 'home', label: 'Dashboard', icon: LayoutDashboard },
   newtab: { id: 'newtab', label: 'New Tab', icon: Plus },
+  newrecord: { id: 'newrecord', label: 'New Record', icon: Plus },
   tickets: { id: 'tickets', label: 'All Records', icon: Inbox },
   incidents: { id: 'incidents', label: 'Incidents', icon: AlertCircle },
   requests: { id: 'requests', label: 'Service Requests', icon: BriefcaseBusiness },
@@ -85,14 +86,24 @@ export const analystNavGroups = [
 
 export const analystNavIds = analystNavGroups.flatMap((group) => group.items)
 
+
+export const accentOptions = [
+  { id: 'amber', label: 'Amber', value: '#f4b13d' },
+  { id: 'cyan', label: 'Cyan', value: '#15bfe8' },
+  { id: 'blue', label: 'Blue', value: '#4b7ff5' },
+  { id: 'violet', label: 'Violet', value: '#8b5cf6' },
+  { id: 'emerald', label: 'Emerald', value: '#2eb67d' },
+  { id: 'rose', label: 'Rose', value: '#ef6a8a' },
+]
+
 export const loginProfiles = {
   analyst: {
     label: 'Agent Workspace',
     role: 'analyst',
     name: 'Dana Sinclair',
     initials: 'DS',
-    username: 'analyst@lsl.co.uk',
-    password: 'LSLdesk!2026',
+    username: 'analyst@hi5central.com',
+    password: 'Hi5Desk!2026',
     landingView: 'home',
     landingTitle: 'Dashboard',
     helper: 'Full ITSM console with incidents, requests, changes, CMDB, reporting, and settings.',
@@ -102,8 +113,8 @@ export const loginProfiles = {
     role: 'requester',
     name: 'Eleanor Shaw',
     initials: 'ES',
-    username: 'employee@lsl.co.uk',
-    password: 'LSLportal!2026',
+    username: 'employee@hi5central.com',
+    password: 'Hi5Portal!2026',
     landingView: 'portal',
     landingTitle: 'Self-Service',
     helper: 'End-user portal for raising requests, checking progress, and searching knowledge.',
@@ -319,6 +330,7 @@ export const serviceCatalog = [
 
 export const assets = [
   {
+    id: 'M365-TENANT',
     name: 'M365 Tenant',
     className: 'Cloud Service',
     owner: 'Collaboration',
@@ -327,6 +339,7 @@ export const assets = [
     related: ['Exchange Hybrid', 'Azure AD'],
   },
   {
+    id: 'FW-EDGE-A',
     name: 'FW-EDGE-A',
     className: 'Network Appliance',
     owner: 'Network',
@@ -335,6 +348,7 @@ export const assets = [
     related: ['FW-EDGE-B', 'VPN-GW-01'],
   },
   {
+    id: 'PAYROLL-SAAS',
     name: 'PAYROLL-SaaS',
     className: 'Business App',
     owner: 'Applications',
@@ -343,6 +357,7 @@ export const assets = [
     related: ['ADFS-01', 'Azure AD'],
   },
   {
+    id: 'LAP-8841',
     name: 'LAP-8841',
     className: 'Endpoint',
     owner: 'Finance',
@@ -354,28 +369,56 @@ export const assets = [
 
 export const knowledgeArticles = [
   {
+    slug: 'resetting-mfa-on-a-new-phone',
     title: 'Resetting MFA on a new phone',
     category: 'Identity',
     reads: 842,
     updated: 'Updated today',
+    summary: 'Restore Microsoft Authenticator access after a phone replacement or reset.',
+    steps: [
+      'Confirm the user can still sign in with an alternative verification method.',
+      'Remove the old Authenticator registration from the security information page.',
+      'Register Microsoft Authenticator on the replacement device and complete a test prompt.',
+    ],
   },
   {
+    slug: 'how-to-request-a-laptop-refresh',
     title: 'How to request a laptop refresh',
     category: 'Hardware',
     reads: 516,
     updated: 'Updated yesterday',
+    summary: 'What information is required when requesting a replacement laptop through the service catalogue.',
+    steps: [
+      'Open the Equipment request in Self-Service.',
+      'Select the required device class and provide the current asset tag where available.',
+      'Submit the request for manager and cost-centre approval.',
+    ],
   },
   {
+    slug: 'vpn-connection-checks-for-remote-staff',
     title: 'VPN connection checks for remote staff',
     category: 'Network',
     reads: 691,
     updated: 'Updated this week',
+    summary: 'Quick checks for common VPN connectivity and authentication failures.',
+    steps: [
+      'Confirm general internet access is working before opening the VPN client.',
+      'Check the device date and time and then retry authentication.',
+      'If the connection still fails, capture the VPN error and raise an incident.',
+    ],
   },
   {
+    slug: 'known-error-conference-room-wifi-roaming',
     title: 'Known error: conference room Wi-Fi roaming',
     category: 'Known Errors',
     reads: 184,
     updated: 'Draft in review',
+    summary: 'Known roaming instability affecting heavily occupied meeting rooms at London HQ.',
+    steps: [
+      'Confirm the affected room and approximate number of connected devices.',
+      'Ask users to reconnect to the corporate wireless network as a temporary workaround.',
+      'Link new incidents to PRB-0142 so impact can be tracked centrally.',
+    ],
   },
 ]
 
