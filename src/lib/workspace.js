@@ -68,9 +68,10 @@ export function tabBreadcrumbLabel(tab) {
   return viewMeta[tab.viewId]?.label || tab.title
 }
 
-export function getBreadcrumbs(activeTab, selectedTicket) {
+export function getBreadcrumbs(activeTab, selectedTicket, selectedAsset, selectedArticle) {
   const homeCrumb = { label: 'Home', viewId: 'home', key: 'home', title: 'Dashboard' }
   if (!activeTab || activeTab.viewId === 'home') return [homeCrumb]
+
   if (activeTab.viewId === 'tickets' && activeTab.recordId) {
     const recordTitle = selectedTicket?.id || activeTab.title
     return [
@@ -85,6 +86,69 @@ export function getBreadcrumbs(activeTab, selectedTicket) {
       },
     ]
   }
+
+  if (activeTab.assetId) {
+    return [
+      homeCrumb,
+      { label: 'CMDB', viewId: 'cmdb', key: 'cmdb', title: 'CMDB' },
+      {
+        label: selectedAsset?.name || activeTab.title,
+        viewId: 'cmdb',
+        key: activeTab.key,
+        title: selectedAsset?.name || activeTab.title,
+        assetId: activeTab.assetId,
+      },
+    ]
+  }
+
+  if (activeTab.articleSlug) {
+    return [
+      homeCrumb,
+      { label: 'Knowledge', viewId: 'knowledge', key: 'knowledge', title: 'Knowledge' },
+      {
+        label: selectedArticle?.title || activeTab.title,
+        viewId: 'knowledge',
+        key: activeTab.key,
+        title: selectedArticle?.title || activeTab.title,
+        articleSlug: activeTab.articleSlug,
+      },
+    ]
+  }
+
+  if (activeTab.newRecordType) {
+    return [
+      homeCrumb,
+      processBreadcrumb({ type: activeTab.newRecordType }),
+      {
+        label: activeTab.title,
+        viewId: 'newrecord',
+        key: activeTab.key,
+        title: activeTab.title,
+        newRecordType: activeTab.newRecordType,
+      },
+    ]
+  }
+
+  if (activeTab.settingsSection) {
+    return [
+      homeCrumb,
+      {
+        label: 'Settings',
+        viewId: 'settings',
+        key: 'settings-appearance',
+        title: 'Settings',
+        settingsSection: 'appearance',
+      },
+      {
+        label: activeTab.title,
+        viewId: 'settings',
+        key: activeTab.key,
+        title: activeTab.title,
+        settingsSection: activeTab.settingsSection,
+      },
+    ]
+  }
+
   return [
     homeCrumb,
     {
@@ -100,8 +164,14 @@ export function makeTab(viewId, overrides = {}) {
   return {
     key: overrides.key || viewId,
     viewId,
-    title: overrides.title || viewMeta[viewId].label,
+    title: overrides.title || viewMeta[viewId]?.label || 'Workspace',
     pinned: overrides.pinned || false,
     recordId: overrides.recordId,
+    assetId: overrides.assetId,
+    articleSlug: overrides.articleSlug,
+    portalRequestId: overrides.portalRequestId,
+    settingsSection: overrides.settingsSection,
+    newRecordType: overrides.newRecordType,
+    navId: overrides.navId,
   }
 }

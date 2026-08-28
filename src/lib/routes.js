@@ -78,10 +78,35 @@ const LIST_ROUTES = {
   },
   '/settings': {
     kind: 'workspace',
-    path: '/settings',
+    path: '/settings/appearance',
     viewId: 'settings',
-    key: 'settings',
-    title: 'Settings',
+    key: 'settings-appearance',
+    title: 'Appearance',
+    settingsSection: 'appearance',
+  },
+  '/settings/appearance': {
+    kind: 'workspace',
+    path: '/settings/appearance',
+    viewId: 'settings',
+    key: 'settings-appearance',
+    title: 'Appearance',
+    settingsSection: 'appearance',
+  },
+  '/settings/workspace': {
+    kind: 'workspace',
+    path: '/settings/workspace',
+    viewId: 'settings',
+    key: 'settings-workspace',
+    title: 'Workspace',
+    settingsSection: 'workspace',
+  },
+  '/settings/profile': {
+    kind: 'workspace',
+    path: '/settings/profile',
+    viewId: 'settings',
+    key: 'settings-profile',
+    title: 'Profile',
+    settingsSection: 'profile',
   },
   '/portal': {
     kind: 'workspace',
@@ -102,6 +127,13 @@ const LIST_ROUTES = {
 const ALIASES = {
   '/home': '/dashboard',
   '/self-service': '/portal',
+}
+
+const NEW_RECORD_ROUTES = {
+  incidents: { type: 'Incident', navId: 'incidents', title: 'New Incident' },
+  requests: { type: 'Service Request', navId: 'requests', title: 'New Service Request' },
+  problems: { type: 'Problem', navId: 'problems', title: 'New Problem' },
+  changes: { type: 'Change', navId: 'changes', title: 'New Change' },
 }
 
 function normalizePathname(pathname) {
@@ -136,6 +168,60 @@ export function routeFromLocation(location = window.location) {
 
   if (LIST_ROUTES[pathname]) {
     return { ...LIST_ROUTES[pathname] }
+  }
+
+  const newRecordMatch = pathname.match(/^\/(incidents|requests|problems|changes)\/new$/i)
+  if (newRecordMatch) {
+    const section = newRecordMatch[1].toLowerCase()
+    const config = NEW_RECORD_ROUTES[section]
+    return {
+      kind: 'workspace',
+      path: `/${section}/new`,
+      viewId: 'newrecord',
+      key: `new-${section}`,
+      title: config.title,
+      newRecordType: config.type,
+      navId: config.navId,
+    }
+  }
+
+  const portalRequestMatch = pathname.match(/^\/portal\/requests\/([^/]+)$/i)
+  if (portalRequestMatch) {
+    const id = decodeURIComponent(portalRequestMatch[1]).toUpperCase()
+    return {
+      kind: 'workspace',
+      path: `/portal/requests/${encodeURIComponent(id)}`,
+      viewId: 'portal',
+      key: `portal-request-${id}`,
+      title: id,
+      portalRequestId: id,
+    }
+  }
+
+  const cmdbMatch = pathname.match(/^\/cmdb\/([^/]+)$/i)
+  if (cmdbMatch) {
+    const assetId = decodeURIComponent(cmdbMatch[1]).toUpperCase()
+    return {
+      kind: 'workspace',
+      path: `/cmdb/${encodeURIComponent(assetId)}`,
+      viewId: 'cmdb',
+      key: `asset-${assetId}`,
+      title: assetId,
+      assetId,
+    }
+  }
+
+  const knowledgeMatch = pathname.match(/^\/knowledge\/([^/]+)$/i)
+  if (knowledgeMatch) {
+    const articleSlug = decodeURIComponent(knowledgeMatch[1]).toLowerCase()
+    return {
+      kind: 'workspace',
+      path: `/knowledge/${encodeURIComponent(articleSlug)}`,
+      viewId: 'knowledge',
+      key: `knowledge-${articleSlug}`,
+      title: 'Knowledge Article',
+      articleSlug,
+    }
   }
 
   const newTabMatch = pathname.match(/^\/new-tab\/([^/]+)$/i)
@@ -180,6 +266,7 @@ export function defaultRouteForRole(role) {
 
 export function resolveRouteForRole(route, role) {
   if (role === 'requester') {
+    if (route?.kind === 'workspace' && route.viewId === 'portal') return route
     return defaultRouteForRole('requester')
   }
 
@@ -204,12 +291,41 @@ function recordPrefixFromTicket(ticket, recordId = '') {
   return 'tickets'
 }
 
+function newRecordPrefix(type) {
+  return {
+    Incident: 'incidents',
+    'Service Request': 'requests',
+    Problem: 'problems',
+    Change: 'changes',
+  }[type] || 'incidents'
+}
+
 export function pathForTab(tab, tickets = []) {
   if (!tab) return '/dashboard'
+
+  if (tab.portalRequestId) {
+    return `/portal/requests/${encodeURIComponent(tab.portalRequestId)}`
+  }
+
+  if (tab.assetId) {
+    return `/cmdb/${encodeURIComponent(tab.assetId)}`
+  }
+
+  if (tab.articleSlug) {
+    return `/knowledge/${encodeURIComponent(tab.articleSlug)}`
+  }
+
+  if (tab.newRecordType) {
+    return `/${newRecordPrefix(tab.newRecordType)}/new`
+  }
 
   if (tab.recordId) {
     const ticket = tickets.find((item) => item.id === tab.recordId)
     return `/${recordPrefixFromTicket(ticket, tab.recordId)}/${encodeURIComponent(tab.recordId)}`
+  }
+
+  if (tab.settingsSection) {
+    return `/settings/${tab.settingsSection}`
   }
 
   if (tab.viewId === 'incidents' || tab.key === 'incidents') return '/incidents'
@@ -224,7 +340,7 @@ export function pathForTab(tab, tickets = []) {
     cmdb: '/cmdb',
     knowledge: '/knowledge',
     reports: '/reports',
-    settings: '/settings',
+    settings: '/settings/appearance',
     newtab: tab.key && tab.key !== 'newtab' ? `/new-tab/${encodeURIComponent(tab.key)}` : '/new-tab',
   }[tab.viewId] || '/dashboard'
 }
