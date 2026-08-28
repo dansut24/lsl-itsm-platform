@@ -48,7 +48,7 @@ export function LoginScreen({
     <main className="login-shell" data-theme={theme}>
       <section className="login-panel">
         <div className="login-brand">
-          <img src={`${import.meta.env.BASE_URL}lsl-logo.png`} alt="LSL" />
+          <img src={`${import.meta.env.BASE_URL}hi5central-logo.png`} alt="Hi5Central" />
           <button
             className="icon-button"
             onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
@@ -61,7 +61,7 @@ export function LoginScreen({
 
         <div>
           <span className="eyebrow">Demo access</span>
-          <h1>Sign in to LSL ITSM</h1>
+          <h1>Sign in to Hi5Central</h1>
           <p className="login-copy">{activeProfile.helper}</p>
         </div>
 
@@ -158,7 +158,7 @@ export function SelfServiceShell({
     <div className="portal-shell" data-theme={theme}>
       <header className="portal-shell-header">
         <div className="portal-shell-brand">
-          <img src={`${import.meta.env.BASE_URL}lsl-logo.png`} alt="LSL" />
+          <img src={`${import.meta.env.BASE_URL}hi5central-logo.png`} alt="Hi5Central" />
           <div>
             <span>Technology Services</span>
             <strong>Self-Service Portal</strong>
@@ -817,7 +817,7 @@ export function SelfServicePortal({
   )
 }
 
-export function ChangesView({ approveChange, tickets }) {
+export function ChangesView({ approveChange, openRecordTab, tickets }) {
   return (
     <div className="changes-view">
       {tickets.map((ticket) => (
@@ -833,7 +833,9 @@ export function ChangesView({ approveChange, tickets }) {
             </div>
           </div>
           <div className="approval-panel">
-            <strong>{ticket.id}</strong>
+            <button className="change-record-link" onClick={() => openRecordTab(ticket)} type="button">
+              {ticket.id}
+            </button>
             <span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span>
             <button onClick={() => approveChange(ticket, 'Approved')} type="button">
               <CheckCircle2 size={16} aria-hidden="true" />
