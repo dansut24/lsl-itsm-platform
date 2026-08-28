@@ -2450,7 +2450,7 @@ textarea:focus {
     grid-template-rows: 40px;
     height: 40px;
     gap: 0;
-    padding: 4px 8px 0;
+    padding: 1px 8px 0;
   }
 
   .chrome-actions {
@@ -2466,7 +2466,7 @@ textarea:focus {
     width: auto;
     min-width: 132px;
     max-width: 220px;
-    height: 36px;
+    height: 39px;
     padding: 0 10px;
     border-radius: 9px 9px 0 0;
     font-size: 12px;
@@ -2501,7 +2501,7 @@ textarea:focus {
   .tab-add {
     flex-basis: 34px;
     width: 34px;
-    height: 36px;
+    height: 39px;
     border-radius: 9px 9px 0 0;
   }
 
