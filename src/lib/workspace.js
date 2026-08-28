@@ -173,5 +173,7 @@ export function makeTab(viewId, overrides = {}) {
     settingsSection: overrides.settingsSection,
     newRecordType: overrides.newRecordType,
     navId: overrides.navId,
+    filter: overrides.filter,
+    query: overrides.query,
   }
 }
