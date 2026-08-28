@@ -272,7 +272,7 @@ export function DashboardView({ metrics, openRecordTab, openTab, tickets }) {
             <h2>Live Service Queue</h2>
           </div>
           <button className="text-button" onClick={() => openTab('tickets')} type="button">
-            Open all tickets
+            Open all records
             <ChevronRight size={16} aria-hidden="true" />
           </button>
         </div>
@@ -492,6 +492,7 @@ export function TicketsView({
   filters,
   filteredTickets,
   handleTicketSubmit,
+  moduleConfig,
   newComment,
   openRecordTab,
   query,
@@ -505,31 +506,42 @@ export function TicketsView({
   tickets,
   updateTicket,
 }) {
+  const moduleTickets = moduleConfig
+    ? tickets.filter((ticket) => ticket.type === moduleConfig.type)
+    : tickets
+  const recordLabel = moduleConfig ? moduleConfig.label.toLowerCase() : 'records'
+  const queueTitle = moduleConfig?.queueTitle || 'All Records'
+  const createTitle = moduleConfig?.createTitle || 'New Record'
+  const createLabel = moduleConfig?.createLabel || 'Create Record'
+  const searchPlaceholder = moduleConfig?.searchPlaceholder || 'Record, requester, service'
+
   return (
     <div className="tickets-layout">
       <section className="ticket-list-zone">
         <div className="section-heading">
           <div>
-            <span className="eyebrow">{filteredTickets.length} of {tickets.length} records</span>
-            <h2>Service Desk Queue</h2>
+            <span className="eyebrow">{filteredTickets.length} of {moduleTickets.length} {recordLabel}</span>
+            <h2>{queueTitle}</h2>
           </div>
           <button className="primary-action compact" type="submit" form="new-ticket-form">
             <Plus size={16} aria-hidden="true" />
-            Create
+            {createLabel}
           </button>
         </div>
 
-        <div className="filter-grid">
+        <div className={moduleConfig ? 'filter-grid module-filter-grid' : 'filter-grid'}>
           <label>
             Search
             <input
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Ticket, requester, service"
+              placeholder={searchPlaceholder}
               type="search"
               value={query}
             />
           </label>
-          <FilterSelect label="Type" options={['All', ...types]} value={filters.type} onChange={(type) => setFilters({ ...filters, type })} />
+          {!moduleConfig && (
+            <FilterSelect label="Type" options={['All', ...types]} value={filters.type} onChange={(type) => setFilters({ ...filters, type })} />
+          )}
           <FilterSelect label="Priority" options={['All', ...priorities]} value={filters.priority} onChange={(priority) => setFilters({ ...filters, priority })} />
           <FilterSelect label="Status" options={['All', ...statusOptions]} value={filters.status} onChange={(status) => setFilters({ ...filters, status })} />
         </div>
@@ -579,18 +591,20 @@ export function TicketsView({
           <div className="section-heading tight">
             <div>
               <span className="eyebrow">Quick Capture</span>
-              <h2>New Record</h2>
+              <h2>{createTitle}</h2>
             </div>
           </div>
-          <div className="form-row">
-            <label>
-              Type
-              <select value={ticketDraft.type} onChange={(event) => setTicketDraft({ ...ticketDraft, type: event.target.value })}>
-                {types.map((type) => (
-                  <option key={type}>{type}</option>
-                ))}
-              </select>
-            </label>
+          <div className={moduleConfig ? '' : 'form-row'}>
+            {!moduleConfig && (
+              <label>
+                Type
+                <select value={ticketDraft.type} onChange={(event) => setTicketDraft({ ...ticketDraft, type: event.target.value })}>
+                  {types.map((type) => (
+                    <option key={type}>{type}</option>
+                  ))}
+                </select>
+              </label>
+            )}
             <label>
               Priority
               <select value={ticketDraft.priority} onChange={(event) => setTicketDraft({ ...ticketDraft, priority: event.target.value })}>
