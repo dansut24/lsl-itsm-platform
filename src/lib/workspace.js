@@ -55,17 +55,18 @@ export function processBreadcrumb(ticket) {
     }
   }
   return {
-    label: 'Tickets',
+    label: 'Incidents',
     viewId: 'tickets',
-    key: 'tickets',
-    title: 'Tickets',
+    key: 'incidents',
+    title: 'Incidents',
     filter: { type: 'Incident', priority: 'All', status: 'All' },
     query: '',
   }
 }
 
 export function tabBreadcrumbLabel(tab) {
-  if (tab.key === 'requests') return 'Request'
+  if (tab.key === 'incidents') return 'Incidents'
+  if (tab.key === 'requests') return 'Requests'
   if (tab.key === 'problems') return 'Problems'
   return viewMeta[tab.viewId]?.label || tab.title
 }
