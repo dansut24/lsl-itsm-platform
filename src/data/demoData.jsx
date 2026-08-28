@@ -80,7 +80,16 @@ export const analystNavGroups = [
     label: 'Service Desk',
     items: ['incidents', 'requests', 'problems', 'changes'],
   },
-  { id: 'platform', items: ['knowledge', 'cmdb', 'reports'] },
+  {
+    id: 'knowledge-data',
+    label: 'Knowledge & Data',
+    items: ['knowledge', 'cmdb'],
+  },
+  {
+    id: 'insights',
+    label: 'Insights',
+    items: ['reports'],
+  },
   { id: 'administration', items: ['settings'], separated: true },
 ]
 
