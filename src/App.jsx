@@ -1031,26 +1031,39 @@ function App() {
         </div>
 
         <nav className="nav-stack">
-          {navGroups.map((group) => (
-            <div
-              className={group.separated ? 'nav-group nav-group-separated' : 'nav-group'}
-              key={group.id}
-            >
-              {group.label && <span className="nav-group-label">{group.label}</span>}
-              {group.items.map(({ id, label, icon: Icon }) => (
-                <button
-                  className={activeNavId === id ? 'nav-item active' : 'nav-item'}
-                  key={id}
-                  onClick={() => openSidebarTab(id)}
-                  title={label}
-                  type="button"
-                >
-                  <Icon size={18} aria-hidden="true" />
-                  <span>{label}</span>
-                </button>
-              ))}
-            </div>
-          ))}
+          {navGroups.map((group) => {
+            const groupIsActive = group.items.some(({ id }) => id === activeNavId)
+
+            return (
+              <div
+                className={[
+                  'nav-group',
+                  group.separated ? 'nav-group-separated' : '',
+                  groupIsActive ? 'nav-group-active' : '',
+                ].filter(Boolean).join(' ')}
+                key={group.id}
+              >
+                {group.label && <span className="nav-group-label">{group.label}</span>}
+                {group.items.map(({ id, label, icon: Icon }) => {
+                  const itemIsActive = activeNavId === id
+
+                  return (
+                    <button
+                      aria-current={itemIsActive ? 'page' : undefined}
+                      className={itemIsActive ? 'nav-item active' : 'nav-item'}
+                      key={id}
+                      onClick={() => openSidebarTab(id)}
+                      title={label}
+                      type="button"
+                    >
+                      <Icon size={18} aria-hidden="true" />
+                      <span>{label}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            )
+          })}
         </nav>
 
         <div className="sidebar-status">

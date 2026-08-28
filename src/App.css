@@ -13,7 +13,6 @@
   --brand-2: #f4b13d;
   --accent-ink: #05203a;
   --accent-rgb: 244, 177, 61;
-  --accent-rgb: 244, 177, 61;
   --danger: #c93d4f;
   --warning: #ad7414;
   --steady: #2f5f9e;
@@ -51,7 +50,7 @@ button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible {
-  outline: 3px solid rgba(23, 72, 141, 0.28);
+  outline: 3px solid rgba(var(--accent-rgb), 0.32);
   outline-offset: 2px;
 }
 
@@ -376,31 +375,50 @@ textarea:focus-visible {
 .nav-stack {
   display: grid;
   align-content: start;
-  gap: 10px;
+  gap: 15px;
   min-height: 0;
   overflow: auto;
-  padding-right: 2px;
+  padding: 2px 2px 4px 0;
 }
 
 .nav-group {
   display: grid;
-  gap: 6px;
+  gap: 5px;
 }
 
 .nav-group-separated {
-  margin-top: 2px;
-  padding-top: 10px;
+  margin-top: 1px;
+  padding-top: 13px;
   border-top: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 .nav-group-label {
-  display: block;
-  padding: 3px 10px 1px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 18px;
+  padding: 1px 12px 2px;
   color: #8fb1e8;
   font-size: 10px;
   font-weight: 900;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.085em;
+  line-height: 1.2;
   text-transform: uppercase;
+  transition: color 140ms ease;
+}
+
+.nav-group-active .nav-group-label {
+  color: color-mix(in srgb, rgb(var(--accent-rgb)) 90%, white);
+}
+
+.nav-group-active .nav-group-label::before {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 5px;
+  border-radius: 999px;
+  background: rgb(var(--accent-rgb));
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.1);
+  content: '';
 }
 
 .nav-item,
@@ -421,23 +439,66 @@ textarea:focus-visible {
 }
 
 .nav-item {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 11px;
   width: 100%;
-  min-height: 40px;
-  padding: 9px 10px;
-  border-radius: 7px;
+  min-height: 42px;
+  padding: 9px 12px;
+  border: 1px solid transparent;
+  border-radius: 8px;
   background: transparent;
   color: #c9d8f5;
   text-align: left;
   white-space: nowrap;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    transform 140ms ease;
 }
 
-.nav-item:hover,
-.nav-item.active {
-  background: #123a7a;
+.nav-item svg {
+  flex: 0 0 auto;
+  color: #9eb9e5;
+  transition: color 140ms ease, transform 140ms ease;
+}
+
+.nav-item:hover {
+  border-color: rgba(var(--accent-rgb), 0.08);
+  background: rgba(var(--accent-rgb), 0.07);
   color: #ffffff;
+}
+
+.nav-item:hover svg {
+  color: #ffffff;
+}
+
+.nav-item.active {
+  border-color: rgba(var(--accent-rgb), 0.17);
+  background:
+    linear-gradient(90deg, rgba(var(--accent-rgb), 0.17), rgba(var(--accent-rgb), 0.075));
+  color: color-mix(in srgb, rgb(var(--accent-rgb)) 90%, white);
+  font-weight: 800;
+}
+
+.nav-item.active svg {
+  color: color-mix(in srgb, rgb(var(--accent-rgb)) 90%, white);
+}
+
+.nav-item.active::before {
+  position: absolute;
+  inset: 7px auto 7px -1px;
+  width: 3px;
+  border-radius: 999px;
+  background: rgb(var(--accent-rgb));
+  box-shadow: 0 0 12px rgba(var(--accent-rgb), 0.24);
+  content: '';
+}
+
+.nav-item:active {
+  transform: translateY(1px);
 }
 
 .sidebar-status {
@@ -494,6 +555,14 @@ textarea:focus-visible {
 .sidebar-collapsed .sidebar-toggle,
 .sidebar-collapsed .nav-item {
   justify-content: center;
+}
+
+.sidebar-collapsed .nav-item {
+  padding-inline: 8px;
+}
+
+.sidebar-collapsed .nav-item.active::before {
+  inset-block: 8px;
 }
 
 .main-frame {
@@ -2259,8 +2328,10 @@ textarea:focus {
   }
 
   .mobile-new-ticket {
+    border-color: rgba(var(--accent-rgb), 0.56);
     background: var(--brand-2);
     color: var(--accent-ink);
+    box-shadow: 0 5px 14px rgba(var(--accent-rgb), 0.18);
   }
 
   .sidebar,
@@ -2345,9 +2416,10 @@ textarea:focus {
   .nav-stack {
     display: grid;
     align-content: start;
-    gap: 10px;
+    gap: 15px;
     overflow: auto;
-    padding-right: 2px;
+    padding: 2px 2px 8px 0;
+    overscroll-behavior: contain;
   }
 
   .nav-group-label,
@@ -2360,8 +2432,8 @@ textarea:focus {
     justify-content: flex-start;
     flex: none;
     width: 100%;
-    min-height: 42px;
-    padding: 9px 10px;
+    min-height: 44px;
+    padding: 10px 12px;
   }
 
   .sidebar-status {
