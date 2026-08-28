@@ -17,14 +17,14 @@ const LIST_ROUTES = {
     path: '/tickets',
     viewId: 'tickets',
     key: 'tickets',
-    title: 'Tickets',
+    title: 'All Records',
     filter: ALL_TICKET_FILTERS,
     query: '',
   },
   '/incidents': {
     kind: 'workspace',
     path: '/incidents',
-    viewId: 'tickets',
+    viewId: 'incidents',
     key: 'incidents',
     title: 'Incidents',
     filter: { ...ALL_TICKET_FILTERS, type: 'Incident' },
@@ -33,16 +33,16 @@ const LIST_ROUTES = {
   '/requests': {
     kind: 'workspace',
     path: '/requests',
-    viewId: 'tickets',
+    viewId: 'requests',
     key: 'requests',
-    title: 'Requests',
+    title: 'Service Requests',
     filter: { ...ALL_TICKET_FILTERS, type: 'Service Request' },
     query: '',
   },
   '/problems': {
     kind: 'workspace',
     path: '/problems',
-    viewId: 'tickets',
+    viewId: 'problems',
     key: 'problems',
     title: 'Problems',
     filter: { ...ALL_TICKET_FILTERS, type: 'Problem' },
@@ -212,9 +212,9 @@ export function pathForTab(tab, tickets = []) {
     return `/${recordPrefixFromTicket(ticket, tab.recordId)}/${encodeURIComponent(tab.recordId)}`
   }
 
-  if (tab.key === 'incidents') return '/incidents'
-  if (tab.key === 'requests') return '/requests'
-  if (tab.key === 'problems') return '/problems'
+  if (tab.viewId === 'incidents' || tab.key === 'incidents') return '/incidents'
+  if (tab.viewId === 'requests' || tab.key === 'requests') return '/requests'
+  if (tab.viewId === 'problems' || tab.key === 'problems') return '/problems'
 
   return {
     home: '/dashboard',

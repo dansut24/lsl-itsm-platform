@@ -33,10 +33,10 @@ export function countBy(items, key) {
 export function processBreadcrumb(ticket) {
   if (ticket?.type === 'Service Request') {
     return {
-      label: 'Request',
-      viewId: 'tickets',
+      label: 'Service Requests',
+      viewId: 'requests',
       key: 'requests',
-      title: 'Requests',
+      title: 'Service Requests',
       filter: { type: 'Service Request', priority: 'All', status: 'All' },
       query: '',
     }
@@ -47,7 +47,7 @@ export function processBreadcrumb(ticket) {
   if (ticket?.type === 'Problem') {
     return {
       label: 'Problems',
-      viewId: 'tickets',
+      viewId: 'problems',
       key: 'problems',
       title: 'Problems',
       filter: { type: 'Problem', priority: 'All', status: 'All' },
@@ -56,7 +56,7 @@ export function processBreadcrumb(ticket) {
   }
   return {
     label: 'Incidents',
-    viewId: 'tickets',
+    viewId: 'incidents',
     key: 'incidents',
     title: 'Incidents',
     filter: { type: 'Incident', priority: 'All', status: 'All' },
@@ -65,9 +65,6 @@ export function processBreadcrumb(ticket) {
 }
 
 export function tabBreadcrumbLabel(tab) {
-  if (tab.key === 'incidents') return 'Incidents'
-  if (tab.key === 'requests') return 'Requests'
-  if (tab.key === 'problems') return 'Problems'
   return viewMeta[tab.viewId]?.label || tab.title
 }
 
