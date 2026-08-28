@@ -310,6 +310,116 @@ export const seedTickets = [
   },
 ]
 
+export const demoUsers = [
+  {
+    id: 'USR-1001',
+    name: 'Eleanor Shaw',
+    email: 'eleanor.shaw@hi5central.com',
+    staffNumber: 'HC-10482',
+    jobTitle: 'Finance Analyst',
+    department: 'Finance',
+    location: 'London HQ',
+    manager: 'Marcus Lee',
+  },
+  {
+    id: 'USR-1002',
+    name: 'Marcus Lee',
+    email: 'marcus.lee@hi5central.com',
+    staffNumber: 'HC-10177',
+    jobTitle: 'Finance Operations Manager',
+    department: 'Finance',
+    location: 'Birmingham',
+    manager: 'Olivia Grant',
+  },
+  {
+    id: 'USR-1003',
+    name: 'Chloe Bennett',
+    email: 'chloe.bennett@hi5central.com',
+    staffNumber: 'HC-10821',
+    jobTitle: 'Sales Executive',
+    department: 'Sales',
+    location: 'Manchester',
+    manager: 'Aisha Khan',
+  },
+  {
+    id: 'USR-1004',
+    name: 'Tom Sinclair',
+    email: 'tom.sinclair@hi5central.com',
+    staffNumber: 'HC-10643',
+    jobTitle: 'Accounts Payable Specialist',
+    department: 'Finance',
+    location: 'Leeds',
+    manager: 'Marcus Lee',
+  },
+  {
+    id: 'USR-1005',
+    name: 'Amelia Brooks',
+    email: 'amelia.brooks@hi5central.com',
+    staffNumber: 'HC-10904',
+    jobTitle: 'People Partner',
+    department: 'People',
+    location: 'London HQ',
+    manager: 'Sophie Walker',
+  },
+  {
+    id: 'USR-1006',
+    name: 'Daniel Cole',
+    email: 'daniel.cole@hi5central.com',
+    staffNumber: 'HC-10218',
+    jobTitle: 'Operations Coordinator',
+    department: 'Operations',
+    location: 'Bristol',
+    manager: 'Freya Morgan',
+  },
+  {
+    id: 'USR-1007',
+    name: 'Priya Raman',
+    email: 'priya.raman@hi5central.com',
+    staffNumber: 'HC-10031',
+    jobTitle: 'Infrastructure Engineer',
+    department: 'Technology',
+    location: 'London HQ',
+    manager: 'James Howard',
+  },
+  {
+    id: 'USR-1008',
+    name: 'Noah Williams',
+    email: 'noah.williams@hi5central.com',
+    staffNumber: 'HC-10550',
+    jobTitle: 'EUC Analyst',
+    department: 'Technology',
+    location: 'Birmingham',
+    manager: 'Maya Ford',
+  },
+]
+
+export const incidentServices = [
+  {
+    name: 'Collaboration',
+    categories: ['Email & Messaging', 'Microsoft Teams', 'SharePoint & OneDrive'],
+  },
+  {
+    name: 'Identity',
+    categories: ['Sign-in & MFA', 'User Account', 'Permissions'],
+  },
+  {
+    name: 'Hardware',
+    categories: ['Laptop or Desktop', 'Peripheral', 'Printer'],
+  },
+  {
+    name: 'Network Security',
+    categories: ['VPN', 'Firewall', 'Secure Connectivity'],
+  },
+  {
+    name: 'Wireless',
+    categories: ['Corporate Wi-Fi', 'Guest Wi-Fi', 'Roaming'],
+  },
+  {
+    name: 'Access',
+    categories: ['Application Access', 'Shared Resource', 'Privileged Access'],
+  },
+]
+
 export const serviceCatalog = [
   {
     title: 'Report an IT Issue',
