@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bell,
   CheckCircle2,
@@ -41,10 +41,14 @@ import {
 } from './lib/routes.js'
 import { authenticateDemoUser } from './services/demoAuth.js'
 import {
+  loadAccent,
+  loadDensity,
   loadSession,
   loadSidebarMode,
   loadTheme,
   loadTickets,
+  saveAccent,
+  saveDensity,
   saveSession,
   saveSidebarMode,
   saveTheme,
@@ -52,10 +56,13 @@ import {
 } from './services/demoStore.js'
 import {
   ChangesView,
+  CmdbRecordView,
   CmdbView,
   DashboardView,
+  KnowledgeArticleView,
   KnowledgeView,
   LoginScreen,
+  NewRecordView,
   NewTabView,
   ReportsView,
   SelfServicePortal,
@@ -65,6 +72,36 @@ import {
   TicketsView,
 } from './features/workspace/WorkspaceViews.jsx'
 import './App.css'
+
+const settingsSectionTitles = {
+  appearance: 'Appearance',
+  workspace: 'Workspace',
+  profile: 'Profile',
+}
+
+function getSystemTheme() {
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
+function tabFromRoute(route) {
+  const asset = route.assetId ? assets.find((item) => item.id === route.assetId) : undefined
+  const article = route.articleSlug
+    ? knowledgeArticles.find((item) => item.slug === route.articleSlug)
+    : undefined
+
+  return makeTab(route.viewId, {
+    key: route.key,
+    title: asset?.name || article?.title || route.title,
+    pinned: route.viewId === 'home' || (route.viewId === 'portal' && !route.portalRequestId),
+    recordId: route.recordId,
+    assetId: route.assetId,
+    articleSlug: route.articleSlug,
+    portalRequestId: route.portalRequestId,
+    settingsSection: route.settingsSection,
+    newRecordType: route.newRecordType,
+    navId: route.navId,
+  })
+}
 
 function App() {
   const [initialTickets] = useState(loadTickets)
@@ -76,23 +113,20 @@ function App() {
   )
   const [session, setSession] = useState(initialSession)
   const [theme, setTheme] = useState(loadTheme)
+  const [systemTheme, setSystemTheme] = useState(getSystemTheme)
+  const [accent, setAccent] = useState(loadAccent)
   const [sidebarMode, setSidebarMode] = useState(loadSidebarMode)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
-  const [density, setDensity] = useState('comfortable')
+  const [density, setDensity] = useState(loadDensity)
+  const tabListRef = useRef(null)
   const [tickets, setTickets] = useState(initialTickets)
-  const [tabs, setTabs] = useState(() => [
-    makeTab(initialWorkspaceRoute.viewId, {
-      key: initialWorkspaceRoute.key,
-      title: initialWorkspaceRoute.title,
-      pinned: initialWorkspaceRoute.viewId === 'home' || initialWorkspaceRoute.viewId === 'portal',
-      recordId: initialWorkspaceRoute.recordId,
-    }),
-  ])
+  const [tabs, setTabs] = useState(() => [tabFromRoute(initialWorkspaceRoute)])
   const [activeTabKey, setActiveTabKey] = useState(initialWorkspaceRoute.key)
   const initialRouteType =
-    initialWorkspaceRoute.filter?.type && initialWorkspaceRoute.filter.type !== 'All'
+    initialWorkspaceRoute.newRecordType ||
+    (initialWorkspaceRoute.filter?.type && initialWorkspaceRoute.filter.type !== 'All'
       ? initialWorkspaceRoute.filter.type
-      : undefined
+      : undefined)
   const initialModuleTicket = initialRouteType
     ? initialTickets.find((ticket) => ticket.type === initialRouteType)
     : undefined
@@ -127,6 +161,8 @@ function App() {
     urgency: 'Medium',
   })
 
+  const resolvedTheme = theme === 'system' ? systemTheme : theme
+
   useEffect(() => {
     saveTickets(tickets)
   }, [tickets])
@@ -134,6 +170,31 @@ function App() {
   useEffect(() => {
     saveTheme(theme)
   }, [theme])
+
+  useEffect(() => {
+    saveAccent(accent)
+  }, [accent])
+
+  useEffect(() => {
+    saveDensity(density)
+  }, [density])
+
+  useEffect(() => {
+    const media = window.matchMedia?.('(prefers-color-scheme: dark)')
+    if (!media) return undefined
+
+    const handleSystemThemeChange = (event) => {
+      setSystemTheme(event.matches ? 'dark' : 'light')
+    }
+
+    setSystemTheme(media.matches ? 'dark' : 'light')
+    media.addEventListener?.('change', handleSystemThemeChange)
+    return () => media.removeEventListener?.('change', handleSystemThemeChange)
+  }, [])
+
+  useEffect(() => {
+    document.documentElement.style.colorScheme = resolvedTheme
+  }, [resolvedTheme])
 
   useEffect(() => {
     saveSidebarMode(sidebarMode)
@@ -164,23 +225,16 @@ function App() {
       const currentRoute = routeFromLocation()
       const route = resolveRouteForRole(currentRoute, session.role)
 
-      if (session.role === 'requester') {
-        writeRoute('/portal', { replace: true })
-        return
-      }
-
       if (route.path !== currentRoute.path) {
         writeRoute(route.path, { replace: true })
       }
 
-      const tab = makeTab(route.viewId, {
-        key: route.key,
-        title: route.title,
-        recordId: route.recordId,
-      })
+      const tab = tabFromRoute(route)
 
       if (route.recordId) {
         setSelectedTicketId(route.recordId)
+      } else if (route.newRecordType) {
+        setTicketDraft((currentDraft) => ({ ...currentDraft, type: route.newRecordType }))
       } else if (route.filter?.type && route.filter.type !== 'All') {
         const firstModuleTicket = tickets.find((ticket) => ticket.type === route.filter.type)
         if (firstModuleTicket) setSelectedTicketId(firstModuleTicket.id)
@@ -211,6 +265,26 @@ function App() {
     return () => window.clearTimeout(timer)
   }, [toast])
 
+  useEffect(() => {
+    const list = tabListRef.current
+    const activeTabElement = list
+      ? Array.from(list.children).find((element) => element.dataset?.tabKey === activeTabKey)
+      : undefined
+    if (!list || !activeTabElement) return
+
+    const left = activeTabElement.offsetLeft
+    const right = left + activeTabElement.offsetWidth
+    const visibleLeft = list.scrollLeft
+    const visibleRight = visibleLeft + list.clientWidth
+
+    if (left < visibleLeft || right > visibleRight) {
+      list.scrollTo({
+        left: Math.max(0, left - 12),
+        behavior: 'smooth',
+      })
+    }
+  }, [activeTabKey, tabs.length])
+
   const activeTab = tabs.find((tab) => tab.key === activeTabKey) || tabs[0]
   const activeView = activeTab?.viewId || 'home'
   const activeModule = serviceDeskModules[activeView]
@@ -219,6 +293,15 @@ function App() {
     tickets.find((ticket) => ticket.id === (activeTab?.recordId || selectedTicketId)) ||
     (activeModuleType ? tickets.find((ticket) => ticket.type === activeModuleType) : undefined) ||
     tickets[0]
+  const selectedAsset = activeTab?.assetId
+    ? assets.find((asset) => asset.id === activeTab.assetId)
+    : undefined
+  const selectedArticle = activeTab?.articleSlug
+    ? knowledgeArticles.find((article) => article.slug === activeTab.articleSlug)
+    : undefined
+  const selectedPortalRequest = activeTab?.portalRequestId
+    ? tickets.find((ticket) => ticket.id === activeTab.portalRequestId)
+    : undefined
   const navItems = analystNavIds.map((id) => viewMeta[id])
   const navGroups = analystNavGroups.map((group) => ({
     ...group,
@@ -232,10 +315,22 @@ function App() {
           Problem: 'problems',
           Change: 'changes',
         }[selectedTicket?.type]
-      : activeView
-  const breadcrumbs = getBreadcrumbs(activeTab, selectedTicket)
+      : activeView === 'newrecord'
+        ? activeTab?.navId || {
+            Incident: 'incidents',
+            'Service Request': 'requests',
+            Problem: 'problems',
+            Change: 'changes',
+          }[activeTab?.newRecordType]
+        : activeView
+  const breadcrumbs = getBreadcrumbs(activeTab, selectedTicket, selectedAsset, selectedArticle)
   const sidebarCollapsed = sidebarMode === 'collapsed'
   const sidebarHidden = sidebarMode === 'hidden'
+
+  useEffect(() => {
+    const title = activeTab?.title || 'Hi5Central'
+    document.title = title === 'Hi5Central' ? title : `${title} · Hi5Central`
+  }, [activeTab?.title])
 
   const filteredTickets = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
@@ -294,6 +389,13 @@ function App() {
         query: '',
         ...overrides,
       }
+    } else if (viewId === 'settings' && !overrides.settingsSection) {
+      normalizedOverrides = {
+        ...overrides,
+        key: 'settings-appearance',
+        title: 'Appearance',
+        settingsSection: 'appearance',
+      }
     } else if (viewId === 'tickets' && !overrides.recordId && !overrides.filter && !overrides.key) {
       normalizedOverrides = {
         ...overrides,
@@ -307,6 +409,8 @@ function App() {
     const tab = makeTab(viewId, normalizedOverrides)
     if (normalizedOverrides.recordId) {
       setSelectedTicketId(normalizedOverrides.recordId)
+    } else if (normalizedOverrides.newRecordType) {
+      setTicketDraft((currentDraft) => ({ ...currentDraft, type: normalizedOverrides.newRecordType }))
     } else if (moduleConfig) {
       const firstModuleTicket = tickets.find((ticket) => ticket.type === moduleConfig.type)
       if (firstModuleTicket) setSelectedTicketId(firstModuleTicket.id)
@@ -337,8 +441,88 @@ function App() {
       key: crumb.key,
       query: crumb.query,
       recordId: crumb.recordId,
+      assetId: crumb.assetId,
+      articleSlug: crumb.articleSlug,
+      settingsSection: crumb.settingsSection,
+      newRecordType: crumb.newRecordType,
       title: crumb.title,
     })
+  }
+
+  function openNewRecord(recordType = 'Incident') {
+    const config = {
+      Incident: { navId: 'incidents', section: 'incidents', title: 'New Incident' },
+      'Service Request': { navId: 'requests', section: 'requests', title: 'New Service Request' },
+      Problem: { navId: 'problems', section: 'problems', title: 'New Problem' },
+      Change: { navId: 'changes', section: 'changes', title: 'New Change' },
+    }[recordType] || { navId: 'incidents', section: 'incidents', title: 'New Incident' }
+
+    setTicketDraft((currentDraft) => ({ ...currentDraft, type: recordType }))
+    openTab('newrecord', {
+      key: `new-${config.section}`,
+      title: config.title,
+      newRecordType: recordType,
+      navId: config.navId,
+    })
+  }
+
+  function openAsset(asset) {
+    openTab('cmdb', {
+      key: `asset-${asset.id}`,
+      title: asset.name,
+      assetId: asset.id,
+    })
+  }
+
+  function openAssetByName(assetName) {
+    const asset = assets.find((item) => item.name === assetName || item.id === assetName)
+    if (!asset) {
+      setToast(`${assetName} is not in the prototype CMDB yet`)
+      return
+    }
+    openAsset(asset)
+  }
+
+  function openArticle(article) {
+    openTab('knowledge', {
+      key: `knowledge-${article.slug}`,
+      title: article.title,
+      articleSlug: article.slug,
+    })
+  }
+
+  function openSettingsSection(section) {
+    openTab('settings', {
+      key: `settings-${section}`,
+      title: settingsSectionTitles[section] || 'Settings',
+      settingsSection: section,
+    })
+  }
+
+  function openPortalRequest(ticket) {
+    const tab = makeTab('portal', {
+      key: `portal-request-${ticket.id}`,
+      title: ticket.id,
+      portalRequestId: ticket.id,
+    })
+    setTabs((currentTabs) =>
+      currentTabs.some((currentTab) => currentTab.key === tab.key)
+        ? currentTabs
+        : [...currentTabs, tab],
+    )
+    setActiveTabKey(tab.key)
+    writeRoute(pathForTab(tab, tickets))
+  }
+
+  function openPortalHome() {
+    const tab = makeTab('portal', { key: 'portal', title: 'Self-Service', pinned: true })
+    setTabs((currentTabs) =>
+      currentTabs.some((currentTab) => currentTab.key === tab.key)
+        ? currentTabs
+        : [...currentTabs, tab],
+    )
+    setActiveTabKey(tab.key)
+    writeRoute('/portal')
   }
 
   function openSidebarTab(viewId) {
@@ -357,6 +541,8 @@ function App() {
   function activateTab(tab) {
     if (tab.recordId) {
       setSelectedTicketId(tab.recordId)
+    } else if (tab.newRecordType) {
+      setTicketDraft((currentDraft) => ({ ...currentDraft, type: tab.newRecordType }))
     } else if (serviceDeskModules[tab.viewId]) {
       const moduleConfig = serviceDeskModules[tab.viewId]
       const firstModuleTicket = tickets.find((ticket) => ticket.type === moduleConfig.type)
@@ -379,6 +565,8 @@ function App() {
       const fallbackTab = nextTabs[fallbackIndex] || nextTabs[0]
       if (fallbackTab.recordId) {
         setSelectedTicketId(fallbackTab.recordId)
+      } else if (fallbackTab.newRecordType) {
+        setTicketDraft((currentDraft) => ({ ...currentDraft, type: fallbackTab.newRecordType }))
       } else if (serviceDeskModules[fallbackTab.viewId]) {
         const moduleConfig = serviceDeskModules[fallbackTab.viewId]
         const firstModuleTicket = tickets.find((ticket) => ticket.type === moduleConfig.type)
@@ -494,6 +682,9 @@ function App() {
       urgency: 'Medium',
     })
     setToast(`${createdTicket.id} submitted through self-service`)
+    if (session?.role === 'requester') {
+      openPortalRequest(createdTicket)
+    }
   }
 
   function approveChange(ticket, approval) {
@@ -518,12 +709,7 @@ function App() {
       initialRoute.kind === 'workspace'
         ? resolveRouteForRole(initialRoute, profile.role)
         : defaultRouteForRole(profile.role)
-    const tab = makeTab(requestedRoute.viewId, {
-      key: requestedRoute.key,
-      title: requestedRoute.title,
-      pinned: requestedRoute.viewId === 'home' || requestedRoute.viewId === 'portal',
-      recordId: requestedRoute.recordId,
-    })
+    const tab = tabFromRoute(requestedRoute)
 
     setSession(nextSession)
     setLoginError('')
@@ -531,6 +717,8 @@ function App() {
     setActiveTabKey(tab.key)
     if (requestedRoute.recordId) {
       setSelectedTicketId(requestedRoute.recordId)
+    } else if (requestedRoute.newRecordType) {
+      setTicketDraft((currentDraft) => ({ ...currentDraft, type: requestedRoute.newRecordType }))
     } else if (requestedRoute.filter?.type && requestedRoute.filter.type !== 'All') {
       const firstModuleTicket = tickets.find((ticket) => ticket.type === requestedRoute.filter.type)
       if (firstModuleTicket) setSelectedTicketId(firstModuleTicket.id)
@@ -605,11 +793,23 @@ function App() {
       )
     }
 
+    if (activeView === 'newrecord') {
+      return (
+        <NewRecordView
+          handleTicketSubmit={handleTicketSubmit}
+          recordType={activeTab.newRecordType || ticketDraft.type}
+          setTicketDraft={setTicketDraft}
+          ticketDraft={ticketDraft}
+        />
+      )
+    }
+
     if (activeView === 'tickets' && activeTab?.recordId) {
       return (
         <TicketRecordView
           addComment={addComment}
           newComment={newComment}
+          openAssetByName={openAssetByName}
           selectedTicket={selectedTicket}
           setNewComment={setNewComment}
           updateTicket={updateTicket}
@@ -626,6 +826,7 @@ function App() {
           handleTicketSubmit={handleTicketSubmit}
           moduleConfig={serviceDeskModules[activeView]}
           newComment={newComment}
+          openNewRecord={openNewRecord}
           openRecordTab={(ticket) =>
             openTab('tickets', { key: `ticket-${ticket.id}`, title: ticket.id, recordId: ticket.id })
           }
@@ -648,6 +849,7 @@ function App() {
         <SelfServicePortal
           currentUser={session}
           handlePortalSubmit={handlePortalSubmit}
+          openPortalRequest={openPortalRequest}
           portalDraft={portalDraft}
           portalQuery={portalQuery}
           portalResults={portalResults}
@@ -663,6 +865,7 @@ function App() {
       return (
         <ChangesView
           approveChange={approveChange}
+          openNewRecord={openNewRecord}
           openRecordTab={(ticket) =>
             openTab('tickets', { key: `ticket-${ticket.id}`, title: ticket.id, recordId: ticket.id })
           }
@@ -672,12 +875,27 @@ function App() {
     }
 
     if (activeView === 'cmdb') {
-      return <CmdbView assets={assets} tickets={tickets} />
+      if (selectedAsset) {
+        return (
+          <CmdbRecordView
+            asset={selectedAsset}
+            openRecordTab={(ticket) =>
+              openTab('tickets', { key: `ticket-${ticket.id}`, title: ticket.id, recordId: ticket.id })
+            }
+            tickets={tickets}
+          />
+        )
+      }
+      return <CmdbView assets={assets} openAsset={openAsset} tickets={tickets} />
     }
 
     if (activeView === 'knowledge') {
+      if (selectedArticle) {
+        return <KnowledgeArticleView article={selectedArticle} />
+      }
       return (
         <KnowledgeView
+          openArticle={openArticle}
           portalQuery={portalQuery}
           portalResults={portalResults}
           setPortalQuery={setPortalQuery}
@@ -691,11 +909,16 @@ function App() {
 
     return (
       <SettingsView
+        accent={accent}
         density={density}
+        openSettingsSection={openSettingsSection}
+        resolvedTheme={resolvedTheme}
         session={session}
+        setAccent={setAccent}
         setDensity={setDensity}
         setSidebarMode={setSidebarMode}
         setTheme={setTheme}
+        settingsSection={activeTab?.settingsSection || 'appearance'}
         sidebarMode={sidebarMode}
         theme={theme}
       />
@@ -705,6 +928,7 @@ function App() {
   if (!session) {
     return (
       <LoginScreen
+        accent={accent}
         fillCredentials={fillCredentials}
         loginError={loginError}
         loginForm={loginForm}
@@ -713,7 +937,7 @@ function App() {
         setLoginForm={setLoginForm}
         setLoginMode={setLoginMode}
         setTheme={setTheme}
-        theme={theme}
+        theme={resolvedTheme}
       />
     )
   }
@@ -721,9 +945,13 @@ function App() {
   if (session.role === 'requester') {
     return (
       <SelfServiceShell
+        accent={accent}
+        activeRequest={selectedPortalRequest}
         currentUser={session}
         handleLogout={handleLogout}
         handlePortalSubmit={handlePortalSubmit}
+        openPortalHome={openPortalHome}
+        openPortalRequest={openPortalRequest}
         portalDraft={portalDraft}
         portalQuery={portalQuery}
         portalResults={portalResults}
@@ -731,7 +959,7 @@ function App() {
         setPortalDraft={setPortalDraft}
         setPortalQuery={setPortalQuery}
         setTheme={setTheme}
-        theme={theme}
+        theme={resolvedTheme}
         tickets={tickets}
         toast={toast}
       />
@@ -741,7 +969,8 @@ function App() {
   return (
     <div
       className={`app-shell sidebar-${sidebarMode} density-${density}`}
-      data-theme={theme}
+      data-accent={accent}
+      data-theme={resolvedTheme}
     >
       <header className="mobile-topbar" aria-label="Mobile workspace controls">
         <button
@@ -754,16 +983,16 @@ function App() {
         </button>
 
         <div className="mobile-topbar-actions">
-          <button className="mobile-icon-action mobile-new-ticket" onClick={() => openTab('incidents')} title="New incident" type="button">
+          <button className="mobile-icon-action mobile-new-ticket" onClick={() => openNewRecord('Incident')} title="New incident" type="button">
             <Plus size={18} aria-hidden="true" />
           </button>
           <button
             className="mobile-icon-action"
-            onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
-            title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+            onClick={() => setTheme(resolvedTheme === 'light' ? 'dark' : 'light')}
+            title={resolvedTheme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
             type="button"
           >
-            {theme === 'light' ? <Moon size={17} /> : <Sun size={17} />}
+            {resolvedTheme === 'light' ? <Moon size={17} /> : <Sun size={17} />}
           </button>
           <button className="mobile-icon-action" title="Notifications" type="button">
             <Bell size={17} aria-hidden="true" />
@@ -844,10 +1073,11 @@ function App() {
 
       <section className="main-frame">
         <header className="tabbar" aria-label="Open workspace tabs">
-          <div className="tab-list">
+          <div className="tab-list" ref={tabListRef}>
             {tabs.map((tab) => (
                 <button
                   className={activeTabKey === tab.key ? 'workspace-tab active' : 'workspace-tab'}
+                  data-tab-key={tab.key}
                   key={tab.key}
                   onClick={() => activateTab(tab)}
                   type="button"
@@ -886,7 +1116,7 @@ function App() {
             )}
             <button
               className="new-ticket-button"
-              onClick={() => openTab('incidents')}
+              onClick={() => openNewRecord('Incident')}
               type="button"
             >
               <Plus size={16} aria-hidden="true" />
@@ -904,11 +1134,11 @@ function App() {
             </label>
             <button
               className="icon-button"
-              onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
-              title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+              onClick={() => setTheme(resolvedTheme === 'light' ? 'dark' : 'light')}
+              title={resolvedTheme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
               type="button"
             >
-              {theme === 'light' ? <Moon size={17} /> : <Sun size={17} />}
+              {resolvedTheme === 'light' ? <Moon size={17} /> : <Sun size={17} />}
             </button>
             <button className="icon-button" title="Notifications" type="button">
               <Bell size={17} aria-hidden="true" />
