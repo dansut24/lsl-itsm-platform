@@ -47,12 +47,14 @@ import {
   loadSidebarMode,
   loadTheme,
   loadTickets,
+  loadWorkspace,
   saveAccent,
   saveDensity,
   saveSession,
   saveSidebarMode,
   saveTheme,
   saveTickets,
+  saveWorkspace,
 } from './services/demoStore.js'
 import {
   ChangesView,
@@ -100,17 +102,85 @@ function tabFromRoute(route) {
     settingsSection: route.settingsSection,
     newRecordType: route.newRecordType,
     navId: route.navId,
+    filter: route.filter,
+    query: route.query,
   })
+}
+
+const MAX_WORKSPACE_TABS = 12
+
+function emptyTicketDraft(type = 'Incident') {
+  return {
+    type,
+    title: '',
+    requester: '',
+    priority: 'Medium',
+    service: 'Collaboration',
+    team: 'Service Desk',
+    description: '',
+  }
+}
+
+function isTicketDraftDirty(draft, type = draft?.type || 'Incident') {
+  if (!draft) return false
+  const baseline = emptyTicketDraft(type)
+  return Object.keys(baseline).some((key) => key !== 'type' && draft[key] !== baseline[key])
+}
+
+function restoreWorkspaceTabs(workspace, routeTab) {
+  const savedTabs = Array.isArray(workspace?.tabs)
+    ? workspace.tabs
+        .filter((tab) => tab && typeof tab.key === 'string' && typeof tab.viewId === 'string')
+        .map((tab) => makeTab(tab.viewId, tab))
+    : []
+
+  const deduped = savedTabs.filter(
+    (tab, index, list) => list.findIndex((candidate) => candidate.key === tab.key) === index,
+  )
+
+  if (!deduped.some((tab) => tab.key === routeTab.key)) {
+    deduped.push(routeTab)
+  }
+
+  if (!deduped.length) return [routeTab]
+  if (deduped.length <= MAX_WORKSPACE_TABS) return deduped
+
+  const essentials = deduped.filter((tab) => tab.pinned || tab.key === routeTab.key)
+  const recent = deduped
+    .filter((tab) => !essentials.some((essential) => essential.key === tab.key))
+    .slice(-(MAX_WORKSPACE_TABS - essentials.length))
+
+  return [...essentials, ...recent].slice(-MAX_WORKSPACE_TABS)
+}
+
+function addWorkspaceTab(currentTabs, tab) {
+  if (currentTabs.some((currentTab) => currentTab.key === tab.key)) return currentTabs
+
+  const nextTabs = [...currentTabs, tab]
+  if (nextTabs.length <= MAX_WORKSPACE_TABS) return nextTabs
+
+  const removableIndex = nextTabs.findIndex(
+    (currentTab) => !currentTab.pinned && currentTab.key !== tab.key,
+  )
+  if (removableIndex >= 0) nextTabs.splice(removableIndex, 1)
+
+  return nextTabs.slice(-MAX_WORKSPACE_TABS)
 }
 
 function App() {
   const [initialTickets] = useState(loadTickets)
   const [initialSession] = useState(loadSession)
+  const [initialWorkspace] = useState(loadWorkspace)
   const [initialRoute] = useState(routeFromLocation)
   const initialWorkspaceRoute = resolveRouteForRole(
     initialRoute,
     initialSession?.role || 'analyst',
   )
+  const initialRouteTab = tabFromRoute(initialWorkspaceRoute)
+  const initialTabs = initialSession?.role === 'analyst'
+    ? restoreWorkspaceTabs(initialWorkspace, initialRouteTab)
+    : [initialRouteTab]
+  const initialActiveTab = initialTabs.find((tab) => tab.key === initialRouteTab.key) || initialRouteTab
   const [session, setSession] = useState(initialSession)
   const [theme, setTheme] = useState(loadTheme)
   const [systemTheme, setSystemTheme] = useState(getSystemTheme)
@@ -120,12 +190,12 @@ function App() {
   const [density, setDensity] = useState(loadDensity)
   const tabListRef = useRef(null)
   const [tickets, setTickets] = useState(initialTickets)
-  const [tabs, setTabs] = useState(() => [tabFromRoute(initialWorkspaceRoute)])
-  const [activeTabKey, setActiveTabKey] = useState(initialWorkspaceRoute.key)
+  const [tabs, setTabs] = useState(initialTabs)
+  const [activeTabKey, setActiveTabKey] = useState(initialRouteTab.key)
   const initialRouteType =
-    initialWorkspaceRoute.newRecordType ||
-    (initialWorkspaceRoute.filter?.type && initialWorkspaceRoute.filter.type !== 'All'
-      ? initialWorkspaceRoute.filter.type
+    initialActiveTab.newRecordType ||
+    (initialActiveTab.filter?.type && initialActiveTab.filter.type !== 'All'
+      ? initialActiveTab.filter.type
       : undefined)
   const initialModuleTicket = initialRouteType
     ? initialTickets.find((ticket) => ticket.type === initialRouteType)
@@ -133,9 +203,9 @@ function App() {
   const [selectedTicketId, setSelectedTicketId] = useState(
     initialWorkspaceRoute.recordId || initialModuleTicket?.id || initialTickets[0]?.id || seedTickets[0].id,
   )
-  const [query, setQuery] = useState(initialWorkspaceRoute.query || '')
+  const [query, setQuery] = useState(initialActiveTab.query || '')
   const [filters, setFilters] = useState(
-    initialWorkspaceRoute.filter || allTicketFilters(),
+    initialActiveTab.filter || allTicketFilters(),
   )
   const [toast, setToast] = useState('')
   const [newComment, setNewComment] = useState('')
@@ -143,15 +213,7 @@ function App() {
   const [loginMode, setLoginMode] = useState('analyst')
   const [loginForm, setLoginForm] = useState({ username: '', password: '' })
   const [loginError, setLoginError] = useState('')
-  const [ticketDraft, setTicketDraft] = useState({
-    type: initialRouteType || 'Incident',
-    title: '',
-    requester: '',
-    priority: 'Medium',
-    service: 'Collaboration',
-    team: 'Service Desk',
-    description: '',
-  })
+  const [ticketDraft, setTicketDraft] = useState(() => emptyTicketDraft(initialRouteType || 'Incident'))
   const [portalDraft, setPortalDraft] = useState({
     requester: initialSession?.role === 'requester' ? initialSession.name : '',
     email: initialSession?.role === 'requester' ? loginProfiles.requester.username : '',
@@ -205,6 +267,11 @@ function App() {
   }, [session])
 
   useEffect(() => {
+    if (session?.role !== 'analyst') return
+    saveWorkspace({ tabs: tabs.slice(-MAX_WORKSPACE_TABS), activeTabKey })
+  }, [activeTabKey, session?.role, tabs])
+
+  useEffect(() => {
     const currentRoute = routeFromLocation()
 
     if (!session) {
@@ -224,6 +291,20 @@ function App() {
 
       const currentRoute = routeFromLocation()
       const route = resolveRouteForRole(currentRoute, session.role)
+      const currentTab = tabs.find((tab) => tab.key === activeTabKey)
+      const leavingDirtyDraft =
+        currentTab?.viewId === 'newrecord' &&
+        route.key !== currentTab.key &&
+        isTicketDraftDirty(ticketDraft, currentTab.newRecordType)
+
+      if (leavingDirtyDraft) {
+        const confirmed = window.confirm('You have unsaved changes. Leave this record without saving?')
+        if (!confirmed) {
+          writeRoute(pathForTab(currentTab, tickets), { replace: true })
+          return
+        }
+        setTicketDraft(emptyTicketDraft(currentTab.newRecordType || ticketDraft.type))
+      }
 
       if (route.path !== currentRoute.path) {
         writeRoute(route.path, { replace: true })
@@ -247,17 +328,13 @@ function App() {
         setQuery(route.query)
       }
 
-      setTabs((currentTabs) =>
-        currentTabs.some((currentTab) => currentTab.key === tab.key)
-          ? currentTabs
-          : [...currentTabs, tab],
-      )
+      setTabs((currentTabs) => addWorkspaceTab(currentTabs, tab))
       setActiveTabKey(tab.key)
     }
 
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
-  }, [session, tickets])
+  }, [activeTabKey, session, tabs, ticketDraft, tickets])
 
   useEffect(() => {
     if (!toast) return undefined
@@ -289,6 +366,41 @@ function App() {
   const activeView = activeTab?.viewId || 'home'
   const activeModule = serviceDeskModules[activeView]
   const activeModuleType = activeModule?.type
+  const activeHasUnsavedChanges =
+    activeView === 'newrecord' && isTicketDraftDirty(ticketDraft, activeTab?.newRecordType)
+
+  useEffect(() => {
+    if (!activeHasUnsavedChanges) return undefined
+
+    const handleBeforeUnload = (event) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [activeHasUnsavedChanges])
+
+  useEffect(() => {
+    if (!(activeView === 'tickets' || serviceDeskModules[activeView])) return
+
+    setTabs((currentTabs) =>
+      currentTabs.map((tab) => {
+        if (tab.key !== activeTabKey) return tab
+
+        const currentFilter = tab.filter || {}
+        const filterUnchanged =
+          currentFilter.status === filters.status &&
+          currentFilter.priority === filters.priority &&
+          currentFilter.type === filters.type
+        const queryUnchanged = (tab.query || '') === query
+
+        if (filterUnchanged && queryUnchanged) return tab
+        return { ...tab, filter: { ...filters }, query }
+      }),
+    )
+  }, [activeTabKey, activeView, filters, query])
+
   const selectedTicket =
     tickets.find((ticket) => ticket.id === (activeTab?.recordId || selectedTicketId)) ||
     (activeModuleType ? tickets.find((ticket) => ticket.type === activeModuleType) : undefined) ||
@@ -377,6 +489,16 @@ function App() {
     )
   }, [portalQuery])
 
+  function confirmLeavingDraft() {
+    if (!activeHasUnsavedChanges) return true
+
+    const confirmed = window.confirm('You have unsaved changes. Leave this record without saving?')
+    if (confirmed) {
+      setTicketDraft(emptyTicketDraft(activeTab?.newRecordType || ticketDraft.type))
+    }
+    return confirmed
+  }
+
   function openTab(viewId, overrides = {}, navigation = {}) {
     const moduleConfig = serviceDeskModules[viewId]
     let normalizedOverrides = overrides
@@ -407,6 +529,14 @@ function App() {
     }
 
     const tab = makeTab(viewId, normalizedOverrides)
+    if (
+      tab.key !== activeTabKey &&
+      navigation.skipUnsavedCheck !== true &&
+      !confirmLeavingDraft()
+    ) {
+      return
+    }
+
     if (normalizedOverrides.recordId) {
       setSelectedTicketId(normalizedOverrides.recordId)
     } else if (normalizedOverrides.newRecordType) {
@@ -422,11 +552,13 @@ function App() {
     if (normalizedOverrides.query !== undefined) {
       setQuery(normalizedOverrides.query)
     }
-    setTabs((currentTabs) =>
-      currentTabs.some((currentTab) => currentTab.key === tab.key)
-        ? currentTabs
-        : [...currentTabs, tab],
-    )
+    setTabs((currentTabs) => {
+      let nextTabs = addWorkspaceTab(currentTabs, tab)
+      if (navigation.replaceTabKey && navigation.replaceTabKey !== tab.key) {
+        nextTabs = nextTabs.filter((currentTab) => currentTab.key !== navigation.replaceTabKey)
+      }
+      return nextTabs
+    })
     setActiveTabKey(tab.key)
 
     if (navigation.syncRoute !== false) {
@@ -449,7 +581,7 @@ function App() {
     })
   }
 
-  function openNewRecord(recordType = 'Incident') {
+  function openNewRecord(recordType = 'Incident', navigation = {}) {
     const config = {
       Incident: { navId: 'incidents', section: 'incidents', title: 'New Incident' },
       'Service Request': { navId: 'requests', section: 'requests', title: 'New Service Request' },
@@ -457,13 +589,16 @@ function App() {
       Change: { navId: 'changes', section: 'changes', title: 'New Change' },
     }[recordType] || { navId: 'incidents', section: 'incidents', title: 'New Incident' }
 
-    setTicketDraft((currentDraft) => ({ ...currentDraft, type: recordType }))
-    openTab('newrecord', {
-      key: `new-${config.section}`,
-      title: config.title,
-      newRecordType: recordType,
-      navId: config.navId,
-    })
+    openTab(
+      'newrecord',
+      {
+        key: `new-${config.section}`,
+        title: config.title,
+        newRecordType: recordType,
+        navId: config.navId,
+      },
+      navigation,
+    )
   }
 
   function openAsset(asset) {
@@ -531,14 +666,19 @@ function App() {
   }
 
   function openNewTab() {
+    if (!confirmLeavingDraft()) return
+
     const key = `newtab-${Date.now()}`
     const tab = makeTab('newtab', { key, title: 'New Tab' })
-    setTabs((currentTabs) => [...currentTabs, tab])
+    setTabs((currentTabs) => addWorkspaceTab(currentTabs, tab))
     setActiveTabKey(key)
     writeRoute(pathForTab(tab, tickets))
   }
 
   function activateTab(tab) {
+    if (tab.key === activeTabKey) return
+    if (!confirmLeavingDraft()) return
+
     if (tab.recordId) {
       setSelectedTicketId(tab.recordId)
     } else if (tab.newRecordType) {
@@ -548,14 +688,19 @@ function App() {
       const firstModuleTicket = tickets.find((ticket) => ticket.type === moduleConfig.type)
       if (firstModuleTicket) setSelectedTicketId(firstModuleTicket.id)
       setTicketDraft((currentDraft) => ({ ...currentDraft, type: moduleConfig.type }))
-      setFilters({ ...allTicketFilters(), type: moduleConfig.type })
-      setQuery('')
+      setFilters(tab.filter || { ...allTicketFilters(), type: moduleConfig.type })
+      setQuery(tab.query || '')
+    } else if (tab.viewId === 'tickets') {
+      setFilters(tab.filter || allTicketFilters())
+      setQuery(tab.query || '')
     }
     setActiveTabKey(tab.key)
     writeRoute(pathForTab(tab, tickets))
   }
 
   function closeTab(key) {
+    if (key === activeTabKey && !confirmLeavingDraft()) return
+
     const index = tabs.findIndex((tab) => tab.key === key)
     const nextTabs = tabs.filter((tab) => tab.key !== key)
     if (!nextTabs.length) return
@@ -572,8 +717,11 @@ function App() {
         const firstModuleTicket = tickets.find((ticket) => ticket.type === moduleConfig.type)
         if (firstModuleTicket) setSelectedTicketId(firstModuleTicket.id)
         setTicketDraft((currentDraft) => ({ ...currentDraft, type: moduleConfig.type }))
-        setFilters({ ...allTicketFilters(), type: moduleConfig.type })
-        setQuery('')
+        setFilters(fallbackTab.filter || { ...allTicketFilters(), type: moduleConfig.type })
+        setQuery(fallbackTab.query || '')
+      } else if (fallbackTab.viewId === 'tickets') {
+        setFilters(fallbackTab.filter || allTicketFilters())
+        setQuery(fallbackTab.query || '')
       }
       setActiveTabKey(fallbackTab.key)
       writeRoute(pathForTab(fallbackTab, tickets), { replace: true })
@@ -629,16 +777,12 @@ function App() {
     }
 
     setTickets((currentTickets) => [createdTicket, ...currentTickets])
-    openTab('tickets', { key: `ticket-${createdTicket.id}`, title: createdTicket.id, recordId: createdTicket.id })
-    setTicketDraft({
-      type: createdTicket.type,
-      title: '',
-      requester: '',
-      priority: 'Medium',
-      service: 'Collaboration',
-      team: 'Service Desk',
-      description: '',
-    })
+    setTicketDraft(emptyTicketDraft(createdTicket.type))
+    openTab(
+      'tickets',
+      { key: `ticket-${createdTicket.id}`, title: createdTicket.id, recordId: createdTicket.id },
+      { skipUnsavedCheck: true },
+    )
     setToast(`${createdTicket.id} created`)
   }
 
@@ -705,31 +849,47 @@ function App() {
     }
 
     const { profile, session: nextSession } = authenticated
-    const requestedRoute =
-      initialRoute.kind === 'workspace'
-        ? resolveRouteForRole(initialRoute, profile.role)
-        : defaultRouteForRole(profile.role)
-    const tab = tabFromRoute(requestedRoute)
+    const explicitWorkspaceRoute = initialRoute.kind === 'workspace'
+    const requestedRoute = explicitWorkspaceRoute
+      ? resolveRouteForRole(initialRoute, profile.role)
+      : defaultRouteForRole(profile.role)
+    const requestedTab = tabFromRoute(requestedRoute)
+    const storedWorkspace = profile.role === 'analyst' ? loadWorkspace() : null
+    const savedActiveTab = !explicitWorkspaceRoute
+      ? storedWorkspace?.tabs?.find((tab) => tab.key === storedWorkspace.activeTabKey)
+      : null
+    const activeLoginTab = savedActiveTab
+      ? makeTab(savedActiveTab.viewId, savedActiveTab)
+      : requestedTab
+    const nextTabs = profile.role === 'analyst'
+      ? restoreWorkspaceTabs(storedWorkspace, activeLoginTab)
+      : [requestedTab]
 
     setSession(nextSession)
     setLoginError('')
-    setTabs([tab])
-    setActiveTabKey(tab.key)
-    if (requestedRoute.recordId) {
-      setSelectedTicketId(requestedRoute.recordId)
-    } else if (requestedRoute.newRecordType) {
-      setTicketDraft((currentDraft) => ({ ...currentDraft, type: requestedRoute.newRecordType }))
-    } else if (requestedRoute.filter?.type && requestedRoute.filter.type !== 'All') {
-      const firstModuleTicket = tickets.find((ticket) => ticket.type === requestedRoute.filter.type)
+    setTabs(nextTabs)
+    setActiveTabKey(activeLoginTab.key)
+
+    if (activeLoginTab.recordId) {
+      setSelectedTicketId(activeLoginTab.recordId)
+    } else if (activeLoginTab.newRecordType) {
+      setTicketDraft(emptyTicketDraft(activeLoginTab.newRecordType))
+    } else if (serviceDeskModules[activeLoginTab.viewId]) {
+      const moduleConfig = serviceDeskModules[activeLoginTab.viewId]
+      const firstModuleTicket = tickets.find((ticket) => ticket.type === moduleConfig.type)
       if (firstModuleTicket) setSelectedTicketId(firstModuleTicket.id)
-      setTicketDraft((currentDraft) => ({ ...currentDraft, type: requestedRoute.filter.type }))
+      setTicketDraft(emptyTicketDraft(moduleConfig.type))
     }
-    if (requestedRoute.filter) {
-      setFilters(requestedRoute.filter)
+
+    if (activeLoginTab.filter) {
+      setFilters(activeLoginTab.filter)
+    } else if (serviceDeskModules[activeLoginTab.viewId]) {
+      setFilters({ ...allTicketFilters(), type: serviceDeskModules[activeLoginTab.viewId].type })
+    } else {
+      setFilters(allTicketFilters())
     }
-    if (requestedRoute.query !== undefined) {
-      setQuery(requestedRoute.query)
-    }
+    setQuery(activeLoginTab.query || '')
+
     setPortalDraft({
       requester: profile.role === 'requester' ? profile.name : '',
       email: profile.role === 'requester' ? profile.username : '',
@@ -738,7 +898,11 @@ function App() {
       description: '',
       urgency: 'Medium',
     })
-    writeRoute(requestedRoute.path, { replace: true })
+
+    const nextPath = profile.role === 'analyst'
+      ? pathForTab(activeLoginTab, tickets)
+      : requestedRoute.path
+    writeRoute(nextPath, { replace: true })
     setToast(`Signed in as ${profile.label}`)
   }
 
@@ -750,6 +914,8 @@ function App() {
   }
 
   function handleLogout() {
+    if (!confirmLeavingDraft()) return
+
     setSession(null)
     setLoginForm({ username: '', password: '' })
     setLoginMode('analyst')
@@ -771,10 +937,17 @@ function App() {
       return (
         <NewTabView
           navItems={navItems}
-          openRecordTab={(ticket) =>
-            openTab('tickets', { key: `ticket-${ticket.id}`, title: ticket.id, recordId: ticket.id })
+          openNewRecord={(recordType) =>
+            openNewRecord(recordType, { replaceTabKey: activeTab.key })
           }
-          openTab={openTab}
+          openRecordTab={(ticket) =>
+            openTab(
+              'tickets',
+              { key: `ticket-${ticket.id}`, title: ticket.id, recordId: ticket.id },
+              { replaceTabKey: activeTab.key },
+            )
+          }
+          openTab={(viewId) => openTab(viewId, {}, { replaceTabKey: activeTab.key })}
           tickets={tickets}
         />
       )
@@ -797,6 +970,7 @@ function App() {
       return (
         <NewRecordView
           handleTicketSubmit={handleTicketSubmit}
+          hasUnsavedChanges={activeHasUnsavedChanges}
           recordType={activeTab.newRecordType || ticketDraft.type}
           setTicketDraft={setTicketDraft}
           ticketDraft={ticketDraft}
@@ -1089,13 +1263,22 @@ function App() {
           <div className="tab-list" ref={tabListRef}>
             {tabs.map((tab) => (
                 <button
-                  className={activeTabKey === tab.key ? 'workspace-tab active' : 'workspace-tab'}
+                  className={[
+                    'workspace-tab',
+                    activeTabKey === tab.key ? 'active' : '',
+                    activeTabKey === tab.key && activeHasUnsavedChanges ? 'dirty' : '',
+                  ].filter(Boolean).join(' ')}
                   data-tab-key={tab.key}
                   key={tab.key}
                   onClick={() => activateTab(tab)}
                   type="button"
                 >
-                  <span>{tab.title}</span>
+                  <span className="workspace-tab-label">
+                    {tab.title}
+                    {activeTabKey === tab.key && activeHasUnsavedChanges && (
+                      <span className="unsaved-dot" aria-label="Unsaved changes" />
+                    )}
+                  </span>
                   {!tab.pinned && (
                     <span
                       className="tab-close"
