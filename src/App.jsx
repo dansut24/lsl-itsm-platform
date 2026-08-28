@@ -29,6 +29,14 @@ import {
   makeTab,
   newTicketId,
 } from './lib/workspace.js'
+import {
+  allTicketFilters,
+  defaultRouteForRole,
+  pathForTab,
+  resolveRouteForRole,
+  routeFromLocation,
+  writeRoute,
+} from './lib/routes.js'
 import { authenticateDemoUser } from './services/demoAuth.js'
 import {
   loadSession,
@@ -59,29 +67,33 @@ import './App.css'
 function App() {
   const [initialTickets] = useState(loadTickets)
   const [initialSession] = useState(loadSession)
+  const [initialRoute] = useState(routeFromLocation)
+  const initialWorkspaceRoute = resolveRouteForRole(
+    initialRoute,
+    initialSession?.role || 'analyst',
+  )
   const [session, setSession] = useState(initialSession)
   const [theme, setTheme] = useState(loadTheme)
   const [sidebarMode, setSidebarMode] = useState(loadSidebarMode)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [density, setDensity] = useState('comfortable')
   const [tickets, setTickets] = useState(initialTickets)
-  const [tabs, setTabs] = useState(() => {
-    const profile = initialSession?.role === 'requester' ? loginProfiles.requester : loginProfiles.analyst
-    return [makeTab(profile.landingView, { title: profile.landingTitle, pinned: true })]
-  })
-  const [activeTabKey, setActiveTabKey] = useState(() => {
-    const profile = initialSession?.role === 'requester' ? loginProfiles.requester : loginProfiles.analyst
-    return profile.landingView
-  })
+  const [tabs, setTabs] = useState(() => [
+    makeTab(initialWorkspaceRoute.viewId, {
+      key: initialWorkspaceRoute.key,
+      title: initialWorkspaceRoute.title,
+      pinned: initialWorkspaceRoute.viewId === 'home' || initialWorkspaceRoute.viewId === 'portal',
+      recordId: initialWorkspaceRoute.recordId,
+    }),
+  ])
+  const [activeTabKey, setActiveTabKey] = useState(initialWorkspaceRoute.key)
   const [selectedTicketId, setSelectedTicketId] = useState(
-    initialTickets[0]?.id || seedTickets[0].id,
+    initialWorkspaceRoute.recordId || initialTickets[0]?.id || seedTickets[0].id,
   )
-  const [query, setQuery] = useState('')
-  const [filters, setFilters] = useState({
-    status: 'All',
-    priority: 'All',
-    type: 'All',
-  })
+  const [query, setQuery] = useState(initialWorkspaceRoute.query || '')
+  const [filters, setFilters] = useState(
+    initialWorkspaceRoute.filter || allTicketFilters(),
+  )
   const [toast, setToast] = useState('')
   const [newComment, setNewComment] = useState('')
   const [portalQuery, setPortalQuery] = useState('')
@@ -120,6 +132,64 @@ function App() {
 
   useEffect(() => {
     saveSession(session)
+  }, [session])
+
+  useEffect(() => {
+    const currentRoute = routeFromLocation()
+
+    if (!session) {
+      writeRoute('/login', { replace: true })
+      return
+    }
+
+    const resolvedRoute = resolveRouteForRole(currentRoute, session.role)
+    if (resolvedRoute.path !== currentRoute.path) {
+      writeRoute(resolvedRoute.path, { replace: true })
+    }
+  }, [session])
+
+  useEffect(() => {
+    function handlePopState() {
+      if (!session) return
+
+      const currentRoute = routeFromLocation()
+      const route = resolveRouteForRole(currentRoute, session.role)
+
+      if (session.role === 'requester') {
+        writeRoute('/portal', { replace: true })
+        return
+      }
+
+      if (route.path !== currentRoute.path) {
+        writeRoute(route.path, { replace: true })
+      }
+
+      const tab = makeTab(route.viewId, {
+        key: route.key,
+        title: route.title,
+        recordId: route.recordId,
+      })
+
+      if (route.recordId) {
+        setSelectedTicketId(route.recordId)
+      }
+      if (route.filter) {
+        setFilters(route.filter)
+      }
+      if (route.query !== undefined) {
+        setQuery(route.query)
+      }
+
+      setTabs((currentTabs) =>
+        currentTabs.some((currentTab) => currentTab.key === tab.key)
+          ? currentTabs
+          : [...currentTabs, tab],
+      )
+      setActiveTabKey(tab.key)
+    }
+
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
   }, [session])
 
   useEffect(() => {
@@ -180,16 +250,27 @@ function App() {
     )
   }, [portalQuery])
 
-  function openTab(viewId, overrides = {}) {
-    const tab = makeTab(viewId, overrides)
-    if (overrides.recordId) {
-      setSelectedTicketId(overrides.recordId)
+  function openTab(viewId, overrides = {}, navigation = {}) {
+    const normalizedOverrides =
+      viewId === 'tickets' && !overrides.recordId && !overrides.filter && !overrides.key
+        ? {
+            ...overrides,
+            key: 'tickets',
+            title: 'Tickets',
+            filter: allTicketFilters(),
+            query: '',
+          }
+        : overrides
+
+    const tab = makeTab(viewId, normalizedOverrides)
+    if (normalizedOverrides.recordId) {
+      setSelectedTicketId(normalizedOverrides.recordId)
     }
-    if (overrides.filter) {
-      setFilters((currentFilters) => ({ ...currentFilters, ...overrides.filter }))
+    if (normalizedOverrides.filter) {
+      setFilters((currentFilters) => ({ ...currentFilters, ...normalizedOverrides.filter }))
     }
-    if (overrides.query !== undefined) {
-      setQuery(overrides.query)
+    if (normalizedOverrides.query !== undefined) {
+      setQuery(normalizedOverrides.query)
     }
     setTabs((currentTabs) =>
       currentTabs.some((currentTab) => currentTab.key === tab.key)
@@ -197,6 +278,10 @@ function App() {
         : [...currentTabs, tab],
     )
     setActiveTabKey(tab.key)
+
+    if (navigation.syncRoute !== false) {
+      writeRoute(pathForTab(tab, tickets), { replace: navigation.replaceRoute })
+    }
   }
 
   function openBreadcrumb(crumb) {
@@ -217,8 +302,10 @@ function App() {
 
   function openNewTab() {
     const key = `newtab-${Date.now()}`
-    setTabs((currentTabs) => [...currentTabs, makeTab('newtab', { key, title: 'New Tab' })])
+    const tab = makeTab('newtab', { key, title: 'New Tab' })
+    setTabs((currentTabs) => [...currentTabs, tab])
     setActiveTabKey(key)
+    writeRoute(pathForTab(tab, tickets))
   }
 
   function activateTab(tab) {
@@ -226,6 +313,7 @@ function App() {
       setSelectedTicketId(tab.recordId)
     }
     setActiveTabKey(tab.key)
+    writeRoute(pathForTab(tab, tickets))
   }
 
   function closeTab(key) {
@@ -240,6 +328,7 @@ function App() {
         setSelectedTicketId(fallbackTab.recordId)
       }
       setActiveTabKey(fallbackTab.key)
+      writeRoute(pathForTab(fallbackTab, tickets), { replace: true })
     }
   }
 
@@ -329,7 +418,7 @@ function App() {
       slaPercent: portalDraft.urgency === 'High' ? 48 : 12,
       created: 'Just now',
       updated: 'Just now',
-      description: portalDraft.description.trim() || 'Submitted through the LSL self-service portal.',
+      description: portalDraft.description.trim() || 'Submitted through the Hi5Central self-service portal.',
       nextStep: 'Service Desk triage.',
       comments: ['Submitted through the self-service portal.'],
       linkedAssets: [],
@@ -365,10 +454,30 @@ function App() {
     }
 
     const { profile, session: nextSession } = authenticated
+    const requestedRoute =
+      initialRoute.kind === 'workspace'
+        ? resolveRouteForRole(initialRoute, profile.role)
+        : defaultRouteForRole(profile.role)
+    const tab = makeTab(requestedRoute.viewId, {
+      key: requestedRoute.key,
+      title: requestedRoute.title,
+      pinned: requestedRoute.viewId === 'home' || requestedRoute.viewId === 'portal',
+      recordId: requestedRoute.recordId,
+    })
+
     setSession(nextSession)
     setLoginError('')
-    setTabs([makeTab(profile.landingView, { title: profile.landingTitle, pinned: true })])
-    setActiveTabKey(profile.landingView)
+    setTabs([tab])
+    setActiveTabKey(tab.key)
+    if (requestedRoute.recordId) {
+      setSelectedTicketId(requestedRoute.recordId)
+    }
+    if (requestedRoute.filter) {
+      setFilters(requestedRoute.filter)
+    }
+    if (requestedRoute.query !== undefined) {
+      setQuery(requestedRoute.query)
+    }
     setPortalDraft({
       requester: profile.role === 'requester' ? profile.name : '',
       email: profile.role === 'requester' ? profile.username : '',
@@ -377,6 +486,7 @@ function App() {
       description: '',
       urgency: 'Medium',
     })
+    writeRoute(requestedRoute.path, { replace: true })
     setToast(`Signed in as ${profile.label}`)
   }
 
@@ -401,6 +511,7 @@ function App() {
       description: '',
       urgency: 'Medium',
     })
+    writeRoute('/login', { replace: true })
   }
 
   function renderActiveView() {
@@ -487,6 +598,9 @@ function App() {
       return (
         <ChangesView
           approveChange={approveChange}
+          openRecordTab={(ticket) =>
+            openTab('tickets', { key: `ticket-${ticket.id}`, title: ticket.id, recordId: ticket.id })
+          }
           tickets={tickets.filter((ticket) => ticket.type === 'Change')}
         />
       )
@@ -571,7 +685,7 @@ function App() {
           title="Open navigation"
           type="button"
         >
-          <img src={`${import.meta.env.BASE_URL}lsl-logo.png`} alt="LSL" />
+          <img src={`${import.meta.env.BASE_URL}hi5central-logo.png`} alt="Hi5Central" />
         </button>
 
         <div className="mobile-topbar-actions">
@@ -601,8 +715,8 @@ function App() {
       {(!sidebarHidden || mobileNavOpen) && <aside className={mobileNavOpen ? 'sidebar mobile-open' : 'sidebar'} aria-label="Primary navigation">
         <div className="sidebar-top">
           <div className="brand">
-            <img src={`${import.meta.env.BASE_URL}lsl-logo.png`} alt="LSL" />
-            <span>ITSM Platform</span>
+            <img src={`${import.meta.env.BASE_URL}hi5central-logo.png`} alt="Hi5Central" />
+            <span>Hi5Central</span>
           </div>
           <button
             className="sidebar-toggle desktop-sidebar-toggle"
@@ -755,7 +869,7 @@ function App() {
         <main className="workspace">
           <header className="view-header">
             <div>
-              <span className="eyebrow">LSL Technology Services</span>
+              <span className="eyebrow">Hi5Central</span>
               <h1>{activeTab.title || viewMeta[activeView].label}</h1>
             </div>
             <div className="view-header-meta">
