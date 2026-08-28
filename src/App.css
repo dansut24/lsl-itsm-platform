@@ -372,10 +372,31 @@ textarea:focus-visible {
 .nav-stack {
   display: grid;
   align-content: start;
-  gap: 6px;
+  gap: 10px;
   min-height: 0;
   overflow: auto;
   padding-right: 2px;
+}
+
+.nav-group {
+  display: grid;
+  gap: 6px;
+}
+
+.nav-group-separated {
+  margin-top: 2px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.nav-group-label {
+  display: block;
+  padding: 3px 10px 1px;
+  color: #8fb1e8;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .nav-item,
@@ -461,6 +482,7 @@ textarea:focus-visible {
 
 .sidebar-collapsed .brand span,
 .sidebar-collapsed .nav-item span,
+.sidebar-collapsed .nav-group-label,
 .sidebar-collapsed .sidebar-status div {
   display: none;
 }
@@ -1296,6 +1318,10 @@ textarea:focus-visible {
   margin-bottom: 12px;
 }
 
+.filter-grid.module-filter-grid {
+  grid-template-columns: minmax(170px, 1fr) repeat(2, minmax(110px, 0.6fr));
+}
+
 label {
   display: grid;
   gap: 6px;
@@ -2083,6 +2109,7 @@ textarea:focus {
   }
 
   .filter-grid,
+  .filter-grid.module-filter-grid,
   .form-row,
   .detail-grid,
   .change-details,
@@ -2303,9 +2330,14 @@ textarea:focus {
   .nav-stack {
     display: grid;
     align-content: start;
-    gap: 6px;
+    gap: 10px;
     overflow: auto;
     padding-right: 2px;
+  }
+
+  .nav-group-label,
+  .sidebar-collapsed .nav-group-label {
+    display: block;
   }
 
   .nav-item,

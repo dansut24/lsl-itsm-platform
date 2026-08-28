@@ -15,12 +15,14 @@ import {
   X,
 } from 'lucide-react'
 import {
+  analystNavGroups,
   analystNavIds,
   assets,
   knowledgeArticles,
   loginProfiles,
   seedTickets,
   serviceCatalog,
+  serviceDeskModules,
   viewMeta,
 } from './data/demoData.jsx'
 import {
@@ -87,8 +89,15 @@ function App() {
     }),
   ])
   const [activeTabKey, setActiveTabKey] = useState(initialWorkspaceRoute.key)
+  const initialRouteType =
+    initialWorkspaceRoute.filter?.type && initialWorkspaceRoute.filter.type !== 'All'
+      ? initialWorkspaceRoute.filter.type
+      : undefined
+  const initialModuleTicket = initialRouteType
+    ? initialTickets.find((ticket) => ticket.type === initialRouteType)
+    : undefined
   const [selectedTicketId, setSelectedTicketId] = useState(
-    initialWorkspaceRoute.recordId || initialTickets[0]?.id || seedTickets[0].id,
+    initialWorkspaceRoute.recordId || initialModuleTicket?.id || initialTickets[0]?.id || seedTickets[0].id,
   )
   const [query, setQuery] = useState(initialWorkspaceRoute.query || '')
   const [filters, setFilters] = useState(
@@ -101,7 +110,7 @@ function App() {
   const [loginForm, setLoginForm] = useState({ username: '', password: '' })
   const [loginError, setLoginError] = useState('')
   const [ticketDraft, setTicketDraft] = useState({
-    type: 'Incident',
+    type: initialRouteType || 'Incident',
     title: '',
     requester: '',
     priority: 'Medium',
@@ -172,6 +181,10 @@ function App() {
 
       if (route.recordId) {
         setSelectedTicketId(route.recordId)
+      } else if (route.filter?.type && route.filter.type !== 'All') {
+        const firstModuleTicket = tickets.find((ticket) => ticket.type === route.filter.type)
+        if (firstModuleTicket) setSelectedTicketId(firstModuleTicket.id)
+        setTicketDraft((currentDraft) => ({ ...currentDraft, type: route.filter.type }))
       }
       if (route.filter) {
         setFilters(route.filter)
@@ -190,7 +203,7 @@ function App() {
 
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
-  }, [session])
+  }, [session, tickets])
 
   useEffect(() => {
     if (!toast) return undefined
@@ -200,9 +213,26 @@ function App() {
 
   const activeTab = tabs.find((tab) => tab.key === activeTabKey) || tabs[0]
   const activeView = activeTab?.viewId || 'home'
+  const activeModule = serviceDeskModules[activeView]
+  const activeModuleType = activeModule?.type
   const selectedTicket =
-    tickets.find((ticket) => ticket.id === (activeTab?.recordId || selectedTicketId)) || tickets[0]
+    tickets.find((ticket) => ticket.id === (activeTab?.recordId || selectedTicketId)) ||
+    (activeModuleType ? tickets.find((ticket) => ticket.type === activeModuleType) : undefined) ||
+    tickets[0]
   const navItems = analystNavIds.map((id) => viewMeta[id])
+  const navGroups = analystNavGroups.map((group) => ({
+    ...group,
+    items: group.items.map((id) => viewMeta[id]),
+  }))
+  const activeNavId =
+    activeView === 'tickets' && activeTab?.recordId
+      ? {
+          Incident: 'incidents',
+          'Service Request': 'requests',
+          Problem: 'problems',
+          Change: 'changes',
+        }[selectedTicket?.type]
+      : activeView
   const breadcrumbs = getBreadcrumbs(activeTab, selectedTicket)
   const sidebarCollapsed = sidebarMode === 'collapsed'
   const sidebarHidden = sidebarMode === 'hidden'
@@ -218,10 +248,12 @@ function App() {
           .includes(normalizedQuery)
       const matchesStatus = filters.status === 'All' || ticket.status === filters.status
       const matchesPriority = filters.priority === 'All' || ticket.priority === filters.priority
-      const matchesType = filters.type === 'All' || ticket.type === filters.type
+      const matchesType = activeModuleType
+        ? ticket.type === activeModuleType
+        : filters.type === 'All' || ticket.type === filters.type
       return matchesQuery && matchesStatus && matchesPriority && matchesType
     })
-  }, [filters, query, tickets])
+  }, [activeModuleType, filters, query, tickets])
 
   const metrics = useMemo(() => {
     const active = tickets.filter((ticket) => !['Closed', 'Resolved'].includes(ticket.status))
@@ -251,20 +283,34 @@ function App() {
   }, [portalQuery])
 
   function openTab(viewId, overrides = {}, navigation = {}) {
-    const normalizedOverrides =
-      viewId === 'tickets' && !overrides.recordId && !overrides.filter && !overrides.key
-        ? {
-            ...overrides,
-            key: 'tickets',
-            title: 'Tickets',
-            filter: allTicketFilters(),
-            query: '',
-          }
-        : overrides
+    const moduleConfig = serviceDeskModules[viewId]
+    let normalizedOverrides = overrides
+
+    if (moduleConfig && !overrides.recordId) {
+      normalizedOverrides = {
+        key: moduleConfig.id,
+        title: moduleConfig.label,
+        filter: { ...allTicketFilters(), type: moduleConfig.type },
+        query: '',
+        ...overrides,
+      }
+    } else if (viewId === 'tickets' && !overrides.recordId && !overrides.filter && !overrides.key) {
+      normalizedOverrides = {
+        ...overrides,
+        key: 'tickets',
+        title: 'All Records',
+        filter: allTicketFilters(),
+        query: '',
+      }
+    }
 
     const tab = makeTab(viewId, normalizedOverrides)
     if (normalizedOverrides.recordId) {
       setSelectedTicketId(normalizedOverrides.recordId)
+    } else if (moduleConfig) {
+      const firstModuleTicket = tickets.find((ticket) => ticket.type === moduleConfig.type)
+      if (firstModuleTicket) setSelectedTicketId(firstModuleTicket.id)
+      setTicketDraft((currentDraft) => ({ ...currentDraft, type: moduleConfig.type }))
     }
     if (normalizedOverrides.filter) {
       setFilters((currentFilters) => ({ ...currentFilters, ...normalizedOverrides.filter }))
@@ -311,6 +357,13 @@ function App() {
   function activateTab(tab) {
     if (tab.recordId) {
       setSelectedTicketId(tab.recordId)
+    } else if (serviceDeskModules[tab.viewId]) {
+      const moduleConfig = serviceDeskModules[tab.viewId]
+      const firstModuleTicket = tickets.find((ticket) => ticket.type === moduleConfig.type)
+      if (firstModuleTicket) setSelectedTicketId(firstModuleTicket.id)
+      setTicketDraft((currentDraft) => ({ ...currentDraft, type: moduleConfig.type }))
+      setFilters({ ...allTicketFilters(), type: moduleConfig.type })
+      setQuery('')
     }
     setActiveTabKey(tab.key)
     writeRoute(pathForTab(tab, tickets))
@@ -326,6 +379,13 @@ function App() {
       const fallbackTab = nextTabs[fallbackIndex] || nextTabs[0]
       if (fallbackTab.recordId) {
         setSelectedTicketId(fallbackTab.recordId)
+      } else if (serviceDeskModules[fallbackTab.viewId]) {
+        const moduleConfig = serviceDeskModules[fallbackTab.viewId]
+        const firstModuleTicket = tickets.find((ticket) => ticket.type === moduleConfig.type)
+        if (firstModuleTicket) setSelectedTicketId(firstModuleTicket.id)
+        setTicketDraft((currentDraft) => ({ ...currentDraft, type: moduleConfig.type }))
+        setFilters({ ...allTicketFilters(), type: moduleConfig.type })
+        setQuery('')
       }
       setActiveTabKey(fallbackTab.key)
       writeRoute(pathForTab(fallbackTab, tickets), { replace: true })
@@ -383,7 +443,7 @@ function App() {
     setTickets((currentTickets) => [createdTicket, ...currentTickets])
     openTab('tickets', { key: `ticket-${createdTicket.id}`, title: createdTicket.id, recordId: createdTicket.id })
     setTicketDraft({
-      type: 'Incident',
+      type: createdTicket.type,
       title: '',
       requester: '',
       priority: 'Medium',
@@ -471,6 +531,10 @@ function App() {
     setActiveTabKey(tab.key)
     if (requestedRoute.recordId) {
       setSelectedTicketId(requestedRoute.recordId)
+    } else if (requestedRoute.filter?.type && requestedRoute.filter.type !== 'All') {
+      const firstModuleTicket = tickets.find((ticket) => ticket.type === requestedRoute.filter.type)
+      if (firstModuleTicket) setSelectedTicketId(firstModuleTicket.id)
+      setTicketDraft((currentDraft) => ({ ...currentDraft, type: requestedRoute.filter.type }))
     }
     if (requestedRoute.filter) {
       setFilters(requestedRoute.filter)
@@ -541,25 +605,26 @@ function App() {
       )
     }
 
-    if (activeView === 'tickets') {
-      if (activeTab?.recordId) {
-        return (
-          <TicketRecordView
-            addComment={addComment}
-            newComment={newComment}
-            selectedTicket={selectedTicket}
-            setNewComment={setNewComment}
-            updateTicket={updateTicket}
-          />
-        )
-      }
+    if (activeView === 'tickets' && activeTab?.recordId) {
+      return (
+        <TicketRecordView
+          addComment={addComment}
+          newComment={newComment}
+          selectedTicket={selectedTicket}
+          setNewComment={setNewComment}
+          updateTicket={updateTicket}
+        />
+      )
+    }
 
+    if (activeView === 'tickets' || serviceDeskModules[activeView]) {
       return (
         <TicketsView
           addComment={addComment}
           filters={filters}
           filteredTickets={filteredTickets}
           handleTicketSubmit={handleTicketSubmit}
+          moduleConfig={serviceDeskModules[activeView]}
           newComment={newComment}
           openRecordTab={(ticket) =>
             openTab('tickets', { key: `ticket-${ticket.id}`, title: ticket.id, recordId: ticket.id })
@@ -689,7 +754,7 @@ function App() {
         </button>
 
         <div className="mobile-topbar-actions">
-          <button className="mobile-icon-action mobile-new-ticket" onClick={() => openTab('tickets')} title="New ticket" type="button">
+          <button className="mobile-icon-action mobile-new-ticket" onClick={() => openTab('incidents')} title="New incident" type="button">
             <Plus size={18} aria-hidden="true" />
           </button>
           <button
@@ -737,17 +802,25 @@ function App() {
         </div>
 
         <nav className="nav-stack">
-          {navItems.map(({ id, label, icon: Icon }) => (
-            <button
-              className={activeView === id ? 'nav-item active' : 'nav-item'}
-              key={id}
-              onClick={() => openSidebarTab(id)}
-              title={label}
-              type="button"
+          {navGroups.map((group) => (
+            <div
+              className={group.separated ? 'nav-group nav-group-separated' : 'nav-group'}
+              key={group.id}
             >
-              <Icon size={18} aria-hidden="true" />
-              <span>{label}</span>
-            </button>
+              {group.label && <span className="nav-group-label">{group.label}</span>}
+              {group.items.map(({ id, label, icon: Icon }) => (
+                <button
+                  className={activeNavId === id ? 'nav-item active' : 'nav-item'}
+                  key={id}
+                  onClick={() => openSidebarTab(id)}
+                  title={label}
+                  type="button"
+                >
+                  <Icon size={18} aria-hidden="true" />
+                  <span>{label}</span>
+                </button>
+              ))}
+            </div>
           ))}
         </nav>
 
@@ -813,11 +886,11 @@ function App() {
             )}
             <button
               className="new-ticket-button"
-              onClick={() => openTab('tickets')}
+              onClick={() => openTab('incidents')}
               type="button"
             >
               <Plus size={16} aria-hidden="true" />
-              New Ticket
+              New Incident
             </button>
             <label className="chrome-search">
               <Search size={16} aria-hidden="true" />
