@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
+  ArrowDown,
   Bell,
   CheckCircle2,
   ChevronRight,
@@ -9,6 +10,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
+  RefreshCw,
   Search,
   Settings,
   Sun,
@@ -198,10 +200,23 @@ function App() {
   const [sidebarMode, setSidebarMode] = useState(loadSidebarMode)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [mobileHeaderHidden, setMobileHeaderHidden] = useState(false)
+  const [pullRefreshDragging, setPullRefreshDragging] = useState(false)
+  const [pullRefreshArmed, setPullRefreshArmed] = useState(false)
+  const [pullRefreshing, setPullRefreshing] = useState(false)
   const [density, setDensity] = useState(loadDensity)
   const tabListRef = useRef(null)
   const mainFrameRef = useRef(null)
   const mobileScrollPositionsRef = useRef(new WeakMap())
+  const pullRefreshGestureRef = useRef({
+    active: false,
+    engaged: false,
+    startX: 0,
+    startY: 0,
+    distance: 0,
+    scrollTarget: null,
+    refreshing: false,
+  })
+  const pullRefreshTimerRef = useRef(null)
   const [tickets, setTickets] = useState(initialTickets)
   const [tabs, setTabs] = useState(initialTabs)
   const [activeTabKey, setActiveTabKey] = useState(initialRouteTab.key)
@@ -313,6 +328,181 @@ function App() {
     return () => {
       document.removeEventListener('scroll', handleWorkspaceScroll, true)
       media.removeEventListener?.('change', handleViewportChange)
+    }
+  }, [])
+
+  useEffect(() => {
+    const media = window.matchMedia?.('(max-width: 680px)')
+    const mainFrame = mainFrameRef.current
+    if (!media || !mainFrame) return undefined
+
+    const PULL_THRESHOLD = 62
+    const PULL_MAX = 92
+    const REFRESH_HOLD = 48
+
+    const setPullDistance = (distance) => {
+      mainFrame.style.setProperty('--pull-refresh-distance', `${Math.max(0, distance)}px`)
+    }
+
+    const findScrollTarget = (element) => {
+      let current = element instanceof HTMLElement ? element : element?.parentElement
+
+      while (current && current !== mainFrame) {
+        const style = window.getComputedStyle(current)
+        const canScroll =
+          /(auto|scroll)/.test(style.overflowY) &&
+          current.scrollHeight > current.clientHeight + 2
+
+        if (canScroll) return current
+        current = current.parentElement
+      }
+
+      return null
+    }
+
+    const resetGesture = ({ animate = true } = {}) => {
+      const gesture = pullRefreshGestureRef.current
+      gesture.active = false
+      gesture.engaged = false
+      gesture.distance = 0
+      gesture.scrollTarget = null
+      setPullRefreshArmed(false)
+      setPullRefreshDragging(false)
+
+      if (animate) {
+        window.requestAnimationFrame(() => setPullDistance(0))
+      } else {
+        setPullDistance(0)
+      }
+    }
+
+    const finishRefresh = () => {
+      pullRefreshGestureRef.current.refreshing = false
+      setTickets(loadTickets())
+      setPullRefreshing(false)
+      setPullRefreshArmed(false)
+      setToast('Workspace refreshed')
+      window.requestAnimationFrame(() => setPullDistance(0))
+    }
+
+    const beginRefresh = () => {
+      pullRefreshGestureRef.current.refreshing = true
+      setPullRefreshDragging(false)
+      setPullRefreshArmed(false)
+      setPullRefreshing(true)
+      setMobileHeaderHidden(false)
+      setPullDistance(REFRESH_HOLD)
+
+      if (pullRefreshTimerRef.current) {
+        window.clearTimeout(pullRefreshTimerRef.current)
+      }
+
+      pullRefreshTimerRef.current = window.setTimeout(finishRefresh, 650)
+    }
+
+    const handleTouchStart = (event) => {
+      if (!media.matches || pullRefreshGestureRef.current.refreshing || event.touches.length !== 1) return
+
+      const target = event.target
+      if (!(target instanceof HTMLElement) || !target.closest('.workspace')) return
+      if (target.closest('.tab-list, .breadcrumbs, .mobile-topbar, .sidebar')) return
+
+      const scrollTarget = findScrollTarget(target)
+      if (scrollTarget && scrollTarget.scrollTop > 0) return
+
+      const touch = event.touches[0]
+      pullRefreshGestureRef.current = {
+        active: true,
+        engaged: false,
+        startX: touch.clientX,
+        startY: touch.clientY,
+        distance: 0,
+        scrollTarget,
+        refreshing: false,
+      }
+    }
+
+    const handleTouchMove = (event) => {
+      const gesture = pullRefreshGestureRef.current
+      if (!gesture.active || gesture.refreshing || event.touches.length !== 1) return
+
+      if (gesture.scrollTarget && gesture.scrollTarget.scrollTop > 0) {
+        resetGesture()
+        return
+      }
+
+      const touch = event.touches[0]
+      const deltaX = touch.clientX - gesture.startX
+      const deltaY = touch.clientY - gesture.startY
+
+      if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 8) {
+        resetGesture()
+        return
+      }
+
+      if (deltaY <= 0) {
+        if (gesture.engaged) resetGesture()
+        return
+      }
+
+      if (deltaY < 7) return
+
+      event.preventDefault()
+      setMobileHeaderHidden(false)
+
+      if (!gesture.engaged) {
+        gesture.engaged = true
+        setPullRefreshDragging(true)
+      }
+
+      const resistedDistance = Math.min(PULL_MAX, deltaY * 0.52)
+      gesture.distance = resistedDistance
+      setPullDistance(resistedDistance)
+
+      const armed = resistedDistance >= PULL_THRESHOLD
+      setPullRefreshArmed((current) => (current === armed ? current : armed))
+    }
+
+    const handleTouchEnd = () => {
+      const gesture = pullRefreshGestureRef.current
+      if (!gesture.active) return
+
+      const shouldRefresh = gesture.engaged && gesture.distance >= PULL_THRESHOLD
+      gesture.active = false
+      gesture.engaged = false
+      gesture.scrollTarget = null
+
+      if (shouldRefresh) {
+        beginRefresh()
+        return
+      }
+
+      resetGesture()
+    }
+
+    const handleViewportChange = () => {
+      if (!media.matches) {
+        resetGesture({ animate: false })
+        pullRefreshGestureRef.current.refreshing = false
+        setPullRefreshing(false)
+      }
+    }
+
+    mainFrame.addEventListener('touchstart', handleTouchStart, { passive: true })
+    mainFrame.addEventListener('touchmove', handleTouchMove, { passive: false })
+    mainFrame.addEventListener('touchend', handleTouchEnd, { passive: true })
+    mainFrame.addEventListener('touchcancel', handleTouchEnd, { passive: true })
+    media.addEventListener?.('change', handleViewportChange)
+
+    return () => {
+      mainFrame.removeEventListener('touchstart', handleTouchStart)
+      mainFrame.removeEventListener('touchmove', handleTouchMove)
+      mainFrame.removeEventListener('touchend', handleTouchEnd)
+      mainFrame.removeEventListener('touchcancel', handleTouchEnd)
+      media.removeEventListener?.('change', handleViewportChange)
+      if (pullRefreshTimerRef.current) {
+        window.clearTimeout(pullRefreshTimerRef.current)
+      }
     }
   }, [])
 
@@ -1349,7 +1539,32 @@ function App() {
         />
       )}
 
-      <section className="main-frame" ref={mainFrameRef}>
+      <section
+        className={[
+          'main-frame',
+          pullRefreshDragging ? 'pull-refresh-dragging' : '',
+          pullRefreshArmed ? 'pull-refresh-armed' : '',
+          pullRefreshing ? 'pull-refresh-refreshing' : '',
+        ].filter(Boolean).join(' ')}
+        ref={mainFrameRef}
+      >
+        <div
+          aria-live="polite"
+          className="pull-refresh-indicator"
+          role="status"
+        >
+          <span className="pull-refresh-icon" aria-hidden="true">
+            {pullRefreshing ? <RefreshCw size={16} /> : <ArrowDown size={16} />}
+          </span>
+          <span>
+            {pullRefreshing
+              ? 'Refreshing…'
+              : pullRefreshArmed
+                ? 'Release to refresh'
+                : 'Pull to refresh'}
+          </span>
+        </div>
+
         <header className="tabbar" aria-label="Open workspace tabs">
           <div className="tab-list" ref={tabListRef}>
             {tabs.map((tab) => (
