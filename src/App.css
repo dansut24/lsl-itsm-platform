@@ -4283,3 +4283,43 @@ textarea:focus {
 .incident-classification-grid {
   margin-top: 10px;
 }
+
+/* Hi5Central mobile pull-to-refresh owns the vertical top-edge gesture.
+   Keep iOS Safari from converting the same movement into viewport rubber-band. */
+@media (max-width: 680px) {
+  html,
+  body,
+  #root {
+    overscroll-behavior-y: none;
+  }
+
+  .view-grid,
+  .portal-view,
+  .changes-view,
+  .cmdb-view,
+  .knowledge-view,
+  .reports-view,
+  .settings-view,
+  .entity-detail-view,
+  .new-record-view {
+    overscroll-behavior-y: contain;
+  }
+}
+
+/* ================================================================
+   HI5CENTRAL MOBILE COMPACT PAGE HEADER
+   The workspace tab + breadcrumb already establish page context on
+   phones. Hide the duplicate global view heading and let each view's
+   own meaningful content header lead the page instead.
+   ================================================================ */
+@media (max-width: 680px) {
+  .workspace {
+    grid-template-rows: minmax(0, 1fr);
+    gap: 0;
+    padding-top: 6px;
+  }
+
+  .view-header {
+    display: none;
+  }
+}
