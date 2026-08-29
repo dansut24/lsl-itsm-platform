@@ -317,8 +317,6 @@ function App() {
 
       if (delta > 5 && currentTop > 48) {
         setMobileHeaderHidden(true)
-      } else if (delta < -3) {
-        setMobileHeaderHidden(false)
       }
     }
 
@@ -549,7 +547,7 @@ function App() {
 
   useEffect(() => {
     setMobileHeaderHidden(false)
-  }, [activeTabKey, mobileNavOpen])
+  }, [activeTabKey])
 
   useEffect(() => {
     saveSidebarMode(sidebarMode)
