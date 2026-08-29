@@ -130,13 +130,27 @@ function emptyTicketDraft(type = 'Incident') {
     service: 'Collaboration',
     category: 'Email & Messaging',
     team: 'Service Desk',
+    requestTemplateId: '',
+    requestedItems: [],
+    requestApprovals: [],
+    requestTasks: [],
+    requestCostCentre: '',
+    requestRequiredBy: '',
   }
 }
 
 function isTicketDraftDirty(draft, type = draft?.type || 'Incident') {
   if (!draft) return false
   const baseline = emptyTicketDraft(type)
-  return Object.keys(baseline).some((key) => key !== 'type' && draft[key] !== baseline[key])
+  return Object.keys(baseline).some((key) => {
+    if (key === 'type') return false
+    const current = draft[key]
+    const initial = baseline[key]
+    if (Array.isArray(current) || Array.isArray(initial)) {
+      return JSON.stringify(current || []) !== JSON.stringify(initial || [])
+    }
+    return current !== initial
+  })
 }
 
 function restoreWorkspaceTabs(workspace, routeTab) {
@@ -1017,9 +1031,30 @@ function App() {
       nextStep: 'Triage and assign an owner.',
       comments: ['Created from the analyst console.'],
       linkedAssets: [],
+      requestInformation: ticketDraft.type === 'Service Request'
+        ? [
+            { label: 'Employee name', value: ticketDraft.requester.trim() },
+            ...(ticketDraft.requesterStaffNumber ? [{ label: 'Staff number', value: ticketDraft.requesterStaffNumber }] : []),
+            ...(ticketDraft.requesterJobTitle ? [{ label: 'Job title', value: ticketDraft.requesterJobTitle }] : []),
+            ...(ticketDraft.requesterDepartment ? [{ label: 'Department', value: ticketDraft.requesterDepartment }] : []),
+            ...(ticketDraft.requestCostCentre ? [{ label: 'Cost centre', value: ticketDraft.requestCostCentre }] : []),
+            ...(ticketDraft.requestRequiredBy ? [{ label: 'Required by', value: ticketDraft.requestRequiredBy }] : []),
+          ]
+        : undefined,
+      requestedItems: ticketDraft.type === 'Service Request' ? ticketDraft.requestedItems || [] : undefined,
+      requestApprovals: ticketDraft.type === 'Service Request' ? ticketDraft.requestApprovals || [] : undefined,
+      requestTasks: ticketDraft.type === 'Service Request' ? ticketDraft.requestTasks || [] : undefined,
       risk: ticketDraft.type === 'Change' ? 'Medium' : undefined,
       approval: ticketDraft.type === 'Change' ? 'Pending' : undefined,
       window: ticketDraft.type === 'Change' ? 'To be scheduled' : undefined,
+    }
+
+    if (createdTicket.type === 'Service Request') {
+      const approvalRequired = createdTicket.requestApprovals?.some((approval) => approval.status === 'Pending')
+      createdTicket.status = approvalRequired ? 'Pending Approval' : 'In Progress'
+      createdTicket.nextStep = approvalRequired
+        ? 'Awaiting required approval before fulfilment tasks are released.'
+        : 'Approval not required. The first fulfilment task is ready.'
     }
 
     setTickets((currentTickets) => [createdTicket, ...currentTickets])
