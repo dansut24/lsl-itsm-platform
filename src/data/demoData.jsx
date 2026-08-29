@@ -17,6 +17,7 @@ import {
 export const statusOptions = [
   'New',
   'In Progress',
+  'Pending',
   'Pending Approval',
   'CAB Review',
   'Monitoring',
