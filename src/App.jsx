@@ -199,14 +199,12 @@ function App() {
   const [accent, setAccent] = useState(loadAccent)
   const [sidebarMode, setSidebarMode] = useState(loadSidebarMode)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
-  const [mobileHeaderHidden, setMobileHeaderHidden] = useState(false)
   const [pullRefreshDragging, setPullRefreshDragging] = useState(false)
   const [pullRefreshArmed, setPullRefreshArmed] = useState(false)
   const [pullRefreshing, setPullRefreshing] = useState(false)
   const [density, setDensity] = useState(loadDensity)
   const tabListRef = useRef(null)
   const mainFrameRef = useRef(null)
-  const mobileScrollPositionsRef = useRef(new WeakMap())
   const pullRefreshGestureRef = useRef({
     active: false,
     engaged: false,
@@ -288,53 +286,6 @@ function App() {
 
   useEffect(() => {
     const media = window.matchMedia?.('(max-width: 680px)')
-    if (!media) return undefined
-
-    const handleWorkspaceScroll = (event) => {
-      if (!media.matches) return
-
-      const target = event.target
-      const mainFrame = mainFrameRef.current
-
-      if (!(target instanceof HTMLElement) || !mainFrame?.contains(target)) return
-      if (target.classList.contains('tab-list')) return
-      if (target.scrollHeight <= target.clientHeight + 4) return
-
-      const maxScrollTop = Math.max(0, target.scrollHeight - target.clientHeight)
-      const currentTop = Math.min(
-        maxScrollTop,
-        Math.max(0, target.scrollTop),
-      )
-      const previousTop = mobileScrollPositionsRef.current.get(target) ?? currentTop
-      const delta = currentTop - previousTop
-
-      mobileScrollPositionsRef.current.set(target, currentTop)
-
-      if (currentTop <= 10) {
-        setMobileHeaderHidden(false)
-        return
-      }
-
-      if (delta > 5 && currentTop > 48) {
-        setMobileHeaderHidden(true)
-      }
-    }
-
-    const handleViewportChange = () => {
-      if (!media.matches) setMobileHeaderHidden(false)
-    }
-
-    document.addEventListener('scroll', handleWorkspaceScroll, true)
-    media.addEventListener?.('change', handleViewportChange)
-
-    return () => {
-      document.removeEventListener('scroll', handleWorkspaceScroll, true)
-      media.removeEventListener?.('change', handleViewportChange)
-    }
-  }, [])
-
-  useEffect(() => {
-    const media = window.matchMedia?.('(max-width: 680px)')
     const mainFrame = mainFrameRef.current
     if (!media || !mainFrame || session?.role !== 'analyst') return undefined
 
@@ -406,7 +357,6 @@ function App() {
       setPullRefreshDragging(false)
       setPullRefreshArmed(false)
       setPullRefreshing(true)
-      setMobileHeaderHidden(false)
       setPullDistance(REFRESH_HOLD)
 
       if (pullRefreshTimerRef.current) {
@@ -436,7 +386,7 @@ function App() {
       // The tab strip remains horizontal-swipe only. Form controls should also
       // keep their native touch behaviour. Breadcrumbs, however, are a valid
       // top-edge pull target on compact mobile layouts.
-      if (target.closest('.tab-list, .mobile-topbar, .sidebar, .breadcrumb-mobile-actions, input, textarea, select')) return
+      if (target.closest('.tab-list, .sidebar, .breadcrumb-mobile-actions, input, textarea, select')) return
 
       const scrollTarget = findScrollTarget(target) || findActiveScrollTarget()
       if (scrollTarget && scrollTarget.scrollTop > 1) return
@@ -482,7 +432,6 @@ function App() {
       // native rubber-band / browser pull-to-refresh behaviour.
       if (event.cancelable) event.preventDefault()
       event.stopPropagation()
-      setMobileHeaderHidden(false)
 
       if (!gesture.engaged) {
         gesture.engaged = true
@@ -544,10 +493,6 @@ function App() {
       }
     }
   }, [session?.role])
-
-  useEffect(() => {
-    setMobileHeaderHidden(false)
-  }, [activeTabKey])
 
   useEffect(() => {
     saveSidebarMode(sidebarMode)
@@ -1460,47 +1405,10 @@ function App() {
 
   return (
     <div
-      className={[
-        `app-shell sidebar-${sidebarMode} density-${density}`,
-        mobileHeaderHidden ? 'mobile-header-hidden' : '',
-      ].filter(Boolean).join(' ')}
+      className={`app-shell sidebar-${sidebarMode} density-${density}`}
       data-accent={accent}
       data-theme={resolvedTheme}
     >
-      <header className="mobile-topbar" aria-label="Mobile workspace controls">
-        <button
-          className="mobile-logo-button"
-          onClick={() => setMobileNavOpen(true)}
-          title="Open navigation"
-          type="button"
-        >
-          <img src={`${import.meta.env.BASE_URL}hi5central-logo.png`} alt="Hi5Central" />
-        </button>
-
-        <div className="mobile-topbar-actions">
-          <button className="mobile-icon-action mobile-new-ticket" onClick={() => openNewRecord('Incident')} title="New incident" type="button">
-            <Plus size={18} aria-hidden="true" />
-          </button>
-          <button
-            className="mobile-icon-action"
-            onClick={() => setTheme(resolvedTheme === 'light' ? 'dark' : 'light')}
-            title={resolvedTheme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
-            type="button"
-          >
-            {resolvedTheme === 'light' ? <Moon size={17} /> : <Sun size={17} />}
-          </button>
-          <button className="mobile-icon-action" title="Notifications" type="button">
-            <Bell size={17} aria-hidden="true" />
-          </button>
-          <button className="mobile-icon-action" onClick={() => openTab('settings')} title="Settings" type="button">
-            <Settings size={17} aria-hidden="true" />
-          </button>
-          <button className="mobile-icon-action" onClick={handleLogout} title="Sign out" type="button">
-            <LogOut size={17} aria-hidden="true" />
-          </button>
-        </div>
-      </header>
-
       {(!sidebarHidden || mobileNavOpen) && <aside className={mobileNavOpen ? 'sidebar mobile-open' : 'sidebar'} aria-label="Primary navigation">
         <div className="sidebar-top">
           <div className="brand">
