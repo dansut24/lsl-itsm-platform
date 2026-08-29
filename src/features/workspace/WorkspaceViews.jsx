@@ -516,6 +516,19 @@ export function TicketRecordView({
     )
   }
 
+  if (selectedTicket.type === 'Service Request') {
+    return (
+      <ServiceRequestRecordWorkspace
+        addComment={addComment}
+        key={selectedTicket.id}
+        newComment={newComment}
+        setNewComment={setNewComment}
+        ticket={selectedTicket}
+        updateTicket={updateTicket}
+      />
+    )
+  }
+
   return (
     <div className="record-page">
       <section className="record-primary">
@@ -1617,6 +1630,624 @@ function IncidentQueueView({
   )
 }
 
+
+
+const serviceRequestSections = [
+  { id: 'overview', label: 'Overview', icon: Inbox },
+  { id: 'items', label: 'Requested items', icon: Server },
+  { id: 'approvals', label: 'Approvals', icon: ClipboardCheck },
+  { id: 'tasks', label: 'Tasks', icon: ListChecks },
+  { id: 'activity', label: 'Activity', icon: MessageSquarePlus },
+]
+
+function requestItemsFor(ticket) {
+  if (ticket.requestedItems?.length) return ticket.requestedItems
+  return [
+    {
+      id: `CAT-${String(ticket.service || 'SERVICE').toUpperCase().replace(/\s+/g, '-')}`,
+      name: ticket.title,
+      category: ticket.service || 'Service',
+      quantity: 1,
+      unitCost: 0,
+      options: ['Standard request configuration'],
+    },
+  ]
+}
+
+function requestApprovalsFor(ticket) {
+  if (ticket.requestApprovals?.length) return ticket.requestApprovals
+  if (ticket.status === 'Pending Approval') {
+    return [
+      {
+        id: `${ticket.id}-APPROVAL-1`,
+        label: 'Request approval',
+        approver: 'Request approver',
+        status: 'Pending',
+        updated: 'Awaiting decision',
+      },
+    ]
+  }
+  return []
+}
+
+function requestTasksFor(ticket) {
+  if (ticket.requestTasks?.length) return ticket.requestTasks
+  return [
+    {
+      id: `${ticket.id}-TASK-1`,
+      title: 'Review and validate request',
+      team: ticket.team || 'Service Desk',
+      assignee: ticket.assignee || 'Unassigned',
+      status: 'Ready',
+      dependsOn: [],
+      due: 'Within 4 hr',
+      instructions: 'Confirm the request information and requested items are complete before fulfilment begins.',
+    },
+    {
+      id: `${ticket.id}-TASK-2`,
+      title: 'Complete fulfilment',
+      team: ticket.team || 'Service Desk',
+      assignee: 'Unassigned',
+      status: 'Waiting',
+      dependsOn: [`${ticket.id}-TASK-1`],
+      due: ticket.sla || 'Within SLA',
+      instructions: 'Complete the requested service and record the fulfilment outcome.',
+    },
+  ]
+}
+
+function requestTotalCost(ticket) {
+  return requestItemsFor(ticket).reduce(
+    (total, item) => total + Number(item.unitCost || 0) * Number(item.quantity || 1),
+    0,
+  )
+}
+
+function formatRequestCost(value) {
+  return new Intl.NumberFormat('en-GB', {
+    style: 'currency',
+    currency: 'GBP',
+    minimumFractionDigits: value % 1 ? 2 : 0,
+  }).format(value || 0)
+}
+
+function requestApprovalsComplete(ticket) {
+  const approvals = requestApprovalsFor(ticket)
+  return !approvals.length || approvals.every((approval) => approval.status === 'Approved')
+}
+
+function requestTaskUnlocked(task, tasks, approvalsComplete) {
+  if (task.requiresApproval && !approvalsComplete) return false
+  const dependencies = task.dependsOn || []
+  return dependencies.every((dependencyId) =>
+    tasks.find((candidate) => candidate.id === dependencyId)?.status === 'Completed',
+  )
+}
+
+function requestVisibleTasks(ticket) {
+  const tasks = requestTasksFor(ticket)
+  const approvalsComplete = requestApprovalsComplete(ticket)
+  return tasks.filter((task) => requestTaskUnlocked(task, tasks, approvalsComplete))
+}
+
+function requestWorkflowProgress(ticket) {
+  const tasks = requestTasksFor(ticket)
+  const completed = tasks.filter((task) => task.status === 'Completed').length
+  const percent = tasks.length ? Math.round((completed / tasks.length) * 100) : 100
+  return { completed, total: tasks.length, percent }
+}
+
+function ServiceRequestQueueView({
+  filteredTickets,
+  openNewRecord,
+  openRecordTab,
+  query,
+  setQuery,
+  tickets,
+}) {
+  const [quickView, setQuickView] = useState('all')
+  const [sortKey, setSortKey] = useState('updated')
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const [advancedFilters, setAdvancedFilters] = useState({ service: 'All', team: 'All' })
+
+  const requests = tickets.filter((ticket) => ticket.type === 'Service Request')
+  const openRequests = requests.filter((ticket) => !['Resolved', 'Closed'].includes(ticket.status))
+  const awaitingApproval = openRequests.filter((ticket) => !requestApprovalsComplete(ticket)).length
+  const readyTasks = openRequests.reduce(
+    (count, ticket) => count + requestVisibleTasks(ticket).filter((task) => ['Ready', 'Waiting'].includes(task.status)).length,
+    0,
+  )
+  const totalValue = openRequests.reduce((sum, ticket) => sum + requestTotalCost(ticket), 0)
+
+  const services = ['All', ...new Set(requests.map((ticket) => ticket.service).filter(Boolean))]
+  const teamsAvailable = ['All', ...new Set(requests.map((ticket) => ticket.team).filter(Boolean))]
+
+  const matchesQuickView = (ticket) => {
+    const progress = requestWorkflowProgress(ticket)
+    const ready = requestVisibleTasks(ticket).filter((task) => task.status !== 'Completed')
+    if (quickView === 'approval') return !requestApprovalsComplete(ticket)
+    if (quickView === 'fulfilment') return requestApprovalsComplete(ticket) && !['Resolved', 'Closed'].includes(ticket.status)
+    if (quickView === 'ready') return ready.length > 0
+    if (quickView === 'mine') return ready.some((task) => task.assignee === 'Dana Sinclair') || ticket.assignee === 'Dana Sinclair'
+    if (quickView === 'complete') return ['Resolved', 'Closed'].includes(ticket.status) || progress.percent === 100
+    return true
+  }
+
+  const ageMinutes = (value) => {
+    const normalized = String(value || '').toLowerCase()
+    const minutes = normalized.match(/(\d+)\s*min/)
+    if (minutes) return Number(minutes[1])
+    const hours = normalized.match(/(\d+)\s*hr/)
+    if (hours) return Number(hours[1]) * 60
+    if (normalized.includes('just now')) return 0
+    if (normalized.includes('yesterday')) return 1440
+    return 720
+  }
+
+  const visibleRequests = filteredTickets
+    .filter((ticket) =>
+      matchesQuickView(ticket) &&
+      (advancedFilters.service === 'All' || ticket.service === advancedFilters.service) &&
+      (advancedFilters.team === 'All' || ticket.team === advancedFilters.team),
+    )
+    .sort((a, b) => {
+      if (sortKey === 'reference') return Number(String(b.id).replace(/\D/g, '')) - Number(String(a.id).replace(/\D/g, ''))
+      if (sortKey === 'cost') return requestTotalCost(b) - requestTotalCost(a)
+      if (sortKey === 'progress') return requestWorkflowProgress(a).percent - requestWorkflowProgress(b).percent
+      return ageMinutes(a.updated) - ageMinutes(b.updated)
+    })
+
+  const quickViews = [
+    ['all', 'All'],
+    ['approval', 'Awaiting approval'],
+    ['fulfilment', 'In fulfilment'],
+    ['ready', 'Ready tasks'],
+    ['mine', 'My work'],
+    ['complete', 'Completed'],
+  ]
+
+  return (
+    <section className="request-queue-v2">
+      <header className="request-queue-heading">
+        <div>
+          <span className="eyebrow">Service Requests</span>
+          <h2>Request fulfilment</h2>
+          <p>Track approvals, requested items, cost and fulfilment work from one queue.</p>
+        </div>
+        <button className="primary-action compact" onClick={() => openNewRecord?.('Service Request')} type="button">
+          <Plus size={16} aria-hidden="true" />
+          New Service Request
+        </button>
+      </header>
+
+      <div className="request-queue-metrics" aria-label="Service request queue summary">
+        <div><strong>{openRequests.length}</strong><span>Open</span></div>
+        <div><strong>{awaitingApproval}</strong><span>Awaiting approval</span></div>
+        <div><strong>{readyTasks}</strong><span>Ready tasks</span></div>
+        <div><strong>{formatRequestCost(totalValue)}</strong><span>Open value</span></div>
+      </div>
+
+      <div className="request-queue-toolbar">
+        <label className="incident-queue-search request-queue-search">
+          <Search size={17} aria-hidden="true" />
+          <input
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search requests, requester, service or team"
+            type="search"
+            value={query}
+          />
+        </label>
+        <button className={filtersOpen ? 'secondary-action active' : 'secondary-action'} onClick={() => setFiltersOpen(true)} type="button">
+          <SlidersHorizontal size={16} aria-hidden="true" />
+          Filters
+        </button>
+      </div>
+
+      <div className="request-quick-views" aria-label="Service request views">
+        {quickViews.map(([id, label]) => (
+          <button className={quickView === id ? 'active' : ''} key={id} onClick={() => setQuickView(id)} type="button">
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <div className="request-queue-subbar">
+        <span><strong>{visibleRequests.length}</strong> requests</span>
+        <label>
+          Sort
+          <select onChange={(event) => setSortKey(event.target.value)} value={sortKey}>
+            <option value="updated">Recently updated</option>
+            <option value="reference">Reference</option>
+            <option value="cost">Highest cost</option>
+            <option value="progress">Workflow progress</option>
+          </select>
+        </label>
+      </div>
+
+      <div className="request-desktop-table" role="table" aria-label="Service request queue">
+        <div className="request-table-row request-table-head" role="row">
+          <span>Reference / request</span>
+          <span>Requester</span>
+          <span>Approval</span>
+          <span>Workflow</span>
+          <span>Cost</span>
+          <span>Updated</span>
+        </div>
+        {visibleRequests.map((ticket) => {
+          const progress = requestWorkflowProgress(ticket)
+          const approvalsComplete = requestApprovalsComplete(ticket)
+          const ready = requestVisibleTasks(ticket).filter((task) => ['Ready', 'Waiting'].includes(task.status))
+          return (
+            <button className="request-table-row request-table-record" key={ticket.id} onClick={() => openRecordTab(ticket)} role="row" type="button">
+              <span className="request-table-primary">
+                <strong>{ticket.id}</strong>
+                <span>{ticket.title}</span>
+                <small>{ticket.service} · {ticket.team}</small>
+              </span>
+              <span><strong>{ticket.requester}</strong><small>{ticket.location}</small></span>
+              <span><span className={`status-pill ${approvalsComplete ? 'resolved' : 'pending-approval'}`}>{approvalsComplete ? 'Approved' : 'Pending'}</span></span>
+              <span className="request-progress-cell">
+                <strong>{progress.completed}/{progress.total}</strong>
+                <small>{ready.length ? `${ready.length} task${ready.length === 1 ? '' : 's'} ready` : progress.percent === 100 ? 'Complete' : 'Waiting'}</small>
+                <span className="request-progress-track"><i style={{ width: `${progress.percent}%` }} /></span>
+              </span>
+              <span><strong>{formatRequestCost(requestTotalCost(ticket))}</strong></span>
+              <span><strong>{ticket.updated}</strong><small>{ticket.status}</small></span>
+            </button>
+          )
+        })}
+      </div>
+
+      <div className="request-mobile-list">
+        {visibleRequests.map((ticket) => {
+          const progress = requestWorkflowProgress(ticket)
+          const approvalsComplete = requestApprovalsComplete(ticket)
+          const ready = requestVisibleTasks(ticket).filter((task) => ['Ready', 'Waiting'].includes(task.status))
+          return (
+            <button className="request-mobile-card" key={ticket.id} onClick={() => openRecordTab(ticket)} type="button">
+              <div className="request-mobile-card-top">
+                <strong>{ticket.id}</strong>
+                <span>{formatRequestCost(requestTotalCost(ticket))}</span>
+              </div>
+              <h3>{ticket.title}</h3>
+              <div className="request-mobile-card-status">
+                <span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span>
+                <span>{ticket.service}</span>
+              </div>
+              <div className="request-mobile-progress">
+                <span><strong>{progress.completed}/{progress.total}</strong> workflow tasks</span>
+                <span>{ready.length ? `${ready.length} ready` : approvalsComplete ? 'Waiting' : 'Approval required'}</span>
+                <div><i style={{ width: `${progress.percent}%` }} /></div>
+              </div>
+              <footer>
+                <span>{ticket.requester}</span>
+                <span>{ticket.updated} <ChevronRight size={15} aria-hidden="true" /></span>
+              </footer>
+            </button>
+          )
+        })}
+      </div>
+
+      {!visibleRequests.length && (
+        <div className="incident-queue-empty">
+          <ListChecks size={24} aria-hidden="true" />
+          <strong>No service requests match this view</strong>
+          <span>Try another view or clear the active filters.</span>
+        </div>
+      )}
+
+      {filtersOpen && (
+        <div className="request-filter-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setFiltersOpen(false)}>
+          <aside className="request-filter-panel" aria-label="Service request filters">
+            <header>
+              <div><span className="eyebrow">Queue filters</span><h3>Filter requests</h3></div>
+              <button className="icon-button" onClick={() => setFiltersOpen(false)} type="button">×</button>
+            </header>
+            <div className="request-filter-fields">
+              <label>Service<select value={advancedFilters.service} onChange={(event) => setAdvancedFilters({ ...advancedFilters, service: event.target.value })}>{services.map((service) => <option key={service}>{service}</option>)}</select></label>
+              <label>Fulfilment team<select value={advancedFilters.team} onChange={(event) => setAdvancedFilters({ ...advancedFilters, team: event.target.value })}>{teamsAvailable.map((team) => <option key={team}>{team}</option>)}</select></label>
+            </div>
+            <footer>
+              <button className="secondary-action" onClick={() => setAdvancedFilters({ service: 'All', team: 'All' })} type="button">Clear all</button>
+              <button className="primary-action compact" onClick={() => setFiltersOpen(false)} type="button">Apply filters</button>
+            </footer>
+          </aside>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function ServiceRequestRecordWorkspace({ addComment, newComment, setNewComment, ticket, updateTicket }) {
+  const [activeSection, setActiveSection] = useState('overview')
+  const [activityMode, setActivityMode] = useState('work')
+  const items = requestItemsFor(ticket)
+  const approvals = requestApprovalsFor(ticket)
+  const tasks = requestTasksFor(ticket)
+  const approvalsComplete = requestApprovalsComplete(ticket)
+  const visibleTasks = requestVisibleTasks(ticket)
+  const progress = requestWorkflowProgress(ticket)
+  const totalCost = requestTotalCost(ticket)
+
+  const writeTasks = (nextTasks, updates = {}) => {
+    const completed = nextTasks.filter((task) => task.status === 'Completed').length
+    const allComplete = nextTasks.length > 0 && completed === nextTasks.length
+    updateTicket(ticket.id, {
+      requestTasks: nextTasks,
+      ...(allComplete ? { status: 'Resolved', nextStep: 'Fulfilment complete. Confirm requester acceptance and close the request.' } : {}),
+      ...updates,
+    })
+  }
+
+  const materialiseNewlyUnlockedTasks = (candidateTasks, approvalState = approvalsComplete) =>
+    candidateTasks.map((task) => {
+      if (!requestTaskUnlocked(task, candidateTasks, approvalState)) return task
+      if (!['Waiting', 'Blocked'].includes(task.status)) return task
+      return {
+        ...task,
+        status: 'Ready',
+        assignee: task.autoAssignee || task.assignee || 'Unassigned',
+      }
+    })
+
+  const updateTask = (taskId, updates) => {
+    const nextTasks = materialiseNewlyUnlockedTasks(
+      tasks.map((task) => task.id === taskId ? { ...task, ...updates } : task),
+    )
+    writeTasks(nextTasks)
+  }
+
+  const completeTask = (task) => {
+    const completedTasks = tasks.map((candidate) =>
+      candidate.id === task.id
+        ? { ...candidate, status: 'Completed', completedAt: 'Just now', assignee: candidate.assignee || 'Dana Sinclair' }
+        : candidate,
+    )
+    const nextTasks = materialiseNewlyUnlockedTasks(completedTasks)
+    const newlyVisible = nextTasks.filter((candidate) =>
+      candidate.status === 'Ready' && !visibleTasks.some((visible) => visible.id === candidate.id),
+    )
+    writeTasks(nextTasks, {
+      comments: [
+        `Work note: Fulfilment task completed — ${task.title}.`,
+        ...(newlyVisible.length ? [`System: ${newlyVisible.map((candidate) => candidate.title).join(', ')} released to fulfilment.`] : []),
+        ...ticket.comments,
+      ],
+    })
+  }
+
+  const updateApproval = (approvalId, status) => {
+    const nextApprovals = approvals.map((approval) =>
+      approval.id === approvalId ? { ...approval, status, updated: 'Just now' } : approval,
+    )
+    const nextApproved = nextApprovals.length > 0 && nextApprovals.every((approval) => approval.status === 'Approved')
+    let nextTasks = tasks
+    if (nextApproved) nextTasks = materialiseNewlyUnlockedTasks(tasks, true)
+    updateTicket(ticket.id, {
+      requestApprovals: nextApprovals,
+      requestTasks: nextTasks,
+      status: nextApproved ? 'In Progress' : ticket.status,
+      nextStep: nextApproved ? 'Approval complete. Fulfilment tasks have been released.' : ticket.nextStep,
+      comments: [
+        `System: ${nextApprovals.find((approval) => approval.id === approvalId)?.label || 'Approval'} ${status.toLowerCase()}.`,
+        ...ticket.comments,
+      ],
+    })
+  }
+
+  const taskDisplayStatus = (task) => task.status === 'Waiting' ? 'Ready' : task.status
+
+  const renderOverview = () => (
+    <div className="request-detail-overview">
+      <section className="request-detail-section">
+        <div className="request-section-heading"><span className="eyebrow">Requester</span><h3>{ticket.requester}</h3></div>
+        <div className="request-requester-summary">
+          <div className="request-avatar">{userInitials(ticket.requester)}</div>
+          <div>
+            <strong>{ticket.requester}</strong>
+            <span>{ticket.requesterJobTitle || 'Requester'}{ticket.requesterDepartment ? ` · ${ticket.requesterDepartment}` : ''}</span>
+            {ticket.requesterEmail && <small>{ticket.requesterEmail}</small>}
+          </div>
+        </div>
+        <div className="request-information-grid">
+          {(ticket.requestInformation?.length ? ticket.requestInformation : [
+            { label: 'Location', value: ticket.location },
+            { label: 'Service', value: ticket.service },
+            { label: 'Priority', value: ticket.priority },
+            { label: 'Fulfilment team', value: ticket.team },
+          ]).map((field) => <IncidentProperty key={`${field.label}-${field.value}`} label={field.label} value={field.value} />)}
+        </div>
+      </section>
+
+      <section className="request-detail-section">
+        <div className="request-section-heading"><span className="eyebrow">Request</span><h3>Request information</h3></div>
+        <p className="request-description-copy">{ticket.description}</p>
+      </section>
+
+      <section className="request-detail-summary-grid">
+        <div><span>Requested items</span><strong>{items.reduce((sum, item) => sum + Number(item.quantity || 1), 0)}</strong><small>{formatRequestCost(totalCost)} cost snapshot</small></div>
+        <div><span>Approvals</span><strong>{approvals.filter((approval) => approval.status === 'Approved').length}/{approvals.length || 0}</strong><small>{approvalsComplete ? 'Approval complete' : 'Awaiting approval'}</small></div>
+        <div><span>Fulfilment</span><strong>{progress.completed}/{progress.total}</strong><small>{progress.percent}% complete</small></div>
+      </section>
+
+      <section className="request-next-step-card">
+        <span className="eyebrow">Next step</span>
+        <strong>{ticket.nextStep}</strong>
+      </section>
+    </div>
+  )
+
+  const renderItems = () => (
+    <div className="request-items-panel">
+      <div className="request-panel-intro">
+        <div><span className="eyebrow">Cost snapshot</span><h3>Requested items</h3><p>Items and prices are captured with the request so later catalogue changes do not alter this record.</p></div>
+        <div className="request-total-cost"><span>Total</span><strong>{formatRequestCost(totalCost)}</strong></div>
+      </div>
+      <div className="request-item-list">
+        {items.map((item) => (
+          <article className="request-item-card" key={item.id}>
+            <div className="request-item-icon"><Server size={18} aria-hidden="true" /></div>
+            <div className="request-item-main">
+              <span>{item.category} · {item.id}</span>
+              <h4>{item.name}</h4>
+              <div className="request-item-options">{(item.options || []).map((option) => <span key={option}>{option}</span>)}</div>
+            </div>
+            <div className="request-item-price">
+              <span>Qty {item.quantity || 1}</span>
+              <strong>{formatRequestCost(Number(item.unitCost || 0) * Number(item.quantity || 1))}</strong>
+              <small>{formatRequestCost(item.unitCost || 0)} each</small>
+            </div>
+          </article>
+        ))}
+      </div>
+    </div>
+  )
+
+  const renderApprovals = () => (
+    <div className="request-approvals-panel">
+      <div className="request-panel-intro">
+        <div><span className="eyebrow">Governance</span><h3>Approvals</h3><p>Fulfilment work that requires approval is not released until every required approval is complete.</p></div>
+        <span className={`status-pill ${approvalsComplete ? 'resolved' : 'pending-approval'}`}>{approvalsComplete ? 'Approved' : 'Approval required'}</span>
+      </div>
+      {!approvals.length ? (
+        <div className="request-empty-section"><CheckCircle2 size={22} /><strong>No approval required</strong><span>This request can move directly into fulfilment.</span></div>
+      ) : (
+        <div className="request-approval-list">
+          {approvals.map((approval) => (
+            <article className="request-approval-card" key={approval.id}>
+              <div className={`request-approval-state ${approval.status.toLowerCase()}`}><ClipboardCheck size={18} aria-hidden="true" /></div>
+              <div><span>{approval.label}</span><strong>{approval.approver}</strong><small>{approval.updated}</small></div>
+              <span className={`status-pill ${approval.status === 'Approved' ? 'resolved' : approval.status === 'Rejected' ? 'closed' : 'pending-approval'}`}>{approval.status}</span>
+              {approval.status === 'Pending' && (
+                <div className="request-approval-actions">
+                  <button onClick={() => updateApproval(approval.id, 'Rejected')} type="button">Reject</button>
+                  <button className="primary-action compact" onClick={() => updateApproval(approval.id, 'Approved')} type="button">Approve</button>
+                </div>
+              )}
+            </article>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+
+  const renderTasks = () => {
+    const available = visibleTasks.filter((task) => task.status !== 'Completed')
+    return (
+      <div className="request-tasks-panel">
+        <div className="request-panel-intro">
+          <div>
+            <span className="eyebrow">Fulfilment workflow</span>
+            <h3>Tasks</h3>
+            <p>Only work that is currently available is shown. Dependent tasks stay hidden and unassigned until their prerequisite task is completed.</p>
+          </div>
+          <div className="request-task-progress"><strong>{progress.completed}/{progress.total}</strong><span>complete</span></div>
+        </div>
+
+        <div className="request-task-context">
+          <div><span className="eyebrow">Request context</span><strong>{ticket.requester}</strong><small>{ticket.requesterJobTitle || ticket.requesterDepartment || ticket.location}</small></div>
+          <div><span className="eyebrow">Requested items</span><strong>{items.map((item) => `${item.name} ×${item.quantity || 1}`).join(' · ')}</strong><small>{formatRequestCost(totalCost)} captured cost</small></div>
+        </div>
+
+        <div className="request-task-list">
+          {visibleTasks.map((task, index) => {
+            const displayStatus = taskDisplayStatus(task)
+            return (
+              <article className={`request-task-card status-${displayStatus.toLowerCase().replace(/\s+/g, '-')}`} key={task.id}>
+                <div className="request-task-index">{task.status === 'Completed' ? <CheckCircle2 size={18} /> : index + 1}</div>
+                <div className="request-task-main">
+                  <div className="request-task-title-row"><div><span>{task.id}</span><h4>{task.title}</h4></div><span className={`status-pill ${task.status === 'Completed' ? 'resolved' : task.status === 'In Progress' ? 'in-progress' : 'new'}`}>{displayStatus}</span></div>
+                  <p>{task.instructions}</p>
+                  <div className="request-task-meta">
+                    <span><Users size={14} /> {task.team}</span>
+                    <span><UserRound size={14} /> {task.assignee || 'Unassigned'}</span>
+                    <span><Clock3 size={14} /> {task.due}</span>
+                  </div>
+                  {task.status !== 'Completed' && (
+                    <div className="request-task-actions">
+                      {(!task.assignee || task.assignee === 'Unassigned') && <button onClick={() => updateTask(task.id, { assignee: 'Dana Sinclair' })} type="button"><UserCheck size={15} /> Claim task</button>}
+                      {['Ready', 'Waiting'].includes(task.status) && <button className="primary-action compact" onClick={() => updateTask(task.id, { status: 'In Progress', assignee: task.assignee === 'Unassigned' ? 'Dana Sinclair' : task.assignee })} type="button"><Wrench size={15} /> Start task</button>}
+                      {task.status === 'In Progress' && <button className="primary-action compact" onClick={() => completeTask(task)} type="button"><CheckCircle2 size={15} /> Complete task</button>}
+                    </div>
+                  )}
+                </div>
+              </article>
+            )
+          })}
+        </div>
+
+        {!visibleTasks.length && (
+          <div className="request-empty-section">
+            <Clock3 size={22} aria-hidden="true" />
+            <strong>{approvalsComplete ? 'No fulfilment work available yet' : 'Waiting for approval'}</strong>
+            <span>{approvalsComplete ? 'The workflow will release its first task when its prerequisites are satisfied.' : 'No technician tasks are exposed or assigned until the required approvals are complete.'}</span>
+          </div>
+        )}
+        {visibleTasks.length > 0 && !available.length && progress.percent < 100 && (
+          <div className="request-empty-section compact"><Clock3 size={20} /><strong>Waiting for the next workflow transition</strong></div>
+        )}
+      </div>
+    )
+  }
+
+  const renderActivity = () => (
+    <div className="request-activity-panel">
+      <div className="request-panel-intro"><div><span className="eyebrow">History</span><h3>Activity</h3><p>Keep internal fulfilment notes separate from updates intended for the requester.</p></div></div>
+      <div className="incident-activity-composer request-activity-composer">
+        <div className="incident-note-mode">
+          <button className={activityMode === 'work' ? 'active' : ''} onClick={() => setActivityMode('work')} type="button">Work note</button>
+          <button className={activityMode === 'customer' ? 'active' : ''} onClick={() => setActivityMode('customer')} type="button">Requester comment</button>
+        </div>
+        <textarea onChange={(event) => setNewComment(event.target.value)} placeholder={activityMode === 'work' ? 'Add fulfilment notes, handover details or task context' : 'Write an update the requester can see'} value={newComment} />
+        <div className="incident-composer-footer"><span>{activityMode === 'work' ? 'Visible to analysts and fulfilment teams' : 'Visible to the requester'}</span><button className="primary-action compact" onClick={() => addComment(activityMode)} type="button"><Send size={15} /> Add update</button></div>
+      </div>
+      <div className="incident-activity-timeline request-activity-timeline">
+        {ticket.comments.map((comment, index) => {
+          const lower = comment.toLowerCase()
+          const kind = lower.startsWith('customer comment') ? 'customer' : lower.startsWith('system') ? 'system' : 'work'
+          return <article className={`incident-activity-event ${kind}`} key={`${ticket.id}-request-${index}-${comment}`}><span className="incident-event-dot" /><div><header><strong>{kind === 'system' ? 'System' : 'Dana Sinclair'}</strong><span>{kind === 'customer' ? 'Requester comment' : kind === 'system' ? 'Workflow event' : 'Work note'}</span></header><p>{comment.replace(/^(Customer comment:|Work note:|System:)\s*/i, '')}</p></div></article>
+        })}
+      </div>
+    </div>
+  )
+
+  const panel = activeSection === 'items'
+    ? renderItems()
+    : activeSection === 'approvals'
+      ? renderApprovals()
+      : activeSection === 'tasks'
+        ? renderTasks()
+        : activeSection === 'activity'
+          ? renderActivity()
+          : renderOverview()
+
+  return (
+    <div className="service-request-record-v2">
+      <header className="request-record-header">
+        <div className="request-record-title">
+          <span className="eyebrow">{ticket.id}</span>
+          <h2>{ticket.title}</h2>
+          <div className="request-record-badges"><span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span><span>{ticket.service}</span><span>{ticket.priority} priority</span></div>
+        </div>
+        <div className="request-record-summary">
+          <div><span>Total cost</span><strong>{formatRequestCost(totalCost)}</strong></div>
+          <div><span>Workflow</span><strong>{progress.completed}/{progress.total}</strong><small>{progress.percent}% complete</small></div>
+        </div>
+      </header>
+
+      <div className="request-record-progress" aria-label="Request workflow progress"><span><i style={{ width: `${progress.percent}%` }} /></span></div>
+
+      <nav className="request-record-tabs" aria-label="Service request sections">
+        {serviceRequestSections.map(({ id, label, icon: Icon }) => (
+          <button aria-current={activeSection === id ? 'page' : undefined} className={activeSection === id ? 'active' : ''} key={id} onClick={() => setActiveSection(id)} type="button"><Icon size={16} aria-hidden="true" />{label}</button>
+        ))}
+      </nav>
+
+      <div className="request-record-panel">{panel}</div>
+    </div>
+  )
+}
+
 export function TicketsView({
   addComment,
   filters,
@@ -1649,6 +2280,19 @@ export function TicketsView({
         setQuery={setQuery}
         tickets={tickets}
         updateTicket={updateTicket}
+      />
+    )
+  }
+
+  if (moduleConfig?.type === 'Service Request') {
+    return (
+      <ServiceRequestQueueView
+        filteredTickets={filteredTickets}
+        openNewRecord={openNewRecord}
+        openRecordTab={openRecordTab}
+        query={query}
+        setQuery={setQuery}
+        tickets={tickets}
       />
     )
   }
@@ -2159,6 +2803,221 @@ function IncidentIntakeView({
   )
 }
 
+
+
+const serviceRequestCatalogTemplates = [
+  {
+    id: 'laptop-refresh',
+    title: 'Laptop refresh',
+    description: 'Replace an ageing or under-performing corporate laptop with the standard professional bundle.',
+    service: 'Hardware',
+    team: 'End User Compute',
+    items: [
+      { id: 'CAT-LAP-PRO-14', name: 'Lenovo ThinkPad T14 Gen 7', category: 'Laptop', quantity: 1, unitCost: 1249, options: ['Intel Core Ultra 7', '32 GB RAM', '1 TB SSD', '3-year onsite warranty'] },
+      { id: 'CAT-DOCK-USBC', name: 'USB-C Performance Dock', category: 'Accessory', quantity: 1, unitCost: 189, options: ['135W power supply', 'Dual-display support'] },
+    ],
+    approvals: [
+      { id: 'APPROVAL-1', label: 'Line manager approval', approver: 'Line manager', status: 'Pending', updated: 'Created with request' },
+      { id: 'APPROVAL-2', label: 'Cost-centre approval', approver: 'Finance Operations', status: 'Pending', updated: 'Created with request' },
+    ],
+    tasks: [
+      { id: 'TASK-1', title: 'Confirm stock and reserve device', team: 'End User Compute', assignee: 'Unassigned', autoAssignee: 'Noah Williams', status: 'Waiting', requiresApproval: true, dependsOn: [], due: 'Within 4 hr of approval', instructions: 'Confirm the approved configuration is available and reserve the serial number.' },
+      { id: 'TASK-2', title: 'Build and secure laptop', team: 'End User Compute', assignee: 'Unassigned', status: 'Waiting', dependsOn: ['TASK-1'], due: '1 business day', instructions: 'Apply the corporate build, encryption, endpoint security and required applications.' },
+      { id: 'TASK-3', title: 'Transfer profile and approved data', team: 'Service Desk', assignee: 'Unassigned', status: 'Waiting', dependsOn: ['TASK-2'], due: 'Before handover', instructions: 'Confirm cloud sync and transfer any approved local user data.' },
+      { id: 'TASK-4', title: 'Arrange handover and collect old device', team: 'Service Desk', assignee: 'Unassigned', status: 'Waiting', dependsOn: ['TASK-3'], due: 'Required-by date', instructions: 'Arrange handover, verify identity, collect the replaced asset and update the asset record.' },
+    ],
+  },
+  {
+    id: 'new-starter-access',
+    title: 'New starter access package',
+    description: 'Provision the standard collaboration, VPN and shared-resource access required for a new employee.',
+    service: 'Access',
+    team: 'Service Desk',
+    items: [
+      { id: 'CAT-M365-E3', name: 'Microsoft 365 E3 licence', category: 'Software', quantity: 1, unitCost: 31, options: ['Monthly licence'] },
+      { id: 'CAT-VPN-STD', name: 'Corporate VPN access', category: 'Access', quantity: 1, unitCost: 0, options: ['Standard employee profile'] },
+      { id: 'CAT-SHARED-ACCESS', name: 'Department shared resources', category: 'Access', quantity: 1, unitCost: 0, options: ['Manager-approved standard groups'] },
+    ],
+    approvals: [
+      { id: 'APPROVAL-1', label: 'Manager approval', approver: 'Line manager', status: 'Pending', updated: 'Created with request' },
+    ],
+    tasks: [
+      { id: 'TASK-1', title: 'Create identity and licence', team: 'Identity', assignee: 'Unassigned', status: 'Waiting', requiresApproval: true, dependsOn: [], due: 'Within 4 hr of approval', instructions: 'Create the corporate identity and allocate the approved Microsoft 365 licence.' },
+      { id: 'TASK-2', title: 'Provision shared-resource access', team: 'Service Desk', assignee: 'Unassigned', status: 'Waiting', dependsOn: ['TASK-1'], due: 'Before start date', instructions: 'Apply the approved department and project group memberships.' },
+      { id: 'TASK-3', title: 'Assign VPN profile', team: 'Network', assignee: 'Unassigned', status: 'Waiting', dependsOn: ['TASK-2'], due: 'Before start date', instructions: 'Apply the standard VPN profile and confirm conditional-access prerequisites.' },
+      { id: 'TASK-4', title: 'Validate starter access', team: 'Service Desk', assignee: 'Unassigned', status: 'Waiting', dependsOn: ['TASK-3'], due: 'Before start date', instructions: 'Validate the requested services and confirm the package is ready for the starter.' },
+    ],
+  },
+  {
+    id: 'software-access',
+    title: 'Software access request',
+    description: 'Request a standard licensed application for an existing employee.',
+    service: 'Access',
+    team: 'Service Desk',
+    items: [
+      { id: 'CAT-SOFTWARE-STD', name: 'Standard licensed application', category: 'Software', quantity: 1, unitCost: 24, options: ['Named-user licence', 'Standard support'] },
+    ],
+    approvals: [
+      { id: 'APPROVAL-1', label: 'Manager approval', approver: 'Line manager', status: 'Pending', updated: 'Created with request' },
+    ],
+    tasks: [
+      { id: 'TASK-1', title: 'Validate licence availability', team: 'Service Desk', assignee: 'Unassigned', status: 'Waiting', requiresApproval: true, dependsOn: [], due: 'Within 4 hr of approval', instructions: 'Confirm licence availability and validate the requested software is on the approved catalogue.' },
+      { id: 'TASK-2', title: 'Assign licence and entitlement', team: 'Service Desk', assignee: 'Unassigned', status: 'Waiting', dependsOn: ['TASK-1'], due: '1 business day', instructions: 'Allocate the licence and apply the required entitlement group.' },
+      { id: 'TASK-3', title: 'Confirm user access', team: 'Service Desk', assignee: 'Unassigned', status: 'Waiting', dependsOn: ['TASK-2'], due: 'Within SLA', instructions: 'Confirm the user can launch and authenticate to the requested application.' },
+    ],
+  },
+  {
+    id: 'shared-mailbox',
+    title: 'Shared mailbox access',
+    description: 'Add an employee to an existing shared mailbox with standard access permissions.',
+    service: 'Collaboration',
+    team: 'Service Desk',
+    items: [
+      { id: 'CAT-SHARED-MAILBOX', name: 'Shared mailbox access', category: 'Access', quantity: 1, unitCost: 0, options: ['Read and send-as access'] },
+    ],
+    approvals: [],
+    tasks: [
+      { id: 'TASK-1', title: 'Validate mailbox owner approval', team: 'Service Desk', assignee: 'Dana Sinclair', status: 'Ready', dependsOn: [], due: 'Within 2 hr', instructions: 'Confirm the request references the approved shared mailbox and owner.' },
+      { id: 'TASK-2', title: 'Apply mailbox permissions', team: 'Collaboration', assignee: 'Unassigned', status: 'Waiting', dependsOn: ['TASK-1'], due: 'Within 4 hr', instructions: 'Apply the requested mailbox permissions and allow time for replication.' },
+      { id: 'TASK-3', title: 'Validate access with requester', team: 'Service Desk', assignee: 'Unassigned', status: 'Waiting', dependsOn: ['TASK-2'], due: 'Within SLA', instructions: 'Confirm the mailbox is visible and the requested permissions are working.' },
+    ],
+  },
+]
+
+function ServiceRequestIntakeView({
+  handleTicketSubmit,
+  hasUnsavedChanges,
+  setTicketDraft,
+  ticketDraft,
+}) {
+  const [userQuery, setUserQuery] = useState('')
+  const selectedUser = ticketDraft.requesterId
+    ? demoUsers.find((user) => user.id === ticketDraft.requesterId)
+    : null
+  const selectedTemplate = serviceRequestCatalogTemplates.find((template) => template.id === ticketDraft.requestTemplateId)
+  const normalizedQuery = userQuery.trim().toLowerCase()
+  const userResults = normalizedQuery
+    ? demoUsers.filter((user) => [user.name, user.email, user.staffNumber, user.department, user.location].join(' ').toLowerCase().includes(normalizedQuery)).slice(0, 6)
+    : []
+
+  const selectUser = (user) => {
+    setTicketDraft({
+      ...ticketDraft,
+      type: 'Service Request',
+      requesterId: user.id,
+      requester: user.name,
+      requesterEmail: user.email,
+      requesterStaffNumber: user.staffNumber,
+      requesterJobTitle: user.jobTitle,
+      requesterDepartment: user.department,
+      requesterLocation: user.location,
+      requesterManager: user.manager,
+    })
+    setUserQuery('')
+  }
+
+  const clearUser = () => {
+    setTicketDraft({
+      ...ticketDraft,
+      requesterId: '', requester: '', requesterEmail: '', requesterStaffNumber: '', requesterJobTitle: '', requesterDepartment: '', requesterLocation: '', requesterManager: '',
+    })
+  }
+
+  const selectTemplate = (template) => {
+    const approvals = template.approvals.map((approval) => ({
+      ...approval,
+      approver: approval.approver === 'Line manager' ? ticketDraft.requesterManager || 'Line manager' : approval.approver,
+    }))
+    setTicketDraft({
+      ...ticketDraft,
+      type: 'Service Request',
+      requestTemplateId: template.id,
+      title: template.title,
+      service: template.service,
+      team: template.team,
+      priority: 'Medium',
+      requestedItems: template.items.map((item) => ({ ...item })),
+      requestApprovals: approvals,
+      requestTasks: template.tasks.map((task) => ({ ...task })),
+    })
+  }
+
+  const templateCost = selectedTemplate
+    ? selectedTemplate.items.reduce((sum, item) => sum + Number(item.unitCost || 0) * Number(item.quantity || 1), 0)
+    : 0
+
+  return (
+    <div className="new-record-page service-request-intake-page">
+      <section className="service-request-intake-shell">
+        <header className="incident-intake-header request-intake-header">
+          <div><span className="eyebrow">Create request</span><h2>New Service Request</h2><p>Identify the requester, select a catalogue service, then capture the fulfilment information.</p></div>
+          {hasUnsavedChanges && <span className="draft-status">Unsaved changes</span>}
+        </header>
+
+        <ol className="incident-stepper request-stepper" aria-label="Service request creation progress">
+          <li className={selectedUser ? 'complete' : 'active'}><span>1</span><div><strong>Find requester</strong><small>Name, email or staff number</small></div></li>
+          <li className={selectedUser && selectedTemplate ? 'complete' : selectedUser ? 'active' : ''}><span>2</span><div><strong>Choose service</strong><small>Catalogue item and cost</small></div></li>
+          <li className={selectedUser && selectedTemplate ? 'active' : ''}><span>3</span><div><strong>Request details</strong><small>Submit into fulfilment</small></div></li>
+        </ol>
+
+        {!selectedUser ? (
+          <section className="incident-stage-card user-lookup-stage">
+            <div className="incident-stage-heading"><span className="stage-number">1</span><div><span className="eyebrow">Requester</span><h3>Who is this request for?</h3><p>Search the people directory before selecting the service.</p></div></div>
+            <label className="incident-user-search"><Search size={20} /><input autoFocus onChange={(event) => setUserQuery(event.target.value)} placeholder="Search name, email, staff number, department..." type="search" value={userQuery} /></label>
+            {!normalizedQuery ? (
+              <div className="incident-search-empty"><UserRound size={28} /><strong>Start typing to find a user</strong><span>Try “Marcus”, “HC-10177” or an email address.</span></div>
+            ) : userResults.length ? (
+              <div className="incident-user-results">
+                {userResults.map((user) => (
+                  <button key={user.id} onClick={() => selectUser(user)} type="button"><span className="directory-avatar">{userInitials(user.name)}</span><span className="directory-primary"><strong>{user.name}</strong><small>{user.email}</small></span><span className="directory-secondary"><strong>{user.staffNumber}</strong><small>{user.jobTitle}</small></span><span className="directory-location"><strong>{user.department}</strong><small>{user.location}</small></span><ChevronRight size={18} /></button>
+                ))}
+              </div>
+            ) : <div className="incident-search-empty"><Search size={28} /><strong>No matching users</strong><span>Check the spelling, email address or staff number.</span></div>}
+          </section>
+        ) : !selectedTemplate ? (
+          <div className="request-catalogue-layout">
+            <aside className="incident-requester-card request-intake-requester">
+              <div className="requester-profile"><span className="directory-avatar large">{userInitials(selectedUser.name)}</span><div><strong>{selectedUser.name}</strong><span>{selectedUser.jobTitle}</span></div></div>
+              <dl className="requester-facts"><div><dt>Email</dt><dd>{selectedUser.email}</dd></div><div><dt>Staff number</dt><dd>{selectedUser.staffNumber}</dd></div><div><dt>Department</dt><dd>{selectedUser.department}</dd></div><div><dt>Location</dt><dd>{selectedUser.location}</dd></div><div><dt>Manager</dt><dd>{selectedUser.manager}</dd></div></dl>
+              <button className="secondary-action full-width" onClick={clearUser} type="button">Change requester</button>
+            </aside>
+            <section className="request-catalogue-stage">
+              <div className="incident-stage-heading"><span className="stage-number">2</span><div><span className="eyebrow">Service catalogue</span><h3>What does {selectedUser.name.split(' ')[0]} need?</h3><p>Select a catalogue request. Costs and fulfilment workflow are captured with the request.</p></div></div>
+              <div className="request-template-grid">
+                {serviceRequestCatalogTemplates.map((template) => {
+                  const cost = template.items.reduce((sum, item) => sum + Number(item.unitCost || 0) * Number(item.quantity || 1), 0)
+                  return <button key={template.id} onClick={() => selectTemplate(template)} type="button"><span className="request-template-icon"><ListChecks size={19} /></span><span className="request-template-copy"><strong>{template.title}</strong><small>{template.description}</small><em>{template.items.length} item{template.items.length === 1 ? '' : 's'} · {template.tasks.length} workflow tasks</em></span><span className="request-template-cost">{formatRequestCost(cost)}<ChevronRight size={17} /></span></button>
+                })}
+              </div>
+            </section>
+          </div>
+        ) : (
+          <div className="request-details-layout">
+            <aside className="request-selected-summary">
+              <div className="requester-profile"><span className="directory-avatar large">{userInitials(selectedUser.name)}</span><div><strong>{selectedUser.name}</strong><span>{selectedUser.jobTitle}</span></div></div>
+              <div className="request-selected-template"><span className="eyebrow">Selected service</span><strong>{selectedTemplate.title}</strong><small>{selectedTemplate.service} · {selectedTemplate.team}</small></div>
+              <div className="request-selected-cost"><span>Cost snapshot</span><strong>{formatRequestCost(templateCost)}</strong><small>{selectedTemplate.items.length} requested item{selectedTemplate.items.length === 1 ? '' : 's'}</small></div>
+              <button className="secondary-action full-width" onClick={() => setTicketDraft({ ...ticketDraft, requestTemplateId: '', requestedItems: [], requestApprovals: [], requestTasks: [], title: '' })} type="button">Change service</button>
+            </aside>
+
+            <section className="incident-stage-card request-form-stage">
+              <div className="incident-stage-heading"><span className="stage-number">3</span><div><span className="eyebrow">Request information</span><h3>Complete the request</h3><p>This information and the current item prices will be stored with the submitted request.</p></div></div>
+              <form className="new-record-form request-intake-form" onSubmit={handleTicketSubmit}>
+                <label>Request summary<input onChange={(event) => setTicketDraft({ ...ticketDraft, title: event.target.value })} value={ticketDraft.title} /></label>
+                <label>Business reason / additional information<textarea onChange={(event) => setTicketDraft({ ...ticketDraft, description: event.target.value })} placeholder="Explain why this service is needed and include any fulfilment detail" value={ticketDraft.description} /></label>
+                <div className="form-row"><label>Cost centre<input onChange={(event) => setTicketDraft({ ...ticketDraft, requestCostCentre: event.target.value })} placeholder="e.g. FIN-4102" value={ticketDraft.requestCostCentre || ''} /></label><label>Required by<input onChange={(event) => setTicketDraft({ ...ticketDraft, requestRequiredBy: event.target.value })} placeholder="e.g. 04 Sep 2026" value={ticketDraft.requestRequiredBy || ''} /></label></div>
+                <div className="request-intake-items"><span className="eyebrow">Requested items</span>{selectedTemplate.items.map((item) => <div key={item.id}><span><strong>{item.name}</strong><small>{item.options.join(' · ')}</small></span><strong>{formatRequestCost(item.unitCost * (item.quantity || 1))}</strong></div>)}</div>
+                <div className="request-intake-workflow-summary"><div><span>Approvals</span><strong>{selectedTemplate.approvals.length || 'None'}</strong></div><div><span>Workflow tasks</span><strong>{selectedTemplate.tasks.length}</strong></div><div><span>Total cost</span><strong>{formatRequestCost(templateCost)}</strong></div></div>
+                <div className="incident-submit-strip"><div><span className="eyebrow">Next</span><strong>The same tab becomes the submitted request.</strong></div><button className="primary-action" type="submit"><Plus size={17} />Submit Service Request</button></div>
+              </form>
+            </section>
+          </div>
+        )}
+      </section>
+    </div>
+  )
+}
+
 function GenericNewRecordView({
   handleTicketSubmit,
   hasUnsavedChanges,
@@ -2268,6 +3127,10 @@ function GenericNewRecordView({
 export function NewRecordView(props) {
   if (props.recordType === 'Incident') {
     return <IncidentIntakeView {...props} />
+  }
+
+  if (props.recordType === 'Service Request') {
+    return <ServiceRequestIntakeView {...props} />
   }
 
   return <GenericNewRecordView {...props} />
