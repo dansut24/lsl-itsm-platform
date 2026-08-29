@@ -300,7 +300,11 @@ function App() {
       if (target.classList.contains('tab-list')) return
       if (target.scrollHeight <= target.clientHeight + 4) return
 
-      const currentTop = Math.max(0, target.scrollTop)
+      const maxScrollTop = Math.max(0, target.scrollHeight - target.clientHeight)
+      const currentTop = Math.min(
+        maxScrollTop,
+        Math.max(0, target.scrollTop),
+      )
       const previousTop = mobileScrollPositionsRef.current.get(target) ?? currentTop
       const delta = currentTop - previousTop
 
@@ -333,11 +337,10 @@ function App() {
 
   useEffect(() => {
     const media = window.matchMedia?.('(max-width: 680px)')
-    const mainFrame = mainFrameRef.current
-    if (!media || !mainFrame) return undefined
+    if (!media || session?.role !== 'analyst') return undefined
 
-    const PULL_THRESHOLD = 62
-    const PULL_MAX = 92
+    const PULL_THRESHOLD = 58
+    const PULL_MAX = 96
     const REFRESH_HOLD = 48
 
     const setPullDistance = (distance) => {
@@ -401,14 +404,23 @@ function App() {
     }
 
     const handleTouchStart = (event) => {
-      if (!media.matches || pullRefreshGestureRef.current.refreshing || event.touches.length !== 1) return
+      const mainFrame = mainFrameRef.current
+      if (
+        !media.matches ||
+        !mainFrame ||
+        pullRefreshGestureRef.current.refreshing ||
+        event.touches.length !== 1
+      ) return
 
-      const target = event.target
-      if (!(target instanceof HTMLElement) || !target.closest('.workspace')) return
-      if (target.closest('.tab-list, .breadcrumbs, .mobile-topbar, .sidebar')) return
+      const rawTarget = event.target
+      if (!(rawTarget instanceof Element) || !mainFrame.contains(rawTarget)) return
+
+      const target = rawTarget instanceof HTMLElement ? rawTarget : rawTarget.parentElement
+      if (!target || !target.closest('.workspace')) return
+      if (target.closest('.tab-list, .breadcrumbs, .mobile-topbar, .sidebar, input, textarea, select')) return
 
       const scrollTarget = findScrollTarget(target)
-      if (scrollTarget && scrollTarget.scrollTop > 0) return
+      if (scrollTarget && scrollTarget.scrollTop > 1) return
 
       const touch = event.touches[0]
       pullRefreshGestureRef.current = {
@@ -426,7 +438,7 @@ function App() {
       const gesture = pullRefreshGestureRef.current
       if (!gesture.active || gesture.refreshing || event.touches.length !== 1) return
 
-      if (gesture.scrollTarget && gesture.scrollTarget.scrollTop > 0) {
+      if (gesture.scrollTarget && gesture.scrollTarget.scrollTop > 1) {
         resetGesture()
         return
       }
@@ -445,9 +457,12 @@ function App() {
         return
       }
 
-      if (deltaY < 7) return
+      if (deltaY < 5) return
 
-      event.preventDefault()
+      // Capture the vertical gesture before iOS Safari turns it into its
+      // native rubber-band / browser pull-to-refresh behaviour.
+      if (event.cancelable) event.preventDefault()
+      event.stopPropagation()
       setMobileHeaderHidden(false)
 
       if (!gesture.engaged) {
@@ -488,23 +503,28 @@ function App() {
       }
     }
 
-    mainFrame.addEventListener('touchstart', handleTouchStart, { passive: true })
-    mainFrame.addEventListener('touchmove', handleTouchMove, { passive: false })
-    mainFrame.addEventListener('touchend', handleTouchEnd, { passive: true })
-    mainFrame.addEventListener('touchcancel', handleTouchEnd, { passive: true })
+    // iOS Safari can keep the native elastic scroll gesture inside nested
+    // overflow containers before an ancestor bubble listener gets a chance to
+    // cancel it. Capture on document instead, then scope the gesture back to
+    // the current Hi5Central main frame in handleTouchStart.
+    document.addEventListener('touchstart', handleTouchStart, { passive: true, capture: true })
+    document.addEventListener('touchmove', handleTouchMove, { passive: false, capture: true })
+    document.addEventListener('touchend', handleTouchEnd, { passive: true, capture: true })
+    document.addEventListener('touchcancel', handleTouchEnd, { passive: true, capture: true })
     media.addEventListener?.('change', handleViewportChange)
 
     return () => {
-      mainFrame.removeEventListener('touchstart', handleTouchStart)
-      mainFrame.removeEventListener('touchmove', handleTouchMove)
-      mainFrame.removeEventListener('touchend', handleTouchEnd)
-      mainFrame.removeEventListener('touchcancel', handleTouchEnd)
+      document.removeEventListener('touchstart', handleTouchStart, true)
+      document.removeEventListener('touchmove', handleTouchMove, true)
+      document.removeEventListener('touchend', handleTouchEnd, true)
+      document.removeEventListener('touchcancel', handleTouchEnd, true)
       media.removeEventListener?.('change', handleViewportChange)
+      resetGesture({ animate: false })
       if (pullRefreshTimerRef.current) {
         window.clearTimeout(pullRefreshTimerRef.current)
       }
     }
-  }, [])
+  }, [session?.role])
 
   useEffect(() => {
     setMobileHeaderHidden(false)
