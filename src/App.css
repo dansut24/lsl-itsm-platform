@@ -4323,3 +4323,1030 @@ textarea:focus {
     display: none;
   }
 }
+
+/* ========================================================================== */
+/* INCIDENT DETAIL V2                                                         */
+/* ========================================================================== */
+
+.status-pill.pending {
+  background: #fff2d8;
+  color: #875500;
+}
+
+.app-shell[data-theme='dark'] .status-pill.pending,
+.portal-shell[data-theme='dark'] .status-pill.pending {
+  background: rgba(255, 192, 90, 0.16);
+  color: #ffd184;
+}
+
+.incident-record-workspace {
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.incident-record-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 20px;
+  align-items: start;
+  padding: 18px 20px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.incident-record-identity {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.incident-record-reference-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px 12px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.incident-record-reference-row span:first-child {
+  color: var(--brand);
+  letter-spacing: 0.04em;
+}
+
+.incident-record-identity h2 {
+  max-width: 900px;
+  margin: 0;
+  color: var(--ink);
+  font-size: clamp(22px, 2.2vw, 31px);
+  line-height: 1.12;
+  overflow-wrap: anywhere;
+}
+
+.incident-record-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.incident-record-badges > span:not(.status-pill):not(.incident-priority-badge) {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+}
+
+.incident-priority-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+}
+
+.incident-priority-badge.critical {
+  color: var(--danger);
+}
+
+.incident-priority-badge.high {
+  color: #c45f00;
+}
+
+.incident-priority-badge.medium {
+  color: #2864b4;
+}
+
+.incident-priority-badge.low {
+  color: var(--steady);
+}
+
+.incident-record-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(112px, 1fr));
+  gap: 7px;
+  width: min(360px, 100%);
+}
+
+.incident-record-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.incident-record-actions button:hover:not(:disabled) {
+  border-color: rgba(var(--accent-rgb), 0.5);
+  background: rgba(var(--accent-rgb), 0.06);
+  color: var(--brand);
+}
+
+.incident-record-actions button:last-child {
+  border-color: rgba(var(--accent-rgb), 0.46);
+  color: var(--brand);
+}
+
+.incident-record-actions button:disabled,
+.incident-workflow-actions button:disabled,
+.incident-composer-footer button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.incident-lifecycle {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-soft);
+}
+
+.incident-lifecycle > div {
+  position: relative;
+  z-index: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--muted);
+}
+
+.incident-lifecycle > div:not(:last-child)::after {
+  position: absolute;
+  z-index: -1;
+  top: 50%;
+  right: 6px;
+  left: 34px;
+  height: 2px;
+  background: var(--line);
+  content: '';
+  transform: translateY(-50%);
+}
+
+.incident-lifecycle > div > span {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 26px;
+  width: 26px;
+  height: 26px;
+  border: 2px solid var(--line);
+  border-radius: 999px;
+  background: var(--page);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.incident-lifecycle > div > strong {
+  max-width: calc(100% - 42px);
+  padding-right: 8px;
+  background: var(--surface-soft);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.incident-lifecycle > div.complete,
+.incident-lifecycle > div.current {
+  color: var(--brand);
+}
+
+.incident-lifecycle > div.complete > span,
+.incident-lifecycle > div.current > span {
+  border-color: var(--brand-2);
+  background: var(--brand-2);
+  color: var(--accent-ink);
+}
+
+.incident-lifecycle > div.complete:not(:last-child)::after {
+  background: rgba(var(--accent-rgb), 0.55);
+}
+
+.incident-workflow-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(220px, 0.65fr);
+  gap: 14px;
+  align-items: end;
+  margin: 14px 20px 0;
+  padding: 16px;
+  border: 1px solid rgba(var(--accent-rgb), 0.38);
+  border-radius: 10px;
+  background: rgba(var(--accent-rgb), 0.055);
+}
+
+.incident-workflow-panel > div:first-child {
+  align-self: start;
+}
+
+.incident-workflow-panel h3,
+.incident-workflow-panel p,
+.incident-section-heading h3,
+.incident-sla-hero h3,
+.incident-sla-policy h3 {
+  margin: 0;
+}
+
+.incident-workflow-panel h3,
+.incident-section-heading h3,
+.incident-sla-hero h3,
+.incident-sla-policy h3 {
+  margin-top: 3px;
+  color: var(--ink);
+  font-size: 17px;
+}
+
+.incident-workflow-panel p,
+.incident-sla-hero p,
+.incident-sla-policy p {
+  margin-top: 7px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.incident-workflow-panel textarea {
+  min-height: 92px;
+}
+
+.incident-workflow-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.incident-record-tabs {
+  position: sticky;
+  z-index: 5;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--page) 94%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.incident-record-tabs button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.incident-record-tabs button:hover {
+  background: rgba(var(--accent-rgb), 0.05);
+  color: var(--ink);
+}
+
+.incident-record-tabs button.active {
+  background: rgba(var(--accent-rgb), 0.105);
+  color: var(--brand);
+}
+
+.incident-record-tabs button.active::after {
+  position: absolute;
+  right: 12px;
+  bottom: -8px;
+  left: 12px;
+  height: 2px;
+  border-radius: 99px;
+  background: var(--brand-2);
+  content: '';
+}
+
+.incident-record-panel {
+  min-height: 0;
+  padding: 18px 20px 26px;
+}
+
+.incident-overview-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+  gap: 18px;
+  align-items: start;
+}
+
+.incident-overview-main,
+.incident-overview-rail,
+.incident-related-layout,
+.incident-sla-layout,
+.incident-activity-layout {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.incident-detail-section {
+  padding: 0 0 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.incident-detail-section:last-of-type {
+  border-bottom: 0;
+}
+
+.incident-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.incident-section-heading > svg {
+  flex: 0 0 auto;
+  color: var(--brand);
+}
+
+.incident-user-summary {
+  padding: 14px 15px;
+  border: 1px solid rgba(var(--accent-rgb), 0.22);
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.07), var(--surface));
+}
+
+.incident-inline-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.incident-inline-facts span {
+  display: inline-flex;
+  min-height: 27px;
+  align-items: center;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.incident-user-contact {
+  margin: 9px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.incident-description {
+  max-width: 900px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.incident-property-grid,
+.incident-assignment-grid,
+.incident-relationship-grid,
+.incident-sla-policy-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 16px;
+}
+
+.incident-property {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.incident-property > span,
+.incident-relationship-item > span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+}
+
+.incident-property > strong,
+.incident-relationship-item > strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.incident-property.strong > strong {
+  color: var(--brand);
+}
+
+.incident-next-step-panel {
+  display: grid;
+  gap: 5px;
+  padding: 13px 15px;
+  border-left: 3px solid var(--brand-2);
+  border-radius: 0 8px 8px 0;
+  background: rgba(var(--accent-rgb), 0.07);
+}
+
+.incident-next-step-panel > span:not(.eyebrow) {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.incident-glance-panel,
+.incident-activity-composer,
+.incident-activity-timeline,
+.incident-related-section,
+.incident-sla-card,
+.incident-sla-policy,
+.incident-sla-hero {
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.incident-glance-panel {
+  display: grid;
+  gap: 11px;
+}
+
+.incident-glance-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.incident-inline-link {
+  justify-content: flex-start;
+  width: fit-content;
+  padding: 0;
+}
+
+.incident-activity-layout {
+  grid-template-columns: minmax(280px, 0.78fr) minmax(0, 1.22fr);
+  align-items: start;
+}
+
+.incident-activity-composer {
+  position: sticky;
+  top: 62px;
+}
+
+.incident-note-mode {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  margin-bottom: 12px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-soft);
+}
+
+.incident-note-mode button {
+  min-height: 34px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.incident-note-mode button.active {
+  background: var(--surface);
+  color: var(--brand);
+  box-shadow: 0 1px 4px rgba(8, 28, 54, 0.08);
+}
+
+.incident-note-field textarea {
+  min-height: 126px;
+}
+
+.incident-composer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.incident-composer-footer > span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.incident-activity-timeline {
+  display: grid;
+  align-content: start;
+}
+
+.incident-activity-entry {
+  position: relative;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: 10px;
+  padding: 13px 0;
+  border-top: 1px solid var(--line);
+}
+
+.incident-activity-entry:first-of-type {
+  border-top: 0;
+}
+
+.incident-activity-entry:not(:last-child)::after {
+  position: absolute;
+  top: 28px;
+  bottom: -14px;
+  left: 5px;
+  width: 2px;
+  background: var(--line);
+  content: '';
+}
+
+.incident-activity-marker {
+  position: relative;
+  z-index: 1;
+  width: 11px;
+  height: 11px;
+  margin-top: 4px;
+  border: 2px solid var(--surface);
+  border-radius: 999px;
+  background: #8090a8;
+  box-shadow: 0 0 0 1px var(--line);
+}
+
+.incident-activity-entry.work .incident-activity-marker {
+  background: var(--brand-2);
+}
+
+.incident-activity-entry.customer .incident-activity-marker {
+  background: var(--steady);
+}
+
+.incident-activity-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.incident-activity-meta strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.incident-activity-meta span {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.incident-activity-entry p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.incident-related-section {
+  display: grid;
+  gap: 4px;
+}
+
+.incident-related-list,
+.incident-knowledge-suggestions {
+  display: grid;
+  gap: 7px;
+}
+
+.incident-related-row {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 18px;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  min-height: 58px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+}
+
+.incident-related-row:hover {
+  border-color: rgba(var(--accent-rgb), 0.4);
+  background: rgba(var(--accent-rgb), 0.055);
+}
+
+.incident-related-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: rgba(var(--accent-rgb), 0.1);
+  color: var(--brand);
+}
+
+.incident-related-row > span:nth-child(2),
+.incident-knowledge-suggestions > div > span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.incident-related-row small,
+.incident-knowledge-suggestions small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.incident-empty-related {
+  margin: 0;
+  color: var(--muted);
+}
+
+.incident-relationship-item {
+  display: grid;
+  gap: 4px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.incident-knowledge-suggestions > div {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 9px;
+  align-items: center;
+  min-height: 50px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.incident-knowledge-suggestions svg {
+  color: var(--brand);
+}
+
+.incident-sla-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  border-color: rgba(var(--accent-rgb), 0.25);
+  background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.085), var(--surface));
+}
+
+.incident-sla-percent {
+  display: grid;
+  justify-items: end;
+}
+
+.incident-sla-percent strong {
+  color: var(--brand);
+  font-size: 28px;
+}
+
+.incident-sla-percent span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.incident-sla-progress {
+  grid-column: 1 / -1;
+  height: 7px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--surface-strong);
+}
+
+.incident-sla-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--brand-2), #ffc64c, #e95767);
+}
+
+.incident-sla-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.incident-sla-card {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.incident-sla-card > .eyebrow,
+.incident-sla-card-heading {
+  grid-column: 1 / -1;
+}
+
+.incident-sla-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--brand);
+}
+
+.incident-sla-card.met .incident-sla-card-heading {
+  color: var(--steady);
+}
+
+.incident-sla-card.paused .incident-sla-card-heading {
+  color: var(--warning);
+}
+
+.incident-sla-card-heading strong {
+  font-size: 16px;
+}
+
+.incident-sla-policy-grid {
+  margin-top: 14px;
+}
+
+@media (max-width: 1050px) {
+  .incident-record-header {
+    grid-template-columns: 1fr;
+  }
+
+  .incident-record-actions {
+    width: 100%;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .incident-overview-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(240px, 280px);
+  }
+
+  .incident-activity-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .incident-activity-composer {
+    position: static;
+  }
+}
+
+@media (max-width: 760px) {
+  .incident-overview-layout,
+  .incident-sla-card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .incident-overview-rail {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .incident-overview-rail .incident-glance-panel:first-child {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 680px) {
+  .incident-record-workspace {
+    scrollbar-gutter: auto;
+  }
+
+  .incident-record-header {
+    gap: 14px;
+    padding: 12px 12px 11px;
+  }
+
+  .incident-record-reference-row {
+    font-size: 10px;
+  }
+
+  .incident-record-identity {
+    gap: 7px;
+  }
+
+  .incident-record-identity h2 {
+    font-size: 20px;
+    line-height: 1.18;
+  }
+
+  .incident-record-badges {
+    gap: 5px;
+  }
+
+  .incident-record-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .incident-record-actions button {
+    min-height: 40px;
+    padding-inline: 8px;
+    font-size: 11px;
+  }
+
+  .incident-lifecycle {
+    padding: 9px 10px;
+  }
+
+  .incident-lifecycle > div {
+    display: grid;
+    justify-items: center;
+    gap: 4px;
+    text-align: center;
+  }
+
+  .incident-lifecycle > div:not(:last-child)::after {
+    top: 13px;
+    right: -5px;
+    left: calc(50% + 14px);
+  }
+
+  .incident-lifecycle > div > span {
+    width: 24px;
+    height: 24px;
+    flex-basis: 24px;
+    font-size: 10px;
+  }
+
+  .incident-lifecycle > div > strong {
+    max-width: none;
+    padding: 0 3px;
+    background: transparent;
+    font-size: 8px;
+    line-height: 1.15;
+    white-space: normal;
+  }
+
+  .incident-workflow-panel {
+    grid-template-columns: 1fr;
+    margin: 10px 10px 0;
+    padding: 13px;
+  }
+
+  .incident-workflow-panel .form-row {
+    grid-template-columns: 1fr;
+  }
+
+  .incident-workflow-actions {
+    grid-column: auto;
+  }
+
+  .incident-record-tabs {
+    gap: 2px;
+    overflow-x: auto;
+    padding: 5px 8px;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .incident-record-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .incident-record-tabs button {
+    flex: 1 0 auto;
+    min-height: 37px;
+    padding: 0 10px;
+  }
+
+  .incident-record-tabs button.active::after {
+    bottom: -5px;
+  }
+
+  .incident-record-panel {
+    padding: 12px 10px 22px;
+  }
+
+  .incident-overview-main,
+  .incident-overview-rail,
+  .incident-related-layout,
+  .incident-sla-layout,
+  .incident-activity-layout {
+    gap: 10px;
+  }
+
+  .incident-overview-rail {
+    grid-template-columns: 1fr;
+  }
+
+  .incident-overview-rail .incident-glance-panel:first-child {
+    grid-column: auto;
+  }
+
+  .incident-detail-section {
+    padding-bottom: 13px;
+  }
+
+  .incident-user-summary,
+  .incident-glance-panel,
+  .incident-activity-composer,
+  .incident-activity-timeline,
+  .incident-related-section,
+  .incident-sla-card,
+  .incident-sla-policy,
+  .incident-sla-hero {
+    padding: 12px;
+  }
+
+  .incident-section-heading {
+    margin-bottom: 10px;
+  }
+
+  .incident-section-heading h3,
+  .incident-workflow-panel h3,
+  .incident-sla-hero h3,
+  .incident-sla-policy h3 {
+    font-size: 15px;
+  }
+
+  .incident-property-grid,
+  .incident-assignment-grid,
+  .incident-relationship-grid,
+  .incident-sla-policy-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .incident-assignment-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .incident-glance-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .incident-composer-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .incident-composer-footer .primary-action {
+    width: 100%;
+  }
+
+  .incident-activity-meta {
+    display: grid;
+    gap: 3px;
+  }
+
+  .incident-sla-hero {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .incident-sla-percent strong {
+    font-size: 24px;
+  }
+}
+
+@media (max-width: 430px) {
+  .incident-property-grid,
+  .incident-relationship-grid,
+  .incident-sla-policy-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .incident-glance-list {
+    grid-template-columns: 1fr 1fr;
+  }
+}

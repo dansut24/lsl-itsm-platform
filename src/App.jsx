@@ -1029,13 +1029,14 @@ function App() {
     )
   }
 
-  function addComment() {
+  function addComment(noteMode = 'work') {
     if (!newComment.trim() || !selectedTicket) return
+    const prefix = noteMode === 'customer' ? 'Customer comment: ' : 'Work note: '
     updateTicket(selectedTicket.id, {
-      comments: [`${newComment.trim()} - added now`, ...selectedTicket.comments],
+      comments: [`${prefix}${newComment.trim()} - added now`, ...selectedTicket.comments],
     })
     setNewComment('')
-    setToast(`Comment added to ${selectedTicket.id}`)
+    setToast(`${noteMode === 'customer' ? 'Customer comment' : 'Work note'} added to ${selectedTicket.id}`)
   }
 
   function handleTicketSubmit(event) {
