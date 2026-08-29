@@ -1608,6 +1608,16 @@ function App() {
         </div>
 
         <header className="tabbar" aria-label="Open workspace tabs">
+          <button
+            aria-label="Open Hi5Central navigation"
+            className="tabbar-brand"
+            onClick={() => setMobileNavOpen(true)}
+            title="Open navigation"
+            type="button"
+          >
+            <img src={`${import.meta.env.BASE_URL}hi5central-logo.png`} alt="" aria-hidden="true" />
+          </button>
+
           <div className="tab-list" ref={tabListRef}>
             {tabs.map((tab) => (
                 <button

@@ -591,6 +591,10 @@ textarea:focus-visible {
   border-bottom: 0;
 }
 
+.tabbar-brand {
+  display: none;
+}
+
 .tab-list {
   display: flex;
   align-items: end;
@@ -2556,10 +2560,61 @@ textarea:focus {
   }
 
   .tabbar {
+    grid-template-columns: auto minmax(0, 1fr);
     grid-template-rows: 40px;
     height: 40px;
     gap: 0;
     padding: 1px 8px 0;
+  }
+
+  .tabbar-brand {
+    position: relative;
+    z-index: 5;
+    display: inline-grid;
+    place-items: center;
+    align-self: center;
+    width: 0;
+    min-width: 0;
+    height: 32px;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    border: 0;
+    border-radius: 8px;
+    background: var(--surface-strong);
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(-8px) scale(0.92);
+    transition:
+      width 180ms cubic-bezier(0.22, 1, 0.36, 1),
+      margin-right 180ms cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 120ms ease,
+      transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .tabbar-brand img {
+    width: 25px;
+    height: 25px;
+    object-fit: contain;
+  }
+
+  .mobile-header-hidden .tabbar-brand {
+    width: 34px;
+    margin-right: 5px;
+    background: #f8fbff;
+    box-shadow: 0 0 0 1px rgba(16, 33, 63, 0.08);
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateX(0) scale(1);
+  }
+
+  .mobile-header-hidden .tabbar-brand:active {
+    transform: scale(0.94);
+  }
+
+  .mobile-header-hidden .tabbar-brand:focus-visible {
+    outline: 2px solid rgb(var(--accent-rgb));
+    outline-offset: -2px;
   }
 
   .chrome-actions {
@@ -2915,6 +2970,7 @@ textarea:focus {
   .app-shell.sidebar-collapsed,
   .app-shell.sidebar-hidden,
   .mobile-topbar,
+  .tabbar-brand,
   .pull-refresh-indicator,
   .workspace {
     transition: none;
