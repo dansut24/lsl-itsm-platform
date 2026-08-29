@@ -495,10 +495,24 @@ export function TicketRecordView({
       <div className="record-page">
         <section className="record-primary empty-record">
           <span className="eyebrow">Record not found</span>
-          <h2>This incident is no longer available</h2>
-          <p>The ticket may have been closed or removed from the current workspace data.</p>
+          <h2>This record is no longer available</h2>
+          <p>The record may have been closed or removed from the current workspace data.</p>
         </section>
       </div>
+    )
+  }
+
+  if (selectedTicket.type === 'Incident') {
+    return (
+      <IncidentRecordWorkspace
+        addComment={addComment}
+        key={selectedTicket.id}
+        newComment={newComment}
+        openAssetByName={openAssetByName}
+        setNewComment={setNewComment}
+        ticket={selectedTicket}
+        updateTicket={updateTicket}
+      />
     )
   }
 
@@ -564,6 +578,566 @@ export function TicketRecordView({
           <strong>{selectedTicket.location}</strong>
         </div>
       </aside>
+    </div>
+  )
+}
+
+const incidentRecordSections = [
+  { id: 'overview', label: 'Overview', icon: Inbox },
+  { id: 'activity', label: 'Activity', icon: MessageSquarePlus },
+  { id: 'related', label: 'Related', icon: Server },
+  { id: 'sla', label: 'SLA', icon: Clock3 },
+]
+
+const incidentLifecycle = ['New', 'In Progress', 'Pending', 'Resolved', 'Closed']
+const incidentPendingReasons = [
+  'Awaiting customer',
+  'Awaiting vendor',
+  'Awaiting change',
+  'Awaiting third party',
+  'Scheduled',
+]
+const incidentResolutionCodes = [
+  'Resolved - fix applied',
+  'Resolved - workaround provided',
+  'Resolved - user action',
+  'Resolved - no fault found',
+  'Resolved - duplicate',
+]
+
+function incidentLifecycleIndex(status) {
+  if (status === 'Pending Approval' || status === 'CAB Review') return 2
+  if (status === 'Monitoring') return 1
+  const index = incidentLifecycle.indexOf(status)
+  return index < 0 ? 0 : index
+}
+
+function incidentSlaTargets(priority) {
+  if (priority === 'Critical') return { response: '15 min', resolution: '1 hr' }
+  if (priority === 'High') return { response: '30 min', resolution: '4 hr' }
+  if (priority === 'Medium') return { response: '1 hr', resolution: '8 hr' }
+  return { response: '4 hr', resolution: '2 business days' }
+}
+
+function IncidentRecordWorkspace({
+  addComment,
+  newComment,
+  openAssetByName,
+  setNewComment,
+  ticket,
+  updateTicket,
+}) {
+  const [activeSection, setActiveSection] = useState('overview')
+  const [workflowPanel, setWorkflowPanel] = useState(null)
+  const [pendingReason, setPendingReason] = useState(ticket.pendingReason || 'Awaiting customer')
+  const [resolutionCode, setResolutionCode] = useState(ticket.resolutionCode || incidentResolutionCodes[0])
+  const [resolutionNotes, setResolutionNotes] = useState(ticket.resolutionNotes || '')
+  const [noteMode, setNoteMode] = useState('work')
+  const lifecycleIndex = incidentLifecycleIndex(ticket.status)
+  const slaTargets = incidentSlaTargets(ticket.priority)
+  const linkedAssets = ticket.linkedAssets || []
+  const isResolved = ticket.status === 'Resolved' || ticket.status === 'Closed'
+  const isPending = ticket.status === 'Pending'
+
+  const knowledgeSuggestions = ticket.service === 'Identity'
+    ? ['Resetting MFA on a new phone', 'Troubleshooting SSO sign-in failures']
+    : ticket.service === 'Collaboration'
+      ? ['Microsoft 365 mail flow checks', 'How to collect an Exchange message trace']
+      : ['Service troubleshooting checklist', 'Collecting diagnostics before escalation']
+
+  function confirmPending() {
+    updateTicket(ticket.id, {
+      status: 'Pending',
+      pendingReason,
+      nextStep: pendingReason,
+    })
+    setWorkflowPanel(null)
+  }
+
+  function confirmResolution() {
+    if (!resolutionNotes.trim()) return
+    updateTicket(ticket.id, {
+      status: 'Resolved',
+      resolutionCode,
+      resolutionNotes: resolutionNotes.trim(),
+      slaPercent: 100,
+      sla: 'Met',
+      nextStep: 'Confirm service restoration and close after validation.',
+    })
+    setWorkflowPanel(null)
+  }
+
+  function renderWorkflowPanel() {
+    if (workflowPanel === 'pending') {
+      return (
+        <section className="incident-workflow-panel" aria-label="Place incident pending">
+          <div>
+            <span className="eyebrow">Status transition</span>
+            <h3>Place incident on hold</h3>
+            <p>Choose why progress is paused. This reason will later drive SLA pause rules and requester communication.</p>
+          </div>
+          <label>
+            Pending reason
+            <select value={pendingReason} onChange={(event) => setPendingReason(event.target.value)}>
+              {incidentPendingReasons.map((reason) => <option key={reason}>{reason}</option>)}
+            </select>
+          </label>
+          <div className="incident-workflow-actions">
+            <button className="secondary-action" onClick={() => setWorkflowPanel(null)} type="button">Cancel</button>
+            <button className="primary-action compact" onClick={confirmPending} type="button">Set pending</button>
+          </div>
+        </section>
+      )
+    }
+
+    if (workflowPanel === 'resolve') {
+      return (
+        <section className="incident-workflow-panel" aria-label="Resolve incident">
+          <div>
+            <span className="eyebrow">Status transition</span>
+            <h3>Resolve incident</h3>
+            <p>Capture the resolution now so closure, reporting and future knowledge can use the same structured information.</p>
+          </div>
+          <div className="form-row">
+            <label>
+              Resolution code
+              <select value={resolutionCode} onChange={(event) => setResolutionCode(event.target.value)}>
+                {incidentResolutionCodes.map((code) => <option key={code}>{code}</option>)}
+              </select>
+            </label>
+            <label>
+              Resolution notes
+              <textarea
+                onChange={(event) => setResolutionNotes(event.target.value)}
+                placeholder="What fixed the issue?"
+                value={resolutionNotes}
+              />
+            </label>
+          </div>
+          <div className="incident-workflow-actions">
+            <button className="secondary-action" onClick={() => setWorkflowPanel(null)} type="button">Cancel</button>
+            <button className="primary-action compact" disabled={!resolutionNotes.trim()} onClick={confirmResolution} type="button">
+              Resolve incident
+            </button>
+          </div>
+        </section>
+      )
+    }
+
+    return null
+  }
+
+  function renderOverview() {
+    return (
+      <div className="incident-overview-layout">
+        <div className="incident-overview-main">
+          <section className="incident-detail-section incident-user-summary">
+            <div className="incident-section-heading">
+              <div>
+                <span className="eyebrow">Affected user</span>
+                <h3>{ticket.requester}</h3>
+              </div>
+              <UserRound size={20} aria-hidden="true" />
+            </div>
+            <div className="incident-inline-facts">
+              {ticket.requesterJobTitle && <span>{ticket.requesterJobTitle}</span>}
+              {ticket.requesterDepartment && <span>{ticket.requesterDepartment}</span>}
+              {ticket.requesterStaffNumber && <span>{ticket.requesterStaffNumber}</span>}
+              <span>{ticket.location}</span>
+            </div>
+            {ticket.requesterEmail && <p className="incident-user-contact">{ticket.requesterEmail}</p>}
+            {ticket.requesterManager && <p className="incident-user-contact">Manager: {ticket.requesterManager}</p>}
+          </section>
+
+          <section className="incident-detail-section">
+            <div className="incident-section-heading">
+              <div>
+                <span className="eyebrow">Description</span>
+                <h3>Issue summary</h3>
+              </div>
+              <ClipboardCheck size={20} aria-hidden="true" />
+            </div>
+            <p className="incident-description">{ticket.description}</p>
+          </section>
+
+          <section className="incident-detail-section">
+            <div className="incident-section-heading">
+              <div>
+                <span className="eyebrow">Classification</span>
+                <h3>Service and priority</h3>
+              </div>
+              <CircleGauge size={20} aria-hidden="true" />
+            </div>
+            <div className="incident-property-grid">
+              <IncidentProperty label="Service" value={ticket.service} />
+              <IncidentProperty label="Category" value={ticket.category || 'Not classified'} />
+              <IncidentProperty label="Impact" value={ticket.impact || 'Not set'} />
+              <IncidentProperty label="Urgency" value={ticket.urgency || 'Not set'} />
+              <IncidentProperty label="Priority" value={ticket.priority} strong />
+              <IncidentProperty label="Location" value={ticket.location} />
+            </div>
+          </section>
+
+          <section className="incident-detail-section">
+            <div className="incident-section-heading">
+              <div>
+                <span className="eyebrow">Assignment</span>
+                <h3>Ownership</h3>
+              </div>
+              <Users size={20} aria-hidden="true" />
+            </div>
+            <div className="incident-assignment-grid">
+              <label>
+                Assignment group
+                <select value={ticket.team} onChange={(event) => updateTicket(ticket.id, { team: event.target.value })}>
+                  {teams.map((team) => <option key={team}>{team}</option>)}
+                </select>
+              </label>
+              <label>
+                Assigned to
+                <select value={ticket.assignee} onChange={(event) => updateTicket(ticket.id, { assignee: event.target.value })}>
+                  {['Unassigned', 'Dana Sinclair', 'Priya Raman', 'Noah Williams', 'Amara Okafor', 'Sam Taylor', 'Maya Ford'].map((assignee) => (
+                    <option key={assignee}>{assignee}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </section>
+
+          <section className="incident-next-step-panel">
+            <span className="eyebrow">Next step</span>
+            <strong>{ticket.nextStep}</strong>
+            {isPending && <span>Pending reason: {ticket.pendingReason || pendingReason}</span>}
+            {isResolved && ticket.resolutionCode && <span>{ticket.resolutionCode}</span>}
+          </section>
+        </div>
+
+        <aside className="incident-overview-rail">
+          <section className="incident-glance-panel">
+            <span className="eyebrow">At a glance</span>
+            <div className="incident-glance-list">
+              <IncidentProperty label="Created" value={ticket.created} />
+              <IncidentProperty label="Updated" value={ticket.updated} />
+              <IncidentProperty label="SLA remaining" value={ticket.sla} />
+              <IncidentProperty label="Configuration items" value={linkedAssets.length || 'None'} />
+            </div>
+          </section>
+
+          <section className="incident-glance-panel">
+            <span className="eyebrow">SLA position</span>
+            <SlaBar value={ticket.slaPercent} label={ticket.sla} />
+            <button className="text-button incident-inline-link" onClick={() => setActiveSection('sla')} type="button">
+              View SLA detail <ChevronRight size={15} aria-hidden="true" />
+            </button>
+          </section>
+
+          <section className="incident-glance-panel">
+            <span className="eyebrow">Configuration items</span>
+            <div className="linked-ci-list">
+              {linkedAssets.length ? linkedAssets.map((asset) => (
+                <button className="linked-ci-button" key={asset} onClick={() => openAssetByName?.(asset)} type="button">{asset}</button>
+              )) : <span>No CI linked</span>}
+            </div>
+          </section>
+        </aside>
+      </div>
+    )
+  }
+
+  function renderActivity() {
+    const activityEntries = [
+      ...ticket.comments.map((comment, index) => ({
+        id: `comment-${index}`,
+        kind: comment.toLowerCase().startsWith('customer comment:') ? 'customer' : 'work',
+        actor: comment.toLowerCase().startsWith('customer comment:') ? 'Dana Sinclair · Customer comment' : 'Dana Sinclair · Work note',
+        time: index === 0 ? 'Just now' : `${index * 12 + 6} min ago`,
+        text: comment.replace(/^Customer comment:\s*/i, '').replace(/^Work note:\s*/i, '').replace(/\s*-\s*added now$/i, ''),
+      })),
+      {
+        id: 'assignment',
+        kind: 'system',
+        actor: 'System · Assignment',
+        time: ticket.updated,
+        text: `${ticket.team} · ${ticket.assignee}`,
+      },
+      {
+        id: 'created',
+        kind: 'system',
+        actor: 'System · Incident created',
+        time: ticket.created,
+        text: `Created for ${ticket.requester} from the analyst console.`,
+      },
+    ]
+
+    return (
+      <div className="incident-activity-layout">
+        <section className="incident-activity-composer">
+          <div className="incident-section-heading">
+            <div>
+              <span className="eyebrow">Add activity</span>
+              <h3>Update this incident</h3>
+            </div>
+            <MessageSquarePlus size={20} aria-hidden="true" />
+          </div>
+          <div className="incident-note-mode" role="group" aria-label="Activity visibility">
+            <button className={noteMode === 'work' ? 'active' : ''} onClick={() => setNoteMode('work')} type="button">Work note</button>
+            <button className={noteMode === 'customer' ? 'active' : ''} onClick={() => setNoteMode('customer')} type="button">Customer comment</button>
+          </div>
+          <label className="incident-note-field">
+            {noteMode === 'work' ? 'Internal work note' : 'Requester-visible comment'}
+            <textarea
+              onChange={(event) => setNewComment(event.target.value)}
+              placeholder={noteMode === 'work' ? 'Add troubleshooting notes, handover detail or investigation findings' : 'Write an update the requester can see'}
+              value={newComment}
+            />
+          </label>
+          <div className="incident-composer-footer">
+            <span>{noteMode === 'work' ? 'Visible to analysts only' : 'Visible to the requester'}</span>
+            <button className="primary-action compact" disabled={!newComment.trim()} onClick={() => addComment(noteMode)} type="button">
+              <MessageSquarePlus size={16} aria-hidden="true" />
+              Add {noteMode === 'work' ? 'work note' : 'comment'}
+            </button>
+          </div>
+        </section>
+
+        <section className="incident-activity-timeline" aria-label="Incident activity timeline">
+          <div className="incident-section-heading">
+            <div>
+              <span className="eyebrow">Timeline</span>
+              <h3>Activity history</h3>
+            </div>
+          </div>
+          {activityEntries.map((entry) => (
+            <article className={`incident-activity-entry ${entry.kind}`} key={entry.id}>
+              <span className="incident-activity-marker" aria-hidden="true" />
+              <div>
+                <div className="incident-activity-meta">
+                  <strong>{entry.actor}</strong>
+                  <span>{entry.time}</span>
+                </div>
+                <p>{entry.text}</p>
+              </div>
+            </article>
+          ))}
+        </section>
+      </div>
+    )
+  }
+
+  function renderRelated() {
+    return (
+      <div className="incident-related-layout">
+        <section className="incident-related-section">
+          <div className="incident-section-heading">
+            <div>
+              <span className="eyebrow">Configuration</span>
+              <h3>Affected configuration items</h3>
+            </div>
+            <Server size={20} aria-hidden="true" />
+          </div>
+          {linkedAssets.length ? (
+            <div className="incident-related-list">
+              {linkedAssets.map((asset) => (
+                <button className="incident-related-row" key={asset} onClick={() => openAssetByName?.(asset)} type="button">
+                  <span className="incident-related-icon"><Server size={17} aria-hidden="true" /></span>
+                  <span><strong>{asset}</strong><small>Configuration item</small></span>
+                  <ChevronRight size={17} aria-hidden="true" />
+                </button>
+              ))}
+            </div>
+          ) : <p className="incident-empty-related">No configuration items are linked yet.</p>}
+        </section>
+
+        <section className="incident-related-section">
+          <div className="incident-section-heading">
+            <div>
+              <span className="eyebrow">Relationships</span>
+              <h3>Related ITSM records</h3>
+            </div>
+            <ClipboardCheck size={20} aria-hidden="true" />
+          </div>
+          <div className="incident-relationship-grid">
+            <IncidentRelationship label="Problem" value="No problem linked" />
+            <IncidentRelationship label="Change" value="No change linked" />
+            <IncidentRelationship label="Parent / major incident" value="Not linked" />
+            <IncidentRelationship label="Child incidents" value="None" />
+          </div>
+        </section>
+
+        <section className="incident-related-section">
+          <div className="incident-section-heading">
+            <div>
+              <span className="eyebrow">Knowledge</span>
+              <h3>Suggested articles</h3>
+            </div>
+          </div>
+          <div className="incident-knowledge-suggestions">
+            {knowledgeSuggestions.map((article) => (
+              <div key={article}>
+                <BookOpen size={17} aria-hidden="true" />
+                <span><strong>{article}</strong><small>Suggested from {ticket.service}</small></span>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+    )
+  }
+
+  function renderSla() {
+    const resolutionState = isResolved ? 'Met' : isPending ? 'Paused' : 'In progress'
+    return (
+      <div className="incident-sla-layout">
+        <section className="incident-sla-hero">
+          <div>
+            <span className="eyebrow">Resolution SLA</span>
+            <h3>{resolutionState}</h3>
+            <p>{isResolved ? 'Resolution target completed.' : isPending ? `Clock behaviour follows the ${ticket.pendingReason || pendingReason} rule.` : `${ticket.sla} remaining against the current target.`}</p>
+          </div>
+          <div className="incident-sla-percent">
+            <strong>{Math.min(100, ticket.slaPercent)}%</strong>
+            <span>consumed</span>
+          </div>
+          <div className="incident-sla-progress"><span style={{ width: `${Math.min(100, ticket.slaPercent)}%` }} /></div>
+        </section>
+
+        <div className="incident-sla-card-grid">
+          <section className="incident-sla-card met">
+            <span className="eyebrow">First response</span>
+            <div className="incident-sla-card-heading"><CheckCircle2 size={20} aria-hidden="true" /><strong>Met</strong></div>
+            <IncidentProperty label="Target" value={slaTargets.response} />
+            <IncidentProperty label="Completed" value="8 min" />
+          </section>
+          <section className={`incident-sla-card ${isResolved ? 'met' : isPending ? 'paused' : 'active'}`}>
+            <span className="eyebrow">Resolution</span>
+            <div className="incident-sla-card-heading"><Clock3 size={20} aria-hidden="true" /><strong>{resolutionState}</strong></div>
+            <IncidentProperty label="Target" value={slaTargets.resolution} />
+            <IncidentProperty label={isResolved ? 'Completed' : 'Remaining'} value={isResolved ? 'Within target' : ticket.sla} />
+          </section>
+        </div>
+
+        <section className="incident-sla-policy">
+          <span className="eyebrow">Clock behaviour</span>
+          <h3>Designed for policy-driven SLA rules</h3>
+          <p>When the backend is introduced, priority, service, business hours and pending reasons will determine target selection, pause behaviour, breaches and escalations.</p>
+          <div className="incident-sla-policy-grid">
+            <IncidentProperty label="Business hours" value="Service calendar" />
+            <IncidentProperty label="Pending pause" value="Reason dependent" />
+            <IncidentProperty label="Escalation" value="Before breach" />
+          </div>
+        </section>
+      </div>
+    )
+  }
+
+  const panel = activeSection === 'activity'
+    ? renderActivity()
+    : activeSection === 'related'
+      ? renderRelated()
+      : activeSection === 'sla'
+        ? renderSla()
+        : renderOverview()
+
+  return (
+    <div className="incident-record-workspace">
+      <header className="incident-record-header">
+        <div className="incident-record-identity">
+          <div className="incident-record-reference-row">
+            <span>{ticket.id}</span>
+            <span>Updated {ticket.updated}</span>
+          </div>
+          <h2>{ticket.title}</h2>
+          <div className="incident-record-badges">
+            <span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span>
+            <span className={`incident-priority-badge ${priorityClass(ticket.priority)}`}>
+              <span className={`priority-dot ${priorityClass(ticket.priority)}`} />
+              {ticket.priority} priority
+            </span>
+            <span>{ticket.service}</span>
+          </div>
+        </div>
+
+        <div className="incident-record-actions" aria-label="Incident actions">
+          <button onClick={() => updateTicket(ticket.id, { assignee: 'Dana Sinclair' })} type="button">
+            <UserCheck size={16} aria-hidden="true" />
+            Assign to me
+          </button>
+          <button disabled={isResolved} onClick={() => updateTicket(ticket.id, { status: 'In Progress' })} type="button">
+            <Wrench size={16} aria-hidden="true" />
+            Start work
+          </button>
+          <button disabled={isResolved} onClick={() => setWorkflowPanel(workflowPanel === 'pending' ? null : 'pending')} type="button">
+            <Clock3 size={16} aria-hidden="true" />
+            Pending
+          </button>
+          {ticket.status === 'Closed' ? (
+            <button disabled type="button">
+              <CheckCircle2 size={16} aria-hidden="true" />
+              Closed
+            </button>
+          ) : ticket.status === 'Resolved' ? (
+            <button onClick={() => updateTicket(ticket.id, { status: 'Closed', nextStep: 'Incident closed.' })} type="button">
+              <CheckCircle2 size={16} aria-hidden="true" />
+              Close
+            </button>
+          ) : (
+            <button onClick={() => setWorkflowPanel(workflowPanel === 'resolve' ? null : 'resolve')} type="button">
+              <CheckCircle2 size={16} aria-hidden="true" />
+              Resolve
+            </button>
+          )}
+        </div>
+      </header>
+
+      <div className="incident-lifecycle" aria-label="Incident lifecycle">
+        {incidentLifecycle.map((status, index) => {
+          const isCurrent = index === lifecycleIndex
+          const isComplete = index < lifecycleIndex
+          return (
+            <div className={isCurrent ? 'current' : isComplete ? 'complete' : ''} key={status}>
+              <span>{isComplete ? '✓' : index + 1}</span>
+              <strong>{status}</strong>
+            </div>
+          )
+        })}
+      </div>
+
+      {renderWorkflowPanel()}
+
+      <nav className="incident-record-tabs" aria-label="Incident record sections">
+        {incidentRecordSections.map(({ id, label, icon: Icon }) => (
+          <button
+            aria-current={activeSection === id ? 'page' : undefined}
+            className={activeSection === id ? 'active' : ''}
+            key={id}
+            onClick={() => setActiveSection(id)}
+            type="button"
+          >
+            <Icon size={16} aria-hidden="true" />
+            {label}
+          </button>
+        ))}
+      </nav>
+
+      <div className="incident-record-panel">{panel}</div>
+    </div>
+  )
+}
+
+function IncidentProperty({ label, strong = false, value }) {
+  return (
+    <div className={strong ? 'incident-property strong' : 'incident-property'}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  )
+}
+
+function IncidentRelationship({ label, value }) {
+  return (
+    <div className="incident-relationship-item">
+      <span>{label}</span>
+      <strong>{value}</strong>
     </div>
   )
 }
