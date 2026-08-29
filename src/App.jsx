@@ -197,8 +197,11 @@ function App() {
   const [accent, setAccent] = useState(loadAccent)
   const [sidebarMode, setSidebarMode] = useState(loadSidebarMode)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [mobileHeaderHidden, setMobileHeaderHidden] = useState(false)
   const [density, setDensity] = useState(loadDensity)
   const tabListRef = useRef(null)
+  const mainFrameRef = useRef(null)
+  const mobileScrollPositionsRef = useRef(new WeakMap())
   const [tickets, setTickets] = useState(initialTickets)
   const [tabs, setTabs] = useState(initialTabs)
   const [activeTabKey, setActiveTabKey] = useState(initialRouteTab.key)
@@ -267,6 +270,55 @@ function App() {
   useEffect(() => {
     document.documentElement.style.colorScheme = resolvedTheme
   }, [resolvedTheme])
+
+  useEffect(() => {
+    const media = window.matchMedia?.('(max-width: 680px)')
+    if (!media) return undefined
+
+    const handleWorkspaceScroll = (event) => {
+      if (!media.matches) return
+
+      const target = event.target
+      const mainFrame = mainFrameRef.current
+
+      if (!(target instanceof HTMLElement) || !mainFrame?.contains(target)) return
+      if (target.classList.contains('tab-list')) return
+      if (target.scrollHeight <= target.clientHeight + 4) return
+
+      const currentTop = Math.max(0, target.scrollTop)
+      const previousTop = mobileScrollPositionsRef.current.get(target) ?? currentTop
+      const delta = currentTop - previousTop
+
+      mobileScrollPositionsRef.current.set(target, currentTop)
+
+      if (currentTop <= 10) {
+        setMobileHeaderHidden(false)
+        return
+      }
+
+      if (delta > 5 && currentTop > 48) {
+        setMobileHeaderHidden(true)
+      } else if (delta < -3) {
+        setMobileHeaderHidden(false)
+      }
+    }
+
+    const handleViewportChange = () => {
+      if (!media.matches) setMobileHeaderHidden(false)
+    }
+
+    document.addEventListener('scroll', handleWorkspaceScroll, true)
+    media.addEventListener?.('change', handleViewportChange)
+
+    return () => {
+      document.removeEventListener('scroll', handleWorkspaceScroll, true)
+      media.removeEventListener?.('change', handleViewportChange)
+    }
+  }, [])
+
+  useEffect(() => {
+    setMobileHeaderHidden(false)
+  }, [activeTabKey, mobileNavOpen])
 
   useEffect(() => {
     saveSidebarMode(sidebarMode)
@@ -1178,7 +1230,10 @@ function App() {
 
   return (
     <div
-      className={`app-shell sidebar-${sidebarMode} density-${density}`}
+      className={[
+        `app-shell sidebar-${sidebarMode} density-${density}`,
+        mobileHeaderHidden ? 'mobile-header-hidden' : '',
+      ].filter(Boolean).join(' ')}
       data-accent={accent}
       data-theme={resolvedTheme}
     >
@@ -1294,7 +1349,7 @@ function App() {
         />
       )}
 
-      <section className="main-frame">
+      <section className="main-frame" ref={mainFrameRef}>
         <header className="tabbar" aria-label="Open workspace tabs">
           <div className="tab-list" ref={tabListRef}>
             {tabs.map((tab) => (

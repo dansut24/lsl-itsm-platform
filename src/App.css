@@ -2273,6 +2273,15 @@ textarea:focus {
   .app-shell.sidebar-hidden {
     grid-template-columns: 1fr;
     grid-template-rows: 54px minmax(0, 1fr);
+    transition:
+      grid-template-rows 180ms ease,
+      grid-template-columns 180ms ease;
+  }
+
+  .app-shell.mobile-header-hidden,
+  .app-shell.sidebar-collapsed.mobile-header-hidden,
+  .app-shell.sidebar-hidden.mobile-header-hidden {
+    grid-template-rows: 0 minmax(0, 1fr);
   }
 
   .mobile-topbar {
@@ -2282,9 +2291,26 @@ textarea:focus {
     justify-content: space-between;
     gap: 8px;
     min-width: 0;
+    min-height: 0;
+    overflow: hidden;
     padding: 7px 8px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.13);
     background: var(--brand-strong);
+    transform: translateY(0);
+    transform-origin: top;
+    opacity: 1;
+    transition:
+      transform 180ms ease,
+      opacity 140ms ease;
+    will-change: transform;
+  }
+
+  .mobile-header-hidden .mobile-topbar {
+    pointer-events: none;
+    padding-block: 0;
+    border-bottom-color: transparent;
+    transform: translateY(-100%);
+    opacity: 0;
   }
 
   .mobile-logo-button {
@@ -2792,6 +2818,15 @@ textarea:focus {
 
   .action-strip {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 680px) and (prefers-reduced-motion: reduce) {
+  .app-shell,
+  .app-shell.sidebar-collapsed,
+  .app-shell.sidebar-hidden,
+  .mobile-topbar {
+    transition: none;
   }
 }
 
