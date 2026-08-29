@@ -436,7 +436,7 @@ function App() {
       // The tab strip remains horizontal-swipe only. Form controls should also
       // keep their native touch behaviour. Breadcrumbs, however, are a valid
       // top-edge pull target on compact mobile layouts.
-      if (target.closest('.tab-list, .mobile-topbar, .sidebar, input, textarea, select')) return
+      if (target.closest('.tab-list, .mobile-topbar, .sidebar, .breadcrumb-mobile-actions, input, textarea, select')) return
 
       const scrollTarget = findScrollTarget(target) || findActiveScrollTarget()
       if (scrollTarget && scrollTarget.scrollTop > 1) return
@@ -1706,19 +1706,43 @@ function App() {
         </header>
 
         <nav className="breadcrumbs" aria-label="Breadcrumb">
-          {breadcrumbs.map((crumb, index) => (
-            <span className="breadcrumb-segment" key={`${crumb.label}-${crumb.key || index}`}>
-              {index > 0 && <ChevronRight className="breadcrumb-separator" size={14} aria-hidden="true" />}
-              <button
-                aria-current={index === breadcrumbs.length - 1 ? 'page' : undefined}
-                className={index === breadcrumbs.length - 1 ? 'breadcrumb-item current' : 'breadcrumb-item'}
-                onClick={() => openBreadcrumb(crumb)}
-                type="button"
-              >
-                {crumb.label}
-              </button>
-            </span>
-          ))}
+          <div className="breadcrumb-trail">
+            {breadcrumbs.map((crumb, index) => (
+              <span className="breadcrumb-segment" key={`${crumb.label}-${crumb.key || index}`}>
+                {index > 0 && <ChevronRight className="breadcrumb-separator" size={14} aria-hidden="true" />}
+                <button
+                  aria-current={index === breadcrumbs.length - 1 ? 'page' : undefined}
+                  className={index === breadcrumbs.length - 1 ? 'breadcrumb-item current' : 'breadcrumb-item'}
+                  onClick={() => openBreadcrumb(crumb)}
+                  type="button"
+                >
+                  {crumb.label}
+                </button>
+              </span>
+            ))}
+          </div>
+
+          <div className="breadcrumb-mobile-actions" aria-label="Mobile quick actions">
+            <button className="breadcrumb-mobile-action" title="Notifications" type="button">
+              <Bell size={16} aria-hidden="true" />
+            </button>
+            <button
+              className="breadcrumb-mobile-action"
+              onClick={() => openTab('settings')}
+              title="Settings"
+              type="button"
+            >
+              <Settings size={16} aria-hidden="true" />
+            </button>
+            <button
+              className="breadcrumb-mobile-action"
+              onClick={handleLogout}
+              title="Sign out"
+              type="button"
+            >
+              <LogOut size={16} aria-hidden="true" />
+            </button>
+          </div>
         </nav>
 
         <main className="workspace">
