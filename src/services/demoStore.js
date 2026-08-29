@@ -21,8 +21,38 @@ function writeJson(key, value) {
   window.localStorage.setItem(key, JSON.stringify(value))
 }
 
+function hydrateTicketEnhancements(tickets) {
+  const seedsById = new Map(seedTickets.map((ticket) => [ticket.id, ticket]))
+  const enhancementFields = [
+    'requesterEmail',
+    'requesterStaffNumber',
+    'requesterJobTitle',
+    'requesterDepartment',
+    'requesterManager',
+    'requestInformation',
+    'requestedItems',
+    'requestApprovals',
+    'requestTasks',
+  ]
+
+  return tickets.map((ticket) => {
+    const seed = seedsById.get(ticket.id)
+    if (!seed) return ticket
+
+    const enhancements = {}
+    for (const field of enhancementFields) {
+      if (ticket[field] === undefined && seed[field] !== undefined) {
+        enhancements[field] = seed[field]
+      }
+    }
+
+    return Object.keys(enhancements).length ? { ...ticket, ...enhancements } : ticket
+  })
+}
+
 export function loadTickets() {
-  return readMigratedJson('hi5central-tickets', 'lsl-itsm-tickets', seedTickets)
+  const tickets = readMigratedJson('hi5central-tickets', 'lsl-itsm-tickets', seedTickets)
+  return hydrateTicketEnhancements(Array.isArray(tickets) ? tickets : seedTickets)
 }
 
 export function loadSession() {
