@@ -1249,6 +1249,374 @@ function TicketDetailContent({
   )
 }
 
+
+function IncidentQueueView({
+  filters,
+  filteredTickets,
+  openNewRecord,
+  openRecordTab,
+  query,
+  setFilters,
+  setQuery,
+  tickets,
+  updateTicket,
+}) {
+  const [quickView, setQuickView] = useState('all')
+  const [sortKey, setSortKey] = useState('sla')
+  const [sortDirection, setSortDirection] = useState('desc')
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const [selectedIds, setSelectedIds] = useState([])
+  const [advancedFilters, setAdvancedFilters] = useState({
+    team: 'All',
+    assignee: 'All',
+    service: 'All',
+  })
+
+  const incidentTickets = tickets.filter((ticket) => ticket.type === 'Incident')
+  const openIncidents = incidentTickets.filter((ticket) => !['Resolved', 'Closed'].includes(ticket.status))
+  const mineCount = openIncidents.filter((ticket) => ticket.assignee === 'Dana Sinclair').length
+  const unassignedCount = openIncidents.filter((ticket) => !ticket.assignee || ticket.assignee === 'Unassigned').length
+  const atRiskCount = openIncidents.filter((ticket) => ticket.slaPercent >= 60).length
+
+  const availableTeams = ['All', ...new Set(incidentTickets.map((ticket) => ticket.team).filter(Boolean))]
+  const availableAssignees = ['All', ...new Set(incidentTickets.map((ticket) => ticket.assignee).filter(Boolean))]
+  const availableServices = ['All', ...new Set(incidentTickets.map((ticket) => ticket.service).filter(Boolean))]
+
+  const applyQuickView = (ticket) => {
+    if (quickView === 'mine') return ticket.assignee === 'Dana Sinclair' && !['Resolved', 'Closed'].includes(ticket.status)
+    if (quickView === 'unassigned') return (!ticket.assignee || ticket.assignee === 'Unassigned') && !['Resolved', 'Closed'].includes(ticket.status)
+    if (quickView === 'priority') return ['Critical', 'High'].includes(ticket.priority) && !['Resolved', 'Closed'].includes(ticket.status)
+    if (quickView === 'risk') return ticket.slaPercent >= 60 && !['Resolved', 'Closed'].includes(ticket.status)
+    if (quickView === 'pending') return ticket.status === 'Pending'
+    if (quickView === 'resolved') return ['Resolved', 'Closed'].includes(ticket.status)
+    return true
+  }
+
+  const priorityWeight = { Critical: 4, High: 3, Medium: 2, Low: 1 }
+  const statusWeight = { New: 1, 'In Progress': 2, Pending: 3, Resolved: 4, Closed: 5 }
+  const recordNumber = (id) => Number(String(id || '').match(/\d+/)?.[0] || 0)
+  const ageMinutes = (value) => {
+    const normalized = String(value || '').toLowerCase()
+    if (normalized.includes('just now')) return 0
+    const minutes = normalized.match(/(\d+)\s*min/)
+    if (minutes) return Number(minutes[1])
+    const hours = normalized.match(/(\d+)\s*hr/)
+    if (hours) return Number(hours[1]) * 60
+    if (normalized.includes('yesterday')) return 1440
+    if (/^\d{1,2}:\d{2}$/.test(normalized)) return 720
+    return 2880
+  }
+
+  const visibleTickets = filteredTickets
+    .filter((ticket) =>
+      (advancedFilters.team === 'All' || ticket.team === advancedFilters.team) &&
+      (advancedFilters.assignee === 'All' || ticket.assignee === advancedFilters.assignee) &&
+      (advancedFilters.service === 'All' || ticket.service === advancedFilters.service) &&
+      applyQuickView(ticket),
+    )
+    .sort((a, b) => {
+      let aValue
+      let bValue
+      if (sortKey === 'reference') {
+        aValue = recordNumber(a.id)
+        bValue = recordNumber(b.id)
+      } else if (sortKey === 'priority') {
+        aValue = priorityWeight[a.priority] || 0
+        bValue = priorityWeight[b.priority] || 0
+      } else if (sortKey === 'status') {
+        aValue = statusWeight[a.status] || 0
+        bValue = statusWeight[b.status] || 0
+      } else if (sortKey === 'sla') {
+        aValue = a.slaPercent || 0
+        bValue = b.slaPercent || 0
+      } else if (sortKey === 'updated') {
+        aValue = ageMinutes(a.updated)
+        bValue = ageMinutes(b.updated)
+      } else {
+        aValue = String(a[sortKey] || '').toLowerCase()
+        bValue = String(b[sortKey] || '').toLowerCase()
+      }
+      const comparison = typeof aValue === 'string'
+        ? aValue.localeCompare(bValue)
+        : aValue - bValue
+      return sortDirection === 'asc' ? comparison : -comparison
+    })
+
+  const sortBy = (key) => {
+    if (sortKey === key) {
+      setSortDirection((current) => current === 'asc' ? 'desc' : 'asc')
+      return
+    }
+    setSortKey(key)
+    setSortDirection(key === 'sla' || key === 'priority' ? 'desc' : 'asc')
+  }
+
+  const sortIndicator = (key) => sortKey === key ? (sortDirection === 'asc' ? ' ↑' : ' ↓') : ''
+  const advancedCount = [advancedFilters.team, advancedFilters.assignee, advancedFilters.service].filter((value) => value !== 'All').length
+  const filterCount = advancedCount + (filters.priority !== 'All' ? 1 : 0) + (filters.status !== 'All' ? 1 : 0)
+
+  const toggleSelected = (id) => {
+    setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])
+  }
+
+  const bulkUpdate = (patch) => {
+    selectedIds.forEach((id) => updateTicket(id, patch))
+    setSelectedIds([])
+  }
+
+  const clearFilters = () => {
+    setFilters({ ...filters, status: 'All', priority: 'All' })
+    setAdvancedFilters({ team: 'All', assignee: 'All', service: 'All' })
+    setQuickView('all')
+  }
+
+  const slaTone = (ticket) => {
+    if (['Resolved', 'Closed'].includes(ticket.status)) return 'met'
+    if (ticket.slaPercent >= 80) return 'critical'
+    if (ticket.slaPercent >= 60) return 'watch'
+    return 'healthy'
+  }
+
+  const quickViews = [
+    ['all', 'All'],
+    ['mine', 'Mine'],
+    ['unassigned', 'Unassigned'],
+    ['priority', 'P1 / P2'],
+    ['risk', 'At risk'],
+    ['pending', 'Pending'],
+    ['resolved', 'Resolved'],
+  ]
+
+  return (
+    <section className="incident-queue-v2">
+      <header className="incident-queue-heading">
+        <div>
+          <span className="eyebrow">Service Desk</span>
+          <h2>Incidents</h2>
+          <p>Triage interruptions, protect SLA targets and keep ownership clear.</p>
+        </div>
+        <button className="primary-action compact" onClick={() => openNewRecord?.('Incident')} type="button">
+          <Plus size={16} aria-hidden="true" />
+          New Incident
+        </button>
+      </header>
+
+      <div className="incident-queue-metrics" aria-label="Incident queue summary">
+        <div><strong>{openIncidents.length}</strong><span>Open</span></div>
+        <div><strong>{mineCount}</strong><span>Mine</span></div>
+        <div><strong>{unassignedCount}</strong><span>Unassigned</span></div>
+        <div className={atRiskCount ? 'attention' : ''}><strong>{atRiskCount}</strong><span>At risk</span></div>
+      </div>
+
+      <div className="incident-queue-toolbar">
+        <label className="incident-queue-search">
+          <Search size={18} aria-hidden="true" />
+          <input
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search reference, summary, requester, service..."
+            type="search"
+            value={query}
+          />
+        </label>
+        <button className={filterCount ? 'incident-filter-button active' : 'incident-filter-button'} onClick={() => setFiltersOpen(true)} type="button">
+          <SlidersHorizontal size={17} aria-hidden="true" />
+          Filters
+          {filterCount > 0 && <span>{filterCount}</span>}
+        </button>
+      </div>
+
+      <div className="incident-quick-views" aria-label="Incident saved views">
+        {quickViews.map(([id, label]) => (
+          <button className={quickView === id ? 'active' : ''} key={id} onClick={() => setQuickView(id)} type="button">
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <div className="incident-queue-result-meta">
+        <span><strong>{visibleTickets.length}</strong> incidents</span>
+        <span className="incident-desktop-sort-summary">Sorted by {sortKey === 'sla' ? 'SLA position' : sortKey} {sortDirection === 'asc' ? 'ascending' : 'descending'}</span>
+        <label className="incident-mobile-sort">
+          <span>Sort</span>
+          <select
+            onChange={(event) => {
+              const nextKey = event.target.value
+              setSortKey(nextKey)
+              setSortDirection(nextKey === 'sla' || nextKey === 'priority' ? 'desc' : 'asc')
+            }}
+            value={sortKey}
+          >
+            <option value="sla">SLA risk</option>
+            <option value="priority">Priority</option>
+            <option value="updated">Updated</option>
+            <option value="reference">Reference</option>
+          </select>
+        </label>
+      </div>
+
+      {selectedIds.length > 0 && (
+        <div className="incident-bulk-bar">
+          <strong>{selectedIds.length} selected</strong>
+          <div>
+            <button onClick={() => bulkUpdate({ assignee: 'Dana Sinclair' })} type="button">Assign to me</button>
+            <button onClick={() => bulkUpdate({ status: 'In Progress' })} type="button">Start work</button>
+            <button onClick={() => setSelectedIds([])} type="button">Clear</button>
+          </div>
+        </div>
+      )}
+
+      {visibleTickets.length ? (
+        <>
+          <div className="incident-table-wrap">
+            <table className="incident-queue-table">
+              <thead>
+                <tr>
+                  <th className="select-column"><span className="sr-only">Select</span></th>
+                  <th><button onClick={() => sortBy('reference')} type="button">Reference{sortIndicator('reference')}</button></th>
+                  <th>Summary</th>
+                  <th><button onClick={() => sortBy('priority')} type="button">Priority{sortIndicator('priority')}</button></th>
+                  <th><button onClick={() => sortBy('status')} type="button">Status{sortIndicator('status')}</button></th>
+                  <th><button onClick={() => sortBy('team')} type="button">Team{sortIndicator('team')}</button></th>
+                  <th>Assignee</th>
+                  <th><button onClick={() => sortBy('sla')} type="button">SLA{sortIndicator('sla')}</button></th>
+                  <th><button onClick={() => sortBy('updated')} type="button">Updated{sortIndicator('updated')}</button></th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleTickets.map((ticket) => (
+                  <tr key={ticket.id}>
+                    <td className="select-column">
+                      <input
+                        aria-label={`Select ${ticket.id}`}
+                        checked={selectedIds.includes(ticket.id)}
+                        onChange={() => toggleSelected(ticket.id)}
+                        type="checkbox"
+                      />
+                    </td>
+                    <td>
+                      <button className="incident-reference-link" onClick={() => openRecordTab(ticket)} type="button">
+                        <span className={`priority-dot ${priorityClass(ticket.priority)}`} />
+                        {ticket.id}
+                      </button>
+                    </td>
+                    <td className="incident-summary-cell">
+                      <button onClick={() => openRecordTab(ticket)} type="button">
+                        <strong>{ticket.title}</strong>
+                        <small>{ticket.requester} · {ticket.service}</small>
+                      </button>
+                    </td>
+                    <td><span className={`incident-priority-text ${priorityClass(ticket.priority)}`}>{ticket.priority}</span></td>
+                    <td><span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span></td>
+                    <td>{ticket.team}</td>
+                    <td>{ticket.assignee || 'Unassigned'}</td>
+                    <td>
+                      <div className={`incident-sla-cell ${slaTone(ticket)}`}>
+                        <strong>{['Resolved', 'Closed'].includes(ticket.status) ? 'Met' : ticket.sla}</strong>
+                        <span><i style={{ width: `${Math.min(100, ticket.slaPercent || 0)}%` }} /></span>
+                      </div>
+                    </td>
+                    <td>{ticket.updated}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="incident-mobile-list">
+            {visibleTickets.map((ticket) => (
+              <button className="incident-mobile-card" key={ticket.id} onClick={() => openRecordTab(ticket)} type="button">
+                <div className="incident-mobile-card-top">
+                  <span className="incident-mobile-reference">
+                    <span className={`priority-dot ${priorityClass(ticket.priority)}`} />
+                    <strong>{ticket.id}</strong>
+                  </span>
+                  <span className={`incident-priority-text ${priorityClass(ticket.priority)}`}>{ticket.priority}</span>
+                </div>
+                <h3>{ticket.title}</h3>
+                <div className="incident-mobile-card-state">
+                  <span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span>
+                  <span>{ticket.team} · {ticket.assignee || 'Unassigned'}</span>
+                </div>
+                <div className="incident-mobile-card-context">
+                  <span>{ticket.requester}</span>
+                  <span className={`mobile-sla-label ${slaTone(ticket)}`}>{['Resolved', 'Closed'].includes(ticket.status) ? 'SLA met' : `${ticket.sla} SLA`}</span>
+                </div>
+                <div className="incident-mobile-card-footer">
+                  <span>Updated {ticket.updated}</span>
+                  <ChevronRight size={17} aria-hidden="true" />
+                </div>
+              </button>
+            ))}
+          </div>
+        </>
+      ) : (
+        <div className="incident-queue-empty">
+          <CheckCircle2 size={28} aria-hidden="true" />
+          <strong>No incidents match this view</strong>
+          <span>Try another saved view or clear your filters.</span>
+          <button onClick={clearFilters} type="button">Clear filters</button>
+        </div>
+      )}
+
+      {filtersOpen && (
+        <div className="incident-filter-overlay" role="presentation" onMouseDown={(event) => {
+          if (event.target === event.currentTarget) setFiltersOpen(false)
+        }}>
+          <aside className="incident-filter-panel" aria-label="Incident filters">
+            <header>
+              <div>
+                <span className="eyebrow">Queue controls</span>
+                <h3>Filter incidents</h3>
+              </div>
+              <button aria-label="Close filters" className="icon-button" onClick={() => setFiltersOpen(false)} type="button">×</button>
+            </header>
+
+            <div className="incident-filter-fields">
+              <label>
+                Status
+                <select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}>
+                  <option>All</option>
+                  {['New', 'In Progress', 'Pending', 'Resolved', 'Closed'].map((status) => <option key={status}>{status}</option>)}
+                </select>
+              </label>
+              <label>
+                Priority
+                <select value={filters.priority} onChange={(event) => setFilters({ ...filters, priority: event.target.value })}>
+                  <option>All</option>
+                  {priorities.map((priority) => <option key={priority}>{priority}</option>)}
+                </select>
+              </label>
+              <label>
+                Assignment group
+                <select value={advancedFilters.team} onChange={(event) => setAdvancedFilters({ ...advancedFilters, team: event.target.value })}>
+                  {availableTeams.map((team) => <option key={team}>{team}</option>)}
+                </select>
+              </label>
+              <label>
+                Assignee
+                <select value={advancedFilters.assignee} onChange={(event) => setAdvancedFilters({ ...advancedFilters, assignee: event.target.value })}>
+                  {availableAssignees.map((assignee) => <option key={assignee}>{assignee}</option>)}
+                </select>
+              </label>
+              <label>
+                Service
+                <select value={advancedFilters.service} onChange={(event) => setAdvancedFilters({ ...advancedFilters, service: event.target.value })}>
+                  {availableServices.map((service) => <option key={service}>{service}</option>)}
+                </select>
+              </label>
+            </div>
+
+            <footer>
+              <button className="secondary-action" onClick={clearFilters} type="button">Clear all</button>
+              <button className="primary-action compact" onClick={() => setFiltersOpen(false)} type="button">Apply filters</button>
+            </footer>
+          </aside>
+        </div>
+      )}
+    </section>
+  )
+}
+
 export function TicketsView({
   addComment,
   filters,
@@ -1269,6 +1637,22 @@ export function TicketsView({
   tickets,
   updateTicket,
 }) {
+  if (moduleConfig?.type === 'Incident') {
+    return (
+      <IncidentQueueView
+        filters={filters}
+        filteredTickets={filteredTickets}
+        openNewRecord={openNewRecord}
+        openRecordTab={openRecordTab}
+        query={query}
+        setFilters={setFilters}
+        setQuery={setQuery}
+        tickets={tickets}
+        updateTicket={updateTicket}
+      />
+    )
+  }
+
   const moduleTickets = moduleConfig
     ? tickets.filter((ticket) => ticket.type === moduleConfig.type)
     : tickets
