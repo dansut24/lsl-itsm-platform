@@ -337,7 +337,8 @@ function App() {
 
   useEffect(() => {
     const media = window.matchMedia?.('(max-width: 680px)')
-    if (!media || session?.role !== 'analyst') return undefined
+    const mainFrame = mainFrameRef.current
+    if (!media || !mainFrame || session?.role !== 'analyst') return undefined
 
     const PULL_THRESHOLD = 58
     const PULL_MAX = 96
@@ -347,20 +348,34 @@ function App() {
       mainFrame.style.setProperty('--pull-refresh-distance', `${Math.max(0, distance)}px`)
     }
 
+    const isScrollable = (element) => {
+      if (!(element instanceof HTMLElement) || element.getClientRects().length === 0) return false
+
+      const style = window.getComputedStyle(element)
+      return (
+        /(auto|scroll)/.test(style.overflowY) &&
+        element.scrollHeight > element.clientHeight + 2
+      )
+    }
+
     const findScrollTarget = (element) => {
       let current = element instanceof HTMLElement ? element : element?.parentElement
 
       while (current && current !== mainFrame) {
-        const style = window.getComputedStyle(current)
-        const canScroll =
-          /(auto|scroll)/.test(style.overflowY) &&
-          current.scrollHeight > current.clientHeight + 2
-
-        if (canScroll) return current
+        if (isScrollable(current)) return current
         current = current.parentElement
       }
 
       return null
+    }
+
+    const findActiveScrollTarget = () => {
+      const workspace = mainFrame.querySelector('.workspace')
+      if (!(workspace instanceof HTMLElement)) return null
+
+      if (isScrollable(workspace)) return workspace
+
+      return Array.from(workspace.querySelectorAll('*')).find(isScrollable) || null
     }
 
     const resetGesture = ({ animate = true } = {}) => {
@@ -404,10 +419,8 @@ function App() {
     }
 
     const handleTouchStart = (event) => {
-      const mainFrame = mainFrameRef.current
       if (
         !media.matches ||
-        !mainFrame ||
         pullRefreshGestureRef.current.refreshing ||
         event.touches.length !== 1
       ) return
@@ -416,10 +429,18 @@ function App() {
       if (!(rawTarget instanceof Element) || !mainFrame.contains(rawTarget)) return
 
       const target = rawTarget instanceof HTMLElement ? rawTarget : rawTarget.parentElement
-      if (!target || !target.closest('.workspace')) return
-      if (target.closest('.tab-list, .breadcrumbs, .mobile-topbar, .sidebar, input, textarea, select')) return
+      if (!target) return
 
-      const scrollTarget = findScrollTarget(target)
+      const inWorkspace = Boolean(target.closest('.workspace'))
+      const inBreadcrumbs = Boolean(target.closest('.breadcrumbs'))
+      if (!inWorkspace && !inBreadcrumbs) return
+
+      // The tab strip remains horizontal-swipe only. Form controls should also
+      // keep their native touch behaviour. Breadcrumbs, however, are a valid
+      // top-edge pull target on compact mobile layouts.
+      if (target.closest('.tab-list, .mobile-topbar, .sidebar, input, textarea, select')) return
+
+      const scrollTarget = findScrollTarget(target) || findActiveScrollTarget()
       if (scrollTarget && scrollTarget.scrollTop > 1) return
 
       const touch = event.touches[0]
