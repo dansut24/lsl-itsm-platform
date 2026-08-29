@@ -7702,3 +7702,44 @@ textarea:focus {
     font-size: 10px;
   }
 }
+
+/* ========================================================================== */
+/* WORKSPACE SCROLL CONTRACT                                                  */
+/* ========================================================================== */
+/*
+ * Routed queues and record workspaces live inside .content-frame, whose
+ * overflow is intentionally clipped so the authenticated shell never moves.
+ * Each routed workspace therefore owns its vertical scrolling. Keeping this
+ * rule shared prevents new feature layouts from accidentally becoming clipped
+ * when their content grows beyond the available viewport.
+ */
+.incident-queue-v2,
+.request-queue-v2,
+.incident-record-workspace,
+.service-request-record-v2 {
+  height: 100%;
+  min-height: 0;
+  align-content: start;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+}
+
+@media (max-width: 680px) {
+  .incident-queue-v2,
+  .request-queue-v2,
+  .incident-record-workspace,
+  .service-request-record-v2 {
+    scrollbar-gutter: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Give the last mobile card/section enough room to clear the phone safe
+     area without changing the fixed tab + breadcrumb shell above it. */
+  .incident-queue-v2,
+  .request-queue-v2,
+  .service-request-record-v2 {
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+}
