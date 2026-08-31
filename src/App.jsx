@@ -109,6 +109,36 @@ function tabFromRoute(route) {
   })
 }
 
+const demoNotifications = [
+  {
+    id: 'sla-inc-1032',
+    title: 'SLA at risk',
+    detail: 'INC-1032 has 43 minutes remaining on its resolution target.',
+    recordId: 'INC-1032',
+    meta: '8 min ago',
+    tone: 'critical',
+    read: false,
+  },
+  {
+    id: 'approval-req-2217',
+    title: 'Approval required',
+    detail: 'REQ-2217 is waiting for an approval before fulfilment can continue.',
+    recordId: 'REQ-2217',
+    meta: '18 min ago',
+    tone: 'warning',
+    read: false,
+  },
+  {
+    id: 'change-chg-0891',
+    title: 'Change window approaching',
+    detail: 'CHG-0891 is scheduled for implementation this evening.',
+    recordId: 'CHG-0891',
+    meta: '42 min ago',
+    tone: 'info',
+    read: true,
+  },
+]
+
 const MAX_WORKSPACE_TABS = 12
 
 function emptyTicketDraft(type = 'Incident') {
@@ -265,6 +295,10 @@ function App() {
     initialActiveTab.filter || allTicketFilters(),
   )
   const [toast, setToast] = useState('')
+  const [notifications, setNotifications] = useState(demoNotifications)
+  const [notificationsOpen, setNotificationsOpen] = useState(false)
+  const [globalSearchQuery, setGlobalSearchQuery] = useState('')
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false)
   const [newComment, setNewComment] = useState('')
   const [portalQuery, setPortalQuery] = useState('')
   const [loginMode, setLoginMode] = useState('analyst')
@@ -316,7 +350,7 @@ function App() {
   }, [resolvedTheme])
 
   useEffect(() => {
-    const media = window.matchMedia?.('(max-width: 680px)')
+    const media = window.matchMedia?.('(max-width: 680px) and (any-pointer: coarse), (max-height: 600px) and (any-pointer: coarse)')
     const mainFrame = mainFrameRef.current
     if (!media || !mainFrame || session?.role !== 'analyst') return undefined
 
@@ -417,7 +451,7 @@ function App() {
       // The tab strip remains horizontal-swipe only. Form controls should also
       // keep their native touch behaviour. Breadcrumbs, however, are a valid
       // top-edge pull target on compact mobile layouts.
-      if (target.closest('.tab-list, .sidebar, .breadcrumb-mobile-actions, input, textarea, select')) return
+      if (target.closest('.tab-list, .sidebar, .breadcrumb-mobile-actions, .notifications-panel, .global-search-panel, .header-overlay-backdrop, input, textarea, select')) return
 
       const scrollTarget = findScrollTarget(target) || findActiveScrollTarget()
       if (scrollTarget && scrollTarget.scrollTop > 1) return
@@ -755,6 +789,40 @@ function App() {
       [article.title, article.category].join(' ').toLowerCase().includes(normalizedQuery),
     )
   }, [portalQuery])
+
+  const unreadNotificationCount = notifications.filter((notification) => !notification.read).length
+
+  const globalSearchResults = useMemo(() => {
+    const normalizedQuery = globalSearchQuery.trim().toLowerCase()
+    if (!normalizedQuery) return { tickets: [], assets: [], articles: [] }
+
+    return {
+      tickets: tickets
+        .filter((ticket) =>
+          [ticket.id, ticket.title, ticket.requester, ticket.service, ticket.team, ticket.assignee]
+            .join(' ')
+            .toLowerCase()
+            .includes(normalizedQuery),
+        )
+        .slice(0, 6),
+      assets: assets
+        .filter((asset) =>
+          [asset.id, asset.name, asset.type, asset.owner, asset.status]
+            .join(' ')
+            .toLowerCase()
+            .includes(normalizedQuery),
+        )
+        .slice(0, 4),
+      articles: knowledgeArticles
+        .filter((article) =>
+          [article.title, article.category, article.slug]
+            .join(' ')
+            .toLowerCase()
+            .includes(normalizedQuery),
+        )
+        .slice(0, 4),
+    }
+  }, [globalSearchQuery, tickets])
 
   function confirmLeavingDraft() {
     if (!activeHasUnsavedChanges) return true
@@ -1281,6 +1349,53 @@ function App() {
     writeRoute('/login', { replace: true })
   }
 
+  function toggleNotifications() {
+    setGlobalSearchOpen(false)
+    setNotificationsOpen((open) => !open)
+  }
+
+  function toggleGlobalSearch() {
+    setNotificationsOpen(false)
+    setGlobalSearchOpen((open) => !open)
+  }
+
+  function closeHeaderOverlays() {
+    setNotificationsOpen(false)
+    setGlobalSearchOpen(false)
+  }
+
+  function openTicketRecord(ticket) {
+    if (!ticket) return
+    closeHeaderOverlays()
+    setGlobalSearchQuery('')
+    openTab('tickets', { key: `ticket-${ticket.id}`, title: ticket.id, recordId: ticket.id })
+  }
+
+  function openNotification(notification) {
+    setNotifications((current) =>
+      current.map((item) => (item.id === notification.id ? { ...item, read: true } : item)),
+    )
+    const ticket = tickets.find((item) => item.id === notification.recordId)
+    if (ticket) {
+      openTicketRecord(ticket)
+    } else {
+      closeHeaderOverlays()
+      setToast('That demo record is not available in this workspace yet')
+    }
+  }
+
+  function openGlobalSearchAsset(asset) {
+    closeHeaderOverlays()
+    setGlobalSearchQuery('')
+    openAsset(asset)
+  }
+
+  function openGlobalSearchArticle(article) {
+    closeHeaderOverlays()
+    setGlobalSearchQuery('')
+    openArticle(article)
+  }
+
   function renderActiveView() {
     if (activeView === 'newtab') {
       return (
@@ -1648,10 +1763,11 @@ function App() {
                   )}
                 </button>
               ))}
-            <button className="tab-add" onClick={openNewTab} title="Open new tab" type="button">
-              <Plus size={17} aria-hidden="true" />
-            </button>
           </div>
+
+          <button className="tab-add" onClick={openNewTab} title="Open new tab" type="button">
+            <Plus size={17} aria-hidden="true" />
+          </button>
 
           <div className="chrome-actions">
             {sidebarHidden && (
@@ -1675,11 +1791,19 @@ function App() {
             <label className="chrome-search">
               <Search size={16} aria-hidden="true" />
               <input
-                aria-label="Search tickets"
-                onChange={(event) => setQuery(event.target.value)}
+                aria-label="Search Hi5Central"
+                onChange={(event) => {
+                  setGlobalSearchQuery(event.target.value)
+                  setGlobalSearchOpen(true)
+                  setNotificationsOpen(false)
+                }}
+                onFocus={() => {
+                  setGlobalSearchOpen(true)
+                  setNotificationsOpen(false)
+                }}
                 placeholder="Search records"
                 type="search"
-                value={query}
+                value={globalSearchQuery}
               />
             </label>
             <button
@@ -1690,8 +1814,19 @@ function App() {
             >
               {resolvedTheme === 'light' ? <Moon size={17} /> : <Sun size={17} />}
             </button>
-            <button className="icon-button" title="Notifications" type="button">
+            <button
+              aria-expanded={notificationsOpen}
+              className="icon-button notification-trigger"
+              onClick={toggleNotifications}
+              title="Notifications"
+              type="button"
+            >
               <Bell size={17} aria-hidden="true" />
+              {unreadNotificationCount > 0 && (
+                <span className="notification-badge" aria-label={`${unreadNotificationCount} unread notifications`}>
+                  {unreadNotificationCount}
+                </span>
+              )}
             </button>
             <button className="icon-button" onClick={() => openTab('settings')} title="Settings" type="button">
               <Settings size={17} aria-hidden="true" />
@@ -1720,9 +1855,35 @@ function App() {
             ))}
           </div>
 
+          <label className="breadcrumb-compact-search">
+            <Search size={15} aria-hidden="true" />
+            <input
+              aria-label="Search Hi5Central"
+              onChange={(event) => {
+                setGlobalSearchQuery(event.target.value)
+                setGlobalSearchOpen(true)
+                setNotificationsOpen(false)
+              }}
+              onFocus={() => {
+                setGlobalSearchOpen(true)
+                setNotificationsOpen(false)
+              }}
+              placeholder="Search records"
+              type="search"
+              value={globalSearchQuery}
+            />
+          </label>
+
           <div className="breadcrumb-mobile-actions" aria-label="Mobile quick actions">
-            <button className="breadcrumb-mobile-action" title="Notifications" type="button">
+            <button
+              aria-expanded={notificationsOpen}
+              className="breadcrumb-mobile-action notification-trigger"
+              onClick={toggleNotifications}
+              title="Notifications"
+              type="button"
+            >
               <Bell size={16} aria-hidden="true" />
+              {unreadNotificationCount > 0 && <span className="notification-dot" aria-hidden="true" />}
             </button>
             <button
               className="breadcrumb-mobile-action"
@@ -1742,6 +1903,117 @@ function App() {
             </button>
           </div>
         </nav>
+
+        {(notificationsOpen || globalSearchOpen) && (
+          <button
+            aria-label="Close header panel"
+            className="header-overlay-backdrop"
+            onClick={closeHeaderOverlays}
+            type="button"
+          />
+        )}
+
+        {notificationsOpen && (
+          <aside className="notifications-panel" aria-label="Notifications">
+            <div className="header-panel-heading">
+              <div>
+                <span className="eyebrow">Inbox</span>
+                <strong>Notifications</strong>
+              </div>
+              <button
+                disabled={!unreadNotificationCount}
+                onClick={() =>
+                  setNotifications((current) => current.map((item) => ({ ...item, read: true })))
+                }
+                type="button"
+              >
+                Mark all read
+              </button>
+            </div>
+            <div className="notification-list">
+              {notifications.map((notification) => (
+                <button
+                  className={notification.read ? 'notification-item read' : 'notification-item'}
+                  key={notification.id}
+                  onClick={() => openNotification(notification)}
+                  type="button"
+                >
+                  <span className={`notification-tone ${notification.tone}`} aria-hidden="true" />
+                  <span className="notification-copy">
+                    <strong>{notification.title}</strong>
+                    <span>{notification.detail}</span>
+                    <small>{notification.meta}</small>
+                  </span>
+                  <ChevronRight size={16} aria-hidden="true" />
+                </button>
+              ))}
+            </div>
+          </aside>
+        )}
+
+        {globalSearchOpen && (
+          <aside className="global-search-panel" aria-label="Global search results">
+            <div className="header-panel-heading">
+              <div>
+                <span className="eyebrow">Search</span>
+                <strong>{globalSearchQuery.trim() ? `Results for “${globalSearchQuery.trim()}”` : 'Search Hi5Central'}</strong>
+              </div>
+              <button onClick={() => setGlobalSearchQuery('')} type="button">Clear</button>
+            </div>
+            {!globalSearchQuery.trim() ? (
+              <div className="global-search-empty">Search incidents, requests, problems, changes, CIs and knowledge.</div>
+            ) : (
+              <div className="global-search-results">
+                {!!globalSearchResults.tickets.length && (
+                  <section>
+                    <span className="global-search-group-label">Records</span>
+                    {globalSearchResults.tickets.map((ticket) => (
+                      <button key={ticket.id} onClick={() => openTicketRecord(ticket)} type="button">
+                        <span>
+                          <strong>{ticket.id}</strong>
+                          <small>{ticket.type} · {ticket.status}</small>
+                        </span>
+                        <span className="global-search-result-title">{ticket.title}</span>
+                        <ChevronRight size={15} aria-hidden="true" />
+                      </button>
+                    ))}
+                  </section>
+                )}
+                {!!globalSearchResults.assets.length && (
+                  <section>
+                    <span className="global-search-group-label">Configuration items</span>
+                    {globalSearchResults.assets.map((asset) => (
+                      <button key={asset.id} onClick={() => openGlobalSearchAsset(asset)} type="button">
+                        <span>
+                          <strong>{asset.name}</strong>
+                          <small>{asset.type} · {asset.status}</small>
+                        </span>
+                        <ChevronRight size={15} aria-hidden="true" />
+                      </button>
+                    ))}
+                  </section>
+                )}
+                {!!globalSearchResults.articles.length && (
+                  <section>
+                    <span className="global-search-group-label">Knowledge</span>
+                    {globalSearchResults.articles.map((article) => (
+                      <button key={article.slug} onClick={() => openGlobalSearchArticle(article)} type="button">
+                        <span>
+                          <strong>{article.title}</strong>
+                          <small>{article.category}</small>
+                        </span>
+                        <ChevronRight size={15} aria-hidden="true" />
+                      </button>
+                    ))}
+                  </section>
+                )}
+                {!globalSearchResults.tickets.length && !globalSearchResults.assets.length && !globalSearchResults.articles.length && (
+                  <div className="global-search-empty">No demo records match that search.</div>
+                )}
+              </div>
+            )}
+          </aside>
+        )}
 
         <main className="workspace">
           <header className="view-header">
