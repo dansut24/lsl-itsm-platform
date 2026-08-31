@@ -486,8 +486,10 @@ export function TicketRecordView({
   addComment,
   newComment,
   openAssetByName,
+  openRecordTab,
   selectedTicket,
   setNewComment,
+  tickets,
   updateTicket,
 }) {
   if (!selectedTicket) {
@@ -524,6 +526,38 @@ export function TicketRecordView({
         newComment={newComment}
         setNewComment={setNewComment}
         ticket={selectedTicket}
+        updateTicket={updateTicket}
+      />
+    )
+  }
+
+  if (selectedTicket.type === 'Problem') {
+    return (
+      <ProblemRecordWorkspace
+        addComment={addComment}
+        key={selectedTicket.id}
+        newComment={newComment}
+        openAssetByName={openAssetByName}
+        openRecordTab={openRecordTab}
+        setNewComment={setNewComment}
+        ticket={selectedTicket}
+        tickets={tickets}
+        updateTicket={updateTicket}
+      />
+    )
+  }
+
+  if (selectedTicket.type === 'Change') {
+    return (
+      <ChangeRecordWorkspace
+        addComment={addComment}
+        key={selectedTicket.id}
+        newComment={newComment}
+        openAssetByName={openAssetByName}
+        openRecordTab={openRecordTab}
+        setNewComment={setNewComment}
+        ticket={selectedTicket}
+        tickets={tickets}
         updateTicket={updateTicket}
       />
     )
@@ -2248,6 +2282,371 @@ function ServiceRequestRecordWorkspace({ addComment, newComment, setNewComment, 
   )
 }
 
+
+const problemRecordSections = [
+  { id: 'overview', label: 'Overview', icon: Inbox },
+  { id: 'investigation', label: 'Investigation', icon: Wrench },
+  { id: 'related', label: 'Related', icon: Server },
+  { id: 'known-error', label: 'Known Error', icon: AlertCircle },
+  { id: 'activity', label: 'Activity', icon: MessageSquarePlus },
+]
+
+const problemLifecycle = ['New', 'Under Investigation', 'Known Error', 'Fix in Progress', 'Resolved', 'Closed']
+
+function problemLifecycleIndex(status) {
+  if (status === 'Monitoring') return 2
+  const index = problemLifecycle.indexOf(status)
+  return index < 0 ? 0 : index
+}
+
+function ProblemRecordWorkspace({
+  addComment,
+  newComment,
+  openAssetByName,
+  openRecordTab,
+  setNewComment,
+  ticket,
+  tickets,
+  updateTicket,
+}) {
+  const [activeSection, setActiveSection] = useState('overview')
+  const lifecycleIndex = problemLifecycleIndex(ticket.status)
+  const relatedIncidents = (ticket.relatedIncidents || [])
+    .map((id) => tickets?.find((candidate) => candidate.id === id))
+    .filter(Boolean)
+  const relatedChanges = (ticket.relatedChanges || [])
+    .map((id) => tickets?.find((candidate) => candidate.id === id))
+    .filter(Boolean)
+  const knownErrorActive = ticket.knownErrorStatus && ticket.knownErrorStatus !== 'Not declared'
+
+  const setStatus = (status, nextStep) => {
+    updateTicket(ticket.id, {
+      status,
+      nextStep,
+      comments: [`System: Problem moved to ${status}.`, ...ticket.comments],
+    })
+  }
+
+  const renderOverview = () => (
+    <div className="problem-overview-grid">
+      <section className="problem-section-card problem-statement-card">
+        <div className="problem-section-heading"><span className="eyebrow">Problem statement</span><h3>Recurring issue</h3></div>
+        <p>{ticket.description}</p>
+        <div className="problem-impact-callout"><span>Impact scope</span><strong>{ticket.problemImpactScope || 'Scope still being established'}</strong></div>
+      </section>
+
+      <section className="problem-section-card">
+        <div className="problem-section-heading"><span className="eyebrow">Ownership</span><h3>Investigation owner</h3></div>
+        <div className="problem-property-grid">
+          <IncidentProperty label="Service" value={ticket.service} />
+          <IncidentProperty label="Assignment group" value={ticket.team} />
+          <IncidentProperty label="Problem owner" value={ticket.assignee} />
+          <IncidentProperty label="Priority" strong value={ticket.priority} />
+          <IncidentProperty label="Location / scope" value={ticket.location} />
+          <IncidentProperty label="Updated" value={ticket.updated} />
+        </div>
+      </section>
+
+      <section className="problem-section-card problem-next-card">
+        <div className="problem-section-heading"><span className="eyebrow">Current position</span><h3>What happens next</h3></div>
+        <p>{ticket.nextStep}</p>
+        <div className="problem-overview-counts">
+          <div><span>Related incidents</span><strong>{ticket.relatedIncidents?.length || 0}</strong></div>
+          <div><span>Affected CIs</span><strong>{ticket.linkedAssets?.length || 0}</strong></div>
+          <div><span>Known error</span><strong>{knownErrorActive ? 'Declared' : 'No'}</strong></div>
+        </div>
+      </section>
+    </div>
+  )
+
+  const renderInvestigation = () => (
+    <div className="problem-investigation-layout">
+      <section className="problem-section-card">
+        <div className="problem-section-heading"><span className="eyebrow">Working theory</span><h3>Current hypothesis</h3></div>
+        <textarea
+          className="problem-editor"
+          onChange={(event) => updateTicket(ticket.id, { problemHypothesis: event.target.value })}
+          placeholder="What do we currently believe is causing the recurring issue?"
+          value={ticket.problemHypothesis || ''}
+        />
+      </section>
+      <section className="problem-section-card">
+        <div className="problem-section-heading"><span className="eyebrow">Mitigation</span><h3>Current workaround</h3></div>
+        <textarea
+          className="problem-editor"
+          onChange={(event) => updateTicket(ticket.id, { problemWorkaround: event.target.value })}
+          placeholder="Document a safe workaround analysts can use while investigation continues."
+          value={ticket.problemWorkaround || ''}
+        />
+      </section>
+      <section className="problem-section-card">
+        <div className="problem-section-heading"><span className="eyebrow">Confirmed cause</span><h3>Root cause</h3></div>
+        <textarea
+          className="problem-editor"
+          onChange={(event) => updateTicket(ticket.id, { problemRootCause: event.target.value })}
+          placeholder="Capture the confirmed technical or process root cause."
+          value={ticket.problemRootCause || ''}
+        />
+      </section>
+      <section className="problem-section-card">
+        <div className="problem-section-heading"><span className="eyebrow">Permanent resolution</span><h3>Permanent fix</h3></div>
+        <textarea
+          className="problem-editor"
+          onChange={(event) => updateTicket(ticket.id, { problemPermanentFix: event.target.value })}
+          placeholder="Describe the permanent corrective action or linked change."
+          value={ticket.problemPermanentFix || ''}
+        />
+      </section>
+    </div>
+  )
+
+  const renderRelated = () => (
+    <div className="problem-related-grid">
+      <section className="problem-section-card">
+        <div className="problem-section-heading"><span className="eyebrow">Recurring demand</span><h3>Related incidents</h3></div>
+        <div className="problem-linked-record-list">
+          {relatedIncidents.length ? relatedIncidents.map((incident) => (
+            <button key={incident.id} onClick={() => openRecordTab?.(incident)} type="button">
+              <span><strong>{incident.id}</strong><small>{incident.title}</small></span>
+              <ChevronRight size={16} aria-hidden="true" />
+            </button>
+          )) : <div className="problem-empty-state">No linked incidents yet.</div>}
+        </div>
+      </section>
+      <section className="problem-section-card">
+        <div className="problem-section-heading"><span className="eyebrow">Configuration</span><h3>Affected CIs</h3></div>
+        <div className="problem-ci-grid">
+          {(ticket.linkedAssets?.length ? ticket.linkedAssets : ['No CI linked']).map((asset) => asset === 'No CI linked' ? (
+            <span key={asset}>{asset}</span>
+          ) : (
+            <button key={asset} onClick={() => openAssetByName?.(asset)} type="button"><Server size={15} />{asset}</button>
+          ))}
+        </div>
+      </section>
+      <section className="problem-section-card">
+        <div className="problem-section-heading"><span className="eyebrow">Corrective work</span><h3>Related changes</h3></div>
+        <div className="problem-linked-record-list">
+          {relatedChanges.length ? relatedChanges.map((change) => (
+            <button key={change.id} onClick={() => openRecordTab?.(change)} type="button">
+              <span><strong>{change.id}</strong><small>{change.title}</small></span>
+              <ChevronRight size={16} aria-hidden="true" />
+            </button>
+          )) : <div className="problem-empty-state">No corrective change linked yet.</div>}
+        </div>
+      </section>
+    </div>
+  )
+
+  const renderKnownError = () => (
+    <div className="problem-known-error-layout">
+      <section className={`problem-known-error-hero ${knownErrorActive ? 'active' : ''}`}>
+        <div><span className="eyebrow">Known error status</span><h3>{knownErrorActive ? ticket.knownErrorStatus : 'Not declared'}</h3></div>
+        <button
+          className={knownErrorActive ? 'secondary-action compact' : 'primary-action compact'}
+          onClick={() => updateTicket(ticket.id, {
+            knownErrorStatus: knownErrorActive ? 'Not declared' : 'Published internally',
+            status: knownErrorActive ? 'Under Investigation' : 'Known Error',
+            knownErrorTitle: ticket.knownErrorTitle || ticket.title,
+            comments: [`System: Known error ${knownErrorActive ? 'withdrawn' : 'declared'}.`, ...ticket.comments],
+          })}
+          type="button"
+        >
+          <AlertCircle size={16} />
+          {knownErrorActive ? 'Withdraw known error' : 'Declare known error'}
+        </button>
+      </section>
+      <section className="problem-section-card">
+        <label>Known error title<input onChange={(event) => updateTicket(ticket.id, { knownErrorTitle: event.target.value })} value={ticket.knownErrorTitle || ''} /></label>
+        <label>Published workaround<textarea onChange={(event) => updateTicket(ticket.id, { problemWorkaround: event.target.value })} value={ticket.problemWorkaround || ''} /></label>
+      </section>
+      <section className="problem-section-card">
+        <div className="problem-section-heading"><span className="eyebrow">Affected versions / scope</span><h3>Known impact</h3></div>
+        <div className="problem-version-chips">
+          {(ticket.affectedVersions?.length ? ticket.affectedVersions : ['Scope not yet defined']).map((item) => <span key={item}>{item}</span>)}
+        </div>
+        <div className="problem-kb-link"><BookOpen size={16} /><span>{ticket.knowledgeArticle || 'No knowledge article linked yet'}</span></div>
+      </section>
+    </div>
+  )
+
+  const renderActivity = () => (
+    <div className="problem-activity-layout">
+      <div className="incident-activity-composer">
+        <div className="incident-composer-heading"><span className="eyebrow">Investigation journal</span><strong>Add work note</strong></div>
+        <textarea onChange={(event) => setNewComment(event.target.value)} placeholder="Add evidence, investigation progress or handover context" value={newComment} />
+        <div className="incident-composer-footer"><span>Internal Problem Management activity</span><button className="primary-action compact" onClick={() => addComment('work')} type="button"><Send size={15} /> Add note</button></div>
+      </div>
+      <div className="incident-activity-timeline">
+        {ticket.comments.map((comment, index) => {
+          const system = comment.toLowerCase().startsWith('system:')
+          return <article className={`incident-activity-event ${system ? 'system' : 'work'}`} key={`${ticket.id}-problem-${index}-${comment}`}><span className="incident-event-dot" /><div><header><strong>{system ? 'System' : 'Dana Sinclair'}</strong><span>{system ? 'Problem event' : 'Work note'}</span></header><p>{comment.replace(/^(Work note:|System:)\s*/i, '')}</p></div></article>
+        })}
+      </div>
+    </div>
+  )
+
+  const panel = activeSection === 'investigation'
+    ? renderInvestigation()
+    : activeSection === 'related'
+      ? renderRelated()
+      : activeSection === 'known-error'
+        ? renderKnownError()
+        : activeSection === 'activity'
+          ? renderActivity()
+          : renderOverview()
+
+  return (
+    <div className="problem-record-v2">
+      <header className="problem-record-header">
+        <div className="problem-record-title">
+          <span className="eyebrow">{ticket.id}</span>
+          <h2>{ticket.title}</h2>
+          <div className="problem-record-badges"><span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span><span>{ticket.service}</span><span>{ticket.priority} priority</span></div>
+        </div>
+        <div className="problem-record-actions">
+          <button onClick={() => updateTicket(ticket.id, { assignee: 'Dana Sinclair' })} type="button"><UserCheck size={16} />Assign to me</button>
+          {ticket.status === 'New' && <button onClick={() => setStatus('Under Investigation', 'Establish evidence, scope and current hypothesis.')} type="button"><Wrench size={16} />Start investigation</button>}
+          {!knownErrorActive && !['Resolved', 'Closed'].includes(ticket.status) && <button onClick={() => { updateTicket(ticket.id, { knownErrorStatus: 'Published internally', knownErrorTitle: ticket.knownErrorTitle || ticket.title }); setStatus('Known Error', 'Publish the workaround and progress the permanent fix.') }} type="button"><AlertCircle size={16} />Known error</button>}
+          {['Known Error', 'Monitoring'].includes(ticket.status) && <button onClick={() => setStatus('Fix in Progress', 'Implement or validate the permanent corrective action.')} type="button"><Wrench size={16} />Fix in progress</button>}
+          {!['Resolved', 'Closed'].includes(ticket.status) && <button onClick={() => setStatus('Resolved', 'Monitor the permanent fix before closure.')} type="button"><CheckCircle2 size={16} />Resolve</button>}
+          {ticket.status === 'Resolved' && <button onClick={() => setStatus('Closed', 'Problem closed.')} type="button"><CheckCircle2 size={16} />Close</button>}
+        </div>
+      </header>
+
+      <div className="problem-lifecycle" aria-label="Problem lifecycle">
+        {problemLifecycle.map((status, index) => <div className={index === lifecycleIndex ? 'current' : index < lifecycleIndex ? 'complete' : ''} key={status}><span>{index < lifecycleIndex ? '✓' : index + 1}</span><strong>{status}</strong></div>)}
+      </div>
+
+      <nav className="problem-record-tabs" aria-label="Problem record sections">
+        {problemRecordSections.map(({ id, label, icon: Icon }) => <button aria-current={activeSection === id ? 'page' : undefined} className={activeSection === id ? 'active' : ''} key={id} onClick={() => setActiveSection(id)} type="button"><Icon size={16} />{label}</button>)}
+      </nav>
+      <div className="problem-record-panel">{panel}</div>
+    </div>
+  )
+}
+
+function ProblemQueueView({ openNewRecord, openRecordTab, query, setQuery, tickets }) {
+  const [quickView, setQuickView] = useState('all')
+  const [sortKey, setSortKey] = useState('updated')
+  const problems = tickets.filter((ticket) => ticket.type === 'Problem')
+  const openProblems = problems.filter((ticket) => !['Resolved', 'Closed'].includes(ticket.status))
+  const knownErrors = problems.filter((ticket) => ticket.knownErrorStatus && ticket.knownErrorStatus !== 'Not declared')
+  const relatedIncidentCount = problems.reduce((total, ticket) => total + (ticket.relatedIncidents?.length || 0), 0)
+
+  const visible = problems
+    .filter((ticket) => {
+      const needle = query.trim().toLowerCase()
+      const matchesQuery = !needle || [ticket.id, ticket.title, ticket.service, ticket.assignee, ticket.problemImpactScope].some((value) => String(value || '').toLowerCase().includes(needle))
+      if (!matchesQuery) return false
+      if (quickView === 'mine') return ticket.assignee === 'Dana Sinclair'
+      if (quickView === 'investigation') return ['New', 'Under Investigation', 'Monitoring'].includes(ticket.status)
+      if (quickView === 'known') return ticket.knownErrorStatus && ticket.knownErrorStatus !== 'Not declared'
+      if (quickView === 'no-workaround') return !ticket.problemWorkaround
+      if (quickView === 'resolved') return ['Resolved', 'Closed'].includes(ticket.status)
+      return true
+    })
+    .sort((a, b) => {
+      if (sortKey === 'priority') return priorities.indexOf(a.priority) - priorities.indexOf(b.priority)
+      if (sortKey === 'incidents') return (b.relatedIncidents?.length || 0) - (a.relatedIncidents?.length || 0)
+      return b.id.localeCompare(a.id)
+    })
+
+  const quickViews = [
+    ['all', 'All'], ['mine', 'Mine'], ['investigation', 'Investigation'], ['known', 'Known errors'], ['no-workaround', 'No workaround'], ['resolved', 'Resolved'],
+  ]
+
+  return (
+    <div className="problem-queue-v2">
+      <header className="problem-queue-header">
+        <div><span className="eyebrow">Problem Management</span><h2>Problems</h2><p>Find recurring causes, publish safe workarounds and drive permanent fixes.</p></div>
+        <button className="primary-action compact" onClick={() => openNewRecord('Problem')} type="button"><Plus size={16} />New Problem</button>
+      </header>
+      <div className="problem-queue-metrics">
+        <div><span>Open problems</span><strong>{openProblems.length}</strong></div>
+        <div><span>Known errors</span><strong>{knownErrors.length}</strong></div>
+        <div><span>Related incidents</span><strong>{relatedIncidentCount}</strong></div>
+        <div><span>Fix in progress</span><strong>{problems.filter((ticket) => ticket.status === 'Fix in Progress').length}</strong></div>
+      </div>
+      <div className="problem-queue-toolbar">
+        <label className="problem-search"><Search size={18} /><input onChange={(event) => setQuery(event.target.value)} placeholder="Search problems, services, owners..." type="search" value={query} /></label>
+        <label className="problem-sort">Sort<select onChange={(event) => setSortKey(event.target.value)} value={sortKey}><option value="updated">Updated</option><option value="priority">Priority</option><option value="incidents">Related incidents</option></select></label>
+      </div>
+      <div className="problem-quick-views">{quickViews.map(([id, label]) => <button className={quickView === id ? 'active' : ''} key={id} onClick={() => setQuickView(id)} type="button">{label}</button>)}</div>
+      <div className="problem-queue-result-line"><strong>{visible.length} problems</strong><span>{quickViews.find(([id]) => id === quickView)?.[1]}</span></div>
+
+      <div className="problem-table-wrap">
+        <table className="problem-table"><thead><tr><th>Reference</th><th>Problem</th><th>Status</th><th>Related incidents</th><th>Service</th><th>Owner</th><th>Known error</th><th>Updated</th></tr></thead><tbody>{visible.map((ticket) => <tr key={ticket.id} onClick={() => openRecordTab(ticket)}><td><button onClick={(event) => { event.stopPropagation(); openRecordTab(ticket) }} type="button">{ticket.id}</button></td><td><strong>{ticket.title}</strong><small>{ticket.problemImpactScope || ticket.location}</small></td><td><span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span></td><td><strong>{ticket.relatedIncidents?.length || 0}</strong></td><td>{ticket.service}</td><td>{ticket.assignee}</td><td>{ticket.knownErrorStatus && ticket.knownErrorStatus !== 'Not declared' ? <span className="problem-known-chip">Declared</span> : '—'}</td><td>{ticket.updated}</td></tr>)}</tbody></table>
+      </div>
+
+      <div className="problem-mobile-list">{visible.map((ticket) => <button className="problem-mobile-card" key={ticket.id} onClick={() => openRecordTab(ticket)} type="button"><div className="problem-mobile-card-top"><strong>{ticket.id}</strong><span className={`priority-label ${priorityClass(ticket.priority)}`}>{ticket.priority}</span></div><h3>{ticket.title}</h3><div className="problem-mobile-state"><span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span>{ticket.knownErrorStatus && ticket.knownErrorStatus !== 'Not declared' && <span className="problem-known-chip">Known error</span>}</div><div className="problem-mobile-meta"><span>{ticket.service} · {ticket.assignee}</span><span>{ticket.relatedIncidents?.length || 0} incidents</span></div><footer><span>Updated {ticket.updated}</span><ChevronRight size={17} /></footer></button>)}</div>
+      {!visible.length && <div className="problem-empty-state queue">No problems match this view.</div>}
+    </div>
+  )
+}
+
+const changeRecordSections = [
+  { id: 'overview', label: 'Overview', icon: Inbox },
+  { id: 'plan', label: 'Plan', icon: ListChecks },
+  { id: 'risk', label: 'Risk & Approval', icon: ClipboardCheck },
+  { id: 'schedule', label: 'Schedule', icon: CalendarClock },
+  { id: 'cis', label: 'Affected CIs', icon: Server },
+  { id: 'implementation', label: 'Implementation', icon: Wrench },
+  { id: 'activity', label: 'Activity', icon: MessageSquarePlus },
+]
+
+const changeLifecycle = ['Draft', 'Assessment', 'Pending Approval', 'Scheduled', 'Implementing', 'Review', 'Closed']
+
+function changeLifecycleIndex(status) {
+  if (status === 'CAB Review') return 2
+  if (status === 'In Progress') return 4
+  if (status === 'Approved') return 3
+  const index = changeLifecycle.indexOf(status)
+  return index < 0 ? 0 : index
+}
+
+function ChangeRecordWorkspace({ addComment, newComment, openAssetByName, openRecordTab, setNewComment, ticket, tickets, updateTicket }) {
+  const [activeSection, setActiveSection] = useState('overview')
+  const lifecycleIndex = changeLifecycleIndex(ticket.status)
+  const relatedProblems = (ticket.relatedProblems || []).map((id) => tickets?.find((candidate) => candidate.id === id)).filter(Boolean)
+
+  const transition = (status, nextStep, updates = {}) => updateTicket(ticket.id, {
+    status,
+    nextStep,
+    ...updates,
+    comments: [`System: Change moved to ${status}.`, ...ticket.comments],
+  })
+
+  const renderOverview = () => <div className="change-overview-grid">
+    <section className="change-section-card change-reason-card"><div className="change-section-heading"><span className="eyebrow">Business reason</span><h3>Why this change is needed</h3></div><p>{ticket.businessReason || ticket.description}</p><div className="change-next-step"><span>Next step</span><strong>{ticket.nextStep}</strong></div></section>
+    <section className="change-section-card"><div className="change-section-heading"><span className="eyebrow">Ownership</span><h3>Change record</h3></div><div className="problem-property-grid"><IncidentProperty label="Type" value={ticket.changeType || 'Normal'} /><IncidentProperty label="Service" value={ticket.service} /><IncidentProperty label="Owner" value={ticket.assignee} /><IncidentProperty label="Assignment group" value={ticket.team} /><IncidentProperty label="Risk" strong value={ticket.risk || 'Medium'} /><IncidentProperty label="Approval" value={ticket.approval || 'Not submitted'} /></div></section>
+    {relatedProblems.length > 0 && <section className="change-section-card"><div className="change-section-heading"><span className="eyebrow">Related Problems</span><h3>Corrective context</h3></div><div className="problem-linked-record-list">{relatedProblems.map((problem) => <button key={problem.id} onClick={() => openRecordTab?.(problem)} type="button"><span><strong>{problem.id}</strong><small>{problem.title}</small></span><ChevronRight size={16} /></button>)}</div></section>}
+  </div>
+
+  const renderPlan = () => <div className="change-plan-grid">
+    <section className="change-section-card"><div className="change-section-heading"><span className="eyebrow">Implementation</span><h3>Implementation plan</h3></div><textarea className="change-plan-editor" onChange={(event) => updateTicket(ticket.id, { implementationPlan: event.target.value })} value={ticket.implementationPlan || ''} /></section>
+    <section className="change-section-card"><div className="change-section-heading"><span className="eyebrow">Validation</span><h3>Test plan</h3></div><textarea className="change-plan-editor" onChange={(event) => updateTicket(ticket.id, { testPlan: event.target.value })} value={ticket.testPlan || ''} /></section>
+    <section className="change-section-card"><div className="change-section-heading"><span className="eyebrow">Recovery</span><h3>Backout plan</h3></div><textarea className="change-plan-editor" onChange={(event) => updateTicket(ticket.id, { backoutPlan: event.target.value })} value={ticket.backoutPlan || ''} /></section>
+  </div>
+
+  const renderRisk = () => <div className="change-risk-layout">
+    <section className="change-risk-hero"><div><span className="eyebrow">Overall risk</span><h3>{ticket.risk || 'Medium'}</h3><p>{ticket.riskSummary || 'Risk assessment still needs to be completed.'}</p></div><label>Risk<select onChange={(event) => updateTicket(ticket.id, { risk: event.target.value })} value={ticket.risk || 'Medium'}><option>Low</option><option>Medium</option><option>High</option><option>Critical</option></select></label></section>
+    <section className="change-section-card"><div className="change-section-heading"><span className="eyebrow">Approval route</span><h3>{ticket.approvalRoute || 'CAB'}</h3></div><div className="change-approval-status"><span>Current decision</span><strong>{ticket.approval || 'Not submitted'}</strong></div><div className="change-approval-actions"><button className="secondary-action compact" onClick={() => transition('Pending Approval', 'Awaiting the configured approval route.', { approval: 'Pending' })} type="button"><ClipboardCheck size={16} />Submit</button><button className="primary-action compact" onClick={() => transition('Scheduled', 'Confirm implementation readiness for the approved window.', { approval: 'Approved' })} type="button"><CheckCircle2 size={16} />Approve</button><button className="secondary-action compact" onClick={() => updateTicket(ticket.id, { approval: 'Rejected', status: 'Assessment', nextStep: 'Address approval feedback before resubmitting.' })} type="button"><AlertCircle size={16} />Reject</button></div></section>
+  </div>
+
+  const renderSchedule = () => <div className="change-schedule-layout"><section className="change-schedule-hero"><div><span className="eyebrow">Implementation window</span><h3>{ticket.window || 'To be scheduled'}</h3><p>{ticket.downtime || 'No outage statement recorded'}</p></div><CalendarClock size={28} /></section><section className="change-section-card"><div className="change-schedule-grid"><label>Planned start<input onChange={(event) => updateTicket(ticket.id, { plannedStart: event.target.value, window: `${event.target.value || 'TBC'} → ${ticket.plannedEnd || 'TBC'}` })} value={ticket.plannedStart || ''} /></label><label>Planned end<input onChange={(event) => updateTicket(ticket.id, { plannedEnd: event.target.value, window: `${ticket.plannedStart || 'TBC'} → ${event.target.value || 'TBC'}` })} value={ticket.plannedEnd || ''} /></label><label className="span-two">Expected customer impact<input onChange={(event) => updateTicket(ticket.id, { downtime: event.target.value })} value={ticket.downtime || ''} /></label></div></section></div>
+
+  const renderCis = () => <div className="change-ci-layout"><section className="change-section-card"><div className="change-section-heading"><span className="eyebrow">Configuration scope</span><h3>Affected configuration items</h3></div><div className="change-ci-grid">{(ticket.linkedAssets?.length ? ticket.linkedAssets : ['No CI linked']).map((asset) => asset === 'No CI linked' ? <span key={asset}>{asset}</span> : <button key={asset} onClick={() => openAssetByName?.(asset)} type="button"><Server size={16} /><strong>{asset}</strong><small>Open configuration item</small></button>)}</div></section><section className="change-section-card"><div className="change-section-heading"><span className="eyebrow">Service impact</span><h3>{ticket.service}</h3></div><p>{ticket.description}</p></section></div>
+
+  const renderImplementation = () => <div className="change-implementation-layout"><section className="change-section-card"><div className="change-section-heading"><span className="eyebrow">Execution log</span><h3>Implementation notes</h3></div><textarea className="change-plan-editor" onChange={(event) => updateTicket(ticket.id, { implementationNotes: event.target.value })} placeholder="Record implementation evidence, timings and deviations from plan" value={ticket.implementationNotes || ''} /></section><section className="change-section-card"><div className="change-section-heading"><span className="eyebrow">Post implementation</span><h3>Review outcome</h3></div><textarea className="change-plan-editor" onChange={(event) => updateTicket(ticket.id, { reviewOutcome: event.target.value })} placeholder="Capture success criteria, issues, lessons learned and follow-up actions" value={ticket.reviewOutcome || ''} /></section></div>
+
+  const renderActivity = () => <div className="change-activity-layout"><div className="incident-activity-composer"><div className="incident-composer-heading"><span className="eyebrow">Change journal</span><strong>Add work note</strong></div><textarea onChange={(event) => setNewComment(event.target.value)} placeholder="Add CAB context, implementation evidence or review notes" value={newComment} /><div className="incident-composer-footer"><span>Internal change activity</span><button className="primary-action compact" onClick={() => addComment('work')} type="button"><Send size={15} />Add note</button></div></div><div className="incident-activity-timeline">{ticket.comments.map((comment, index) => { const system = comment.toLowerCase().startsWith('system:'); return <article className={`incident-activity-event ${system ? 'system' : 'work'}`} key={`${ticket.id}-change-${index}-${comment}`}><span className="incident-event-dot" /><div><header><strong>{system ? 'System' : 'Dana Sinclair'}</strong><span>{system ? 'Change event' : 'Work note'}</span></header><p>{comment.replace(/^(Work note:|System:)\s*/i, '')}</p></div></article> })}</div></div>
+
+  const panel = activeSection === 'plan' ? renderPlan() : activeSection === 'risk' ? renderRisk() : activeSection === 'schedule' ? renderSchedule() : activeSection === 'cis' ? renderCis() : activeSection === 'implementation' ? renderImplementation() : activeSection === 'activity' ? renderActivity() : renderOverview()
+
+  return <div className="change-record-v2"><header className="change-record-header"><div className="change-record-title"><span className="eyebrow">{ticket.id}</span><h2>{ticket.title}</h2><div className="change-record-badges"><span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span><span>{ticket.changeType || 'Normal'} change</span><span className={`change-risk-badge ${String(ticket.risk || 'Medium').toLowerCase()}`}>{ticket.risk || 'Medium'} risk</span></div></div><div className="change-record-actions"><button onClick={() => updateTicket(ticket.id, { assignee: 'Dana Sinclair' })} type="button"><UserCheck size={16} />Assign to me</button>{ticket.status === 'Draft' && <button onClick={() => transition('Assessment', 'Complete risk, plan and schedule assessment before approval.')} type="button"><ListChecks size={16} />Start assessment</button>}{ticket.status === 'Assessment' && <button onClick={() => transition('Pending Approval', 'Awaiting the configured approval route.', { approval: 'Pending' })} type="button"><ClipboardCheck size={16} />Submit</button>}{['Pending Approval', 'CAB Review'].includes(ticket.status) && <button onClick={() => transition('Scheduled', 'Approved. Confirm readiness for the implementation window.', { approval: 'Approved' })} type="button"><CheckCircle2 size={16} />Approve</button>}{ticket.status === 'Scheduled' && <button onClick={() => transition('Implementing', 'Execute the approved implementation plan and capture evidence.')} type="button"><Wrench size={16} />Implement</button>}{ticket.status === 'Implementing' && <button onClick={() => transition('Review', 'Complete post-implementation validation and review.')} type="button"><ClipboardCheck size={16} />Review</button>}{ticket.status === 'Review' && <button onClick={() => transition('Closed', 'Change closed after successful review.')} type="button"><CheckCircle2 size={16} />Close</button>}</div></header><div className="change-lifecycle" aria-label="Change lifecycle">{changeLifecycle.map((status, index) => <div className={index === lifecycleIndex ? 'current' : index < lifecycleIndex ? 'complete' : ''} key={status}><span>{index < lifecycleIndex ? '✓' : index + 1}</span><strong>{status}</strong></div>)}</div><nav className="change-record-tabs" aria-label="Change record sections">{changeRecordSections.map(({ id, label, icon: Icon }) => <button aria-current={activeSection === id ? 'page' : undefined} className={activeSection === id ? 'active' : ''} key={id} onClick={() => setActiveSection(id)} type="button"><Icon size={16} />{label}</button>)}</nav><div className="change-record-panel">{panel}</div></div>
+}
+
+
 export function TicketsView({
   addComment,
   filters,
@@ -2288,6 +2687,18 @@ export function TicketsView({
     return (
       <ServiceRequestQueueView
         filteredTickets={filteredTickets}
+        openNewRecord={openNewRecord}
+        openRecordTab={openRecordTab}
+        query={query}
+        setQuery={setQuery}
+        tickets={tickets}
+      />
+    )
+  }
+
+  if (moduleConfig?.type === 'Problem') {
+    return (
+      <ProblemQueueView
         openNewRecord={openNewRecord}
         openRecordTab={openRecordTab}
         query={query}
@@ -3018,6 +3429,79 @@ function ServiceRequestIntakeView({
   )
 }
 
+
+function ProblemIntakeView({ handleTicketSubmit, hasUnsavedChanges, setTicketDraft, ticketDraft }) {
+  return (
+    <div className="problem-intake-page">
+      <section className="problem-intake-panel">
+        <header className="problem-intake-header">
+          <div><span className="eyebrow">Problem Management</span><h2>New Problem</h2><p>Capture a recurring issue, its scope and the evidence needed to drive root-cause investigation.</p></div>
+          {hasUnsavedChanges && <span className="draft-status">Unsaved changes</span>}
+        </header>
+        <form className="problem-intake-form" onSubmit={handleTicketSubmit}>
+          <section className="problem-intake-section">
+            <div className="problem-intake-section-title"><span>1</span><div><strong>Problem statement</strong><small>Describe the recurring pattern rather than a single user incident.</small></div></div>
+            <label>Problem summary<input autoFocus onChange={(event) => setTicketDraft({ ...ticketDraft, title: event.target.value })} placeholder="e.g. Payroll SSO breaks after certificate rotations" value={ticketDraft.title} /></label>
+            <label>Problem description<textarea onChange={(event) => setTicketDraft({ ...ticketDraft, description: event.target.value })} placeholder="Describe the recurring symptoms, pattern and business impact" value={ticketDraft.description} /></label>
+            <div className="form-row"><label>Raised by<input onChange={(event) => setTicketDraft({ ...ticketDraft, requester: event.target.value })} placeholder="Team or person raising the problem" value={ticketDraft.requester} /></label><label>Impact scope<input onChange={(event) => setTicketDraft({ ...ticketDraft, problemImpactScope: event.target.value })} placeholder="Users, sites, services or versions affected" value={ticketDraft.problemImpactScope || ''} /></label></div>
+          </section>
+
+          <section className="problem-intake-section">
+            <div className="problem-intake-section-title"><span>2</span><div><strong>Classification & ownership</strong><small>Set the service context and investigation owner.</small></div></div>
+            <div className="problem-intake-grid three"><label>Priority<select onChange={(event) => setTicketDraft({ ...ticketDraft, priority: event.target.value })} value={ticketDraft.priority}>{priorities.map((priority) => <option key={priority}>{priority}</option>)}</select></label><label>Service<select onChange={(event) => setTicketDraft({ ...ticketDraft, service: event.target.value })} value={ticketDraft.service}>{['Collaboration', 'Identity', 'Hardware', 'Network Security', 'Wireless', 'Access', 'Print'].map((service) => <option key={service}>{service}</option>)}</select></label><label>Assignment group<select onChange={(event) => setTicketDraft({ ...ticketDraft, team: event.target.value })} value={ticketDraft.team}>{teams.map((team) => <option key={team}>{team}</option>)}</select></label></div>
+            <label>Related incidents<input onChange={(event) => setTicketDraft({ ...ticketDraft, problemRelatedIncidentsText: event.target.value })} placeholder="INC-1032, INC-1044 (comma separated)" value={ticketDraft.problemRelatedIncidentsText || ''} /></label>
+          </section>
+
+          <section className="problem-intake-section">
+            <div className="problem-intake-section-title"><span>3</span><div><strong>Investigation starting point</strong><small>Record the current theory and any safe workaround already known.</small></div></div>
+            <label>Initial hypothesis<textarea onChange={(event) => setTicketDraft({ ...ticketDraft, problemHypothesis: event.target.value })} placeholder="What do we currently believe may be causing the pattern?" value={ticketDraft.problemHypothesis || ''} /></label>
+            <label>Current workaround<textarea onChange={(event) => setTicketDraft({ ...ticketDraft, problemWorkaround: event.target.value })} placeholder="Optional: document a known safe mitigation" value={ticketDraft.problemWorkaround || ''} /></label>
+          </section>
+
+          <div className="problem-intake-submit"><div><span className="eyebrow">Create problem</span><strong>The same workspace tab becomes the submitted Problem record.</strong></div><button className="primary-action" type="submit"><Plus size={17} />Create Problem</button></div>
+        </form>
+      </section>
+    </div>
+  )
+}
+
+function ChangeIntakeView({ handleTicketSubmit, hasUnsavedChanges, setTicketDraft, ticketDraft }) {
+  return (
+    <div className="change-intake-page">
+      <section className="change-intake-panel">
+        <header className="change-intake-header">
+          <div><span className="eyebrow">Change Management</span><h2>New Change</h2><p>Build the implementation, risk, schedule and recovery context before the change enters approval.</p></div>
+          {hasUnsavedChanges && <span className="draft-status">Unsaved changes</span>}
+        </header>
+        <form className="change-intake-form" onSubmit={handleTicketSubmit}>
+          <section className="change-intake-section">
+            <div className="change-intake-section-title"><span>1</span><div><strong>Change overview</strong><small>Describe what is changing and why.</small></div></div>
+            <label>Change summary<input autoFocus onChange={(event) => setTicketDraft({ ...ticketDraft, title: event.target.value })} placeholder="e.g. Upgrade perimeter firewall cluster" value={ticketDraft.title} /></label>
+            <div className="change-intake-grid three"><label>Change type<select onChange={(event) => setTicketDraft({ ...ticketDraft, changeType: event.target.value })} value={ticketDraft.changeType || 'Normal'}><option>Standard</option><option>Normal</option><option>Emergency</option></select></label><label>Risk<select onChange={(event) => setTicketDraft({ ...ticketDraft, changeRisk: event.target.value, priority: event.target.value })} value={ticketDraft.changeRisk || 'Medium'}><option>Low</option><option>Medium</option><option>High</option><option>Critical</option></select></label><label>Approval route<select onChange={(event) => setTicketDraft({ ...ticketDraft, changeApprovalRoute: event.target.value })} value={ticketDraft.changeApprovalRoute || 'CAB'}><option>CAB</option><option>Service owner</option><option>Security approval</option><option>Emergency CAB</option></select></label></div>
+            <div className="form-row"><label>Requested by<input onChange={(event) => setTicketDraft({ ...ticketDraft, requester: event.target.value })} placeholder="Person or team requesting the change" value={ticketDraft.requester} /></label><label>Service<select onChange={(event) => setTicketDraft({ ...ticketDraft, service: event.target.value })} value={ticketDraft.service}>{['Collaboration', 'Identity', 'Hardware', 'Network Security', 'Wireless', 'Access'].map((service) => <option key={service}>{service}</option>)}</select></label></div>
+            <div className="form-row"><label>Assignment group<select onChange={(event) => setTicketDraft({ ...ticketDraft, team: event.target.value })} value={ticketDraft.team}>{teams.map((team) => <option key={team}>{team}</option>)}</select></label><label>Affected CIs<input onChange={(event) => setTicketDraft({ ...ticketDraft, changeAffectedCisText: event.target.value })} placeholder="FW-EDGE-A, M365-TENANT" value={ticketDraft.changeAffectedCisText || ''} /></label></div>
+            <label>Business reason<textarea onChange={(event) => setTicketDraft({ ...ticketDraft, changeBusinessReason: event.target.value, description: event.target.value })} placeholder="Why is the change required and what outcome should it deliver?" value={ticketDraft.changeBusinessReason || ''} /></label>
+          </section>
+
+          <section className="change-intake-section">
+            <div className="change-intake-section-title"><span>2</span><div><strong>Implementation & recovery</strong><small>Plans should be detailed enough for another technician to execute safely.</small></div></div>
+            <label>Implementation plan<textarea onChange={(event) => setTicketDraft({ ...ticketDraft, changeImplementationPlan: event.target.value })} placeholder="Ordered implementation steps" value={ticketDraft.changeImplementationPlan || ''} /></label>
+            <div className="change-intake-plan-grid"><label>Test plan<textarea onChange={(event) => setTicketDraft({ ...ticketDraft, changeTestPlan: event.target.value })} placeholder="How success will be validated" value={ticketDraft.changeTestPlan || ''} /></label><label>Backout plan<textarea onChange={(event) => setTicketDraft({ ...ticketDraft, changeBackoutPlan: event.target.value })} placeholder="How the service will be restored if validation fails" value={ticketDraft.changeBackoutPlan || ''} /></label></div>
+          </section>
+
+          <section className="change-intake-section">
+            <div className="change-intake-section-title"><span>3</span><div><strong>Schedule & customer impact</strong><small>Capture the proposed window; approval can adjust it later.</small></div></div>
+            <div className="change-intake-grid three"><label>Planned start<input onChange={(event) => setTicketDraft({ ...ticketDraft, changePlannedStart: event.target.value })} placeholder="01 Sep 2026 · 22:00" value={ticketDraft.changePlannedStart || ''} /></label><label>Planned end<input onChange={(event) => setTicketDraft({ ...ticketDraft, changePlannedEnd: event.target.value })} placeholder="01 Sep 2026 · 23:00" value={ticketDraft.changePlannedEnd || ''} /></label><label>Expected impact<input onChange={(event) => setTicketDraft({ ...ticketDraft, changeDowntime: event.target.value })} placeholder="No outage expected" value={ticketDraft.changeDowntime || ''} /></label></div>
+          </section>
+
+          <div className="change-intake-submit"><div><span className="eyebrow">Create draft</span><strong>The change is created as Draft in this same workspace tab.</strong></div><button className="primary-action" type="submit"><Plus size={17} />Create Change</button></div>
+        </form>
+      </section>
+    </div>
+  )
+}
+
+
 function GenericNewRecordView({
   handleTicketSubmit,
   hasUnsavedChanges,
@@ -3131,6 +3615,14 @@ export function NewRecordView(props) {
 
   if (props.recordType === 'Service Request') {
     return <ServiceRequestIntakeView {...props} />
+  }
+
+  if (props.recordType === 'Problem') {
+    return <ProblemIntakeView {...props} />
+  }
+
+  if (props.recordType === 'Change') {
+    return <ChangeIntakeView {...props} />
   }
 
   return <GenericNewRecordView {...props} />
@@ -3311,47 +3803,80 @@ export function SelfServicePortal({
   )
 }
 
-export function ChangesView({ approveChange, openNewRecord, openRecordTab, tickets }) {
+export function ChangesView({ openNewRecord, openRecordTab, tickets }) {
+  const [query, setQuery] = useState('')
+  const [quickView, setQuickView] = useState('all')
+  const [sortKey, setSortKey] = useState('window')
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const [riskFilter, setRiskFilter] = useState('All')
+  const [typeFilter, setTypeFilter] = useState('All')
+
+  const pendingApproval = tickets.filter((ticket) => ['Pending Approval', 'CAB Review'].includes(ticket.status)).length
+  const scheduled = tickets.filter((ticket) => ticket.status === 'Scheduled').length
+  const highRisk = tickets.filter((ticket) => ['High', 'Critical'].includes(ticket.risk)).length
+  const implementing = tickets.filter((ticket) => ['Implementing', 'In Progress', 'Review'].includes(ticket.status)).length
+
+  const quickViews = [
+    ['all', 'All'],
+    ['approval', 'Awaiting approval'],
+    ['scheduled', 'Scheduled'],
+    ['high-risk', 'High risk'],
+    ['implementation', 'In progress'],
+    ['closed', 'Closed'],
+  ]
+
+  const visible = tickets
+    .filter((ticket) => {
+      const needle = query.trim().toLowerCase()
+      const matchesQuery = !needle || [ticket.id, ticket.title, ticket.service, ticket.assignee, ticket.window, ticket.requester].some((value) => String(value || '').toLowerCase().includes(needle))
+      if (!matchesQuery) return false
+      if (riskFilter !== 'All' && ticket.risk !== riskFilter) return false
+      if (typeFilter !== 'All' && (ticket.changeType || 'Normal') !== typeFilter) return false
+      if (quickView === 'approval') return ['Pending Approval', 'CAB Review'].includes(ticket.status)
+      if (quickView === 'scheduled') return ticket.status === 'Scheduled'
+      if (quickView === 'high-risk') return ['High', 'Critical'].includes(ticket.risk)
+      if (quickView === 'implementation') return ['Implementing', 'In Progress', 'Review'].includes(ticket.status)
+      if (quickView === 'closed') return ticket.status === 'Closed'
+      return true
+    })
+    .sort((a, b) => {
+      if (sortKey === 'risk') {
+        const riskOrder = ['Critical', 'High', 'Medium', 'Low']
+        return riskOrder.indexOf(a.risk || 'Medium') - riskOrder.indexOf(b.risk || 'Medium')
+      }
+      if (sortKey === 'status') return a.status.localeCompare(b.status)
+      return b.id.localeCompare(a.id)
+    })
+
   return (
-    <div className="changes-view">
-      <div className="changes-toolbar">
-        <div>
-          <span className="eyebrow">Change Management</span>
-          <h2>Planned Changes</h2>
-        </div>
-        <button className="primary-action compact" onClick={() => openNewRecord('Change')} type="button">
-          <Plus size={16} aria-hidden="true" />
-          New Change
-        </button>
+    <div className="change-queue-v2">
+      <header className="change-queue-header">
+        <div><span className="eyebrow">Change Management</span><h2>Changes</h2><p>Assess risk, protect implementation windows and keep approvals visible before execution.</p></div>
+        <button className="primary-action compact" onClick={() => openNewRecord('Change')} type="button"><Plus size={16} />New Change</button>
+      </header>
+
+      <div className="change-queue-metrics">
+        <div><span>Awaiting approval</span><strong>{pendingApproval}</strong></div>
+        <div><span>Scheduled</span><strong>{scheduled}</strong></div>
+        <div><span>High risk</span><strong>{highRisk}</strong></div>
+        <div><span>Implementing / review</span><strong>{implementing}</strong></div>
       </div>
-      {tickets.map((ticket) => (
-        <article className="change-card" key={ticket.id}>
-          <div className="change-main">
-            <span className={`priority-label ${priorityClass(ticket.priority)}`}>{ticket.priority} risk</span>
-            <h2>{ticket.title}</h2>
-            <p>{ticket.description}</p>
-            <div className="change-details">
-              <InfoItem label="Owner" value={ticket.assignee} icon={UserRound} />
-              <InfoItem label="Window" value={ticket.window || 'To be scheduled'} icon={CalendarClock} />
-              <InfoItem label="Approval" value={ticket.approval || ticket.status} icon={ClipboardCheck} />
-            </div>
-          </div>
-          <div className="approval-panel">
-            <button className="change-record-link" onClick={() => openRecordTab(ticket)} type="button">
-              {ticket.id}
-            </button>
-            <span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span>
-            <button onClick={() => approveChange(ticket, 'Approved')} type="button">
-              <CheckCircle2 size={16} aria-hidden="true" />
-              Approve
-            </button>
-            <button onClick={() => approveChange(ticket, 'Rejected')} type="button">
-              <AlertCircle size={16} aria-hidden="true" />
-              Reject
-            </button>
-          </div>
-        </article>
-      ))}
+
+      <div className="change-queue-toolbar">
+        <label className="change-search"><Search size={18} /><input onChange={(event) => setQuery(event.target.value)} placeholder="Search changes, services, owners..." type="search" value={query} /></label>
+        <button className={filtersOpen || riskFilter !== 'All' || typeFilter !== 'All' ? 'change-filter-button active' : 'change-filter-button'} onClick={() => setFiltersOpen((current) => !current)} type="button"><SlidersHorizontal size={17} />Filters{(riskFilter !== 'All' || typeFilter !== 'All') && <span>{Number(riskFilter !== 'All') + Number(typeFilter !== 'All')}</span>}</button>
+        <label className="change-sort">Sort<select onChange={(event) => setSortKey(event.target.value)} value={sortKey}><option value="window">Window</option><option value="risk">Risk</option><option value="status">Status</option></select></label>
+      </div>
+
+      {filtersOpen && <div className="change-filter-panel"><label>Risk<select onChange={(event) => setRiskFilter(event.target.value)} value={riskFilter}><option>All</option><option>Low</option><option>Medium</option><option>High</option><option>Critical</option></select></label><label>Change type<select onChange={(event) => setTypeFilter(event.target.value)} value={typeFilter}><option>All</option><option>Standard</option><option>Normal</option><option>Emergency</option></select></label><button className="text-button" onClick={() => { setRiskFilter('All'); setTypeFilter('All') }} type="button">Clear filters</button></div>}
+
+      <div className="change-quick-views">{quickViews.map(([id, label]) => <button className={quickView === id ? 'active' : ''} key={id} onClick={() => setQuickView(id)} type="button">{label}</button>)}</div>
+      <div className="change-queue-result-line"><strong>{visible.length} changes</strong><span>{quickViews.find(([id]) => id === quickView)?.[1]}</span></div>
+
+      <div className="change-table-wrap"><table className="change-table"><thead><tr><th>Reference</th><th>Change</th><th>Type / risk</th><th>Status</th><th>Approval</th><th>Window</th><th>Owner</th><th>Affected CIs</th><th>Updated</th></tr></thead><tbody>{visible.map((ticket) => <tr key={ticket.id} onClick={() => openRecordTab(ticket)}><td><button onClick={(event) => { event.stopPropagation(); openRecordTab(ticket) }} type="button">{ticket.id}</button></td><td><strong>{ticket.title}</strong><small>{ticket.service}</small></td><td><span>{ticket.changeType || 'Normal'}</span><strong className={`change-risk-text ${String(ticket.risk || 'Medium').toLowerCase()}`}>{ticket.risk || 'Medium'}</strong></td><td><span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span></td><td>{ticket.approval || 'Not submitted'}</td><td><strong>{ticket.window || 'To be scheduled'}</strong><small>{ticket.downtime || ''}</small></td><td>{ticket.assignee}</td><td>{ticket.linkedAssets?.length || 0}</td><td>{ticket.updated}</td></tr>)}</tbody></table></div>
+
+      <div className="change-mobile-list">{visible.map((ticket) => <button className="change-mobile-card" key={ticket.id} onClick={() => openRecordTab(ticket)} type="button"><div className="change-mobile-card-top"><strong>{ticket.id}</strong><span className={`change-risk-badge ${String(ticket.risk || 'Medium').toLowerCase()}`}>{ticket.risk || 'Medium'} risk</span></div><h3>{ticket.title}</h3><div className="change-mobile-state"><span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span><span>{ticket.changeType || 'Normal'} · {ticket.approval || 'Not submitted'}</span></div><div className="change-mobile-window"><CalendarClock size={15} /><span>{ticket.window || 'To be scheduled'}</span></div><div className="change-mobile-meta"><span>{ticket.service} · {ticket.assignee}</span><span>{ticket.linkedAssets?.length || 0} CIs</span></div><footer><span>Updated {ticket.updated}</span><ChevronRight size={17} /></footer></button>)}</div>
+      {!visible.length && <div className="problem-empty-state queue">No changes match this view.</div>}
     </div>
   )
 }
