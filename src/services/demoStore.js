@@ -33,6 +33,30 @@ function hydrateTicketEnhancements(tickets) {
     'requestedItems',
     'requestApprovals',
     'requestTasks',
+    'problemImpactScope',
+    'problemHypothesis',
+    'problemWorkaround',
+    'problemRootCause',
+    'problemPermanentFix',
+    'relatedIncidents',
+    'relatedChanges',
+    'knownErrorStatus',
+    'knownErrorTitle',
+    'affectedVersions',
+    'knowledgeArticle',
+    'changeType',
+    'riskSummary',
+    'approvalRoute',
+    'businessReason',
+    'implementationPlan',
+    'testPlan',
+    'backoutPlan',
+    'plannedStart',
+    'plannedEnd',
+    'downtime',
+    'relatedProblems',
+    'implementationNotes',
+    'reviewOutcome',
   ]
 
   return tickets.map((ticket) => {
@@ -52,7 +76,18 @@ function hydrateTicketEnhancements(tickets) {
 
 export function loadTickets() {
   const tickets = readMigratedJson('hi5central-tickets', 'lsl-itsm-tickets', seedTickets)
-  return hydrateTicketEnhancements(Array.isArray(tickets) ? tickets : seedTickets)
+  const hydrated = hydrateTicketEnhancements(Array.isArray(tickets) ? tickets : seedTickets)
+
+  // Layout/demo migrations: add only the new Problem/Change examples introduced
+  // for the dedicated module designs. Existing user-created demo records and
+  // edits remain untouched.
+  const supplementalIds = new Set(['PRB-0148', 'PRB-0151', 'CHG-0904', 'CHG-0906'])
+  const currentIds = new Set(hydrated.map((ticket) => ticket.id))
+  const supplemental = seedTickets.filter(
+    (ticket) => supplementalIds.has(ticket.id) && !currentIds.has(ticket.id),
+  )
+
+  return [...hydrated, ...supplemental]
 }
 
 export function loadSession() {
