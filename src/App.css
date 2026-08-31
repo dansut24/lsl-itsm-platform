@@ -687,7 +687,6 @@ textarea:focus-visible {
 
 .tab-add {
   box-sizing: border-box;
-  grid-row: 1;
   align-self: end;
   flex: 0 0 42px;
   width: 42px;
@@ -9628,4 +9627,112 @@ textarea:focus {
 .notification-trigger {
   position: relative;
   z-index: 44;
+}
+
+
+/* ================================================================
+   RESPONSIVE SHELL CORRECTION — TAB ORDER + NARROW WORKSPACES
+   Keep source order deterministic: brand -> tabs -> + -> actions.
+   Narrow workspaces adapt by available space, not pointer type alone.
+   ================================================================ */
+
+.notification-panel-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.notification-panel-close {
+  display: none;
+}
+
+/* Narrow desktop/tablet workspace: free horizontal space for tabs.
+   Short landscape phones are excluded because they already use the
+   permanent compact mobile shell. */
+@media (min-width: 681px) and (max-width: 1120px) and (min-height: 601px) {
+  .new-ticket-button,
+  .chrome-search {
+    display: none;
+  }
+
+  .breadcrumb-compact-search {
+    display: flex;
+  }
+
+  .breadcrumbs {
+    gap: 10px;
+  }
+
+  .breadcrumb-trail {
+    flex: 1 1 auto;
+  }
+
+  .workspace-tab {
+    padding-inline: 10px;
+  }
+}
+
+/* Desktop notifications are a full-height right drawer. Mobile and
+   coarse-pointer notification layouts are intentionally unchanged. */
+@media (hover: hover) and (pointer: fine) and (min-width: 681px) {
+  .notifications-panel {
+    position: fixed;
+    z-index: 60;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(420px, 38vw);
+    max-height: none;
+    height: 100dvh;
+    overflow: hidden;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    border-top: 0;
+    border-right: 0;
+    border-bottom: 0;
+    border-radius: 0;
+    box-shadow: -18px 0 44px rgba(5, 16, 36, 0.24);
+    animation: hi5-notification-drawer-in 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .notifications-panel .notification-list {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .notifications-panel .header-panel-heading {
+    position: relative;
+    top: auto;
+    padding: 18px 18px 16px;
+  }
+
+  .notification-panel-close {
+    display: inline-grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    border: 1px solid var(--line) !important;
+    border-radius: 8px;
+    background: var(--surface-soft) !important;
+    color: var(--ink) !important;
+  }
+
+  .notification-panel-close:hover {
+    border-color: rgb(var(--accent-rgb)) !important;
+    color: rgb(var(--accent-rgb)) !important;
+  }
+}
+
+@keyframes hi5-notification-drawer-in {
+  from {
+    opacity: 0;
+    transform: translateX(22px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }

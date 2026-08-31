@@ -1920,15 +1920,26 @@ function App() {
                 <span className="eyebrow">Inbox</span>
                 <strong>Notifications</strong>
               </div>
-              <button
-                disabled={!unreadNotificationCount}
-                onClick={() =>
-                  setNotifications((current) => current.map((item) => ({ ...item, read: true })))
-                }
-                type="button"
-              >
-                Mark all read
-              </button>
+              <div className="notification-panel-actions">
+                <button
+                  disabled={!unreadNotificationCount}
+                  onClick={() =>
+                    setNotifications((current) => current.map((item) => ({ ...item, read: true })))
+                  }
+                  type="button"
+                >
+                  Mark all read
+                </button>
+                <button
+                  aria-label="Close notifications"
+                  className="notification-panel-close"
+                  onClick={() => setNotificationsOpen(false)}
+                  title="Close notifications"
+                  type="button"
+                >
+                  <X size={17} aria-hidden="true" />
+                </button>
+              </div>
             </div>
             <div className="notification-list">
               {notifications.map((notification) => (
