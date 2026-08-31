@@ -136,6 +136,23 @@ function emptyTicketDraft(type = 'Incident') {
     requestTasks: [],
     requestCostCentre: '',
     requestRequiredBy: '',
+    problemImpactScope: '',
+    problemHypothesis: '',
+    problemWorkaround: '',
+    problemRootCause: '',
+    problemPermanentFix: '',
+    problemRelatedIncidentsText: '',
+    changeType: 'Normal',
+    changeRisk: 'Medium',
+    changeApprovalRoute: 'CAB',
+    changeBusinessReason: '',
+    changeImplementationPlan: '',
+    changeTestPlan: '',
+    changeBackoutPlan: '',
+    changePlannedStart: '',
+    changePlannedEnd: '',
+    changeDowntime: 'No outage expected',
+    changeAffectedCisText: '',
   }
 }
 
@@ -1030,7 +1047,6 @@ function App() {
       description: ticketDraft.description.trim() || 'No description supplied.',
       nextStep: 'Triage and assign an owner.',
       comments: ['Created from the analyst console.'],
-      linkedAssets: [],
       requestInformation: ticketDraft.type === 'Service Request'
         ? [
             { label: 'Employee name', value: ticketDraft.requester.trim() },
@@ -1044,9 +1060,44 @@ function App() {
       requestedItems: ticketDraft.type === 'Service Request' ? ticketDraft.requestedItems || [] : undefined,
       requestApprovals: ticketDraft.type === 'Service Request' ? ticketDraft.requestApprovals || [] : undefined,
       requestTasks: ticketDraft.type === 'Service Request' ? ticketDraft.requestTasks || [] : undefined,
-      risk: ticketDraft.type === 'Change' ? 'Medium' : undefined,
-      approval: ticketDraft.type === 'Change' ? 'Pending' : undefined,
-      window: ticketDraft.type === 'Change' ? 'To be scheduled' : undefined,
+      problemImpactScope: ticketDraft.type === 'Problem' ? ticketDraft.problemImpactScope || 'Scope to be confirmed' : undefined,
+      problemHypothesis: ticketDraft.type === 'Problem' ? ticketDraft.problemHypothesis || '' : undefined,
+      problemWorkaround: ticketDraft.type === 'Problem' ? ticketDraft.problemWorkaround || '' : undefined,
+      problemRootCause: ticketDraft.type === 'Problem' ? ticketDraft.problemRootCause || '' : undefined,
+      problemPermanentFix: ticketDraft.type === 'Problem' ? ticketDraft.problemPermanentFix || '' : undefined,
+      relatedIncidents: ticketDraft.type === 'Problem'
+        ? (ticketDraft.problemRelatedIncidentsText || '').split(',').map((value) => value.trim()).filter(Boolean)
+        : undefined,
+      knownErrorStatus: ticketDraft.type === 'Problem' ? 'Not declared' : undefined,
+      changeType: ticketDraft.type === 'Change' ? ticketDraft.changeType || 'Normal' : undefined,
+      risk: ticketDraft.type === 'Change' ? ticketDraft.changeRisk || 'Medium' : undefined,
+      approval: ticketDraft.type === 'Change' ? 'Not submitted' : undefined,
+      approvalRoute: ticketDraft.type === 'Change' ? ticketDraft.changeApprovalRoute || 'CAB' : undefined,
+      businessReason: ticketDraft.type === 'Change' ? ticketDraft.changeBusinessReason || ticketDraft.description.trim() : undefined,
+      implementationPlan: ticketDraft.type === 'Change' ? ticketDraft.changeImplementationPlan || '' : undefined,
+      testPlan: ticketDraft.type === 'Change' ? ticketDraft.changeTestPlan || '' : undefined,
+      backoutPlan: ticketDraft.type === 'Change' ? ticketDraft.changeBackoutPlan || '' : undefined,
+      plannedStart: ticketDraft.type === 'Change' ? ticketDraft.changePlannedStart || '' : undefined,
+      plannedEnd: ticketDraft.type === 'Change' ? ticketDraft.changePlannedEnd || '' : undefined,
+      downtime: ticketDraft.type === 'Change' ? ticketDraft.changeDowntime || 'No outage expected' : undefined,
+      linkedAssets: ticketDraft.type === 'Change'
+        ? (ticketDraft.changeAffectedCisText || '').split(',').map((value) => value.trim()).filter(Boolean)
+        : [],
+      window: ticketDraft.type === 'Change'
+        ? [ticketDraft.changePlannedStart, ticketDraft.changePlannedEnd].filter(Boolean).join(' → ') || 'To be scheduled'
+        : undefined,
+    }
+
+    if (createdTicket.type === 'Problem') {
+      createdTicket.status = 'New'
+      createdTicket.nextStep = 'Begin investigation and link recurring incidents.'
+      createdTicket.comments = ['Problem record created from the analyst console.']
+    }
+
+    if (createdTicket.type === 'Change') {
+      createdTicket.status = 'Draft'
+      createdTicket.nextStep = 'Complete the plan and submit the change for approval.'
+      createdTicket.comments = ['Change record created in Draft.']
     }
 
     if (createdTicket.type === 'Service Request') {
@@ -1284,7 +1335,11 @@ function App() {
           openAssetByName={openAssetByName}
           selectedTicket={selectedTicket}
           setNewComment={setNewComment}
+          tickets={tickets}
           updateTicket={updateTicket}
+          openRecordTab={(ticket) =>
+            openTab('tickets', { key: `ticket-${ticket.id}`, title: ticket.id, recordId: ticket.id })
+          }
         />
       )
     }
