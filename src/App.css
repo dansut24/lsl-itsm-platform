@@ -10572,3 +10572,30 @@ textarea:focus {
     transition: none !important;
   }
 }
+
+/* ================================================================
+   CHROME TAB LEFT-SHOULDER CURVE FIX
+   Preserve the classic Chrome-style lower-left shoulder. Desktop tabs
+   shrink to fit, so their decorative shoulders can safely paint outside
+   the tab-list box. Touch rails retain horizontal scrolling and reserve
+   a small leading gutter so the first active tab's curve is not clipped.
+   ================================================================ */
+
+@media (hover: hover) and (pointer: fine) {
+  .tabbar {
+    overflow: visible;
+  }
+
+  .tab-list {
+    overflow-x: visible;
+    overflow-y: visible;
+  }
+}
+
+@media (any-pointer: coarse) {
+  .tab-list {
+    box-sizing: border-box;
+    padding-inline-start: 12px;
+    scroll-padding-inline-start: 12px;
+  }
+}
