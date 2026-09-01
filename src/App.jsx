@@ -1880,8 +1880,69 @@ function App() {
           </span>
         </div>
 
-        <div className="desktop-commandbar" aria-label="Hi5Central workspace commands">
-          <div className="chrome-actions context-rail-actions">
+        <header className="tabbar" aria-label="Open workspace tabs">
+          <button
+            aria-label="Open Hi5Central navigation"
+            className="tabbar-brand"
+            onClick={() => setMobileNavOpen(true)}
+            title="Open navigation"
+            type="button"
+          >
+            <img src={`${import.meta.env.BASE_URL}hi5central-logo.png`} alt="" aria-hidden="true" />
+          </button>
+
+          <div className="tab-list" ref={tabListRef}>
+            {tabs.map((tab) => {
+              const tabModule = workspaceTabModule(tab)
+
+              return (
+                <button
+                  className={[
+                    'workspace-tab',
+                    activeTabKey === tab.key ? 'active' : '',
+                    activeTabKey === tab.key && activeHasUnsavedChanges ? 'dirty' : '',
+                  ].filter(Boolean).join(' ')}
+                  data-tab-key={tab.key}
+                  data-tab-module={tabModule}
+                  key={tab.key}
+                  onClick={() => activateTab(tab)}
+                  onContextMenu={(event) => openTabContextMenu(event, tab)}
+                  type="button"
+                >
+                  <span className="workspace-tab-label">
+                    {tab.title}
+                    {activeTabKey === tab.key && activeHasUnsavedChanges && (
+                      <span className="unsaved-dot" aria-label="Unsaved changes" />
+                    )}
+                  </span>
+                  {!tab.pinned && (
+                    <span
+                      className="tab-close"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        closeTab(tab.key)
+                      }}
+                      role="button"
+                      tabIndex={0}
+                    >
+                      <X size={13} aria-hidden="true" />
+                    </span>
+                  )}
+                </button>
+              )
+            })}
+            <button
+              aria-label="Open Hi5 workspace launcher"
+              className="tab-add"
+              onClick={openNewTab}
+              title="Open Hi5 workspace launcher"
+              type="button"
+            >
+              <Plus size={18} strokeWidth={2.4} aria-hidden="true" />
+            </button>
+          </div>
+
+          <div className="chrome-actions">
             {sidebarHidden && (
               <button
                 className="icon-button"
@@ -1946,69 +2007,6 @@ function App() {
             <button className="user-pill" onClick={handleLogout} title="Sign out" type="button">
               <span>{session.initials}</span>
               <LogOut size={15} aria-hidden="true" />
-            </button>
-          </div>
-        </div>
-
-        <header className="tabbar" aria-label="Open workspace tabs">
-          <button
-            aria-label="Open Hi5Central navigation"
-            className="tabbar-brand"
-            onClick={() => setMobileNavOpen(true)}
-            title="Open navigation"
-            type="button"
-          >
-            <img src={`${import.meta.env.BASE_URL}hi5central-logo.png`} alt="" aria-hidden="true" />
-          </button>
-
-          <div className="tab-list" ref={tabListRef}>
-            {tabs.map((tab) => {
-              const tabModule = workspaceTabModule(tab)
-
-              return (
-                <button
-                  className={[
-                    'workspace-tab',
-                    activeTabKey === tab.key ? 'active' : '',
-                    activeTabKey === tab.key && activeHasUnsavedChanges ? 'dirty' : '',
-                  ].filter(Boolean).join(' ')}
-                  data-tab-key={tab.key}
-                  data-tab-module={tabModule}
-                  key={tab.key}
-                  onClick={() => activateTab(tab)}
-                  onContextMenu={(event) => openTabContextMenu(event, tab)}
-                  type="button"
-                >
-                  <span className="workspace-tab-label">
-                    {tab.title}
-                    {activeTabKey === tab.key && activeHasUnsavedChanges && (
-                      <span className="unsaved-dot" aria-label="Unsaved changes" />
-                    )}
-                  </span>
-                  {!tab.pinned && (
-                    <span
-                      className="tab-close"
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        closeTab(tab.key)
-                      }}
-                      role="button"
-                      tabIndex={0}
-                    >
-                      <X size={13} aria-hidden="true" />
-                    </span>
-                  )}
-                </button>
-              )
-            })}
-            <button
-              aria-label="Open Hi5 workspace launcher"
-              className="tab-add"
-              onClick={openNewTab}
-              title="Open Hi5 workspace launcher"
-              type="button"
-            >
-              <Plus size={18} strokeWidth={2.4} aria-hidden="true" />
             </button>
           </div>
         </header>
