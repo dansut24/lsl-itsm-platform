@@ -51,6 +51,7 @@ import {
   loadTheme,
   loadTickets,
   loadProjects,
+  loadRotaEntries,
   loadWorkspace,
   saveAccent,
   saveDensity,
@@ -59,9 +60,11 @@ import {
   saveTheme,
   saveTickets,
   saveProjects,
+  saveRotaEntries,
   saveWorkspace,
 } from './services/demoStore.js'
 import { ProjectManagementView } from './features/projects/ProjectViews.jsx'
+import { RotaView } from './features/rota/RotaView.jsx'
 import {
   ChangesView,
   CmdbRecordView,
@@ -289,6 +292,7 @@ function addWorkspaceTab(currentTabs, tab) {
 function App() {
   const [initialTickets] = useState(loadTickets)
   const [initialProjects] = useState(loadProjects)
+  const [initialRotaEntries] = useState(loadRotaEntries)
   const [initialSession] = useState(loadSession)
   const [initialWorkspace] = useState(loadWorkspace)
   const [initialRoute] = useState(routeFromLocation)
@@ -325,6 +329,7 @@ function App() {
   const pullRefreshTimerRef = useRef(null)
   const [tickets, setTickets] = useState(initialTickets)
   const [projects, setProjects] = useState(initialProjects)
+  const [rotaEntries, setRotaEntries] = useState(initialRotaEntries)
   const [tabs, setTabs] = useState(initialTabs)
   const [activeTabKey, setActiveTabKey] = useState(initialRouteTab.key)
   const initialRouteType =
@@ -372,6 +377,10 @@ function App() {
   useEffect(() => {
     saveProjects(projects)
   }, [projects])
+
+  useEffect(() => {
+    saveRotaEntries(rotaEntries)
+  }, [rotaEntries])
 
   useEffect(() => {
     saveTheme(theme)
@@ -1098,6 +1107,34 @@ function App() {
       : project))
   }
 
+  function saveRotaEntry(entry) {
+    const person = workPeople.find((item) => item.id === entry.personId)
+    if (entry.id) {
+      setRotaEntries((current) => current.map((item) => item.id === entry.id ? entry : item))
+      setToast(`${entry.type} updated for ${person?.name || 'team member'}`)
+      return
+    }
+
+    const created = { ...entry, id: `ROT-${Date.now()}` }
+    setRotaEntries((current) => [...current, created])
+    setToast(`${entry.type} added for ${person?.name || 'team member'}`)
+  }
+
+  function deleteRotaEntry(entryId) {
+    setRotaEntries((current) => current.filter((entry) => entry.id !== entryId))
+    setToast('Rota entry removed')
+  }
+
+  function copyRotaEntries(entriesToCopy) {
+    const batchId = Date.now()
+    const created = entriesToCopy.map((entry, index) => ({
+      ...entry,
+      id: `ROT-${batchId}-${String(index + 1).padStart(2, '0')}`,
+    }))
+    setRotaEntries((current) => [...current, ...created])
+    setToast(`${created.length} rota entries copied`)
+  }
+
   function openSettingsSection(section) {
     openTab('settings', {
       key: `settings-${section}`,
@@ -1761,6 +1798,19 @@ function App() {
           selectedProject={selectedProject}
           teams={workTeams}
           tickets={tickets}
+        />
+      )
+    }
+
+    if (activeView === 'rota') {
+      return (
+        <RotaView
+          entries={rotaEntries}
+          onCopyEntries={copyRotaEntries}
+          onDeleteEntry={deleteRotaEntry}
+          onSaveEntry={saveRotaEntry}
+          people={workPeople}
+          teams={workTeams}
         />
       )
     }
