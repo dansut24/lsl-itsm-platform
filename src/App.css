@@ -10265,3 +10265,310 @@ textarea:focus {
   margin: 5px 6px;
   background: var(--line);
 }
+
+/* ================================================================
+   CHROME TAB RESTORE + BREADCRUMB UTILITIES
+   Restore the original browser-like connected workspace tabs while
+   moving desktop/tablet utility icons into the breadcrumb/context row.
+   Mobile retains its approved permanent quick-action row.
+   ================================================================ */
+
+/* Top row: tabs + launcher + New Incident + Search + Logout only. */
+.tabbar {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 12px;
+  padding: 6px 10px 0;
+  border-bottom: 0;
+  background: var(--surface-strong);
+}
+
+.tab-list {
+  align-items: end;
+  gap: 2px;
+}
+
+/* Original Chrome-like connected tab shape. */
+.workspace-tab {
+  box-sizing: border-box;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 8px;
+  align-items: center;
+  flex: 1 1 172px;
+  min-width: 0;
+  max-width: 260px;
+  height: 42px;
+  padding: 0 13px;
+  overflow: visible;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 10px 10px 0 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--ink);
+}
+
+.workspace-tab:hover {
+  border-color: color-mix(in srgb, var(--line) 62%, transparent);
+  border-bottom-color: transparent;
+  background: color-mix(in srgb, var(--page) 48%, transparent);
+  transform: none;
+  box-shadow: none;
+}
+
+.workspace-tab.active {
+  z-index: 2;
+  border-color: var(--line);
+  border-bottom-color: var(--page);
+  border-radius: 10px 10px 0 0;
+  background: var(--page);
+  color: var(--ink);
+  box-shadow: inset 0 2px 0 rgb(var(--accent-rgb));
+  transform: none;
+}
+
+.workspace-tab.active::before,
+.workspace-tab.active::after {
+  position: absolute;
+  top: auto;
+  bottom: -1px;
+  width: 14px;
+  height: 14px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  content: '';
+  pointer-events: none;
+}
+
+.workspace-tab.active::before {
+  right: auto;
+  left: -14px;
+  border-bottom-right-radius: 12px;
+  box-shadow: 6px 6px 0 5px var(--page);
+}
+
+.workspace-tab.active::after {
+  right: -14px;
+  left: auto;
+  border-bottom-left-radius: 12px;
+  box-shadow: -6px 6px 0 5px var(--page);
+}
+
+.workspace-tab-label {
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.25px;
+  line-height: 1.15;
+}
+
+.tab-close {
+  display: inline-grid;
+  place-items: center;
+  justify-self: end;
+  flex: 0 0 19px;
+  min-width: 19px;
+  width: 19px;
+  max-width: 19px;
+  height: 19px;
+  margin-left: 0;
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.tab-close:hover {
+  background: rgba(16, 33, 63, 0.1);
+  color: var(--ink);
+  transform: none;
+}
+
+/* Plain browser-style launcher, always immediately after the last tab. */
+.tab-list > .tab-add,
+.tab-add {
+  box-sizing: border-box;
+  position: relative;
+  align-self: end;
+  flex: 0 0 42px;
+  min-width: 42px;
+  width: 42px;
+  max-width: 42px;
+  height: 42px;
+  overflow: hidden;
+  border: 0;
+  border-bottom: 0;
+  border-radius: 10px 10px 0 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--ink);
+  order: 999;
+  transform: none;
+}
+
+.tab-add::before {
+  display: none;
+  content: none;
+}
+
+.tab-add:hover {
+  background: color-mix(in srgb, var(--page) 56%, transparent);
+  box-shadow: none;
+  transform: none;
+}
+
+/* The top-right utility area is intentionally sparse. */
+.chrome-actions {
+  gap: 8px;
+}
+
+.chrome-actions .chrome-logout {
+  flex: 0 0 auto;
+}
+
+/* Desktop/tablet utility cluster in the context row. */
+.breadcrumb-desktop-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding-left: 8px;
+  border-left: 1px solid var(--line);
+}
+
+.breadcrumb-desktop-action {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.breadcrumb-desktop-action:hover {
+  border-color: rgba(var(--accent-rgb), 0.28);
+  background: rgba(var(--accent-rgb), 0.07);
+  color: color-mix(in srgb, rgb(var(--accent-rgb)) 72%, var(--ink));
+}
+
+.breadcrumb-desktop-action:focus-visible {
+  outline: 2px solid rgb(var(--accent-rgb));
+  outline-offset: 1px;
+}
+
+/* Keep search and breadcrumb content flexible alongside the new controls. */
+.breadcrumb-trail {
+  flex: 1 1 auto;
+}
+
+.breadcrumb-compact-search {
+  margin-left: auto;
+}
+
+/* Touch tablets keep swipeable Chrome-style tabs. */
+@media (any-pointer: coarse) {
+  .tab-list {
+    gap: 2px;
+  }
+
+  .workspace-tab {
+    flex: 0 0 auto;
+    min-width: 132px;
+    max-width: 220px;
+  }
+
+  .workspace-tab-label {
+    font-size: 12px;
+  }
+}
+
+/* Permanent mobile shell: use the same Chrome language, while keeping
+   the already-approved mobile breadcrumb actions unchanged. */
+@media (max-width: 680px) and (any-pointer: coarse),
+       (max-height: 600px) and (any-pointer: coarse) {
+  .tabbar {
+    gap: 4px;
+    padding: 1px 6px 0;
+    background: var(--surface-strong);
+  }
+
+  .tab-list {
+    align-items: end;
+    gap: 1px;
+  }
+
+  .workspace-tab {
+    min-width: 132px;
+    max-width: 210px;
+    height: 39px;
+    padding: 0 10px;
+    border-radius: 9px 9px 0 0;
+  }
+
+  .workspace-tab.active {
+    border-radius: 9px 9px 0 0;
+  }
+
+  .workspace-tab.active::before,
+  .workspace-tab.active::after {
+    bottom: -1px;
+    width: 10px;
+    height: 10px;
+  }
+
+  .workspace-tab.active::before {
+    left: -10px;
+    border-bottom-right-radius: 9px;
+    box-shadow: 4px 4px 0 4px var(--page);
+  }
+
+  .workspace-tab.active::after {
+    right: -10px;
+    border-bottom-left-radius: 9px;
+    box-shadow: -4px 4px 0 4px var(--page);
+  }
+
+  .workspace-tab-label {
+    font-size: 11px;
+  }
+
+  .tab-list > .tab-add,
+  .tab-add {
+    flex-basis: 34px;
+    min-width: 34px;
+    width: 34px;
+    max-width: 34px;
+    height: 39px;
+    border-radius: 9px 9px 0 0;
+  }
+
+  .breadcrumb-desktop-actions {
+    display: none;
+  }
+}
+
+/* Desktop/tablet only: mobile keeps its existing three quick actions. */
+@media (min-width: 681px) and (min-height: 601px) {
+  .breadcrumb-mobile-actions {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-tab,
+  .tab-add,
+  .breadcrumb-desktop-action {
+    transition: none !important;
+  }
+}

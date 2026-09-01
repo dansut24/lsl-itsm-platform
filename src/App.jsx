@@ -1943,16 +1943,6 @@ function App() {
           </div>
 
           <div className="chrome-actions">
-            {sidebarHidden && (
-              <button
-                className="icon-button"
-                onClick={() => setSidebarMode('expanded')}
-                title="Show sidebar"
-                type="button"
-              >
-                <PanelLeftOpen size={17} aria-hidden="true" />
-              </button>
-            )}
             <button
               className="new-ticket-button"
               onClick={() => openNewRecord('Incident')}
@@ -1980,33 +1970,13 @@ function App() {
               />
             </label>
             <button
-              className="icon-button"
-              onClick={() => setTheme(resolvedTheme === 'light' ? 'dark' : 'light')}
-              title={resolvedTheme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+              aria-label="Sign out"
+              className="icon-button chrome-logout"
+              onClick={handleLogout}
+              title="Sign out"
               type="button"
             >
-              {resolvedTheme === 'light' ? <Moon size={17} /> : <Sun size={17} />}
-            </button>
-            <button
-              aria-expanded={notificationsOpen}
-              className="icon-button notification-trigger"
-              onClick={toggleNotifications}
-              title="Notifications"
-              type="button"
-            >
-              <Bell size={17} aria-hidden="true" />
-              {unreadNotificationCount > 0 && (
-                <span className="notification-badge" aria-label={`${unreadNotificationCount} unread notifications`}>
-                  {unreadNotificationCount}
-                </span>
-              )}
-            </button>
-            <button className="icon-button" onClick={() => openTab('settings')} title="Settings" type="button">
-              <Settings size={17} aria-hidden="true" />
-            </button>
-            <button className="user-pill" onClick={handleLogout} title="Sign out" type="button">
-              <span>{session.initials}</span>
-              <LogOut size={15} aria-hidden="true" />
+              <LogOut size={17} aria-hidden="true" />
             </button>
           </div>
         </header>
@@ -2098,6 +2068,48 @@ function App() {
             />
           </label>
 
+          <div className="breadcrumb-desktop-actions" aria-label="Workspace quick actions">
+            {sidebarHidden && (
+              <button
+                className="breadcrumb-desktop-action"
+                onClick={() => setSidebarMode('expanded')}
+                title="Show sidebar"
+                type="button"
+              >
+                <PanelLeftOpen size={16} aria-hidden="true" />
+              </button>
+            )}
+            <button
+              className="breadcrumb-desktop-action"
+              onClick={() => setTheme(resolvedTheme === 'light' ? 'dark' : 'light')}
+              title={resolvedTheme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+              type="button"
+            >
+              {resolvedTheme === 'light' ? <Moon size={16} /> : <Sun size={16} />}
+            </button>
+            <button
+              aria-expanded={notificationsOpen}
+              className="breadcrumb-desktop-action notification-trigger"
+              onClick={toggleNotifications}
+              title="Notifications"
+              type="button"
+            >
+              <Bell size={16} aria-hidden="true" />
+              {unreadNotificationCount > 0 && (
+                <span className="notification-badge" aria-label={`${unreadNotificationCount} unread notifications`}>
+                  {unreadNotificationCount}
+                </span>
+              )}
+            </button>
+            <button
+              className="breadcrumb-desktop-action"
+              onClick={() => openTab('settings')}
+              title="Settings"
+              type="button"
+            >
+              <Settings size={16} aria-hidden="true" />
+            </button>
+          </div>
 
           <div className="breadcrumb-mobile-actions" aria-label="Mobile quick actions">
             <button
