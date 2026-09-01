@@ -100,11 +100,6 @@ function workspaceTabModule(tab) {
   return tab?.viewId || 'tickets'
 }
 
-function workspaceTabIcon(tab) {
-  const moduleId = workspaceTabModule(tab)
-  return viewMeta[moduleId]?.icon || viewMeta[tab?.viewId]?.icon || viewMeta.tickets.icon
-}
-
 function getSystemTheme() {
   return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
 }
@@ -1782,7 +1777,6 @@ function App() {
 
           <div className="tab-list" ref={tabListRef}>
             {tabs.map((tab) => {
-              const TabIcon = workspaceTabIcon(tab)
               const tabModule = workspaceTabModule(tab)
 
               return (
@@ -1798,9 +1792,6 @@ function App() {
                   onClick={() => activateTab(tab)}
                   type="button"
                 >
-                  <span className="workspace-tab-icon" aria-hidden="true">
-                    <TabIcon size={13} strokeWidth={2.2} />
-                  </span>
                   <span className="workspace-tab-label">
                     {tab.title}
                     {activeTabKey === tab.key && activeHasUnsavedChanges && (
@@ -1823,17 +1814,16 @@ function App() {
                 </button>
               )
             })}
+            <button
+              aria-label="Open Hi5 workspace launcher"
+              className="tab-add"
+              onClick={openNewTab}
+              title="Open Hi5 workspace launcher"
+              type="button"
+            >
+              <Plus size={18} strokeWidth={2.4} aria-hidden="true" />
+            </button>
           </div>
-
-          <button
-            aria-label="Open Hi5 workspace launcher"
-            className="tab-add"
-            onClick={openNewTab}
-            title="Open Hi5 workspace launcher"
-            type="button"
-          >
-            <Plus size={18} strokeWidth={2.4} aria-hidden="true" />
-          </button>
 
           <div className="chrome-actions">
             {sidebarHidden && (
