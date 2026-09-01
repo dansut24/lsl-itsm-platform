@@ -635,28 +635,60 @@ function objectToChartData(value, limit = 5) {
     .slice(0, limit)
 }
 
-function packDashboardLayout(widgets, cols) {
+const DASHBOARD_GRID_COLUMNS = 12
+const DASHBOARD_STANDARD_ROW_CAPACITY = 3
+
+function packDashboardLayout(widgets, maxAcross) {
   const layout = []
-  let x = 0
+  let index = 0
   let y = 0
-  widgets.forEach((widget) => {
-    const fullWidth = widget.span === 12
-    if (fullWidth) {
-      if (x !== 0) {
-        y += 1
-        x = 0
-      }
-      layout.push({ i: widget.id, x: 0, y, w: cols, h: 1, minW: cols, maxW: cols, minH: 1, maxH: 1 })
+  const rowCapacity = Math.max(1, Math.min(DASHBOARD_STANDARD_ROW_CAPACITY, maxAcross || DASHBOARD_STANDARD_ROW_CAPACITY))
+
+  while (index < widgets.length) {
+    const widget = widgets[index]
+
+    if (widget.span === 12) {
+      layout.push({
+        i: widget.id,
+        x: 0,
+        y,
+        w: DASHBOARD_GRID_COLUMNS,
+        h: 1,
+        minW: DASHBOARD_GRID_COLUMNS,
+        maxW: DASHBOARD_GRID_COLUMNS,
+        minH: 1,
+        maxH: 1,
+      })
+      index += 1
       y += 1
-      return
+      continue
     }
-    layout.push({ i: widget.id, x, y, w: 1, h: 1, minW: 1, maxW: 1, minH: 1, maxH: 1 })
-    x += 1
-    if (x >= cols) {
-      x = 0
-      y += 1
+
+    const row = []
+    while (index < widgets.length && widgets[index].span !== 12 && row.length < rowCapacity) {
+      row.push(widgets[index])
+      index += 1
     }
-  })
+
+    // Standard rows always consume the complete available row:
+    // 3 widgets = 4/4/4, 2 widgets = 6/6, 1 widget = 12.
+    const cellWidth = DASHBOARD_GRID_COLUMNS / Math.max(1, row.length)
+    row.forEach((rowWidget, rowIndex) => {
+      layout.push({
+        i: rowWidget.id,
+        x: rowIndex * cellWidth,
+        y,
+        w: cellWidth,
+        h: 1,
+        minW: cellWidth,
+        maxW: cellWidth,
+        minH: 1,
+        maxH: 1,
+      })
+    })
+    y += 1
+  }
+
   return layout
 }
 
@@ -671,6 +703,36 @@ function applyDashboardSlotWidths(previousWidgets, reorderedWidgets) {
     ...widget,
     span: slotWidths[index] ?? (widget.span === 12 ? 12 : 4),
   }))
+}
+
+function insertWidgetIntoOpenStandardRow(widgets, widget) {
+  // Width is semantic (Standard or Full). Standard visual width is derived
+  // from row occupancy, so fill the first incomplete 3-widget standard row.
+  let standardCount = 0
+  for (let index = 0; index < widgets.length; index += 1) {
+    if (widgets[index].span === 12) {
+      const remainder = standardCount % DASHBOARD_STANDARD_ROW_CAPACITY
+      if (remainder > 0) {
+        const next = [...widgets]
+        next.splice(index, 0, { ...widget, span: 4 })
+        return next
+      }
+      standardCount = 0
+      continue
+    }
+    standardCount += 1
+  }
+
+  return [...widgets, { ...widget, span: widget.span === 12 ? 12 : 4 }]
+}
+
+function consecutiveStandardCountBefore(widgets, index) {
+  let count = 0
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    if (widgets[cursor].span === 12) break
+    count += 1
+  }
+  return count
 }
 
 function DashboardMetric({ detail, onClick, trend, trendLabel, value }) {
@@ -1070,8 +1132,8 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
   const services = useMemo(() => ['All', ...new Set(tickets.map((ticket) => ticket.service).filter(Boolean))], [tickets])
   const pointerIsCoarse = typeof window !== 'undefined' && window.matchMedia?.('(any-pointer: coarse)').matches
   const mobileStack = Boolean(pointerIsCoarse && (gridWidth < 680 || gridHeight < 460))
-  const gridCols = gridWidth >= 980 ? 3 : gridWidth >= 620 ? 2 : 1
-  const packedLayout = useMemo(() => packDashboardLayout(activeDashboard.widgets, gridCols), [activeDashboard.widgets, gridCols])
+  const maxWidgetsAcross = gridWidth >= 980 ? 3 : gridWidth >= 620 ? 2 : 1
+  const packedLayout = useMemo(() => packDashboardLayout(activeDashboard.widgets, maxWidgetsAcross), [activeDashboard.widgets, maxWidgetsAcross])
   const rowCount = dashboardRowCount(packedLayout)
   const gridGap = 10
   const rowHeight = Math.max(36, Math.floor((gridHeight - Math.max(0, rowCount - 1) * gridGap) / Math.max(rowCount, 1)))
@@ -1106,10 +1168,15 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
   function addWidget(type) {
     if (activeDashboard.widgets.length >= DASHBOARD_MAX_WIDGETS) return
     const definition = DASHBOARD_WIDGET_LIBRARY.find((item) => item.id === type)
-    updateDashboard(activeDashboard.id, (dashboard) => ({
-      ...dashboard,
-      widgets: [...dashboard.widgets, makeDashboardWidget(type, definition?.defaultSpan)],
-    }))
+    updateDashboard(activeDashboard.id, (dashboard) => {
+      const widget = makeDashboardWidget(type, definition?.defaultSpan)
+      return {
+        ...dashboard,
+        widgets: widget.span === 12
+          ? [...dashboard.widgets, widget]
+          : insertWidgetIntoOpenStandardRow(dashboard.widgets, widget),
+      }
+    })
     setWidgetCatalogOpen(false)
   }
 
@@ -1132,6 +1199,24 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
     const target = index + delta
     if (target < 0 || target >= activeDashboard.widgets.length) return
     updateDashboard(activeDashboard.id, (dashboard) => {
+      const movingWidget = dashboard.widgets[index]
+
+      // If a full-width widget sits directly below an incomplete standard row,
+      // "move earlier" fills the empty row slot first. With two widgets above,
+      // that produces an immediate 33/33/33 row; with one above, 50/50.
+      if (delta < 0 && movingWidget?.span === 12) {
+        const standardsBefore = consecutiveStandardCountBefore(dashboard.widgets, index)
+        const remainder = standardsBefore % DASHBOARD_STANDARD_ROW_CAPACITY
+        if (remainder > 0 && remainder < DASHBOARD_STANDARD_ROW_CAPACITY) {
+          return {
+            ...dashboard,
+            widgets: dashboard.widgets.map((widget, widgetIndex) =>
+              widgetIndex === index ? { ...widget, span: 4 } : widget,
+            ),
+          }
+        }
+      }
+
       const reorderedWidgets = [...dashboard.widgets]
       const [widget] = reorderedWidgets.splice(index, 1)
       reorderedWidgets.splice(target, 0, widget)
@@ -1320,7 +1405,7 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
               className="dashboard-rgl-v3"
               compactor={verticalCompactor}
               dragConfig={{ enabled: editMode, handle: '.dashboard-drag-handle', bounded: true }}
-              gridConfig={{ cols: gridCols, rowHeight, margin: [gridGap, gridGap], containerPadding: [0, 0] }}
+              gridConfig={{ cols: DASHBOARD_GRID_COLUMNS, rowHeight, margin: [gridGap, gridGap], containerPadding: [0, 0] }}
               layout={packedLayout}
               onLayoutChange={commitGridOrder}
               resizeConfig={{ enabled: false }}
@@ -1375,7 +1460,7 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
                 <label>Record type<select value={configuredWidget.filterType} onChange={(event) => updateWidget(configuredWidget.id, { filterType: event.target.value })}>{['All', ...types].map((type) => <option key={type}>{type}</option>)}</select></label>
               )}
               {configuredWidget.type === 'heading' && <label>Text<textarea rows="6" value={configuredWidget.note} onChange={(event) => updateWidget(configuredWidget.id, { note: event.target.value })} /></label>}
-              <div className="dashboard-config-preview"><span>Responsive behaviour</span><strong>{DASHBOARD_SIZE_OPTIONS.find((size) => size.id === configuredWidget.span)?.label}</strong><small>Standard widgets use equal-height slots with a maximum of three columns. When widgets are reordered, width follows the slot: moving a full-width widget into a standard slot makes it standard, and the displaced widget inherits the full-width slot.</small></div>
+              <div className="dashboard-config-preview"><span>Responsive behaviour</span><strong>{DASHBOARD_SIZE_OPTIONS.find((size) => size.id === configuredWidget.span)?.label}</strong><small>Standard rows always fill the available width automatically: three widgets use thirds, two use halves, and one uses the full row. Full-width slots still transfer when a complete row is reordered, while a full-width widget moved into an incomplete row fills the empty standard slot first.</small></div>
             </div>
           </aside>
         </>
