@@ -9897,3 +9897,21 @@ textarea:focus {
     transition: none !important;
   }
 }
+
+/* ========================================================================== */
+/* FIRST WORKSPACE TAB — CHROME SHOULDER GUTTER                               */
+/* The active Chrome-style shoulder projects outside the tab itself. Only     */
+/* reserve that space when the first workspace is active, so other tabs keep  */
+/* the exact known-good positioning.                                          */
+/* ========================================================================== */
+.tab-list:has(> .workspace-tab:first-child.active) {
+  box-sizing: border-box;
+  padding-inline-start: 14px;
+}
+
+@media (max-width: 680px) and (any-pointer: coarse),
+       (max-height: 600px) and (any-pointer: coarse) {
+  .tab-list:has(> .workspace-tab:first-child.active) {
+    padding-inline-start: 10px;
+  }
+}
