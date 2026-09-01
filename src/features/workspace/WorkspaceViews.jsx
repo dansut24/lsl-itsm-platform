@@ -444,10 +444,7 @@ const DASHBOARD_WIDGET_LIBRARY = [
 ]
 
 const DASHBOARD_SIZE_OPTIONS = [
-  { id: 3, label: 'Small' },
-  { id: 4, label: 'Compact' },
-  { id: 6, label: 'Medium' },
-  { id: 8, label: 'Large' },
+  { id: 4, label: 'Standard' },
   { id: 12, label: 'Full width' },
 ]
 
@@ -496,7 +493,7 @@ function makeDashboardWidget(type, span, overrides = {}) {
     id: overrides.id || `DW-${type}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     type,
     title: overrides.title || definition?.label || 'Widget',
-    span: span || definition?.defaultSpan || 6,
+    span: (span === 12 || definition?.defaultSpan === 12) ? 12 : 4,
     limit: overrides.limit || 6,
     note: overrides.note || 'Use this space for team guidance, operational context or a handover note.',
     filterType: overrides.filterType || 'All',
@@ -577,7 +574,12 @@ function loadDashboards() {
     if (!stored) return seedDashboards()
     const parsed = JSON.parse(stored)
     if (!Array.isArray(parsed) || !parsed.length) return seedDashboards()
-    return parsed
+    return parsed.map((dashboard) => ({
+      ...dashboard,
+      widgets: Array.isArray(dashboard.widgets)
+        ? dashboard.widgets.map((widget) => ({ ...widget, span: widget.span === 12 ? 12 : 4 }))
+        : [],
+    }))
   } catch {
     return seedDashboards()
   }
@@ -775,6 +777,7 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
   const [shareOpen, setShareOpen] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [moreOpen, setMoreOpen] = useState(false)
+  const [filterOpen, setFilterOpen] = useState(false)
   const [draggedIndex, setDraggedIndex] = useState(null)
   const [dashboardFilters, setDashboardFilters] = useState({ service: 'All', team: 'All', period: 'Last 30 days' })
   const [newDashboardName, setNewDashboardName] = useState('')
@@ -975,85 +978,77 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
 
   return (
     <div className="dashboard-builder" data-sidebar-mode={sidebarMode || 'expanded'}>
-      <div className="dashboard-commandbar">
-        <div className="dashboard-selector-wrap">
-          <button className="dashboard-selector" onClick={() => setDashboardMenuOpen((open) => !open)} type="button">
-            <LayoutDashboard size={17} aria-hidden="true" />
-            <span><small>Dashboard</small><strong>{activeDashboard.name}</strong></span>
-            <ChevronDown size={16} aria-hidden="true" />
-          </button>
-          {dashboardMenuOpen && (
-            <div className="dashboard-selector-menu">
-              {[
-                ['mine', 'My dashboards'],
-                ['shared', 'Shared with me'],
-                ['team', 'Team dashboards'],
-              ].map(([group, label]) => groupedDashboards[group].length ? (
-                <section key={group}>
-                  <span>{label}</span>
-                  {groupedDashboards[group].map((dashboard) => (
-                    <button className={dashboard.id === activeDashboard.id ? 'active' : ''} key={dashboard.id} onClick={() => { setActiveDashboardId(dashboard.id); setDashboardMenuOpen(false); setEditMode(false) }} type="button">
-                      <strong>{dashboard.name}</strong>
-                      <small>{dashboard.owner}{dashboard.isDefault ? ' · Default' : ''}</small>
-                    </button>
-                  ))}
-                </section>
-              ) : null)}
-              <button className="dashboard-menu-create" onClick={() => { setCreateOpen(true); setDashboardMenuOpen(false) }} type="button"><Plus size={15} /> Create dashboard</button>
-            </div>
-          )}
-        </div>
-
-        <div className="dashboard-command-actions">
-          {activeDashboard.isDefault && <span className="dashboard-default-pill"><Star size={13} fill="currentColor" /> Default</span>}
-          <button onClick={() => setShareOpen(true)} type="button"><Share2 size={15} /> Share</button>
-          {activeDashboard.canEdit ? (
-            <button className={editMode ? 'active' : ''} onClick={editMode ? saveEdit : beginEdit} type="button"><Pencil size={15} /> {editMode ? 'Save dashboard' : 'Edit dashboard'}</button>
+      <div className="dashboard-toolbar-row">
+        <div className="dashboard-icon-toolbar" aria-label="Dashboard controls">
+          {editMode ? (
+            <>
+              <button aria-label="Add widget" onClick={() => setWidgetCatalogOpen(true)} title="Add widget" type="button"><Plus size={16} /></button>
+              <button aria-label="Cancel dashboard edits" onClick={cancelEdit} title="Cancel" type="button"><X size={16} /></button>
+              <button className="primary" aria-label="Save dashboard" onClick={saveEdit} title="Save dashboard" type="button"><CheckCircle2 size={16} /></button>
+            </>
           ) : (
-            <button onClick={duplicateDashboard} type="button"><Copy size={15} /> Make a copy</button>
-          )}
-          <div className="dashboard-more-wrap">
-            <button aria-label="Dashboard actions" onClick={() => setMoreOpen((open) => !open)} type="button"><MoreHorizontal size={17} /></button>
-            {moreOpen && (
-              <div className="dashboard-more-menu">
-                <button onClick={duplicateDashboard} type="button"><Copy size={14} /> Duplicate dashboard</button>
-                <button disabled={activeDashboard.isDefault} onClick={setAsDefault} type="button"><Star size={14} /> Set as default</button>
-                {activeDashboard.scope === 'mine' && <button className="danger" onClick={deleteDashboard} type="button"><Trash2 size={14} /> Delete dashboard</button>}
+            <>
+              <div className="dashboard-selector-wrap">
+                <button aria-label="Switch dashboard" onClick={() => { setDashboardMenuOpen((open) => !open); setFilterOpen(false); setMoreOpen(false) }} title="Switch dashboard" type="button"><LayoutDashboard size={16} /></button>
+                {dashboardMenuOpen && (
+                  <div className="dashboard-selector-menu">
+                    {[
+                      ['mine', 'My dashboards'],
+                      ['shared', 'Shared with me'],
+                      ['team', 'Team dashboards'],
+                    ].map(([group, label]) => groupedDashboards[group].length ? (
+                      <section key={group}>
+                        <span>{label}</span>
+                        {groupedDashboards[group].map((dashboard) => (
+                          <button className={dashboard.id === activeDashboard.id ? 'active' : ''} key={dashboard.id} onClick={() => { setActiveDashboardId(dashboard.id); setDashboardMenuOpen(false); setEditMode(false) }} type="button">
+                            <strong>{dashboard.name}</strong>
+                            <small>{dashboard.owner}{dashboard.isDefault ? ' · Default' : ''}</small>
+                          </button>
+                        ))}
+                      </section>
+                    ) : null)}
+                    <button className="dashboard-menu-create" onClick={() => { setCreateOpen(true); setDashboardMenuOpen(false) }} type="button"><Plus size={15} /> Create dashboard</button>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+
+              <div className="dashboard-filter-wrap">
+                <button className={filterOpen ? 'active' : ''} aria-label="Dashboard filters" onClick={() => { setFilterOpen((open) => !open); setDashboardMenuOpen(false); setMoreOpen(false) }} title="Dashboard filters" type="button"><SlidersHorizontal size={16} /></button>
+                {filterOpen && (
+                  <div className="dashboard-filter-popover" aria-label="Dashboard filters">
+                    <label>Service<select value={dashboardFilters.service} onChange={(event) => setDashboardFilters({ ...dashboardFilters, service: event.target.value })}>{services.map((service) => <option key={service}>{service}</option>)}</select></label>
+                    <label>Team<select value={dashboardFilters.team} onChange={(event) => setDashboardFilters({ ...dashboardFilters, team: event.target.value })}>{['All', ...teams].map((team) => <option key={team}>{team}</option>)}</select></label>
+                    <label>Period<select value={dashboardFilters.period} onChange={(event) => setDashboardFilters({ ...dashboardFilters, period: event.target.value })}>{['Today', 'Last 7 days', 'Last 30 days', 'This quarter'].map((period) => <option key={period}>{period}</option>)}</select></label>
+                  </div>
+                )}
+              </div>
+
+              <button aria-label="Share dashboard" onClick={() => setShareOpen(true)} title="Share dashboard" type="button"><Share2 size={16} /></button>
+              {activeDashboard.canEdit ? (
+                <button aria-label="Edit dashboard" onClick={beginEdit} title="Edit dashboard" type="button"><Pencil size={16} /></button>
+              ) : (
+                <button aria-label="Make a copy" onClick={duplicateDashboard} title="Make a copy" type="button"><Copy size={16} /></button>
+              )}
+              <div className="dashboard-more-wrap">
+                <button aria-label="Dashboard actions" onClick={() => { setMoreOpen((open) => !open); setDashboardMenuOpen(false); setFilterOpen(false) }} title="Dashboard actions" type="button"><MoreHorizontal size={17} /></button>
+                {moreOpen && (
+                  <div className="dashboard-more-menu">
+                    <button onClick={duplicateDashboard} type="button"><Copy size={14} /> Duplicate dashboard</button>
+                    <button disabled={activeDashboard.isDefault} onClick={setAsDefault} type="button"><Star size={14} /> Set as default</button>
+                    {activeDashboard.scope === 'mine' && <button className="danger" onClick={deleteDashboard} type="button"><Trash2 size={14} /> Delete dashboard</button>}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
         </div>
       </div>
 
-      <div className="dashboard-contextbar">
-        <div className="dashboard-context-copy">
-          <strong>{activeDashboard.name}</strong>
-          <span>{activeDashboard.description}</span>
-          {activeDashboard.scope !== 'mine' && <small>{activeDashboard.scope === 'team' ? `${activeDashboard.team} team dashboard` : `Shared by ${activeDashboard.owner}`}</small>}
-        </div>
-        <div className="dashboard-global-filters" aria-label="Dashboard filters">
-          <label>Service<select value={dashboardFilters.service} onChange={(event) => setDashboardFilters({ ...dashboardFilters, service: event.target.value })}>{services.map((service) => <option key={service}>{service}</option>)}</select></label>
-          <label>Team<select value={dashboardFilters.team} onChange={(event) => setDashboardFilters({ ...dashboardFilters, team: event.target.value })}>{['All', ...teams].map((team) => <option key={team}>{team}</option>)}</select></label>
-          <label>Period<select value={dashboardFilters.period} onChange={(event) => setDashboardFilters({ ...dashboardFilters, period: event.target.value })}>{['Today', 'Last 7 days', 'Last 30 days', 'This quarter'].map((period) => <option key={period}>{period}</option>)}</select></label>
-        </div>
-      </div>
-
-      {editMode && (
-        <div className="dashboard-edit-toolbar">
-          <span><GripVertical size={15} /> Editing <strong>{activeDashboard.name}</strong></span>
-          <div>
-            <button onClick={() => setWidgetCatalogOpen(true)} type="button"><Plus size={15} /> Add widget</button>
-            <button onClick={cancelEdit} type="button">Cancel</button>
-            <button className="primary" onClick={saveEdit} type="button">Save</button>
-          </div>
-        </div>
-      )}
-
-      <div className="dashboard-canvas" onClick={() => { setDashboardMenuOpen(false); setMoreOpen(false) }}>
+      <div className="dashboard-canvas" onClick={() => { setDashboardMenuOpen(false); setMoreOpen(false); setFilterOpen(false) }}>
         <div className="dashboard-canvas-grid">
           {activeDashboard.widgets.map((widget, index) => (
             <div
-              className="dashboard-widget-dropzone"
+              className={`dashboard-widget-dropzone ${widget.span === 12 ? 'is-full-width' : ''}`}
               key={widget.id}
               onDragOver={(event) => editMode && event.preventDefault()}
               onDrop={() => editMode && dropWidget(index)}
@@ -1125,7 +1120,7 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
                 <label>Record type<select value={configuredWidget.filterType} onChange={(event) => updateWidget(configuredWidget.id, { filterType: event.target.value })}>{['All', ...types].map((type) => <option key={type}>{type}</option>)}</select></label>
               )}
               {configuredWidget.type === 'heading' && <label>Text<textarea rows="6" value={configuredWidget.note} onChange={(event) => updateWidget(configuredWidget.id, { note: event.target.value })} /></label>}
-              <div className="dashboard-config-preview"><span>Responsive width</span><strong>{DASHBOARD_SIZE_OPTIONS.find((size) => size.id === configuredWidget.span)?.label}</strong><small>Full-width widgets always use the complete available canvas, including when the sidebar is hidden or collapsed.</small></div>
+              <div className="dashboard-config-preview"><span>Responsive width</span><strong>{DASHBOARD_SIZE_OPTIONS.find((size) => size.id === configuredWidget.span)?.label}</strong><small>Standard widgets automatically reflow up to three columns. Full-width widgets span the complete available canvas in every sidebar state.</small></div>
             </div>
           </aside>
         </>
