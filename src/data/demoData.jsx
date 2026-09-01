@@ -5,6 +5,7 @@ import {
   BriefcaseBusiness,
   ClipboardCheck,
   Database,
+  FolderKanban,
   Inbox,
   LayoutDashboard,
   LifeBuoy,
@@ -35,6 +36,7 @@ export const viewMeta = {
   problems: { id: 'problems', label: 'Problems', icon: ShieldCheck },
   portal: { id: 'portal', label: 'Self-Service', icon: LifeBuoy },
   changes: { id: 'changes', label: 'Changes', icon: ClipboardCheck },
+  projects: { id: 'projects', label: 'Projects', icon: FolderKanban },
   cmdb: { id: 'cmdb', label: 'CMDB', icon: Database },
   knowledge: { id: 'knowledge', label: 'Knowledge', icon: BookOpen },
   reports: { id: 'reports', label: 'Reports', icon: BarChart3 },
@@ -80,6 +82,11 @@ export const analystNavGroups = [
     id: 'service-desk',
     label: 'Service Desk',
     items: ['incidents', 'requests', 'problems', 'changes'],
+  },
+  {
+    id: 'planning',
+    label: 'Planning',
+    items: ['projects'],
   },
   {
     id: 'knowledge-data',
