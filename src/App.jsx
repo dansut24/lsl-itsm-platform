@@ -100,6 +100,11 @@ function workspaceTabModule(tab) {
   return tab?.viewId || 'tickets'
 }
 
+function workspaceTabIcon(tab) {
+  const moduleId = workspaceTabModule(tab)
+  return viewMeta[moduleId]?.icon || viewMeta[tab?.viewId]?.icon || viewMeta.tickets.icon
+}
+
 function getSystemTheme() {
   return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
 }
@@ -339,7 +344,6 @@ function App() {
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [globalSearchQuery, setGlobalSearchQuery] = useState('')
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false)
-  const [tabContextMenu, setTabContextMenu] = useState(null)
   const [newComment, setNewComment] = useState('')
   const [portalQuery, setPortalQuery] = useState('')
   const [loginMode, setLoginMode] = useState('analyst')
@@ -685,31 +689,6 @@ function App() {
   }, [toast])
 
   useEffect(() => {
-    if (!tabContextMenu) return undefined
-
-    const handlePointerDown = (event) => {
-      if (event.target.closest?.('.tab-context-menu')) return
-      setTabContextMenu(null)
-    }
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape') setTabContextMenu(null)
-    }
-    const closeMenu = () => setTabContextMenu(null)
-
-    document.addEventListener('pointerdown', handlePointerDown, true)
-    window.addEventListener('keydown', handleKeyDown)
-    window.addEventListener('resize', closeMenu)
-    window.addEventListener('scroll', closeMenu, true)
-
-    return () => {
-      document.removeEventListener('pointerdown', handlePointerDown, true)
-      window.removeEventListener('keydown', handleKeyDown)
-      window.removeEventListener('resize', closeMenu)
-      window.removeEventListener('scroll', closeMenu, true)
-    }
-  }, [tabContextMenu])
-
-  useEffect(() => {
     const list = tabListRef.current
     const activeTabElement = list
       ? Array.from(list.children).find((element) => element.dataset?.tabKey === activeTabKey)
@@ -730,9 +709,6 @@ function App() {
   }, [activeTabKey, tabs.length])
 
   const activeTab = tabs.find((tab) => tab.key === activeTabKey) || tabs[0]
-  const contextMenuTab = tabContextMenu
-    ? tabs.find((tab) => tab.key === tabContextMenu.tabKey)
-    : undefined
   const activeView = activeTab?.viewId || 'home'
   const activeModule = serviceDeskModules[activeView]
   const activeModuleType = activeModule?.type
@@ -1085,7 +1061,10 @@ function App() {
     writeRoute(pathForTab(tab, tickets))
   }
 
-  function selectWorkspaceTab(tab, { replaceRoute = false } = {}) {
+  function activateTab(tab) {
+    if (tab.key === activeTabKey) return
+    if (!confirmLeavingDraft()) return
+
     if (tab.recordId) {
       setSelectedTicketId(tab.recordId)
     } else if (tab.newRecordType) {
@@ -1101,20 +1080,11 @@ function App() {
       setFilters(tab.filter || allTicketFilters())
       setQuery(tab.query || '')
     }
-
     setActiveTabKey(tab.key)
-    writeRoute(pathForTab(tab, tickets), { replace: replaceRoute })
-  }
-
-  function activateTab(tab) {
-    setTabContextMenu(null)
-    if (tab.key === activeTabKey) return
-    if (!confirmLeavingDraft()) return
-    selectWorkspaceTab(tab)
+    writeRoute(pathForTab(tab, tickets))
   }
 
   function closeTab(key) {
-    setTabContextMenu(null)
     if (key === activeTabKey && !confirmLeavingDraft()) return
 
     const index = tabs.findIndex((tab) => tab.key === key)
@@ -1124,105 +1094,24 @@ function App() {
     if (activeTabKey === key) {
       const fallbackIndex = Math.max(0, index - 1)
       const fallbackTab = nextTabs[fallbackIndex] || nextTabs[0]
-      selectWorkspaceTab(fallbackTab, { replaceRoute: true })
-    }
-  }
-
-  function openTabContextMenu(event, tab) {
-    const supportsDesktopContextMenu = window.matchMedia?.('(hover: hover) and (pointer: fine)').matches
-    if (!supportsDesktopContextMenu) return
-
-    event.preventDefault()
-    event.stopPropagation()
-    closeHeaderOverlays()
-
-    const menuWidth = 218
-    const menuHeight = 226
-    const x = Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8))
-    const y = Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8))
-
-    setTabContextMenu({ tabKey: tab.key, x, y })
-  }
-
-  function duplicateWorkspaceTab(tabKey) {
-    const sourceTab = tabs.find((tab) => tab.key === tabKey)
-    if (!sourceTab || sourceTab.viewId === 'newtab') return
-    if (sourceTab.key !== activeTabKey && !confirmLeavingDraft()) return
-
-    const duplicate = {
-      ...sourceTab,
-      key: `${sourceTab.key}-copy-${Date.now().toString(36)}`,
-      pinned: false,
-    }
-
-    setTabs((currentTabs) => {
-      let workingTabs = [...currentTabs]
-      if (workingTabs.length >= MAX_WORKSPACE_TABS) {
-        const removableIndex = workingTabs.findIndex(
-          (tab) => !tab.pinned && tab.key !== sourceTab.key && tab.viewId !== 'newtab',
-        )
-        if (removableIndex >= 0) workingTabs.splice(removableIndex, 1)
+      if (fallbackTab.recordId) {
+        setSelectedTicketId(fallbackTab.recordId)
+      } else if (fallbackTab.newRecordType) {
+        setTicketDraft((currentDraft) => ({ ...currentDraft, type: fallbackTab.newRecordType }))
+      } else if (serviceDeskModules[fallbackTab.viewId]) {
+        const moduleConfig = serviceDeskModules[fallbackTab.viewId]
+        const firstModuleTicket = tickets.find((ticket) => ticket.type === moduleConfig.type)
+        if (firstModuleTicket) setSelectedTicketId(firstModuleTicket.id)
+        setTicketDraft((currentDraft) => ({ ...currentDraft, type: moduleConfig.type }))
+        setFilters(fallbackTab.filter || { ...allTicketFilters(), type: moduleConfig.type })
+        setQuery(fallbackTab.query || '')
+      } else if (fallbackTab.viewId === 'tickets') {
+        setFilters(fallbackTab.filter || allTicketFilters())
+        setQuery(fallbackTab.query || '')
       }
-
-      const sourceIndex = workingTabs.findIndex((tab) => tab.key === sourceTab.key)
-      const insertIndex = sourceIndex >= 0 ? sourceIndex + 1 : workingTabs.length
-      workingTabs.splice(insertIndex, 0, duplicate)
-      return workingTabs.slice(0, MAX_WORKSPACE_TABS)
-    })
-
-    selectWorkspaceTab(duplicate)
-    setTabContextMenu(null)
-  }
-
-  function closeTabGroup(keysToClose, fallbackKey) {
-    const closableKeys = new Set(
-      keysToClose.filter((key) => tabs.some((tab) => tab.key === key && !tab.pinned)),
-    )
-    if (!closableKeys.size) {
-      setTabContextMenu(null)
-      return
+      setActiveTabKey(fallbackTab.key)
+      writeRoute(pathForTab(fallbackTab, tickets), { replace: true })
     }
-
-    const removesActiveTab = closableKeys.has(activeTabKey)
-    if (removesActiveTab && !confirmLeavingDraft()) return
-
-    const nextTabs = tabs.filter((tab) => !closableKeys.has(tab.key))
-    if (!nextTabs.length) return
-
-    setTabs(nextTabs)
-
-    if (removesActiveTab) {
-      const fallbackTab =
-        nextTabs.find((tab) => tab.key === fallbackKey) ||
-        nextTabs.find((tab) => tab.pinned) ||
-        nextTabs[0]
-      selectWorkspaceTab(fallbackTab, { replaceRoute: true })
-    }
-
-    setTabContextMenu(null)
-  }
-
-  function closeOtherTabs(tabKey) {
-    closeTabGroup(
-      tabs.filter((tab) => !tab.pinned && tab.key !== tabKey).map((tab) => tab.key),
-      tabKey,
-    )
-  }
-
-  function closeTabsToRight(tabKey) {
-    const targetIndex = tabs.findIndex((tab) => tab.key === tabKey)
-    if (targetIndex < 0) return
-    closeTabGroup(
-      tabs.slice(targetIndex + 1).filter((tab) => !tab.pinned).map((tab) => tab.key),
-      tabKey,
-    )
-  }
-
-  function closeAllClosableTabs() {
-    closeTabGroup(
-      tabs.filter((tab) => !tab.pinned).map((tab) => tab.key),
-      tabs.find((tab) => tab.pinned)?.key,
-    )
   }
 
   function updateTicket(id, updates) {
@@ -1893,6 +1782,7 @@ function App() {
 
           <div className="tab-list" ref={tabListRef}>
             {tabs.map((tab) => {
+              const TabIcon = workspaceTabIcon(tab)
               const tabModule = workspaceTabModule(tab)
 
               return (
@@ -1906,9 +1796,11 @@ function App() {
                   data-tab-module={tabModule}
                   key={tab.key}
                   onClick={() => activateTab(tab)}
-                  onContextMenu={(event) => openTabContextMenu(event, tab)}
                   type="button"
                 >
+                  <span className="workspace-tab-icon" aria-hidden="true">
+                    <TabIcon size={13} strokeWidth={2.2} />
+                  </span>
                   <span className="workspace-tab-label">
                     {tab.title}
                     {activeTabKey === tab.key && activeHasUnsavedChanges && (
@@ -1931,18 +1823,29 @@ function App() {
                 </button>
               )
             })}
-            <button
-              aria-label="Open Hi5 workspace launcher"
-              className="tab-add"
-              onClick={openNewTab}
-              title="Open Hi5 workspace launcher"
-              type="button"
-            >
-              <Plus size={18} strokeWidth={2.4} aria-hidden="true" />
-            </button>
           </div>
 
+          <button
+            aria-label="Open Hi5 workspace launcher"
+            className="tab-add"
+            onClick={openNewTab}
+            title="Open Hi5 workspace launcher"
+            type="button"
+          >
+            <Plus size={18} strokeWidth={2.4} aria-hidden="true" />
+          </button>
+
           <div className="chrome-actions">
+            {sidebarHidden && (
+              <button
+                className="icon-button"
+                onClick={() => setSidebarMode('expanded')}
+                title="Show sidebar"
+                type="button"
+              >
+                <PanelLeftOpen size={17} aria-hidden="true" />
+              </button>
+            )}
             <button
               className="new-ticket-button"
               onClick={() => openNewRecord('Incident')}
@@ -1970,67 +1873,36 @@ function App() {
               />
             </label>
             <button
-              aria-label="Sign out"
-              className="icon-button chrome-logout"
-              onClick={handleLogout}
-              title="Sign out"
+              className="icon-button"
+              onClick={() => setTheme(resolvedTheme === 'light' ? 'dark' : 'light')}
+              title={resolvedTheme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
               type="button"
             >
-              <LogOut size={17} aria-hidden="true" />
+              {resolvedTheme === 'light' ? <Moon size={17} /> : <Sun size={17} />}
+            </button>
+            <button
+              aria-expanded={notificationsOpen}
+              className="icon-button notification-trigger"
+              onClick={toggleNotifications}
+              title="Notifications"
+              type="button"
+            >
+              <Bell size={17} aria-hidden="true" />
+              {unreadNotificationCount > 0 && (
+                <span className="notification-badge" aria-label={`${unreadNotificationCount} unread notifications`}>
+                  {unreadNotificationCount}
+                </span>
+              )}
+            </button>
+            <button className="icon-button" onClick={() => openTab('settings')} title="Settings" type="button">
+              <Settings size={17} aria-hidden="true" />
+            </button>
+            <button className="user-pill" onClick={handleLogout} title="Sign out" type="button">
+              <span>{session.initials}</span>
+              <LogOut size={15} aria-hidden="true" />
             </button>
           </div>
         </header>
-
-        {tabContextMenu && contextMenuTab && (
-          <div
-            className="tab-context-menu"
-            onContextMenu={(event) => event.preventDefault()}
-            role="menu"
-            style={{ left: tabContextMenu.x, top: tabContextMenu.y }}
-          >
-            <button
-              disabled={contextMenuTab.viewId === 'newtab'}
-              onClick={() => duplicateWorkspaceTab(contextMenuTab.key)}
-              role="menuitem"
-              type="button"
-            >
-              Duplicate tab
-            </button>
-            <div className="tab-context-menu-separator" role="separator" />
-            <button
-              disabled={contextMenuTab.pinned}
-              onClick={() => closeTab(contextMenuTab.key)}
-              role="menuitem"
-              type="button"
-            >
-              Close tab
-            </button>
-            <button
-              disabled={!tabs.some((tab) => !tab.pinned && tab.key !== contextMenuTab.key)}
-              onClick={() => closeOtherTabs(contextMenuTab.key)}
-              role="menuitem"
-              type="button"
-            >
-              Close other tabs
-            </button>
-            <button
-              disabled={!tabs.slice(tabs.findIndex((tab) => tab.key === contextMenuTab.key) + 1).some((tab) => !tab.pinned)}
-              onClick={() => closeTabsToRight(contextMenuTab.key)}
-              role="menuitem"
-              type="button"
-            >
-              Close tabs to the right
-            </button>
-            <button
-              disabled={!tabs.some((tab) => !tab.pinned)}
-              onClick={closeAllClosableTabs}
-              role="menuitem"
-              type="button"
-            >
-              Close all tabs
-            </button>
-          </div>
-        )}
 
         <nav className="breadcrumbs" aria-label="Breadcrumb">
           <div className="breadcrumb-trail">
@@ -2067,49 +1939,6 @@ function App() {
               value={globalSearchQuery}
             />
           </label>
-
-          <div className="breadcrumb-desktop-actions" aria-label="Workspace quick actions">
-            {sidebarHidden && (
-              <button
-                className="breadcrumb-desktop-action"
-                onClick={() => setSidebarMode('expanded')}
-                title="Show sidebar"
-                type="button"
-              >
-                <PanelLeftOpen size={16} aria-hidden="true" />
-              </button>
-            )}
-            <button
-              className="breadcrumb-desktop-action"
-              onClick={() => setTheme(resolvedTheme === 'light' ? 'dark' : 'light')}
-              title={resolvedTheme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
-              type="button"
-            >
-              {resolvedTheme === 'light' ? <Moon size={16} /> : <Sun size={16} />}
-            </button>
-            <button
-              aria-expanded={notificationsOpen}
-              className="breadcrumb-desktop-action notification-trigger"
-              onClick={toggleNotifications}
-              title="Notifications"
-              type="button"
-            >
-              <Bell size={16} aria-hidden="true" />
-              {unreadNotificationCount > 0 && (
-                <span className="notification-badge" aria-label={`${unreadNotificationCount} unread notifications`}>
-                  {unreadNotificationCount}
-                </span>
-              )}
-            </button>
-            <button
-              className="breadcrumb-desktop-action"
-              onClick={() => openTab('settings')}
-              title="Settings"
-              type="button"
-            >
-              <Settings size={16} aria-hidden="true" />
-            </button>
-          </div>
 
           <div className="breadcrumb-mobile-actions" aria-label="Mobile quick actions">
             <button
