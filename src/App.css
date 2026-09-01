@@ -10188,3 +10188,26 @@ textarea:focus {
 
 /* The old module-icon styling remains harmless for historical CSS, but no
    icon element is rendered in the workspace tab DOM anymore. */
+
+/* ================================================================
+   WORKSPACE TAB TYPOGRAPHY — COMPACT LABELS
+   Slightly smaller labels reclaim horizontal space without changing
+   tab dimensions, close-control placement or responsive behaviour.
+   ================================================================ */
+.workspace-tab-label {
+  font-size: 12.25px;
+  line-height: 1.15;
+}
+
+@media (any-pointer: coarse) {
+  .workspace-tab-label {
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 680px) and (any-pointer: coarse),
+       (max-height: 600px) and (any-pointer: coarse) {
+  .workspace-tab-label {
+    font-size: 11px;
+  }
+}
