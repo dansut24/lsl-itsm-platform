@@ -68,7 +68,7 @@ export function tabBreadcrumbLabel(tab) {
   return viewMeta[tab.viewId]?.label || tab.title
 }
 
-export function getBreadcrumbs(activeTab, selectedTicket, selectedAsset, selectedArticle) {
+export function getBreadcrumbs(activeTab, selectedTicket, selectedAsset, selectedArticle, selectedProject) {
   const homeCrumb = { label: 'Home', viewId: 'home', key: 'home', title: 'Dashboard' }
   if (!activeTab || activeTab.viewId === 'home') return [homeCrumb]
 
@@ -111,6 +111,20 @@ export function getBreadcrumbs(activeTab, selectedTicket, selectedAsset, selecte
         key: activeTab.key,
         title: selectedArticle?.title || activeTab.title,
         articleSlug: activeTab.articleSlug,
+      },
+    ]
+  }
+
+  if (activeTab.projectId) {
+    return [
+      homeCrumb,
+      { label: 'Projects', viewId: 'projects', key: 'projects', title: 'Projects' },
+      {
+        label: selectedProject?.name || activeTab.title,
+        viewId: 'projects',
+        key: activeTab.key,
+        title: selectedProject?.name || activeTab.title,
+        projectId: activeTab.projectId,
       },
     ]
   }
@@ -169,6 +183,7 @@ export function makeTab(viewId, overrides = {}) {
     recordId: overrides.recordId,
     assetId: overrides.assetId,
     articleSlug: overrides.articleSlug,
+    projectId: overrides.projectId,
     portalRequestId: overrides.portalRequestId,
     settingsSection: overrides.settingsSection,
     newRecordType: overrides.newRecordType,

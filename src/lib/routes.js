@@ -55,6 +55,13 @@ const LIST_ROUTES = {
     key: 'changes',
     title: 'Changes',
   },
+  '/projects': {
+    kind: 'workspace',
+    path: '/projects',
+    viewId: 'projects',
+    key: 'projects',
+    title: 'Projects',
+  },
   '/cmdb': {
     kind: 'workspace',
     path: '/cmdb',
@@ -211,6 +218,19 @@ export function routeFromLocation(location = window.location) {
     }
   }
 
+  const projectMatch = pathname.match(/^\/projects\/([^/]+)$/i)
+  if (projectMatch) {
+    const projectId = decodeURIComponent(projectMatch[1]).toUpperCase()
+    return {
+      kind: 'workspace',
+      path: `/projects/${encodeURIComponent(projectId)}`,
+      viewId: 'projects',
+      key: `project-${projectId}`,
+      title: projectId,
+      projectId,
+    }
+  }
+
   const knowledgeMatch = pathname.match(/^\/knowledge\/([^/]+)$/i)
   if (knowledgeMatch) {
     const articleSlug = decodeURIComponent(knowledgeMatch[1]).toLowerCase()
@@ -315,6 +335,10 @@ export function pathForTab(tab, tickets = []) {
     return `/knowledge/${encodeURIComponent(tab.articleSlug)}`
   }
 
+  if (tab.projectId) {
+    return `/projects/${encodeURIComponent(tab.projectId)}`
+  }
+
   if (tab.newRecordType) {
     return `/${newRecordPrefix(tab.newRecordType)}/new`
   }
@@ -337,6 +361,7 @@ export function pathForTab(tab, tickets = []) {
     tickets: '/tickets',
     portal: '/portal',
     changes: '/changes',
+    projects: '/projects',
     cmdb: '/cmdb',
     knowledge: '/knowledge',
     reports: '/reports',
