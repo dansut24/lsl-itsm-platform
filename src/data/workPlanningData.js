@@ -1,5 +1,8 @@
 export const workPeople = [
   { id: 'AGT-DANA', name: 'Dana Sinclair', initials: 'DS', role: 'Senior Service Desk Analyst', team: 'Service Desk', location: 'London HQ', capacityHours: 35, tone: 'blue' },
+  { id: 'AGT-SOFIA', name: 'Sofia Martinez', initials: 'SM', role: 'Service Desk Analyst', team: 'Service Desk', location: 'Manchester', capacityHours: 35, tone: 'rose' },
+  { id: 'AGT-LEWIS', name: 'Lewis Morgan', initials: 'LM', role: 'Service Desk Analyst', team: 'Service Desk', location: 'London HQ', capacityHours: 35, tone: 'cyan' },
+  { id: 'AGT-EMILY', name: 'Emily Chen', initials: 'EC', role: 'Service Desk Analyst', team: 'Service Desk', location: 'Birmingham', capacityHours: 35, tone: 'emerald' },
   { id: 'AGT-PRIYA', name: 'Priya Raman', initials: 'PR', role: 'Infrastructure Engineer', team: 'Infrastructure', location: 'London HQ', capacityHours: 35, tone: 'violet' },
   { id: 'AGT-NOAH', name: 'Noah Williams', initials: 'NW', role: 'EUC Analyst', team: 'End User Compute', location: 'Birmingham', capacityHours: 35, tone: 'emerald' },
   { id: 'AGT-MAYA', name: 'Maya Ford', initials: 'MF', role: 'EUC Team Lead', team: 'End User Compute', location: 'Birmingham', capacityHours: 28, tone: 'amber' },

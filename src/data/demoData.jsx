@@ -3,6 +3,7 @@ import {
   BarChart3,
   BookOpen,
   BriefcaseBusiness,
+  CalendarDays,
   ClipboardCheck,
   Database,
   FolderKanban,
@@ -37,6 +38,7 @@ export const viewMeta = {
   portal: { id: 'portal', label: 'Self-Service', icon: LifeBuoy },
   changes: { id: 'changes', label: 'Changes', icon: ClipboardCheck },
   projects: { id: 'projects', label: 'Projects', icon: FolderKanban },
+  rota: { id: 'rota', label: 'Rota & Availability', icon: CalendarDays },
   cmdb: { id: 'cmdb', label: 'CMDB', icon: Database },
   knowledge: { id: 'knowledge', label: 'Knowledge', icon: BookOpen },
   reports: { id: 'reports', label: 'Reports', icon: BarChart3 },
@@ -86,7 +88,7 @@ export const analystNavGroups = [
   {
     id: 'planning',
     label: 'Planning',
-    items: ['projects'],
+    items: ['projects', 'rota'],
   },
   {
     id: 'knowledge-data',
