@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactGridLayout, { useContainerWidth, verticalCompactor } from 'react-grid-layout'
 import 'react-grid-layout/css/styles.css'
 import { createSortedRowModel, rowSortingFeature, sortFns, tableFeatures, useTable } from '@tanstack/react-table'
@@ -737,7 +737,19 @@ function DashboardPriorityChart({ data }) {
   )
 }
 
-function Hi5DashboardTable({ onOpen, rows }) {
+function Hi5DashboardTable({ mobile = false, onOpen, rows }) {
+  const tableHostRef = useRef(null)
+  const [page, setPage] = useState(0)
+  const [hostHeight, setHostHeight] = useState(190)
+
+  useEffect(() => {
+    const node = tableHostRef.current
+    if (!node || typeof ResizeObserver === 'undefined') return undefined
+    const observer = new ResizeObserver(([entry]) => setHostHeight(entry.contentRect.height || 190))
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [])
+
   const columns = useMemo(() => [
     {
       accessorKey: 'id',
@@ -779,43 +791,83 @@ function Hi5DashboardTable({ onOpen, rows }) {
     data: rows,
   })
 
+  const sortedRows = table.getRowModel().rows
+  const pageSize = mobile ? 6 : hostHeight < 150 ? 3 : 4
+  const pageCount = Math.max(1, Math.ceil(sortedRows.length / pageSize))
+  const safePage = Math.min(page, pageCount - 1)
+  const visibleRows = sortedRows.slice(safePage * pageSize, safePage * pageSize + pageSize)
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, Math.max(0, pageCount - 1)))
+  }, [pageCount])
+
   return (
-    <div className="dashboard-data-table-wrap">
-      <table className="dashboard-data-table">
-        <thead>
-          {table.getHeaderGroups().map((headerGroup) => (
-            <tr key={headerGroup.id}>
-              {headerGroup.headers.map((header) => {
-                const sorted = header.column.getIsSorted()
-                return (
-                  <th data-column={header.column.id} key={header.id}>
-                    {header.isPlaceholder ? null : (
-                      <button className={header.column.getCanSort() ? 'is-sortable' : ''} onClick={header.column.getToggleSortingHandler()} type="button">
-                        <table.FlexRender header={header} />
-                        {sorted === 'asc' && <ArrowUp size={11} />}
-                        {sorted === 'desc' && <ArrowDown size={11} />}
-                      </button>
-                    )}
-                  </th>
-                )
-              })}
-            </tr>
+    <div className={`dashboard-table-shell ${mobile ? 'is-mobile' : ''}`} ref={tableHostRef}>
+      {mobile ? (
+        <div className="dashboard-table-mobile-list">
+          {visibleRows.map((row) => (
+            <button className="dashboard-table-mobile-card" key={row.id} onClick={() => onOpen(row.original)} type="button">
+              <span className="dashboard-table-mobile-main">
+                <strong>{row.original.id}</strong>
+                <small>{row.original.title}</small>
+              </span>
+              <span className="dashboard-table-mobile-meta">
+                <span className={`dashboard-priority-label ${priorityClass(row.original.priority)}`}><i />{row.original.priority}</span>
+                <span className={`status-pill ${statusClass(row.original.status)}`}>{row.original.status}</span>
+                <small>{row.original.sla}</small>
+              </span>
+              <ChevronRight size={14} aria-hidden="true" />
+            </button>
           ))}
-        </thead>
-        <tbody>
-          {table.getRowModel().rows.map((row) => (
-            <tr
-              key={row.id}
-              onClick={() => onOpen(row.original)}
-              onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onOpen(row.original) }}
-              role="button"
-              tabIndex={0}
-            >
-              {row.getAllCells().map((cell) => <td data-column={cell.column.id} key={cell.id}><table.FlexRender cell={cell} /></td>)}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+        </div>
+      ) : (
+        <div className="dashboard-data-table-wrap">
+          <table className="dashboard-data-table">
+            <thead>
+              {table.getHeaderGroups().map((headerGroup) => (
+                <tr key={headerGroup.id}>
+                  {headerGroup.headers.map((header) => {
+                    const sorted = header.column.getIsSorted()
+                    return (
+                      <th data-column={header.column.id} key={header.id}>
+                        {header.isPlaceholder ? null : (
+                          <button className={header.column.getCanSort() ? 'is-sortable' : ''} onClick={header.column.getToggleSortingHandler()} type="button">
+                            <table.FlexRender header={header} />
+                            {sorted === 'asc' && <ArrowUp size={11} />}
+                            {sorted === 'desc' && <ArrowDown size={11} />}
+                          </button>
+                        )}
+                      </th>
+                    )
+                  })}
+                </tr>
+              ))}
+            </thead>
+            <tbody>
+              {visibleRows.map((row) => (
+                <tr
+                  key={row.id}
+                  onClick={() => onOpen(row.original)}
+                  onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onOpen(row.original) }}
+                  role="button"
+                  tabIndex={0}
+                >
+                  {row.getAllCells().map((cell) => <td data-column={cell.column.id} key={cell.id}><table.FlexRender cell={cell} /></td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {pageCount > 1 && (
+        <div className="dashboard-table-pager" aria-label="Queue pages">
+          <small>{safePage * pageSize + 1}–{Math.min((safePage + 1) * pageSize, sortedRows.length)} of {sortedRows.length}</small>
+          <span>
+            <button aria-label="Previous records" disabled={safePage === 0} onClick={() => setPage((current) => Math.max(0, current - 1))} type="button"><ArrowLeft size={13} /></button>
+            <button aria-label="Next records" disabled={safePage >= pageCount - 1} onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))} type="button"><ChevronRight size={13} /></button>
+          </span>
+        </div>
+      )}
     </div>
   )
 }
@@ -859,7 +911,7 @@ function DashboardWidgetFrame({ children, editMode, index, onConfigure, onMove, 
   )
 }
 
-function DashboardWidgetContent({ dashboardMetrics, filters, openRecordTab, openTab, tickets, widget }) {
+function DashboardWidgetContent({ dashboardMetrics, filters, mobile = false, openRecordTab, openTab, tickets, widget }) {
   const workingTickets = tickets
     .filter((ticket) => filters.team === 'All' || ticket.team === filters.team)
     .filter((ticket) => filters.service === 'All' || ticket.service === filters.service)
@@ -893,8 +945,8 @@ function DashboardWidgetContent({ dashboardMetrics, filters, openRecordTab, open
   }
 
   if (widget.type === 'service-queue') {
-    const rows = riskTickets.slice(0, Math.max(widget.limit, 8))
-    return <Hi5DashboardTable onOpen={openRecordTab} rows={rows} />
+    const rows = riskTickets.slice(0, Math.max(widget.limit, 6))
+    return <Hi5DashboardTable mobile={mobile} onOpen={openRecordTab} rows={rows} />
   }
 
   if (widget.type === 'my-work') {
@@ -1248,7 +1300,7 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
             <div className="dashboard-mobile-stack-v3">
               {activeDashboard.widgets.map((widget, index) => (
                 <DashboardWidgetFrame editMode={editMode} index={index} key={widget.id} onConfigure={(item) => setConfigureWidgetId(item.id)} onMove={moveWidget} onRemove={removeWidget} widget={widget}>
-                  <DashboardWidgetContent dashboardMetrics={dashboardMetrics} filters={dashboardFilters} openRecordTab={openRecordTab} openTab={openTab} tickets={tickets} widget={widget} />
+                  <DashboardWidgetContent dashboardMetrics={dashboardMetrics} filters={dashboardFilters} mobile={mobileStack} openRecordTab={openRecordTab} openTab={openTab} tickets={tickets} widget={widget} />
                 </DashboardWidgetFrame>
               ))}
             </div>
@@ -1266,7 +1318,7 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
               {activeDashboard.widgets.map((widget, index) => (
                 <div className={`dashboard-grid-item-v3 ${widget.span === 12 ? 'is-full-width' : ''}`} key={widget.id}>
                   <DashboardWidgetFrame editMode={editMode} index={index} onConfigure={(item) => setConfigureWidgetId(item.id)} onMove={moveWidget} onRemove={removeWidget} widget={widget}>
-                    <DashboardWidgetContent dashboardMetrics={dashboardMetrics} filters={dashboardFilters} openRecordTab={openRecordTab} openTab={openTab} tickets={tickets} widget={widget} />
+                    <DashboardWidgetContent dashboardMetrics={dashboardMetrics} filters={dashboardFilters} mobile={mobileStack} openRecordTab={openRecordTab} openTab={openTab} tickets={tickets} widget={widget} />
                   </DashboardWidgetFrame>
                 </div>
               ))}
