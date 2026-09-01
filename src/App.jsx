@@ -2267,17 +2267,6 @@ function App() {
         )}
 
         <main className="workspace">
-          <header className="view-header">
-            <div>
-              <span className="eyebrow">Hi5Central</span>
-              <h1>{activeTab.title || viewMeta[activeView].label}</h1>
-            </div>
-            <div className="view-header-meta">
-              <span>{session.name}</span>
-              <span>{loginProfiles[session.profile]?.label}</span>
-            </div>
-          </header>
-
           <section className="content-frame">{renderActiveView()}</section>
         </main>
       </section>

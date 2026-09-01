@@ -10796,3 +10796,506 @@ textarea:focus {
   font-size: 10px;
   line-height: 1.45;
 }
+
+/* ========================================================================== */
+/* DASHBOARD POLISH V2 + GLOBAL PAGE-CHROME CLEANUP                           */
+/* ========================================================================== */
+
+/* The tabs + breadcrumb rail already establish context. Remove the duplicate
+   Hi5Central / page title / analyst heading layer from every routed page. */
+.workspace {
+  grid-template-rows: minmax(0, 1fr);
+  gap: 0;
+  padding: 12px 16px 16px;
+}
+
+.view-header {
+  display: none !important;
+}
+
+/* Dashboard controls are intentionally tiny and icon-only. Dashboard names,
+   descriptions and filters live behind these controls rather than consuming
+   a permanent horizontal band. */
+.dashboard-builder {
+  position: relative;
+  grid-template-rows: 36px minmax(0, 1fr);
+  overflow: hidden;
+  background: transparent;
+}
+
+.dashboard-commandbar,
+.dashboard-contextbar,
+.dashboard-edit-toolbar {
+  display: none;
+}
+
+.dashboard-toolbar-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 4px 4px;
+}
+
+.dashboard-icon-toolbar {
+  position: relative;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.dashboard-icon-toolbar > button,
+.dashboard-icon-toolbar .dashboard-selector-wrap > button,
+.dashboard-icon-toolbar .dashboard-filter-wrap > button,
+.dashboard-icon-toolbar .dashboard-more-wrap > button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, rgb(var(--accent-rgb)) 20%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 96%, rgb(var(--accent-rgb)) 4%);
+  color: var(--muted);
+  transition: border-color 130ms ease, background 130ms ease, color 130ms ease, transform 100ms ease;
+}
+
+.dashboard-icon-toolbar > button:hover,
+.dashboard-icon-toolbar .dashboard-selector-wrap > button:hover,
+.dashboard-icon-toolbar .dashboard-filter-wrap > button:hover,
+.dashboard-icon-toolbar .dashboard-more-wrap > button:hover,
+.dashboard-icon-toolbar button.active {
+  border-color: rgba(var(--accent-rgb), .48);
+  background: rgba(var(--accent-rgb), .11);
+  color: color-mix(in srgb, rgb(var(--accent-rgb)) 72%, var(--ink) 28%);
+}
+
+.dashboard-icon-toolbar > button:active,
+.dashboard-icon-toolbar .dashboard-selector-wrap > button:active,
+.dashboard-icon-toolbar .dashboard-filter-wrap > button:active,
+.dashboard-icon-toolbar .dashboard-more-wrap > button:active {
+  transform: scale(.95);
+}
+
+.dashboard-icon-toolbar > button.primary {
+  border-color: rgb(var(--accent-rgb));
+  background: rgb(var(--accent-rgb));
+  color: var(--accent-ink);
+}
+
+.dashboard-selector-wrap,
+.dashboard-filter-wrap,
+.dashboard-more-wrap {
+  position: relative;
+}
+
+.dashboard-selector-menu {
+  left: auto;
+  right: 0;
+  top: calc(100% + 6px);
+  border-radius: 15px;
+}
+
+.dashboard-filter-popover {
+  position: absolute;
+  z-index: 72;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 250px;
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, rgb(var(--accent-rgb)) 18%, var(--line));
+  border-radius: 15px;
+  background: var(--surface);
+  box-shadow: 0 18px 48px rgba(7, 27, 61, .2);
+}
+
+.dashboard-filter-popover label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.dashboard-filter-popover select {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 30px 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  color: var(--ink);
+  font-size: 11px;
+  text-transform: none;
+}
+
+.dashboard-more-menu {
+  top: calc(100% + 6px);
+  border-radius: 14px;
+}
+
+/* One-screen dashboard canvas on desktop/tablet. Widgets own scrolling rather
+   than the dashboard page itself. */
+.dashboard-canvas {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  padding: 4px 4px 4px;
+}
+
+.dashboard-canvas-grid {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 10px;
+}
+
+.dashboard-widget-dropzone {
+  grid-column: auto;
+  min-height: 0;
+  height: 100%;
+}
+
+.dashboard-widget-dropzone.is-full-width {
+  grid-column: 1 / -1;
+}
+
+.dashboard-widget {
+  position: relative;
+  min-height: 0;
+  height: 100%;
+  border: 1px solid color-mix(in srgb, rgb(var(--accent-rgb)) 28%, var(--line));
+  border-radius: 17px;
+  background:
+    linear-gradient(180deg, rgba(var(--accent-rgb), .065), rgba(var(--accent-rgb), 0) 48px),
+    var(--surface);
+  box-shadow: 0 8px 24px rgba(7, 27, 61, .07);
+  overflow: hidden;
+}
+
+.dashboard-widget::before {
+  content: '';
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  left: 18px;
+  right: 18px;
+  height: 3px;
+  border-radius: 0 0 999px 999px;
+  background: rgb(var(--accent-rgb));
+  opacity: .88;
+  pointer-events: none;
+}
+
+.dashboard-widget:hover {
+  border-color: color-mix(in srgb, rgb(var(--accent-rgb)) 48%, var(--line));
+  box-shadow: 0 10px 28px rgba(var(--accent-rgb), .08), 0 7px 20px rgba(7, 27, 61, .07);
+}
+
+.dashboard-widget-editbar {
+  top: 8px;
+  right: 8px;
+  border-color: color-mix(in srgb, rgb(var(--accent-rgb)) 20%, var(--line));
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--surface) 95%, rgb(var(--accent-rgb)) 5%);
+}
+
+.dashboard-widget-editbar button,
+.dashboard-drag-handle {
+  border-radius: 8px;
+}
+
+.dashboard-kpi,
+.dashboard-table-widget,
+.dashboard-list-widget,
+.dashboard-chart-widget,
+.dashboard-note-widget {
+  min-height: 0;
+  height: 100%;
+}
+
+.dashboard-kpi {
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 9px;
+  padding: 13px 14px;
+}
+
+.dashboard-kpi > svg {
+  color: rgb(var(--accent-rgb));
+}
+
+.dashboard-tone-blue svg,
+.dashboard-tone-blue strong {
+  color: color-mix(in srgb, rgb(var(--accent-rgb)) 82%, var(--ink) 18%);
+}
+
+.dashboard-kpi strong { font-size: clamp(20px, 2.2cqw, 26px); }
+.dashboard-kpi b { font-size: clamp(11px, 1.25cqw, 13px); }
+.dashboard-kpi small { font-size: 9px; }
+
+.dashboard-table-widget,
+.dashboard-list-widget,
+.dashboard-chart-widget,
+.dashboard-note-widget {
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  overflow: hidden;
+}
+
+.dashboard-widget-heading {
+  flex: 0 0 auto;
+  min-height: 30px;
+  margin-bottom: 7px;
+}
+
+.dashboard-widget-heading .eyebrow,
+.dashboard-note-widget .eyebrow {
+  color: color-mix(in srgb, rgb(var(--accent-rgb)) 74%, var(--muted) 26%);
+}
+
+.dashboard-widget-heading h2,
+.dashboard-note-widget h2 {
+  font-size: clamp(12px, 1.35cqw, 15px);
+}
+
+.dashboard-widget-heading .text-button {
+  min-height: 26px;
+  padding: 0 7px;
+  border-radius: 9px;
+  background: rgba(var(--accent-rgb), .08);
+  color: color-mix(in srgb, rgb(var(--accent-rgb)) 72%, var(--ink) 28%);
+}
+
+/* Lists/tables scroll inside equal-height widgets. */
+.dashboard-table-scroll,
+.dashboard-compact-records,
+.dashboard-change-list,
+.dashboard-activity-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+/* Softer, more app-like table treatment. */
+.dashboard-table-scroll {
+  border: 1px solid color-mix(in srgb, rgb(var(--accent-rgb)) 18%, var(--line));
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--surface-soft) 70%, var(--surface) 30%);
+  padding-bottom: 4px;
+}
+
+.dashboard-record-table {
+  min-height: 40px;
+  border-bottom: 0;
+}
+
+.dashboard-record-table-head {
+  min-height: 32px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, rgb(var(--accent-rgb)) 7%, var(--surface));
+  color: var(--muted);
+}
+
+.dashboard-record-table:not(.dashboard-record-table-head) {
+  width: calc(100% - 10px);
+  margin: 4px 5px 0;
+  border: 1px solid color-mix(in srgb, rgb(var(--accent-rgb)) 10%, var(--line));
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.dashboard-record-table:not(.dashboard-record-table-head):hover {
+  border-color: color-mix(in srgb, rgb(var(--accent-rgb)) 34%, var(--line));
+  background: rgba(var(--accent-rgb), .055);
+}
+
+.dashboard-compact-records,
+.dashboard-change-list,
+.dashboard-activity-list {
+  border-top: 0;
+  padding: 2px;
+}
+
+.dashboard-compact-records > button,
+.dashboard-change-list > button,
+.dashboard-activity-list > button {
+  min-height: 42px;
+  margin-bottom: 4px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-soft) 72%, var(--surface) 28%);
+}
+
+.dashboard-compact-records > button:hover,
+.dashboard-change-list > button:hover,
+.dashboard-activity-list > button:hover {
+  border-color: rgba(var(--accent-rgb), .22);
+  background: rgba(var(--accent-rgb), .06);
+}
+
+.dashboard-chart-widget {
+  overflow: auto;
+}
+
+.dashboard-widget-empty {
+  flex: 1 1 auto;
+  min-height: 0;
+  border-radius: 12px;
+}
+
+.dashboard-empty-canvas {
+  min-height: 0;
+  border-radius: 17px;
+}
+
+.dashboard-side-panel,
+.dashboard-modal {
+  border-color: color-mix(in srgb, rgb(var(--accent-rgb)) 18%, var(--line));
+}
+
+.dashboard-modal {
+  border-radius: 18px;
+}
+
+.dashboard-widget-catalog section > button,
+.dashboard-config-preview,
+.dashboard-config-form input,
+.dashboard-config-form select,
+.dashboard-config-form textarea,
+.dashboard-share-add select,
+.dashboard-name-field input {
+  border-radius: 12px;
+}
+
+.dashboard-widget-catalog section > button:hover {
+  border-color: rgb(var(--accent-rgb));
+  background: rgba(var(--accent-rgb), .055);
+}
+
+/* Sidebar-aware responsive grid: because Dashboard Builder is a container,
+   collapsing or hiding the sidebar immediately gives the grid more columns. */
+@container (max-width: 900px) {
+  .dashboard-canvas-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container (max-width: 610px) {
+  .dashboard-canvas-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Tablet keeps the one-page canvas contract, but compacts content aggressively
+   when the available workspace becomes narrow. */
+@container (max-width: 760px) {
+  .dashboard-kpi { padding: 10px 11px; }
+  .dashboard-kpi small { display: none; }
+  .dashboard-table-widget,
+  .dashboard-list-widget,
+  .dashboard-chart-widget,
+  .dashboard-note-widget { padding: 10px; }
+  .dashboard-widget-heading { margin-bottom: 5px; }
+  .dashboard-widget-heading .eyebrow { display: none; }
+}
+
+/* Phones deliberately keep a normal vertically scrolling stack. Equal desktop
+   heights are not useful on a narrow screen. */
+@media (max-width: 680px) and (any-pointer: coarse), (max-height: 600px) and (any-pointer: coarse) {
+  .workspace {
+    grid-template-rows: minmax(0, 1fr);
+    gap: 0;
+    padding: 6px 8px 8px;
+  }
+
+  .dashboard-builder {
+    grid-template-rows: 34px minmax(0, 1fr);
+  }
+
+  .dashboard-toolbar-row {
+    padding: 0 2px 3px;
+  }
+
+  .dashboard-icon-toolbar > button,
+  .dashboard-icon-toolbar .dashboard-selector-wrap > button,
+  .dashboard-icon-toolbar .dashboard-filter-wrap > button,
+  .dashboard-icon-toolbar .dashboard-more-wrap > button {
+    width: 29px;
+    height: 29px;
+    min-height: 29px;
+    border-radius: 9px;
+  }
+
+  .dashboard-filter-popover,
+  .dashboard-selector-menu,
+  .dashboard-more-menu {
+    position: fixed;
+    left: 8px;
+    right: 8px;
+    top: auto;
+    bottom: calc(8px + env(safe-area-inset-bottom));
+    width: auto;
+    max-height: min(68dvh, 560px);
+    overflow: auto;
+    border-radius: 17px;
+  }
+
+  .dashboard-canvas {
+    overflow: auto;
+    padding: 3px 2px 16px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .dashboard-canvas-grid {
+    display: grid;
+    height: auto;
+    grid-template-columns: minmax(0, 1fr);
+    grid-auto-rows: auto;
+    gap: 9px;
+  }
+
+  .dashboard-widget-dropzone,
+  .dashboard-widget-dropzone.is-full-width {
+    grid-column: 1;
+    height: auto;
+  }
+
+  .dashboard-widget {
+    min-height: 154px;
+    height: auto;
+    border-radius: 16px;
+  }
+
+  .dashboard-kpi {
+    min-height: 116px;
+  }
+
+  .dashboard-table-widget,
+  .dashboard-list-widget,
+  .dashboard-chart-widget,
+  .dashboard-note-widget {
+    min-height: 154px;
+    height: 154px;
+  }
+
+  .dashboard-table-scroll,
+  .dashboard-compact-records,
+  .dashboard-change-list,
+  .dashboard-activity-list {
+    max-height: none;
+  }
+}
