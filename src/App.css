@@ -12055,3 +12055,273 @@ textarea:focus {
     min-width: 700px;
   }
 }
+
+/* ========================================================================== */
+/* DASHBOARD V3.1 — CONTROLLED QUEUE + NATURAL MOBILE DASHBOARD FLOW          */
+/* ========================================================================== */
+
+/* The dashboard table uses TanStack only for data/sorting. The viewport is
+   deliberately controlled: no free two-axis scrolling inside a dashboard. */
+.dashboard-table-shell {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface);
+}
+
+.dashboard-data-table-wrap {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: var(--surface);
+  scrollbar-width: auto;
+}
+
+.dashboard-data-table {
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  table-layout: fixed;
+}
+
+.dashboard-data-table thead {
+  position: static;
+}
+
+.dashboard-data-table th,
+.dashboard-data-table td {
+  min-width: 0;
+}
+
+.dashboard-data-table th[data-column="id"],
+.dashboard-data-table td[data-column="id"] { width: 92px; }
+.dashboard-data-table th[data-column="title"],
+.dashboard-data-table td[data-column="title"] { width: auto; }
+.dashboard-data-table th[data-column="priority"],
+.dashboard-data-table td[data-column="priority"] { width: 86px; }
+.dashboard-data-table th[data-column="status"],
+.dashboard-data-table td[data-column="status"] { width: 104px; }
+.dashboard-data-table th[data-column="team"],
+.dashboard-data-table td[data-column="team"] { width: 104px; }
+.dashboard-data-table th[data-column="assignee"],
+.dashboard-data-table td[data-column="assignee"] { width: 112px; }
+.dashboard-data-table th[data-column="slaPercent"],
+.dashboard-data-table td[data-column="slaPercent"] { width: 108px; }
+
+/* Reduce columns rather than introducing horizontal scrolling when the
+   sidebar or viewport makes the full-width widget narrower. */
+@container (max-width: 980px) {
+  .dashboard-data-table th[data-column="assignee"],
+  .dashboard-data-table td[data-column="assignee"] { display: none; }
+}
+
+@container (max-width: 820px) {
+  .dashboard-data-table th[data-column="team"],
+  .dashboard-data-table td[data-column="team"] { display: none; }
+}
+
+@container (max-width: 690px) {
+  .dashboard-data-table th[data-column="status"],
+  .dashboard-data-table td[data-column="status"] { display: none; }
+}
+
+.dashboard-table-pager {
+  min-height: 27px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 3px 6px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-soft);
+}
+
+.dashboard-table-pager > small {
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 8.5px;
+  font-weight: 700;
+}
+
+.dashboard-table-pager > span {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.dashboard-table-pager button {
+  width: 22px;
+  height: 22px;
+  min-height: 22px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.dashboard-table-pager button:hover:not(:disabled) {
+  background: var(--surface-soft);
+  color: var(--ink);
+}
+
+.dashboard-table-pager button:disabled {
+  opacity: .35;
+  cursor: default;
+}
+
+/* Mobile uses a compact record treatment rather than a horizontally scrolling
+   desktop table. Six useful rows can fit before pagination is required. */
+.dashboard-table-mobile-list {
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  overflow: hidden;
+}
+
+.dashboard-table-mobile-card {
+  width: 100%;
+  min-width: 0;
+  min-height: 45px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 14px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 7px;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.dashboard-table-mobile-card:last-child {
+  border-bottom: 0;
+}
+
+.dashboard-table-mobile-card:active {
+  background: var(--surface-soft);
+}
+
+.dashboard-table-mobile-main {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.dashboard-table-mobile-main strong {
+  color: color-mix(in srgb, var(--dashboard-accent) 64%, var(--ink) 36%);
+  font-size: 10px;
+}
+
+.dashboard-table-mobile-main small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-table-mobile-meta {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+}
+
+.dashboard-table-mobile-meta .dashboard-priority-label {
+  font-size: 8px;
+}
+
+.dashboard-table-mobile-meta .status-pill {
+  max-width: 92px;
+  overflow: hidden;
+  font-size: 7.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-table-mobile-meta > small {
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 750;
+}
+
+@media (max-width: 680px) and (any-pointer: coarse),
+       (max-height: 600px) and (any-pointer: coarse) {
+  /* On phones the toolbar belongs to the document flow. Scrolling the
+     dashboard therefore naturally moves Edit / Share / Filters out of view. */
+  .dashboard-builder-v3 {
+    display: block;
+    height: 100%;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+
+  .dashboard-builder-v3 .dashboard-toolbar-row {
+    position: relative;
+    z-index: 9;
+    min-height: 32px;
+    padding: 0 2px 4px;
+  }
+
+  .dashboard-builder-v3 .dashboard-canvas {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+    padding: 2px 1px 10px;
+  }
+
+  .dashboard-grid-host.is-mobile-stack {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .dashboard-mobile-stack-v3 {
+    align-items: start;
+    gap: 10px;
+    padding-bottom: 18px;
+  }
+
+  /* Mobile has one widget per row, so it can afford more useful vertical
+     space than the one-screen desktop grid. */
+  .dashboard-mobile-stack-v3 .dashboard-widget {
+    height: 270px;
+    min-height: 240px;
+    max-height: 340px;
+    border-radius: 15px;
+  }
+
+  .dashboard-mobile-stack-v3 .dashboard-widget-service-queue {
+    height: 350px;
+    min-height: 330px;
+    max-height: 390px;
+  }
+
+  .dashboard-mobile-stack-v3 .dashboard-widget-body-v3 {
+    min-height: 0;
+  }
+
+  .dashboard-data-table {
+    min-width: 0;
+  }
+}
