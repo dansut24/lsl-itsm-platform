@@ -665,6 +665,14 @@ function dashboardRowCount(layout) {
   return Math.max(...layout.map((item) => item.y + item.h))
 }
 
+function applyDashboardSlotWidths(previousWidgets, reorderedWidgets) {
+  const slotWidths = previousWidgets.map((widget) => widget.span === 12 ? 12 : 4)
+  return reorderedWidgets.map((widget, index) => ({
+    ...widget,
+    span: slotWidths[index] ?? (widget.span === 12 ? 12 : 4),
+  }))
+}
+
 function DashboardMetric({ detail, onClick, trend, trendLabel, value }) {
   const trendData = buildTrend(value, trend)
   return (
@@ -1124,9 +1132,10 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
     const target = index + delta
     if (target < 0 || target >= activeDashboard.widgets.length) return
     updateDashboard(activeDashboard.id, (dashboard) => {
-      const widgets = [...dashboard.widgets]
-      const [widget] = widgets.splice(index, 1)
-      widgets.splice(target, 0, widget)
+      const reorderedWidgets = [...dashboard.widgets]
+      const [widget] = reorderedWidgets.splice(index, 1)
+      reorderedWidgets.splice(target, 0, widget)
+      const widgets = applyDashboardSlotWidths(dashboard.widgets, reorderedWidgets)
       return { ...dashboard, widgets }
     })
   }
@@ -1136,10 +1145,12 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
     const order = [...layout].sort((a, b) => a.y - b.y || a.x - b.x).map((item) => item.i)
     updateDashboard(activeDashboard.id, (dashboard) => {
       const byId = new Map(dashboard.widgets.map((widget) => [widget.id, widget]))
-      const widgets = order.map((id) => byId.get(id)).filter(Boolean)
-      dashboard.widgets.forEach((widget) => { if (!order.includes(widget.id)) widgets.push(widget) })
-      const unchanged = widgets.every((widget, index) => widget.id === dashboard.widgets[index]?.id)
-      return unchanged ? dashboard : { ...dashboard, widgets }
+      const reorderedWidgets = order.map((id) => byId.get(id)).filter(Boolean)
+      dashboard.widgets.forEach((widget) => { if (!order.includes(widget.id)) reorderedWidgets.push(widget) })
+      const unchanged = reorderedWidgets.every((widget, index) => widget.id === dashboard.widgets[index]?.id)
+      if (unchanged) return dashboard
+      const widgets = applyDashboardSlotWidths(dashboard.widgets, reorderedWidgets)
+      return { ...dashboard, widgets }
     })
   }
 
@@ -1364,7 +1375,7 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
                 <label>Record type<select value={configuredWidget.filterType} onChange={(event) => updateWidget(configuredWidget.id, { filterType: event.target.value })}>{['All', ...types].map((type) => <option key={type}>{type}</option>)}</select></label>
               )}
               {configuredWidget.type === 'heading' && <label>Text<textarea rows="6" value={configuredWidget.note} onChange={(event) => updateWidget(configuredWidget.id, { note: event.target.value })} /></label>}
-              <div className="dashboard-config-preview"><span>Responsive behaviour</span><strong>{DASHBOARD_SIZE_OPTIONS.find((size) => size.id === configuredWidget.span)?.label}</strong><small>Standard widgets use equal-height slots with a maximum of three columns. The canvas measures its real width, so sidebar expanded, collapsed and hidden states reflow automatically.</small></div>
+              <div className="dashboard-config-preview"><span>Responsive behaviour</span><strong>{DASHBOARD_SIZE_OPTIONS.find((size) => size.id === configuredWidget.span)?.label}</strong><small>Standard widgets use equal-height slots with a maximum of three columns. When widgets are reordered, width follows the slot: moving a full-width widget into a standard slot makes it standard, and the displaced widget inherits the full-width slot.</small></div>
             </div>
           </aside>
         </>
