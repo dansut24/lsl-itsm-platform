@@ -116,7 +116,9 @@ function tabFromRoute(route) {
     : undefined
 
   return makeTab(route.viewId, {
-    key: route.key,
+    // The workspace launcher is a singleton. Older builds created timestamped
+    // /new-tab/:key routes; canonicalise all of them back to one tab identity.
+    key: route.viewId === 'newtab' ? NEW_TAB_KEY : route.key,
     title: asset?.name || article?.title || route.title,
     pinned: route.viewId === 'home' || (route.viewId === 'portal' && !route.portalRequestId),
     recordId: route.recordId,
@@ -162,6 +164,7 @@ const demoNotifications = [
 ]
 
 const MAX_WORKSPACE_TABS = 12
+const NEW_TAB_KEY = 'newtab'
 
 function emptyTicketDraft(type = 'Incident') {
   return {
@@ -223,24 +226,31 @@ function isTicketDraftDirty(draft, type = draft?.type || 'Incident') {
 }
 
 function restoreWorkspaceTabs(workspace, routeTab) {
+  const normalizeWorkspaceTab = (tab) =>
+    tab?.viewId === 'newtab'
+      ? makeTab('newtab', { ...tab, key: NEW_TAB_KEY, title: 'New Tab' })
+      : tab
+
+  const normalizedRouteTab = normalizeWorkspaceTab(routeTab)
   const savedTabs = Array.isArray(workspace?.tabs)
     ? workspace.tabs
         .filter((tab) => tab && typeof tab.key === 'string' && typeof tab.viewId === 'string')
-        .map((tab) => makeTab(tab.viewId, tab))
+        .map((tab) => normalizeWorkspaceTab(makeTab(tab.viewId, tab)))
     : []
 
+  // This also cleans up duplicate launcher tabs persisted by older builds.
   const deduped = savedTabs.filter(
     (tab, index, list) => list.findIndex((candidate) => candidate.key === tab.key) === index,
   )
 
-  if (!deduped.some((tab) => tab.key === routeTab.key)) {
-    deduped.push(routeTab)
+  if (!deduped.some((tab) => tab.key === normalizedRouteTab.key)) {
+    deduped.push(normalizedRouteTab)
   }
 
-  if (!deduped.length) return [routeTab]
+  if (!deduped.length) return [normalizedRouteTab]
   if (deduped.length <= MAX_WORKSPACE_TABS) return deduped
 
-  const essentials = deduped.filter((tab) => tab.pinned || tab.key === routeTab.key)
+  const essentials = deduped.filter((tab) => tab.pinned || tab.key === normalizedRouteTab.key)
   const recent = deduped
     .filter((tab) => !essentials.some((essential) => essential.key === tab.key))
     .slice(-(MAX_WORKSPACE_TABS - essentials.length))
@@ -249,13 +259,26 @@ function restoreWorkspaceTabs(workspace, routeTab) {
 }
 
 function addWorkspaceTab(currentTabs, tab) {
-  if (currentTabs.some((currentTab) => currentTab.key === tab.key)) return currentTabs
+  const normalizedTab =
+    tab?.viewId === 'newtab'
+      ? makeTab('newtab', { ...tab, key: NEW_TAB_KEY, title: 'New Tab' })
+      : tab
 
-  const nextTabs = [...currentTabs, tab]
+  if (
+    currentTabs.some(
+      (currentTab) =>
+        currentTab.key === normalizedTab.key ||
+        (normalizedTab.viewId === 'newtab' && currentTab.viewId === 'newtab'),
+    )
+  ) {
+    return currentTabs
+  }
+
+  const nextTabs = [...currentTabs, normalizedTab]
   if (nextTabs.length <= MAX_WORKSPACE_TABS) return nextTabs
 
   const removableIndex = nextTabs.findIndex(
-    (currentTab) => !currentTab.pinned && currentTab.key !== tab.key,
+    (currentTab) => !currentTab.pinned && currentTab.key !== normalizedTab.key,
   )
   if (removableIndex >= 0) nextTabs.splice(removableIndex, 1)
 
@@ -1025,10 +1048,16 @@ function App() {
   function openNewTab() {
     if (!confirmLeavingDraft()) return
 
-    const key = `newtab-${Date.now()}`
-    const tab = makeTab('newtab', { key, title: 'New Tab' })
+    const existingLauncher = tabs.find((tab) => tab.viewId === 'newtab')
+    if (existingLauncher) {
+      setActiveTabKey(existingLauncher.key)
+      writeRoute(pathForTab(existingLauncher, tickets))
+      return
+    }
+
+    const tab = makeTab('newtab', { key: NEW_TAB_KEY, title: 'New Tab' })
     setTabs((currentTabs) => addWorkspaceTab(currentTabs, tab))
-    setActiveTabKey(key)
+    setActiveTabKey(NEW_TAB_KEY)
     writeRoute(pathForTab(tab, tickets))
   }
 
