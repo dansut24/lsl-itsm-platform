@@ -705,6 +705,35 @@ function applyDashboardSlotWidths(previousWidgets, reorderedWidgets) {
   }))
 }
 
+function applyDashboardReorderWidths(previousWidgets, reorderedWidgets) {
+  // Dragging a full-width widget into the incomplete standard row directly
+  // above it fills that row; there is no full-width slot to transfer. This
+  // mirrors the accessible Move earlier action and prevents an existing
+  // standard widget from unexpectedly becoming full width after a drag.
+  const reorderedIndexes = new Map(reorderedWidgets.map((widget, index) => [widget.id, index]))
+  const incompleteRowFillers = new Set()
+
+  previousWidgets.forEach((widget, previousIndex) => {
+    if (widget.span !== 12) return
+    const reorderedIndex = reorderedIndexes.get(widget.id)
+    if (typeof reorderedIndex !== 'number' || reorderedIndex >= previousIndex) return
+    const remainder = consecutiveStandardCountBefore(previousWidgets, previousIndex)
+      % DASHBOARD_STANDARD_ROW_CAPACITY
+    if (remainder > 0 && remainder < DASHBOARD_STANDARD_ROW_CAPACITY) {
+      incompleteRowFillers.add(widget.id)
+    }
+  })
+
+  if (incompleteRowFillers.size) {
+    return reorderedWidgets.map((widget) => ({
+      ...widget,
+      span: incompleteRowFillers.has(widget.id) ? 4 : widget.span,
+    }))
+  }
+
+  return applyDashboardSlotWidths(previousWidgets, reorderedWidgets)
+}
+
 function insertWidgetIntoOpenStandardRow(widgets, widget) {
   // Width is semantic (Standard or Full). Standard visual width is derived
   // from row occupancy, so fill the first incomplete 3-widget standard row.
@@ -1220,7 +1249,7 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
       const reorderedWidgets = [...dashboard.widgets]
       const [widget] = reorderedWidgets.splice(index, 1)
       reorderedWidgets.splice(target, 0, widget)
-      const widgets = applyDashboardSlotWidths(dashboard.widgets, reorderedWidgets)
+      const widgets = applyDashboardReorderWidths(dashboard.widgets, reorderedWidgets)
       return { ...dashboard, widgets }
     })
   }
@@ -1234,7 +1263,7 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
       dashboard.widgets.forEach((widget) => { if (!order.includes(widget.id)) reorderedWidgets.push(widget) })
       const unchanged = reorderedWidgets.every((widget, index) => widget.id === dashboard.widgets[index]?.id)
       if (unchanged) return dashboard
-      const widgets = applyDashboardSlotWidths(dashboard.widgets, reorderedWidgets)
+      const widgets = applyDashboardReorderWidths(dashboard.widgets, reorderedWidgets)
       return { ...dashboard, widgets }
     })
   }
