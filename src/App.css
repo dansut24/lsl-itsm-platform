@@ -581,7 +581,7 @@ textarea:focus-visible {
 
 .tabbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: stretch;
   gap: 12px;
   min-width: 0;
@@ -2749,7 +2749,7 @@ textarea:focus {
   }
 
   .tabbar {
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: auto minmax(0, 1fr) auto;
     grid-template-rows: 40px;
     height: 40px;
     gap: 0;
@@ -9737,486 +9737,44 @@ textarea:focus {
   }
 }
 
+/* ========================================================================== */
+/* EXACT CHROME TAB RESTORE — CURRENT SHELL COMPATIBILITY                     */
+/* The tab geometry above is intentionally inherited verbatim from the         */
+/* earlier known-good Hi5Central snapshot. Only current-shell compatibility    */
+/* rules live below.                                                           */
+/* ========================================================================== */
 
-/* ================================================================
-   HI5CENTRAL WORKSPACE IDENTITY — V1
-   A recognisable open-workspace rail rather than joined browser tabs.
-   Visual-only: no routing, persistence or data behaviour changes.
-   ================================================================ */
-
+/* Current App.jsx has the launcher inside .tab-list, leaving two tabbar
+   children on desktop: tab list + command actions. */
 .tabbar {
-  gap: 8px;
-  padding: 5px 10px;
-  border-bottom: 1px solid color-mix(in srgb, var(--line) 76%, transparent);
-  background:
-    linear-gradient(90deg, rgba(21, 191, 232, 0.055), transparent 24%, rgba(var(--accent-rgb), 0.04) 72%, transparent),
-    var(--surface-strong);
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
-.tab-list {
-  align-items: center;
-  gap: 6px;
-}
-
-.workspace-tab {
-  align-self: center;
-  gap: 7px;
-  height: 38px;
-  padding: 0 11px;
-  border: 1px solid color-mix(in srgb, var(--line) 90%, transparent);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--surface) 56%, transparent);
-  color: color-mix(in srgb, var(--ink) 78%, var(--muted));
-  box-shadow: 0 2px 5px rgba(8, 30, 66, 0.035);
-  overflow: hidden;
-  transition:
-    transform 150ms cubic-bezier(0.22, 1, 0.36, 1),
-    background 150ms ease,
-    border-color 150ms ease,
-    box-shadow 150ms ease,
-    color 150ms ease;
-}
-
-.workspace-tab:hover {
-  border-color: color-mix(in srgb, rgb(var(--accent-rgb)) 22%, var(--line));
-  background: color-mix(in srgb, var(--surface) 82%, rgb(var(--accent-rgb)) 3%);
-  color: var(--ink);
-  transform: translateY(-1px);
-}
-
-.workspace-tab.active {
-  z-index: 2;
-  border-color: color-mix(in srgb, rgb(var(--accent-rgb)) 30%, var(--line));
-  border-bottom-color: color-mix(in srgb, rgb(var(--accent-rgb)) 30%, var(--line));
-  border-radius: 12px;
-  background:
-    linear-gradient(180deg, rgba(var(--accent-rgb), 0.07), transparent 55%),
-    var(--surface);
-  color: var(--ink);
-  box-shadow:
-    0 7px 16px rgba(8, 30, 66, 0.09),
-    0 0 0 1px rgba(21, 191, 232, 0.035);
-  transform: translateY(-1px);
-}
-
-.workspace-tab.active::before {
-  display: none;
-}
-
-.workspace-tab.active::after {
-  position: absolute;
-  top: 0;
-  right: 10px;
-  bottom: auto;
-  left: 10px;
-  display: block;
-  width: auto;
-  height: 2px;
-  border-radius: 0 0 999px 999px;
-  background: linear-gradient(90deg, #17488d 0%, #15bfe8 48%, rgb(var(--accent-rgb)) 100%);
-  box-shadow: 0 1px 7px rgba(var(--accent-rgb), 0.2);
-  content: '';
-  pointer-events: none;
-}
-
-.workspace-tab-icon {
-  --tab-module-rgb: 75, 127, 245;
-  display: inline-grid;
-  place-items: center;
-  flex: 0 0 23px;
-  width: 23px;
-  height: 23px;
-  border: 1px solid rgba(var(--tab-module-rgb), 0.16);
-  border-radius: 7px;
-  background: rgba(var(--tab-module-rgb), 0.1);
-  color: rgb(var(--tab-module-rgb));
-  transition:
-    transform 150ms ease,
-    background 150ms ease,
-    border-color 150ms ease,
-    box-shadow 150ms ease;
-}
-
-.workspace-tab:hover .workspace-tab-icon,
-.workspace-tab.active .workspace-tab-icon {
-  border-color: rgba(var(--tab-module-rgb), 0.28);
-  background: rgba(var(--tab-module-rgb), 0.15);
-  box-shadow: 0 3px 8px rgba(var(--tab-module-rgb), 0.09);
-}
-
-.workspace-tab.active .workspace-tab-icon {
-  transform: translateY(-1px);
-}
-
-.workspace-tab[data-tab-module='incidents'] .workspace-tab-icon {
-  --tab-module-rgb: 239, 106, 138;
-}
-
-.workspace-tab[data-tab-module='requests'] .workspace-tab-icon,
-.workspace-tab[data-tab-module='portal'] .workspace-tab-icon {
-  --tab-module-rgb: 21, 191, 232;
-}
-
-.workspace-tab[data-tab-module='problems'] .workspace-tab-icon {
-  --tab-module-rgb: 139, 92, 246;
-}
-
-.workspace-tab[data-tab-module='changes'] .workspace-tab-icon {
-  --tab-module-rgb: 244, 177, 61;
-}
-
-.workspace-tab[data-tab-module='knowledge'] .workspace-tab-icon {
-  --tab-module-rgb: 76, 143, 245;
-}
-
-.workspace-tab[data-tab-module='cmdb'] .workspace-tab-icon {
-  --tab-module-rgb: 46, 182, 125;
-}
-
-.workspace-tab[data-tab-module='reports'] .workspace-tab-icon {
-  --tab-module-rgb: 69, 163, 255;
-}
-
-.workspace-tab[data-tab-module='settings'] .workspace-tab-icon {
-  --tab-module-rgb: 133, 146, 166;
-}
-
-.workspace-tab[data-tab-module='newtab'] .workspace-tab-icon,
-.workspace-tab[data-tab-module='newrecord'] .workspace-tab-icon {
-  --tab-module-rgb: var(--accent-rgb);
-}
-
+/* Preserve the compact text approved later, while letting the close control
+   own the far-right edge of every closable tab. */
 .workspace-tab-label {
-  font-weight: 760;
-  letter-spacing: -0.01em;
-}
-
-.tab-close {
-  flex-basis: 19px;
-  width: 19px;
-  height: 19px;
-  margin-left: 2px;
-  border-radius: 7px;
-  color: color-mix(in srgb, var(--muted) 82%, transparent);
-  transition: background 120ms ease, color 120ms ease, transform 120ms ease;
-}
-
-.tab-close:hover {
-  background: rgba(var(--accent-rgb), 0.09);
-  color: var(--ink);
-  transform: scale(1.04);
-}
-
-/* The Hi5 launcher is deliberately not shaped like another tab. */
-.tab-add {
-  position: relative;
-  align-self: center;
-  width: 38px;
-  height: 38px;
-  border: 1px solid rgba(21, 191, 232, 0.38);
-  border-radius: 12px;
-  overflow: visible;
-  background: linear-gradient(145deg, #17488d 0%, #087cd0 48%, #15bfe8 100%);
-  color: #ffffff;
-  box-shadow:
-    0 6px 15px rgba(15, 92, 166, 0.19),
-    inset 0 1px 0 rgba(255, 255, 255, 0.2);
-  transition: transform 150ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 150ms ease;
-}
-
-.tab-add::before {
-  position: absolute;
-  top: 4px;
-  right: 5px;
-  width: 4px;
-  height: 4px;
-  border-radius: 999px;
-  background: rgb(var(--accent-rgb));
-  box-shadow:
-    -5px 2px 0 -1px rgba(var(--accent-rgb), 0.92),
-    -7px 6px 0 -1px rgba(var(--accent-rgb), 0.72);
-  content: '';
-  pointer-events: none;
-}
-
-.tab-add:hover {
-  transform: translateY(-1px) scale(1.02);
-  box-shadow:
-    0 9px 20px rgba(15, 92, 166, 0.24),
-    inset 0 1px 0 rgba(255, 255, 255, 0.24);
-}
-
-.tab-add:active {
-  transform: translateY(0) scale(0.96);
-}
-
-/* Context rail: quieter than a header, but unmistakably part of the
-   Hi5 workspace system. */
-.breadcrumbs {
-  border-bottom-color: color-mix(in srgb, var(--line) 88%, transparent);
-  background:
-    linear-gradient(90deg, rgba(23, 72, 141, 0.025), transparent 35%, rgba(var(--accent-rgb), 0.025)),
-    var(--page);
-}
-
-.breadcrumb-item {
-  min-height: 24px;
-  padding-inline: 5px;
-  border-radius: 7px;
-  transition: color 120ms ease, background 120ms ease;
-}
-
-.breadcrumb-item.current {
-  padding-inline: 7px;
-  background: rgba(var(--accent-rgb), 0.07);
-  color: color-mix(in srgb, rgb(var(--accent-rgb)) 54%, var(--ink));
-}
-
-/* Softer command controls distinguish Hi5's chrome from the uniform
-   square-button treatment used by many service-desk products. */
-.chrome-actions .icon-button,
-.chrome-actions .user-pill {
-  border-color: color-mix(in srgb, var(--line) 82%, transparent);
-  border-radius: 11px;
-  background: color-mix(in srgb, var(--surface) 88%, transparent);
-  box-shadow: 0 2px 6px rgba(8, 30, 66, 0.04);
-  transition:
-    transform 130ms ease,
-    border-color 130ms ease,
-    background 130ms ease,
-    color 130ms ease,
-    box-shadow 130ms ease;
-}
-
-.chrome-actions .icon-button:hover,
-.chrome-actions .user-pill:hover {
-  border-color: rgba(var(--accent-rgb), 0.28);
-  background: color-mix(in srgb, var(--surface) 90%, rgb(var(--accent-rgb)) 5%);
-  color: color-mix(in srgb, rgb(var(--accent-rgb)) 72%, var(--ink));
-  box-shadow: 0 5px 12px rgba(8, 30, 66, 0.07);
-  transform: translateY(-1px);
-}
-
-.new-ticket-button {
-  border: 1px solid rgba(var(--accent-rgb), 0.24);
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.14), transparent 45%),
-    rgb(var(--accent-rgb));
-  box-shadow: 0 4px 12px rgba(var(--accent-rgb), 0.14);
-}
-
-/* Tablet/touch keeps swipeable tabs, but the cards stay visually
-   separated rather than turning back into joined browser tabs. */
-@media (any-pointer: coarse) {
-  .tab-list {
-    gap: 5px;
-  }
-
-  .workspace-tab {
-    flex: 0 0 auto;
-    min-width: 142px;
-    max-width: 230px;
-  }
-}
-
-/* Permanent compact mobile shell. Preserve its density while applying
-   the same workspace-card language and Hi5 launcher treatment. */
-@media (max-width: 680px) and (any-pointer: coarse), (max-height: 600px) and (any-pointer: coarse) {
-  .tabbar {
-    gap: 5px;
-    padding: 3px 6px;
-    background:
-      linear-gradient(90deg, rgba(21, 191, 232, 0.07), transparent 34%, rgba(var(--accent-rgb), 0.04)),
-      var(--surface-strong);
-  }
-
-  .tabbar-brand {
-    height: 32px;
-    margin-right: 1px;
-    border-radius: 10px;
-    box-shadow:
-      0 0 0 1px rgba(21, 191, 232, 0.12),
-      0 4px 10px rgba(7, 27, 61, 0.08);
-  }
-
-  .tab-list {
-    align-items: center;
-    gap: 5px;
-  }
-
-  .workspace-tab {
-    min-width: 142px;
-    max-width: 210px;
-    height: 34px;
-    padding: 0 9px;
-    border-radius: 10px;
-  }
-
-  .workspace-tab.active {
-    border-radius: 10px;
-  }
-
-  .workspace-tab.active::after {
-    right: 8px;
-    left: 8px;
-  }
-
-  .workspace-tab-icon {
-    flex-basis: 21px;
-    width: 21px;
-    height: 21px;
-    border-radius: 6px;
-  }
-
-  .workspace-tab-label {
-    font-size: 11.5px;
-  }
-
-  .tab-add {
-    width: 34px;
-    height: 34px;
-    border-radius: 10px;
-  }
-
-  .breadcrumbs {
-    background:
-      linear-gradient(90deg, rgba(23, 72, 141, 0.03), transparent 52%, rgba(var(--accent-rgb), 0.025)),
-      var(--page);
-  }
-
-  .breadcrumb-mobile-action {
-    border-radius: 9px;
-    background: color-mix(in srgb, var(--surface) 88%, transparent);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .workspace-tab,
-  .workspace-tab-icon,
-  .tab-add,
-  .chrome-actions .icon-button,
-  .chrome-actions .user-pill {
-    transition: none !important;
-  }
-}
-
-
-/* ================================================================
-   WORKSPACE RAIL INTEGRITY — CLOSE SLOT + LAUNCHER SEQUENCE
-   Labels compress first. Module icons and close controls never vanish.
-   The Hi5 launcher is part of the tab sequence and always follows the
-   final open workspace rather than being pinned to the toolbar edge.
-   ================================================================ */
-.workspace-tab-label {
-  display: block;
+  display: inline-flex;
   flex: 1 1 auto;
+  align-items: center;
   min-width: 0;
+  width: auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.workspace-tab-icon {
-  flex: 0 0 23px;
-}
-
-.tab-close {
-  display: inline-grid;
-  flex: 0 0 19px;
-  min-width: 19px;
-  width: 19px;
-  max-width: 19px;
-}
-
-.tab-list > .tab-add {
-  flex: 0 0 38px;
-  min-width: 38px;
-  width: 38px;
-  max-width: 38px;
-  order: 999;
-}
-
-@media (any-pointer: coarse) {
-  .tab-list > .tab-add {
-    scroll-snap-align: end;
-  }
-}
-
-@media (max-width: 680px) and (any-pointer: coarse),
-       (max-height: 600px) and (any-pointer: coarse) {
-  .workspace-tab-icon {
-    flex-basis: 21px;
-  }
-
-  .tab-close {
-    flex-basis: 18px;
-    min-width: 18px;
-    width: 18px;
-    max-width: 18px;
-  }
-
-  .tab-list > .tab-add {
-    flex-basis: 34px;
-    min-width: 34px;
-    width: 34px;
-    max-width: 34px;
-  }
-}
-
-
-/* ================================================================
-   WORKSPACE TAB CLEANUP — LABEL SPACE + EDGE CLOSE CONTROL
-   Module icons are intentionally omitted from tabs. The label owns the
-   available width and the close control is pinned to the far edge.
-   ================================================================ */
-.workspace-tab {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  column-gap: 8px;
-  align-items: center;
-}
-
-.workspace-tab-label {
-  width: 100%;
-  min-width: 0;
-}
-
-.tab-close {
-  justify-self: end;
-  margin-left: 0;
-}
-
-/* The old module-icon styling remains harmless for historical CSS, but no
-   icon element is rendered in the workspace tab DOM anymore. */
-
-/* ================================================================
-   WORKSPACE TAB TYPOGRAPHY — COMPACT LABELS
-   Slightly smaller labels reclaim horizontal space without changing
-   tab dimensions, close-control placement or responsive behaviour.
-   ================================================================ */
-.workspace-tab-label {
   font-size: 12.25px;
   line-height: 1.15;
 }
 
-@media (any-pointer: coarse) {
-  .workspace-tab-label {
-    font-size: 12px;
-  }
+.tab-close {
+  flex: 0 0 19px;
+  min-width: 19px;
+  width: 19px;
+  max-width: 19px;
+  height: 19px;
+  margin-left: auto;
 }
 
-@media (max-width: 680px) and (any-pointer: coarse),
-       (max-height: 600px) and (any-pointer: coarse) {
-  .workspace-tab-label {
-    font-size: 11px;
-  }
-}
-
-/* ================================================================
-   DESKTOP TAB CONTEXT MENU
-   Functional enhancement retained while the visual tab/header shell is
-   restored to the approved Chrome-style layout.
-   ================================================================ */
+/* Desktop right-click menu — functional enhancement retained. */
 .tab-context-menu {
   position: fixed;
   z-index: 100;
@@ -10266,171 +9824,7 @@ textarea:focus {
   background: var(--line);
 }
 
-/* ================================================================
-   CHROME TAB RESTORE + BREADCRUMB UTILITIES
-   Restore the original browser-like connected workspace tabs while
-   moving desktop/tablet utility icons into the breadcrumb/context row.
-   Mobile retains its approved permanent quick-action row.
-   ================================================================ */
-
-/* Top row: tabs + launcher + New Incident + Search + Logout only. */
-.tabbar {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: stretch;
-  gap: 12px;
-  padding: 6px 10px 0;
-  border-bottom: 0;
-  background: var(--surface-strong);
-}
-
-.tab-list {
-  align-items: end;
-  gap: 2px;
-}
-
-/* Original Chrome-like connected tab shape. */
-.workspace-tab {
-  box-sizing: border-box;
-  position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  column-gap: 8px;
-  align-items: center;
-  flex: 1 1 172px;
-  min-width: 0;
-  max-width: 260px;
-  height: 42px;
-  padding: 0 13px;
-  overflow: visible;
-  border: 1px solid transparent;
-  border-bottom: 0;
-  border-radius: 10px 10px 0 0;
-  background: transparent;
-  box-shadow: none;
-  color: var(--ink);
-}
-
-.workspace-tab:hover {
-  border-color: color-mix(in srgb, var(--line) 62%, transparent);
-  border-bottom-color: transparent;
-  background: color-mix(in srgb, var(--page) 48%, transparent);
-  transform: none;
-  box-shadow: none;
-}
-
-.workspace-tab.active {
-  z-index: 2;
-  border-color: var(--line);
-  border-bottom-color: var(--page);
-  border-radius: 10px 10px 0 0;
-  background: var(--page);
-  color: var(--ink);
-  box-shadow: inset 0 2px 0 rgb(var(--accent-rgb));
-  transform: none;
-}
-
-.workspace-tab.active::before,
-.workspace-tab.active::after {
-  position: absolute;
-  top: auto;
-  bottom: -1px;
-  width: 14px;
-  height: 14px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  content: '';
-  pointer-events: none;
-}
-
-.workspace-tab.active::before {
-  right: auto;
-  left: -14px;
-  border-bottom-right-radius: 12px;
-  box-shadow: 6px 6px 0 5px var(--page);
-}
-
-.workspace-tab.active::after {
-  right: -14px;
-  left: auto;
-  border-bottom-left-radius: 12px;
-  box-shadow: -6px 6px 0 5px var(--page);
-}
-
-.workspace-tab-label {
-  min-width: 0;
-  width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12.25px;
-  line-height: 1.15;
-}
-
-.tab-close {
-  display: inline-grid;
-  place-items: center;
-  justify-self: end;
-  flex: 0 0 19px;
-  min-width: 19px;
-  width: 19px;
-  max-width: 19px;
-  height: 19px;
-  margin-left: 0;
-  border-radius: 999px;
-  background: transparent;
-  box-shadow: none;
-}
-
-.tab-close:hover {
-  background: rgba(16, 33, 63, 0.1);
-  color: var(--ink);
-  transform: none;
-}
-
-/* Plain browser-style launcher, always immediately after the last tab. */
-.tab-list > .tab-add,
-.tab-add {
-  box-sizing: border-box;
-  position: relative;
-  align-self: end;
-  flex: 0 0 42px;
-  min-width: 42px;
-  width: 42px;
-  max-width: 42px;
-  height: 42px;
-  overflow: hidden;
-  border: 0;
-  border-bottom: 0;
-  border-radius: 10px 10px 0 0;
-  background: transparent;
-  box-shadow: none;
-  color: var(--ink);
-  order: 999;
-  transform: none;
-}
-
-.tab-add::before {
-  display: none;
-  content: none;
-}
-
-.tab-add:hover {
-  background: color-mix(in srgb, var(--page) 56%, transparent);
-  box-shadow: none;
-  transform: none;
-}
-
-/* The top-right utility area is intentionally sparse. */
-.chrome-actions {
-  gap: 8px;
-}
-
-.chrome-actions .chrome-logout {
-  flex: 0 0 auto;
-}
-
-/* Desktop/tablet utility cluster in the context row. */
+/* Current desktop/tablet utility cluster beneath the tab row. */
 .breadcrumb-desktop-actions {
   display: flex;
   flex: 0 0 auto;
@@ -10467,7 +9861,6 @@ textarea:focus {
   outline-offset: 1px;
 }
 
-/* Keep search and breadcrumb content flexible alongside the new controls. */
 .breadcrumb-trail {
   flex: 1 1 auto;
 }
@@ -10476,81 +9869,16 @@ textarea:focus {
   margin-left: auto;
 }
 
-/* Touch tablets keep swipeable Chrome-style tabs. */
 @media (any-pointer: coarse) {
-  .tab-list {
-    gap: 2px;
-  }
-
-  .workspace-tab {
-    flex: 0 0 auto;
-    min-width: 132px;
-    max-width: 220px;
-  }
-
   .workspace-tab-label {
     font-size: 12px;
   }
 }
 
-/* Permanent mobile shell: use the same Chrome language, while keeping
-   the already-approved mobile breadcrumb actions unchanged. */
 @media (max-width: 680px) and (any-pointer: coarse),
        (max-height: 600px) and (any-pointer: coarse) {
-  .tabbar {
-    gap: 4px;
-    padding: 1px 6px 0;
-    background: var(--surface-strong);
-  }
-
-  .tab-list {
-    align-items: end;
-    gap: 1px;
-  }
-
-  .workspace-tab {
-    min-width: 132px;
-    max-width: 210px;
-    height: 39px;
-    padding: 0 10px;
-    border-radius: 9px 9px 0 0;
-  }
-
-  .workspace-tab.active {
-    border-radius: 9px 9px 0 0;
-  }
-
-  .workspace-tab.active::before,
-  .workspace-tab.active::after {
-    bottom: -1px;
-    width: 10px;
-    height: 10px;
-  }
-
-  .workspace-tab.active::before {
-    left: -10px;
-    border-bottom-right-radius: 9px;
-    box-shadow: 4px 4px 0 4px var(--page);
-  }
-
-  .workspace-tab.active::after {
-    right: -10px;
-    border-bottom-left-radius: 9px;
-    box-shadow: -4px 4px 0 4px var(--page);
-  }
-
   .workspace-tab-label {
     font-size: 11px;
-  }
-
-  .tab-list > .tab-add,
-  .tab-add {
-    flex-basis: 34px;
-    min-width: 34px;
-    width: 34px;
-    max-width: 34px;
-    height: 39px;
-    border-radius: 9px 9px 0 0;
   }
 
   .breadcrumb-desktop-actions {
@@ -10558,7 +9886,6 @@ textarea:focus {
   }
 }
 
-/* Desktop/tablet only: mobile keeps its existing three quick actions. */
 @media (min-width: 681px) and (min-height: 601px) {
   .breadcrumb-mobile-actions {
     display: none;
@@ -10566,85 +9893,7 @@ textarea:focus {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .workspace-tab,
-  .tab-add,
   .breadcrumb-desktop-action {
     transition: none !important;
-  }
-}
-
-/* ================================================================
-   CHROME TAB LEFT-SHOULDER CURVE FIX
-   Preserve the classic Chrome-style lower-left shoulder. Desktop tabs
-   shrink to fit, so their decorative shoulders can safely paint outside
-   the tab-list box. Touch rails retain horizontal scrolling and reserve
-   a small leading gutter so the first active tab's curve is not clipped.
-   ================================================================ */
-
-@media (hover: hover) and (pointer: fine) {
-  .tabbar {
-    overflow: visible;
-  }
-
-  .tab-list {
-    overflow-x: visible;
-    overflow-y: visible;
-  }
-}
-
-@media (any-pointer: coarse) {
-  .tab-list {
-    box-sizing: border-box;
-    padding-inline-start: 12px;
-    scroll-padding-inline-start: 12px;
-  }
-}
-
-/* ================================================================
-   CHROME TAB SHOULDER GEOMETRY FIX V2
-   The previous shoulder shadow was offset downward into the page,
-   where it visually disappeared. Project the shadow sideways instead,
-   matching the classic Chrome-style lower-corner sweep.
-   ================================================================ */
-.workspace-tab.active::before,
-.workspace-tab.active::after {
-  bottom: 0;
-  width: 16px;
-  height: 16px;
-  overflow: visible;
-  background: transparent;
-}
-
-.workspace-tab.active::before {
-  left: -16px;
-  border-bottom-right-radius: 16px;
-  box-shadow: 8px 0 0 0 var(--page);
-}
-
-.workspace-tab.active::after {
-  right: -16px;
-  border-bottom-left-radius: 16px;
-  box-shadow: -8px 0 0 0 var(--page);
-}
-
-@media (max-width: 680px) and (any-pointer: coarse),
-       (max-height: 600px) and (any-pointer: coarse) {
-  .workspace-tab.active::before,
-  .workspace-tab.active::after {
-    bottom: 0;
-    width: 11px;
-    height: 11px;
-  }
-
-  .workspace-tab.active::before {
-    left: -11px;
-    border-bottom-right-radius: 11px;
-    box-shadow: 5px 0 0 0 var(--page);
-  }
-
-  .workspace-tab.active::after {
-    right: -11px;
-    border-bottom-left-radius: 11px;
-    box-shadow: -5px 0 0 0 var(--page);
   }
 }
