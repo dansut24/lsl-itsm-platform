@@ -1582,11 +1582,12 @@ function App() {
     if (activeView === 'home') {
       return (
         <DashboardView
-          metrics={metrics}
+          currentUser={session}
           openRecordTab={(ticket) =>
             openTab('tickets', { key: `ticket-${ticket.id}`, title: ticket.id, recordId: ticket.id })
           }
           openTab={openTab}
+          sidebarMode={sidebarMode}
           tickets={tickets}
         />
       )
