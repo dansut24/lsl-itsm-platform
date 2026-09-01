@@ -10599,3 +10599,52 @@ textarea:focus {
     scroll-padding-inline-start: 12px;
   }
 }
+
+/* ================================================================
+   CHROME TAB SHOULDER GEOMETRY FIX V2
+   The previous shoulder shadow was offset downward into the page,
+   where it visually disappeared. Project the shadow sideways instead,
+   matching the classic Chrome-style lower-corner sweep.
+   ================================================================ */
+.workspace-tab.active::before,
+.workspace-tab.active::after {
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  overflow: visible;
+  background: transparent;
+}
+
+.workspace-tab.active::before {
+  left: -16px;
+  border-bottom-right-radius: 16px;
+  box-shadow: 8px 0 0 0 var(--page);
+}
+
+.workspace-tab.active::after {
+  right: -16px;
+  border-bottom-left-radius: 16px;
+  box-shadow: -8px 0 0 0 var(--page);
+}
+
+@media (max-width: 680px) and (any-pointer: coarse),
+       (max-height: 600px) and (any-pointer: coarse) {
+  .workspace-tab.active::before,
+  .workspace-tab.active::after {
+    bottom: 0;
+    width: 11px;
+    height: 11px;
+  }
+
+  .workspace-tab.active::before {
+    left: -11px;
+    border-bottom-right-radius: 11px;
+    box-shadow: 5px 0 0 0 var(--page);
+  }
+
+  .workspace-tab.active::after {
+    right: -11px;
+    border-bottom-left-radius: 11px;
+    box-shadow: -5px 0 0 0 var(--page);
+  }
+}
