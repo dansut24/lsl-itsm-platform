@@ -1,4 +1,5 @@
 import { loginProfiles, seedTickets } from '../data/demoData.jsx'
+import { seedProjects } from '../data/workPlanningData.js'
 
 function readJson(key, fallback) {
   try {
@@ -90,6 +91,25 @@ export function loadTickets() {
   return [...hydrated, ...supplemental]
 }
 
+export function loadProjects() {
+  const stored = readJson('hi5central-projects-v1', seedProjects)
+  if (!Array.isArray(stored) || !stored.length) return seedProjects
+
+  const seedsById = new Map(seedProjects.map((project) => [project.id, project]))
+  return stored.map((project) => {
+    const seed = seedsById.get(project.id)
+    return {
+      ...project,
+      milestones: Array.isArray(project.milestones) ? project.milestones : seed?.milestones || [],
+      tasks: Array.isArray(project.tasks) ? project.tasks : seed?.tasks || [],
+      risks: Array.isArray(project.risks) ? project.risks : seed?.risks || [],
+      activity: Array.isArray(project.activity) ? project.activity : seed?.activity || [],
+      memberIds: Array.isArray(project.memberIds) ? project.memberIds : seed?.memberIds || [],
+      linkedRecords: Array.isArray(project.linkedRecords) ? project.linkedRecords : seed?.linkedRecords || [],
+    }
+  })
+}
+
 export function loadSession() {
   const storedSession = readMigratedJson('hi5central-session', 'lsl-itsm-session', null)
   const storedProfile = storedSession?.profile
@@ -146,6 +166,10 @@ export function saveWorkspace(workspace) {
 
 export function saveTickets(tickets) {
   writeJson('hi5central-tickets', tickets)
+}
+
+export function saveProjects(projects) {
+  writeJson('hi5central-projects-v1', projects)
 }
 
 export function saveTheme(theme) {
