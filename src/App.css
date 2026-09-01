@@ -9936,9 +9936,9 @@ textarea:focus {
 }
 
 /* Mobile uses a fixed navigation-logo column that is physically outside the
-   horizontally swipeable tab viewport. Per the approved mobile ordering, the
-   tab sequence sits on the left and the Hi5 navigation logo is fixed on the
-   right. The + stays inside .tab-list, immediately after the final tab. */
+   horizontally swipeable tab viewport. The Hi5 navigation logo is fixed on
+   the left, and the tab sequence starts immediately to its right. The + stays
+   inside .tab-list, immediately after the final tab. */
 @media (max-width: 680px) and (any-pointer: coarse),
        (max-height: 600px) and (any-pointer: coarse) {
   .tabbar {
@@ -9953,7 +9953,7 @@ textarea:focus {
 
   .tabbar-tab-zone {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 40px;
+    grid-template-columns: 40px minmax(0, 1fr);
     grid-template-rows: 40px;
     column-gap: 4px;
     width: 100%;
@@ -9963,7 +9963,7 @@ textarea:focus {
   }
 
   .tabbar-tab-zone > .tab-list {
-    grid-column: 1;
+    grid-column: 2;
     grid-row: 1;
     box-sizing: border-box;
     width: 100%;
@@ -9981,10 +9981,10 @@ textarea:focus {
   }
 
   .tabbar-tab-zone > .tabbar-brand {
-    grid-column: 2;
+    grid-column: 1;
     grid-row: 1;
     align-self: center;
-    justify-self: end;
+    justify-self: start;
     width: 34px;
     min-width: 34px;
     height: 32px;
