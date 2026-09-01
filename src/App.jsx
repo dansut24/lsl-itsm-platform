@@ -27,6 +27,7 @@ import {
   serviceDeskModules,
   viewMeta,
 } from './data/demoData.jsx'
+import { workPeople, workTeams } from './data/workPlanningData.js'
 import {
   countBy,
   getBreadcrumbs,
@@ -49,6 +50,7 @@ import {
   loadSidebarMode,
   loadTheme,
   loadTickets,
+  loadProjects,
   loadWorkspace,
   saveAccent,
   saveDensity,
@@ -56,8 +58,10 @@ import {
   saveSidebarMode,
   saveTheme,
   saveTickets,
+  saveProjects,
   saveWorkspace,
 } from './services/demoStore.js'
+import { ProjectManagementView } from './features/projects/ProjectViews.jsx'
 import {
   ChangesView,
   CmdbRecordView,
@@ -85,6 +89,7 @@ const settingsSectionTitles = {
 
 function workspaceTabModule(tab) {
   if (tab?.navId) return tab.navId
+  if (tab?.projectId) return 'projects'
 
   const recordId = String(tab?.recordId || '').toUpperCase()
   if (recordId.startsWith('INC-')) return 'incidents'
@@ -119,6 +124,7 @@ function tabFromRoute(route) {
     recordId: route.recordId,
     assetId: route.assetId,
     articleSlug: route.articleSlug,
+    projectId: route.projectId,
     portalRequestId: route.portalRequestId,
     settingsSection: route.settingsSection,
     newRecordType: route.newRecordType,
@@ -282,6 +288,7 @@ function addWorkspaceTab(currentTabs, tab) {
 
 function App() {
   const [initialTickets] = useState(loadTickets)
+  const [initialProjects] = useState(loadProjects)
   const [initialSession] = useState(loadSession)
   const [initialWorkspace] = useState(loadWorkspace)
   const [initialRoute] = useState(routeFromLocation)
@@ -317,6 +324,7 @@ function App() {
   })
   const pullRefreshTimerRef = useRef(null)
   const [tickets, setTickets] = useState(initialTickets)
+  const [projects, setProjects] = useState(initialProjects)
   const [tabs, setTabs] = useState(initialTabs)
   const [activeTabKey, setActiveTabKey] = useState(initialRouteTab.key)
   const initialRouteType =
@@ -360,6 +368,10 @@ function App() {
   useEffect(() => {
     saveTickets(tickets)
   }, [tickets])
+
+  useEffect(() => {
+    saveProjects(projects)
+  }, [projects])
 
   useEffect(() => {
     saveTheme(theme)
@@ -781,6 +793,9 @@ function App() {
   const selectedArticle = activeTab?.articleSlug
     ? knowledgeArticles.find((article) => article.slug === activeTab.articleSlug)
     : undefined
+  const selectedProject = activeTab?.projectId
+    ? projects.find((project) => project.id === activeTab.projectId)
+    : undefined
   const selectedPortalRequest = activeTab?.portalRequestId
     ? tickets.find((ticket) => ticket.id === activeTab.portalRequestId)
     : undefined
@@ -805,7 +820,7 @@ function App() {
             Change: 'changes',
           }[activeTab?.newRecordType]
         : activeView
-  const breadcrumbs = getBreadcrumbs(activeTab, selectedTicket, selectedAsset, selectedArticle)
+  const breadcrumbs = getBreadcrumbs(activeTab, selectedTicket, selectedAsset, selectedArticle, selectedProject)
   const sidebarCollapsed = sidebarMode === 'collapsed'
   const sidebarHidden = sidebarMode === 'hidden'
 
@@ -979,6 +994,7 @@ function App() {
       recordId: crumb.recordId,
       assetId: crumb.assetId,
       articleSlug: crumb.articleSlug,
+      projectId: crumb.projectId,
       settingsSection: crumb.settingsSection,
       newRecordType: crumb.newRecordType,
       title: crumb.title,
@@ -1028,6 +1044,58 @@ function App() {
       title: article.title,
       articleSlug: article.slug,
     })
+  }
+
+  function openProject(project) {
+    openTab('projects', {
+      key: `project-${project.id}`,
+      title: project.id,
+      projectId: project.id,
+    })
+  }
+
+  function createProject(draft) {
+    const highestId = projects.reduce((highest, project) => {
+      const numericId = Number(String(project.id).replace(/\D/g, ''))
+      return Number.isFinite(numericId) ? Math.max(highest, numericId) : highest
+    }, 0)
+    const id = `PRJ-${String(highestId + 1).padStart(4, '0')}`
+    const owner = workPeople.find((person) => person.id === draft.ownerId)
+    const teamLead = workTeams.find((team) => team.name === draft.team)?.leadId
+    const createdProject = {
+      id,
+      name: draft.name,
+      description: draft.description || 'New delivery initiative created in Hi5Central.',
+      summary: 'Project created. Confirm the delivery plan, milestones and first tasks.',
+      status: 'Planned',
+      health: 'On Track',
+      priority: draft.priority,
+      ownerId: draft.ownerId,
+      sponsorId: teamLead || draft.ownerId,
+      team: draft.team,
+      startDate: draft.startDate,
+      targetDate: draft.targetDate,
+      updated: 'Just now',
+      memberIds: [...new Set([draft.ownerId, teamLead].filter(Boolean))],
+      linkedRecords: [],
+      milestones: [
+        { id: `MS-${id.replace(/\D/g, '')}-1`, title: 'Delivery complete', dueDate: draft.targetDate, status: 'Planned' },
+      ],
+      tasks: [],
+      risks: [],
+      activity: [
+        { id: `ACT-${Date.now()}`, actor: owner?.name || session?.name || 'Dana Sinclair', action: 'created the project', meta: 'Just now' },
+      ],
+    }
+    setProjects((current) => [createdProject, ...current])
+    openProject(createdProject)
+    setToast(`${id} created`)
+  }
+
+  function updateProject(projectId, updates) {
+    setProjects((current) => current.map((project) => project.id === projectId
+      ? { ...project, ...updates, updated: 'Just now' }
+      : project))
   }
 
   function openSettingsSection(section) {
@@ -1675,6 +1743,24 @@ function App() {
             openTab('tickets', { key: `ticket-${ticket.id}`, title: ticket.id, recordId: ticket.id })
           }
           tickets={tickets.filter((ticket) => ticket.type === 'Change')}
+        />
+      )
+    }
+
+    if (activeView === 'projects') {
+      return (
+        <ProjectManagementView
+          onCreateProject={createProject}
+          onOpenProject={openProject}
+          onOpenRecord={(ticket) =>
+            openTab('tickets', { key: `ticket-${ticket.id}`, title: ticket.id, recordId: ticket.id })
+          }
+          onUpdateProject={updateProject}
+          people={workPeople}
+          projects={projects}
+          selectedProject={selectedProject}
+          teams={workTeams}
+          tickets={tickets}
         />
       )
     }
