@@ -83,6 +83,28 @@ const settingsSectionTitles = {
   profile: 'Profile',
 }
 
+function workspaceTabModule(tab) {
+  if (tab?.navId) return tab.navId
+
+  const recordId = String(tab?.recordId || '').toUpperCase()
+  if (recordId.startsWith('INC-')) return 'incidents'
+  if (recordId.startsWith('REQ-')) return 'requests'
+  if (recordId.startsWith('PRB-')) return 'problems'
+  if (recordId.startsWith('CHG-')) return 'changes'
+
+  if (tab?.newRecordType === 'Incident') return 'incidents'
+  if (tab?.newRecordType === 'Service Request') return 'requests'
+  if (tab?.newRecordType === 'Problem') return 'problems'
+  if (tab?.newRecordType === 'Change') return 'changes'
+
+  return tab?.viewId || 'tickets'
+}
+
+function workspaceTabIcon(tab) {
+  const moduleId = workspaceTabModule(tab)
+  return viewMeta[moduleId]?.icon || viewMeta[tab?.viewId]?.icon || viewMeta.tickets.icon
+}
+
 function getSystemTheme() {
   return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
 }
@@ -1730,7 +1752,11 @@ function App() {
           </button>
 
           <div className="tab-list" ref={tabListRef}>
-            {tabs.map((tab) => (
+            {tabs.map((tab) => {
+              const TabIcon = workspaceTabIcon(tab)
+              const tabModule = workspaceTabModule(tab)
+
+              return (
                 <button
                   className={[
                     'workspace-tab',
@@ -1738,10 +1764,14 @@ function App() {
                     activeTabKey === tab.key && activeHasUnsavedChanges ? 'dirty' : '',
                   ].filter(Boolean).join(' ')}
                   data-tab-key={tab.key}
+                  data-tab-module={tabModule}
                   key={tab.key}
                   onClick={() => activateTab(tab)}
                   type="button"
                 >
+                  <span className="workspace-tab-icon" aria-hidden="true">
+                    <TabIcon size={13} strokeWidth={2.2} />
+                  </span>
                   <span className="workspace-tab-label">
                     {tab.title}
                     {activeTabKey === tab.key && activeHasUnsavedChanges && (
@@ -1762,11 +1792,18 @@ function App() {
                     </span>
                   )}
                 </button>
-              ))}
+              )
+            })}
           </div>
 
-          <button className="tab-add" onClick={openNewTab} title="Open new tab" type="button">
-            <Plus size={17} aria-hidden="true" />
+          <button
+            aria-label="Open Hi5 workspace launcher"
+            className="tab-add"
+            onClick={openNewTab}
+            title="Open Hi5 workspace launcher"
+            type="button"
+          >
+            <Plus size={18} strokeWidth={2.4} aria-hidden="true" />
           </button>
 
           <div className="chrome-actions">
