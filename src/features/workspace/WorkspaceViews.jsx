@@ -1,17 +1,23 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   AlertCircle,
+  ArrowDown,
   ArrowLeft,
+  ArrowUp,
   BookOpen,
   CalendarClock,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   CircleGauge,
   ClipboardCheck,
   Clock3,
+  Copy,
+  GripVertical,
   Headphones,
   Inbox,
   KeyRound,
+  LayoutDashboard,
   LifeBuoy,
   ListChecks,
   LogIn,
@@ -19,18 +25,24 @@ import {
   MessageSquarePlus,
   Monitor,
   Moon,
+  MoreHorizontal,
   Palette,
+  Pencil,
   Plus,
   Search,
   Send,
   Server,
   Settings,
+  Share2,
   SlidersHorizontal,
+  Star,
   Sun,
+  Trash2,
   UserCheck,
   UserRound,
   Users,
-  Wrench
+  Wrench,
+  X
 } from 'lucide-react'
 import { accentOptions, demoUsers, incidentServices, loginProfiles, priorities, statusOptions, teams, types } from '../../data/demoData.jsx'
 import { priorityClass, statusClass } from '../../lib/workspace.js'
@@ -412,72 +424,757 @@ export function NewTabView({ navItems, openNewRecord, openRecordTab, openTab, ti
   )
 }
 
-export function DashboardView({ metrics, openRecordTab, openTab, tickets }) {
-  const watchList = tickets
-    .filter((ticket) => ticket.slaPercent >= 45 && ticket.status !== 'Resolved')
-    .sort((a, b) => b.slaPercent - a.slaPercent)
-    .slice(0, 4)
+const DASHBOARD_STORAGE_KEY = 'hi5central-demo-dashboards-v1'
 
+const DASHBOARD_WIDGET_LIBRARY = [
+  { id: 'active-records', label: 'Active Records', category: 'Attention', description: 'Open workload count', defaultSpan: 3 },
+  { id: 'high-priority', label: 'High Priority', category: 'Attention', description: 'Critical and high priority work', defaultSpan: 3 },
+  { id: 'approvals', label: 'Approvals', category: 'Attention', description: 'Requests and changes waiting for approval', defaultSpan: 3 },
+  { id: 'sla-watch', label: 'SLA Watch', category: 'Attention', description: 'Records approaching SLA targets', defaultSpan: 3 },
+  { id: 'my-work', label: 'My Work', category: 'Records', description: 'Records assigned to the current analyst', defaultSpan: 6 },
+  { id: 'needs-attention', label: 'Needs Attention', category: 'Records', description: 'Unassigned, high priority and SLA-risk work', defaultSpan: 6 },
+  { id: 'service-queue', label: 'Live Service Queue', category: 'Records', description: 'Full-width operational queue table', defaultSpan: 12 },
+  { id: 'team-workload', label: 'Team Workload', category: 'Analytics', description: 'Current workload by assignment group', defaultSpan: 6 },
+  { id: 'priority-mix', label: 'Priority Mix', category: 'Analytics', description: 'Workload split by priority', defaultSpan: 6 },
+  { id: 'change-schedule', label: 'Upcoming Changes', category: 'Change', description: 'Implementation schedule and CAB work', defaultSpan: 6 },
+  { id: 'recent-activity', label: 'Recent Activity', category: 'Activity', description: 'Latest meaningful record activity', defaultSpan: 6 },
+  { id: 'service-health', label: 'Service Health', category: 'Analytics', description: 'Open work grouped by service', defaultSpan: 6 },
+  { id: 'saved-filter', label: 'Saved Filter', category: 'Custom', description: 'Reusable filtered record list', defaultSpan: 6 },
+  { id: 'heading', label: 'Heading / Note', category: 'Custom', description: 'Add explanatory text to a dashboard', defaultSpan: 12 },
+]
+
+const DASHBOARD_SIZE_OPTIONS = [
+  { id: 3, label: 'Small' },
+  { id: 4, label: 'Compact' },
+  { id: 6, label: 'Medium' },
+  { id: 8, label: 'Large' },
+  { id: 12, label: 'Full width' },
+]
+
+const DASHBOARD_TEMPLATES = [
+  {
+    id: 'my-work-template',
+    name: 'My Work',
+    description: 'A focused personal workspace for daily analyst work.',
+    widgets: [
+      ['active-records', 3], ['high-priority', 3], ['approvals', 3], ['sla-watch', 3],
+      ['my-work', 6], ['needs-attention', 6], ['service-queue', 12], ['recent-activity', 6], ['team-workload', 6],
+    ],
+  },
+  {
+    id: 'service-desk-template',
+    name: 'Service Desk Operations',
+    description: 'Queues, SLA pressure and assignment-group workload.',
+    widgets: [
+      ['active-records', 3], ['high-priority', 3], ['sla-watch', 3], ['approvals', 3],
+      ['service-queue', 12], ['team-workload', 6], ['priority-mix', 6], ['recent-activity', 12],
+    ],
+  },
+  {
+    id: 'cab-template',
+    name: 'CAB & Change',
+    description: 'Change schedule, approvals and implementation attention.',
+    widgets: [
+      ['approvals', 4], ['high-priority', 4], ['sla-watch', 4], ['change-schedule', 12],
+      ['recent-activity', 6], ['service-health', 6],
+    ],
+  },
+  {
+    id: 'executive-template',
+    name: 'Executive Service Overview',
+    description: 'A high-level service-management overview for leaders.',
+    widgets: [
+      ['active-records', 3], ['high-priority', 3], ['approvals', 3], ['sla-watch', 3],
+      ['service-health', 6], ['priority-mix', 6], ['team-workload', 12],
+    ],
+  },
+]
+
+function makeDashboardWidget(type, span, overrides = {}) {
+  const definition = DASHBOARD_WIDGET_LIBRARY.find((item) => item.id === type)
+  return {
+    id: overrides.id || `DW-${type}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    type,
+    title: overrides.title || definition?.label || 'Widget',
+    span: span || definition?.defaultSpan || 6,
+    limit: overrides.limit || 6,
+    note: overrides.note || 'Use this space for team guidance, operational context or a handover note.',
+    filterType: overrides.filterType || 'All',
+  }
+}
+
+function widgetsFromTemplate(template) {
+  return template.widgets.map(([type, span], index) =>
+    makeDashboardWidget(type, span, { id: `${template.id}-${type}-${index}` }),
+  )
+}
+
+function seedDashboards() {
+  const myWork = DASHBOARD_TEMPLATES[0]
+  const serviceDesk = DASHBOARD_TEMPLATES[1]
+  const cab = DASHBOARD_TEMPLATES[2]
+  const executive = DASHBOARD_TEMPLATES[3]
+
+  return [
+    {
+      id: 'DB-MY-WORK',
+      name: 'My Work',
+      owner: 'Dana Sinclair',
+      scope: 'mine',
+      isDefault: true,
+      canEdit: true,
+      description: 'Your personal day-to-day analyst workspace.',
+      widgets: widgetsFromTemplate(myWork),
+      shares: [],
+    },
+    {
+      id: 'DB-SERVICE-DESK',
+      name: 'Service Desk Operations',
+      owner: 'Service Desk Leads',
+      scope: 'team',
+      team: 'Service Desk',
+      isDefault: false,
+      canEdit: true,
+      description: 'Shared operational view for the Service Desk team.',
+      widgets: widgetsFromTemplate(serviceDesk),
+      shares: [
+        { id: 'TEAM-Service Desk', kind: 'team', name: 'Service Desk', permission: 'Can edit' },
+        { id: 'USR-Priya Raman', kind: 'user', name: 'Priya Raman', permission: 'Can view' },
+      ],
+    },
+    {
+      id: 'DB-CAB',
+      name: 'CAB & Change',
+      owner: 'Change Management',
+      scope: 'shared',
+      isDefault: false,
+      canEdit: false,
+      description: 'Shared CAB schedule and approval view.',
+      widgets: widgetsFromTemplate(cab),
+      shares: [{ id: 'TEAM-Infrastructure', kind: 'team', name: 'Infrastructure', permission: 'Can view' }],
+    },
+    {
+      id: 'DB-EXEC',
+      name: 'Executive Service Overview',
+      owner: 'Technology Leadership',
+      scope: 'shared',
+      isDefault: false,
+      canEdit: false,
+      description: 'High-level shared service-management overview.',
+      widgets: widgetsFromTemplate(executive),
+      shares: [],
+    },
+  ]
+}
+
+function cloneDashboards(value) {
+  return JSON.parse(JSON.stringify(value))
+}
+
+function loadDashboards() {
+  try {
+    const stored = window.localStorage.getItem(DASHBOARD_STORAGE_KEY)
+    if (!stored) return seedDashboards()
+    const parsed = JSON.parse(stored)
+    if (!Array.isArray(parsed) || !parsed.length) return seedDashboards()
+    return parsed
+  } catch {
+    return seedDashboards()
+  }
+}
+
+function DashboardMetric({ detail, icon: Icon, label, onClick, tone, value }) {
   return (
-    <div className="view-grid dashboard-grid">
-      <section className="metric-row" aria-label="Operational metrics">
-        <MetricCard label="Active Records" value={metrics.active} detail="Unresolved workload" icon={Inbox} tone="blue" />
-        <MetricCard label="High Priority" value={metrics.highRisk} detail="Critical and high items" icon={AlertCircle} tone="red" />
-        <MetricCard label="Approvals" value={metrics.approvals} detail="Awaiting owner or CAB" icon={ClipboardCheck} tone="amber" />
-        <MetricCard label="SLA Watch" value={metrics.slaPressure} detail="Needs attention today" icon={Clock3} tone="amber" />
-      </section>
+    <button className={`dashboard-kpi dashboard-tone-${tone}`} onClick={onClick} type="button">
+      <Icon size={19} aria-hidden="true" />
+      <span>
+        <strong>{value}</strong>
+        <b>{label}</b>
+        <small>{detail}</small>
+      </span>
+    </button>
+  )
+}
 
-      <section className="operational-band">
-        <div className="section-heading">
-          <div>
-            <span className="eyebrow">Today</span>
-            <h2>Live Service Queue</h2>
-          </div>
-          <button className="text-button" onClick={() => openTab('tickets')} type="button">
-            Open all records
-            <ChevronRight size={16} aria-hidden="true" />
-          </button>
+function DashboardWidgetFrame({ children, editMode, index, onConfigure, onDragStart, onMove, onRemove, widget }) {
+  return (
+    <article
+      className={`dashboard-widget dashboard-widget-${widget.type}`}
+      draggable={editMode}
+      onDragStart={(event) => onDragStart?.(event, index)}
+      style={{ '--dashboard-widget-span': widget.span }}
+    >
+      {editMode && (
+        <div className="dashboard-widget-editbar">
+          <span className="dashboard-drag-handle" title="Drag to reorder">
+            <GripVertical size={15} aria-hidden="true" />
+          </span>
+          <button onClick={() => onMove?.(index, -1)} title="Move earlier" type="button"><ArrowUp size={14} /></button>
+          <button onClick={() => onMove?.(index, 1)} title="Move later" type="button"><ArrowDown size={14} /></button>
+          <button onClick={() => onConfigure?.(widget)} title="Configure widget" type="button"><Settings size={14} /></button>
+          <button onClick={() => onRemove?.(widget.id)} title="Remove widget" type="button"><Trash2 size={14} /></button>
         </div>
-        <div className="queue-table">
-          {watchList.map((ticket) => (
-            <button
-              className="queue-row"
-              key={ticket.id}
-              onClick={() => openRecordTab(ticket)}
-              type="button"
-            >
-              <span className={`priority-dot ${priorityClass(ticket.priority)}`}></span>
-              <span>
-                <strong>{ticket.id}</strong>
-                {ticket.title}
-              </span>
-              <span>{ticket.team}</span>
+      )}
+      {children}
+    </article>
+  )
+}
+
+function DashboardWidgetContent({ dashboardMetrics, filters, openRecordTab, openTab, tickets, widget }) {
+  const workingTickets = tickets
+    .filter((ticket) => filters.team === 'All' || ticket.team === filters.team)
+    .filter((ticket) => filters.service === 'All' || ticket.service === filters.service)
+    .filter((ticket) => widget.filterType === 'All' || ticket.type === widget.filterType)
+
+  const activeTickets = workingTickets.filter((ticket) => !['Closed', 'Resolved'].includes(ticket.status))
+  const riskTickets = workingTickets
+    .filter((ticket) => ticket.status !== 'Resolved')
+    .sort((a, b) => b.slaPercent - a.slaPercent)
+  const myWork = activeTickets.filter((ticket) => ['Dana Sinclair', 'Priya Raman', 'Noah Williams'].includes(ticket.assignee))
+  const needsAttention = activeTickets.filter((ticket) =>
+    ['Critical', 'High'].includes(ticket.priority) || ticket.slaPercent >= 60 || !ticket.assignee || ticket.assignee === 'Unassigned',
+  )
+  const changes = workingTickets.filter((ticket) => ticket.type === 'Change')
+
+  if (widget.type === 'active-records') {
+    return <DashboardMetric detail="Unresolved workload" icon={Inbox} label={widget.title} onClick={() => openTab('tickets')} tone="blue" value={dashboardMetrics.active} />
+  }
+  if (widget.type === 'high-priority') {
+    return <DashboardMetric detail="Critical and high items" icon={AlertCircle} label={widget.title} onClick={() => openTab('incidents')} tone="red" value={dashboardMetrics.highRisk} />
+  }
+  if (widget.type === 'approvals') {
+    return <DashboardMetric detail="Waiting for approval" icon={ClipboardCheck} label={widget.title} onClick={() => openTab('requests')} tone="amber" value={dashboardMetrics.approvals} />
+  }
+  if (widget.type === 'sla-watch') {
+    return <DashboardMetric detail="Needs attention today" icon={Clock3} label={widget.title} onClick={() => openTab('incidents')} tone="amber" value={dashboardMetrics.slaPressure} />
+  }
+
+  if (widget.type === 'heading') {
+    return (
+      <div className="dashboard-note-widget">
+        <span className="eyebrow">Dashboard note</span>
+        <h2>{widget.title}</h2>
+        <p>{widget.note}</p>
+      </div>
+    )
+  }
+
+  const listHeader = (eyebrow, actionLabel, action) => (
+    <div className="dashboard-widget-heading">
+      <div>
+        <span className="eyebrow">{eyebrow}</span>
+        <h2>{widget.title}</h2>
+      </div>
+      {actionLabel && <button className="text-button" onClick={action} type="button">{actionLabel}<ChevronRight size={15} /></button>}
+    </div>
+  )
+
+  if (widget.type === 'service-queue') {
+    const rows = riskTickets.slice(0, Math.max(widget.limit, 8))
+    return (
+      <div className="dashboard-table-widget">
+        {listHeader('Operational queue', 'Open all records', () => openTab('tickets'))}
+        <div className="dashboard-table-scroll">
+          <div className="dashboard-record-table dashboard-record-table-head" aria-hidden="true">
+            <span>Reference</span><span>Summary</span><span>Priority</span><span>Status</span><span>Team</span><span>Assignee</span><span>SLA</span>
+          </div>
+          {rows.map((ticket) => (
+            <button className="dashboard-record-table" key={ticket.id} onClick={() => openRecordTab(ticket)} type="button">
+              <strong>{ticket.id}</strong>
+              <span className="dashboard-record-summary">{ticket.title}</span>
+              <span>{ticket.priority}</span>
               <span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span>
+              <span>{ticket.team}</span>
+              <span>{ticket.assignee || 'Unassigned'}</span>
               <SlaBar value={ticket.slaPercent} label={ticket.sla} />
             </button>
           ))}
         </div>
-      </section>
+      </div>
+    )
+  }
 
-      <section className="workload-panel">
-        <div className="section-heading">
-          <div>
-            <span className="eyebrow">Workload</span>
-            <h2>Team Distribution</h2>
+  if (widget.type === 'my-work' || widget.type === 'needs-attention' || widget.type === 'saved-filter') {
+    const rows = (widget.type === 'my-work' ? myWork : widget.type === 'needs-attention' ? needsAttention : activeTickets)
+      .slice(0, widget.limit)
+    return (
+      <div className="dashboard-list-widget">
+        {listHeader(widget.type === 'my-work' ? 'Personal queue' : widget.type === 'needs-attention' ? 'Attention' : 'Saved filter', 'Open queue', () => openTab('tickets'))}
+        <div className="dashboard-compact-records">
+          {rows.map((ticket) => (
+            <button key={ticket.id} onClick={() => openRecordTab(ticket)} type="button">
+              <span className={`priority-dot ${priorityClass(ticket.priority)}`} />
+              <span><strong>{ticket.id}</strong><small>{ticket.title}</small></span>
+              <span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span>
+              <small>{ticket.sla}</small>
+              <ChevronRight size={15} aria-hidden="true" />
+            </button>
+          ))}
+          {!rows.length && <div className="dashboard-widget-empty">Nothing matches this view.</div>}
+        </div>
+      </div>
+    )
+  }
+
+  if (widget.type === 'team-workload') {
+    return <div className="dashboard-chart-widget">{listHeader('Workload')}<BarList data={dashboardMetrics.teamCounts} /></div>
+  }
+  if (widget.type === 'priority-mix') {
+    return <div className="dashboard-chart-widget">{listHeader('Priority')}<BarList data={dashboardMetrics.priorityCounts} palette="risk" /></div>
+  }
+  if (widget.type === 'service-health') {
+    return <div className="dashboard-chart-widget">{listHeader('Services')}<BarList data={dashboardMetrics.serviceCounts} /></div>
+  }
+
+  if (widget.type === 'change-schedule') {
+    return (
+      <div className="dashboard-list-widget">
+        {listHeader('Change management', 'Open Changes', () => openTab('changes'))}
+        <div className="dashboard-change-list">
+          {changes.slice(0, widget.limit).map((ticket) => (
+            <button key={ticket.id} onClick={() => openRecordTab(ticket)} type="button">
+              <span><strong>{ticket.id}</strong><small>{ticket.title}</small></span>
+              <span>{ticket.status}</span>
+              <small>{ticket.plannedStart || ticket.sla}</small>
+            </button>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  if (widget.type === 'recent-activity') {
+    const recent = workingTickets.slice(0, widget.limit)
+    return (
+      <div className="dashboard-list-widget">
+        {listHeader('Activity')}
+        <div className="dashboard-activity-list">
+          {recent.map((ticket, index) => (
+            <button key={`${ticket.id}-${index}`} onClick={() => openRecordTab(ticket)} type="button">
+              <span className={`priority-dot ${priorityClass(ticket.priority)}`} />
+              <span><strong>{ticket.id} updated</strong><small>{ticket.title}</small></span>
+              <time>{ticket.updated}</time>
+            </button>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  return <div className="dashboard-widget-empty">Widget preview unavailable.</div>
+}
+
+export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode, tickets }) {
+  const [dashboards, setDashboards] = useState(loadDashboards)
+  const [activeDashboardId, setActiveDashboardId] = useState(() => loadDashboards().find((item) => item.isDefault)?.id || 'DB-MY-WORK')
+  const [dashboardMenuOpen, setDashboardMenuOpen] = useState(false)
+  const [editMode, setEditMode] = useState(false)
+  const [editSnapshot, setEditSnapshot] = useState(null)
+  const [widgetCatalogOpen, setWidgetCatalogOpen] = useState(false)
+  const [configureWidgetId, setConfigureWidgetId] = useState(null)
+  const [shareOpen, setShareOpen] = useState(false)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [moreOpen, setMoreOpen] = useState(false)
+  const [draggedIndex, setDraggedIndex] = useState(null)
+  const [dashboardFilters, setDashboardFilters] = useState({ service: 'All', team: 'All', period: 'Last 30 days' })
+  const [newDashboardName, setNewDashboardName] = useState('')
+  const [newDashboardTemplate, setNewDashboardTemplate] = useState('my-work-template')
+  const [shareTarget, setShareTarget] = useState('Service Desk')
+  const [shareKind, setShareKind] = useState('team')
+  const [sharePermission, setSharePermission] = useState('Can view')
+
+  const activeDashboard = dashboards.find((item) => item.id === activeDashboardId) || dashboards[0]
+  const configuredWidget = activeDashboard?.widgets.find((widget) => widget.id === configureWidgetId)
+  const currentUserName = currentUser?.name || 'Dana Sinclair'
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(DASHBOARD_STORAGE_KEY, JSON.stringify(dashboards))
+    } catch {
+      // Demo persistence is best-effort only.
+    }
+  }, [dashboards])
+
+  const filteredTickets = useMemo(() => tickets
+    .filter((ticket) => dashboardFilters.team === 'All' || ticket.team === dashboardFilters.team)
+    .filter((ticket) => dashboardFilters.service === 'All' || ticket.service === dashboardFilters.service),
+  [dashboardFilters.service, dashboardFilters.team, tickets])
+
+  const dashboardMetrics = useMemo(() => {
+    const active = filteredTickets.filter((ticket) => !['Closed', 'Resolved'].includes(ticket.status))
+    const highRisk = filteredTickets.filter((ticket) => ['Critical', 'High'].includes(ticket.priority))
+    const awaitingApproval = filteredTickets.filter((ticket) => ['Pending Approval', 'CAB Review'].includes(ticket.status))
+    const slaPressure = filteredTickets.filter((ticket) => ticket.slaPercent >= 60 && ticket.status !== 'Resolved')
+    const countBy = (field) => filteredTickets.reduce((result, ticket) => {
+      const key = ticket[field] || 'Unassigned'
+      result[key] = (result[key] || 0) + 1
+      return result
+    }, {})
+    return {
+      active: active.length,
+      highRisk: highRisk.length,
+      approvals: awaitingApproval.length,
+      slaPressure: slaPressure.length,
+      teamCounts: countBy('team'),
+      priorityCounts: countBy('priority'),
+      serviceCounts: countBy('service'),
+    }
+  }, [filteredTickets])
+
+  const services = useMemo(() => ['All', ...new Set(tickets.map((ticket) => ticket.service).filter(Boolean))], [tickets])
+
+  function updateDashboard(id, updater) {
+    setDashboards((current) => current.map((dashboard) => dashboard.id === id ? updater(dashboard) : dashboard))
+  }
+
+  function beginEdit() {
+    if (!activeDashboard.canEdit) return
+    setEditSnapshot(cloneDashboards(dashboards))
+    setEditMode(true)
+    setDashboardMenuOpen(false)
+    setMoreOpen(false)
+  }
+
+  function saveEdit() {
+    setEditSnapshot(null)
+    setEditMode(false)
+    setWidgetCatalogOpen(false)
+    setConfigureWidgetId(null)
+  }
+
+  function cancelEdit() {
+    if (editSnapshot) setDashboards(editSnapshot)
+    setEditSnapshot(null)
+    setEditMode(false)
+    setWidgetCatalogOpen(false)
+    setConfigureWidgetId(null)
+  }
+
+  function addWidget(type) {
+    const definition = DASHBOARD_WIDGET_LIBRARY.find((item) => item.id === type)
+    updateDashboard(activeDashboard.id, (dashboard) => ({
+      ...dashboard,
+      widgets: [...dashboard.widgets, makeDashboardWidget(type, definition?.defaultSpan)],
+    }))
+    setWidgetCatalogOpen(false)
+  }
+
+  function removeWidget(widgetId) {
+    updateDashboard(activeDashboard.id, (dashboard) => ({
+      ...dashboard,
+      widgets: dashboard.widgets.filter((widget) => widget.id !== widgetId),
+    }))
+    if (configureWidgetId === widgetId) setConfigureWidgetId(null)
+  }
+
+  function updateWidget(widgetId, changes) {
+    updateDashboard(activeDashboard.id, (dashboard) => ({
+      ...dashboard,
+      widgets: dashboard.widgets.map((widget) => widget.id === widgetId ? { ...widget, ...changes } : widget),
+    }))
+  }
+
+  function moveWidget(index, delta) {
+    const target = index + delta
+    if (target < 0 || target >= activeDashboard.widgets.length) return
+    updateDashboard(activeDashboard.id, (dashboard) => {
+      const widgets = [...dashboard.widgets]
+      const [widget] = widgets.splice(index, 1)
+      widgets.splice(target, 0, widget)
+      return { ...dashboard, widgets }
+    })
+  }
+
+  function dropWidget(targetIndex) {
+    if (draggedIndex === null || draggedIndex === targetIndex) return
+    updateDashboard(activeDashboard.id, (dashboard) => {
+      const widgets = [...dashboard.widgets]
+      const [widget] = widgets.splice(draggedIndex, 1)
+      widgets.splice(targetIndex, 0, widget)
+      return { ...dashboard, widgets }
+    })
+    setDraggedIndex(null)
+  }
+
+  function createDashboard() {
+    const template = DASHBOARD_TEMPLATES.find((item) => item.id === newDashboardTemplate)
+    const name = newDashboardName.trim() || `My ${template?.name || 'Dashboard'}`
+    const id = `DB-${Date.now()}`
+    const dashboard = {
+      id,
+      name,
+      owner: currentUserName,
+      scope: 'mine',
+      isDefault: false,
+      canEdit: true,
+      description: template?.description || 'Personal dashboard',
+      widgets: template ? widgetsFromTemplate(template).map((widget) => ({ ...widget, id: `${id}-${widget.id}` })) : [],
+      shares: [],
+    }
+    setDashboards((current) => [...current, dashboard])
+    setActiveDashboardId(id)
+    setCreateOpen(false)
+    setNewDashboardName('')
+  }
+
+  function duplicateDashboard() {
+    const id = `DB-${Date.now()}`
+    const copy = {
+      ...cloneDashboards(activeDashboard),
+      id,
+      name: `${activeDashboard.name} copy`,
+      owner: currentUserName,
+      scope: 'mine',
+      canEdit: true,
+      isDefault: false,
+      shares: [],
+      widgets: activeDashboard.widgets.map((widget, index) => ({ ...widget, id: `${id}-${index}-${widget.type}` })),
+    }
+    setDashboards((current) => [...current, copy])
+    setActiveDashboardId(id)
+    setMoreOpen(false)
+  }
+
+  function setAsDefault() {
+    setDashboards((current) => current.map((dashboard) => ({ ...dashboard, isDefault: dashboard.id === activeDashboard.id })))
+    setMoreOpen(false)
+  }
+
+  function deleteDashboard() {
+    if (activeDashboard.scope !== 'mine' || dashboards.filter((item) => item.scope === 'mine').length <= 1) return
+    const remaining = dashboards.filter((dashboard) => dashboard.id !== activeDashboard.id)
+    setDashboards(remaining)
+    setActiveDashboardId(remaining.find((item) => item.isDefault)?.id || remaining[0].id)
+    setMoreOpen(false)
+  }
+
+  function addShare() {
+    const name = shareTarget.trim()
+    if (!name) return
+    updateDashboard(activeDashboard.id, (dashboard) => ({
+      ...dashboard,
+      shares: [
+        ...dashboard.shares.filter((item) => !(item.name === name && item.kind === shareKind)),
+        { id: `${shareKind}-${name}`, kind: shareKind, name, permission: sharePermission },
+      ],
+    }))
+  }
+
+  function removeShare(id) {
+    updateDashboard(activeDashboard.id, (dashboard) => ({
+      ...dashboard,
+      shares: dashboard.shares.filter((item) => item.id !== id),
+    }))
+  }
+
+  const groupedDashboards = {
+    mine: dashboards.filter((item) => item.scope === 'mine'),
+    shared: dashboards.filter((item) => item.scope === 'shared'),
+    team: dashboards.filter((item) => item.scope === 'team'),
+  }
+
+  return (
+    <div className="dashboard-builder" data-sidebar-mode={sidebarMode || 'expanded'}>
+      <div className="dashboard-commandbar">
+        <div className="dashboard-selector-wrap">
+          <button className="dashboard-selector" onClick={() => setDashboardMenuOpen((open) => !open)} type="button">
+            <LayoutDashboard size={17} aria-hidden="true" />
+            <span><small>Dashboard</small><strong>{activeDashboard.name}</strong></span>
+            <ChevronDown size={16} aria-hidden="true" />
+          </button>
+          {dashboardMenuOpen && (
+            <div className="dashboard-selector-menu">
+              {[
+                ['mine', 'My dashboards'],
+                ['shared', 'Shared with me'],
+                ['team', 'Team dashboards'],
+              ].map(([group, label]) => groupedDashboards[group].length ? (
+                <section key={group}>
+                  <span>{label}</span>
+                  {groupedDashboards[group].map((dashboard) => (
+                    <button className={dashboard.id === activeDashboard.id ? 'active' : ''} key={dashboard.id} onClick={() => { setActiveDashboardId(dashboard.id); setDashboardMenuOpen(false); setEditMode(false) }} type="button">
+                      <strong>{dashboard.name}</strong>
+                      <small>{dashboard.owner}{dashboard.isDefault ? ' · Default' : ''}</small>
+                    </button>
+                  ))}
+                </section>
+              ) : null)}
+              <button className="dashboard-menu-create" onClick={() => { setCreateOpen(true); setDashboardMenuOpen(false) }} type="button"><Plus size={15} /> Create dashboard</button>
+            </div>
+          )}
+        </div>
+
+        <div className="dashboard-command-actions">
+          {activeDashboard.isDefault && <span className="dashboard-default-pill"><Star size={13} fill="currentColor" /> Default</span>}
+          <button onClick={() => setShareOpen(true)} type="button"><Share2 size={15} /> Share</button>
+          {activeDashboard.canEdit ? (
+            <button className={editMode ? 'active' : ''} onClick={editMode ? saveEdit : beginEdit} type="button"><Pencil size={15} /> {editMode ? 'Save dashboard' : 'Edit dashboard'}</button>
+          ) : (
+            <button onClick={duplicateDashboard} type="button"><Copy size={15} /> Make a copy</button>
+          )}
+          <div className="dashboard-more-wrap">
+            <button aria-label="Dashboard actions" onClick={() => setMoreOpen((open) => !open)} type="button"><MoreHorizontal size={17} /></button>
+            {moreOpen && (
+              <div className="dashboard-more-menu">
+                <button onClick={duplicateDashboard} type="button"><Copy size={14} /> Duplicate dashboard</button>
+                <button disabled={activeDashboard.isDefault} onClick={setAsDefault} type="button"><Star size={14} /> Set as default</button>
+                {activeDashboard.scope === 'mine' && <button className="danger" onClick={deleteDashboard} type="button"><Trash2 size={14} /> Delete dashboard</button>}
+              </div>
+            )}
           </div>
         </div>
-        <BarList data={metrics.teamCounts} />
-      </section>
+      </div>
 
-      <section className="workload-panel">
-        <div className="section-heading">
+      <div className="dashboard-contextbar">
+        <div className="dashboard-context-copy">
+          <strong>{activeDashboard.name}</strong>
+          <span>{activeDashboard.description}</span>
+          {activeDashboard.scope !== 'mine' && <small>{activeDashboard.scope === 'team' ? `${activeDashboard.team} team dashboard` : `Shared by ${activeDashboard.owner}`}</small>}
+        </div>
+        <div className="dashboard-global-filters" aria-label="Dashboard filters">
+          <label>Service<select value={dashboardFilters.service} onChange={(event) => setDashboardFilters({ ...dashboardFilters, service: event.target.value })}>{services.map((service) => <option key={service}>{service}</option>)}</select></label>
+          <label>Team<select value={dashboardFilters.team} onChange={(event) => setDashboardFilters({ ...dashboardFilters, team: event.target.value })}>{['All', ...teams].map((team) => <option key={team}>{team}</option>)}</select></label>
+          <label>Period<select value={dashboardFilters.period} onChange={(event) => setDashboardFilters({ ...dashboardFilters, period: event.target.value })}>{['Today', 'Last 7 days', 'Last 30 days', 'This quarter'].map((period) => <option key={period}>{period}</option>)}</select></label>
+        </div>
+      </div>
+
+      {editMode && (
+        <div className="dashboard-edit-toolbar">
+          <span><GripVertical size={15} /> Editing <strong>{activeDashboard.name}</strong></span>
           <div>
-            <span className="eyebrow">Priority</span>
-            <h2>Risk Mix</h2>
+            <button onClick={() => setWidgetCatalogOpen(true)} type="button"><Plus size={15} /> Add widget</button>
+            <button onClick={cancelEdit} type="button">Cancel</button>
+            <button className="primary" onClick={saveEdit} type="button">Save</button>
           </div>
         </div>
-        <BarList data={metrics.priorityCounts} palette="risk" />
-      </section>
+      )}
+
+      <div className="dashboard-canvas" onClick={() => { setDashboardMenuOpen(false); setMoreOpen(false) }}>
+        <div className="dashboard-canvas-grid">
+          {activeDashboard.widgets.map((widget, index) => (
+            <div
+              className="dashboard-widget-dropzone"
+              key={widget.id}
+              onDragOver={(event) => editMode && event.preventDefault()}
+              onDrop={() => editMode && dropWidget(index)}
+              style={{ '--dashboard-widget-span': widget.span }}
+            >
+              <DashboardWidgetFrame
+                editMode={editMode}
+                index={index}
+                onConfigure={(item) => setConfigureWidgetId(item.id)}
+                onDragStart={(event, itemIndex) => { setDraggedIndex(itemIndex); event.dataTransfer.effectAllowed = 'move' }}
+                onMove={moveWidget}
+                onRemove={removeWidget}
+                widget={widget}
+              >
+                <DashboardWidgetContent
+                  dashboardMetrics={dashboardMetrics}
+                  filters={dashboardFilters}
+                  openRecordTab={openRecordTab}
+                  openTab={openTab}
+                  tickets={tickets}
+                  widget={widget}
+                />
+              </DashboardWidgetFrame>
+            </div>
+          ))}
+          {!activeDashboard.widgets.length && (
+            <button className="dashboard-empty-canvas" onClick={() => { if (!editMode) beginEdit(); setWidgetCatalogOpen(true) }} type="button">
+              <Plus size={22} />
+              <strong>Add your first widget</strong>
+              <span>Build this dashboard from the Hi5Central widget catalogue.</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {widgetCatalogOpen && (
+        <>
+          <button className="dashboard-panel-backdrop" aria-label="Close widget catalogue" onClick={() => setWidgetCatalogOpen(false)} type="button" />
+          <aside className="dashboard-side-panel" aria-label="Widget catalogue">
+            <header><div><span className="eyebrow">Dashboard builder</span><h2>Add widget</h2></div><button onClick={() => setWidgetCatalogOpen(false)} type="button"><X size={17} /></button></header>
+            <div className="dashboard-widget-catalog">
+              {[...new Set(DASHBOARD_WIDGET_LIBRARY.map((item) => item.category))].map((category) => (
+                <section key={category}>
+                  <span>{category}</span>
+                  {DASHBOARD_WIDGET_LIBRARY.filter((item) => item.category === category).map((item) => (
+                    <button key={item.id} onClick={() => addWidget(item.id)} type="button">
+                      <Plus size={15} /><span><strong>{item.label}</strong><small>{item.description}</small></span>
+                    </button>
+                  ))}
+                </section>
+              ))}
+            </div>
+          </aside>
+        </>
+      )}
+
+      {configuredWidget && (
+        <>
+          <button className="dashboard-panel-backdrop" aria-label="Close widget settings" onClick={() => setConfigureWidgetId(null)} type="button" />
+          <aside className="dashboard-side-panel" aria-label="Widget settings">
+            <header><div><span className="eyebrow">Widget</span><h2>Configure</h2></div><button onClick={() => setConfigureWidgetId(null)} type="button"><X size={17} /></button></header>
+            <div className="dashboard-config-form">
+              <label>Title<input value={configuredWidget.title} onChange={(event) => updateWidget(configuredWidget.id, { title: event.target.value })} /></label>
+              <label>Width<select value={configuredWidget.span} onChange={(event) => updateWidget(configuredWidget.id, { span: Number(event.target.value) })}>{DASHBOARD_SIZE_OPTIONS.map((size) => <option key={size.id} value={size.id}>{size.label}</option>)}</select></label>
+              {!['active-records', 'high-priority', 'approvals', 'sla-watch', 'heading'].includes(configuredWidget.type) && (
+                <label>Records shown<select value={configuredWidget.limit} onChange={(event) => updateWidget(configuredWidget.id, { limit: Number(event.target.value) })}>{[4, 6, 8, 10, 12].map((limit) => <option key={limit}>{limit}</option>)}</select></label>
+              )}
+              {['saved-filter', 'service-queue', 'my-work', 'needs-attention'].includes(configuredWidget.type) && (
+                <label>Record type<select value={configuredWidget.filterType} onChange={(event) => updateWidget(configuredWidget.id, { filterType: event.target.value })}>{['All', ...types].map((type) => <option key={type}>{type}</option>)}</select></label>
+              )}
+              {configuredWidget.type === 'heading' && <label>Text<textarea rows="6" value={configuredWidget.note} onChange={(event) => updateWidget(configuredWidget.id, { note: event.target.value })} /></label>}
+              <div className="dashboard-config-preview"><span>Responsive width</span><strong>{DASHBOARD_SIZE_OPTIONS.find((size) => size.id === configuredWidget.span)?.label}</strong><small>Full-width widgets always use the complete available canvas, including when the sidebar is hidden or collapsed.</small></div>
+            </div>
+          </aside>
+        </>
+      )}
+
+      {shareOpen && (
+        <div className="dashboard-modal-layer" role="presentation">
+          <button className="dashboard-modal-backdrop" aria-label="Close sharing" onClick={() => setShareOpen(false)} type="button" />
+          <section className="dashboard-modal" role="dialog" aria-modal="true" aria-label="Share dashboard">
+            <header><div><span className="eyebrow">Sharing</span><h2>{activeDashboard.name}</h2></div><button onClick={() => setShareOpen(false)} type="button"><X size={17} /></button></header>
+            <p>Share this dashboard with teams or individual users. Permissions here are demo-only until the backend is connected.</p>
+            {activeDashboard.canEdit ? (
+              <div className="dashboard-share-add">
+                <label>Share with<select value={shareKind} onChange={(event) => setShareKind(event.target.value)}><option value="team">Team</option><option value="user">User</option></select></label>
+                <label>{shareKind === 'team' ? 'Team' : 'User'}<select value={shareTarget} onChange={(event) => setShareTarget(event.target.value)}>{(shareKind === 'team' ? teams : demoUsers.map((user) => user.name)).map((item) => <option key={item}>{item}</option>)}</select></label>
+                <label>Permission<select value={sharePermission} onChange={(event) => setSharePermission(event.target.value)}>{['Can view', 'Can edit', 'Can manage'].map((item) => <option key={item}>{item}</option>)}</select></label>
+                <button onClick={addShare} type="button">Add</button>
+              </div>
+            ) : (
+              <div className="dashboard-share-readonly">You can view this dashboard's sharing membership. Make a copy to create and manage your own version.</div>
+            )}
+            <div className="dashboard-share-list">
+              <div><span className="dashboard-share-avatar">DS</span><span><strong>{activeDashboard.owner}</strong><small>Owner</small></span><b>Owner</b></div>
+              {activeDashboard.shares.map((share) => (
+                <div key={share.id}><span className="dashboard-share-avatar">{share.kind === 'team' ? <Users size={15} /> : share.name.split(' ').map((part) => part[0]).join('').slice(0, 2)}</span><span><strong>{share.name}</strong><small>{share.kind === 'team' ? 'Team' : 'User'}</small></span><b>{share.permission}</b>{activeDashboard.canEdit && <button onClick={() => removeShare(share.id)} type="button"><X size={14} /></button>}</div>
+              ))}
+            </div>
+          </section>
+        </div>
+      )}
+
+      {createOpen && (
+        <div className="dashboard-modal-layer" role="presentation">
+          <button className="dashboard-modal-backdrop" aria-label="Close create dashboard" onClick={() => setCreateOpen(false)} type="button" />
+          <section className="dashboard-modal dashboard-create-modal" role="dialog" aria-modal="true" aria-label="Create dashboard">
+            <header><div><span className="eyebrow">Dashboard library</span><h2>Create dashboard</h2></div><button onClick={() => setCreateOpen(false)} type="button"><X size={17} /></button></header>
+            <label className="dashboard-name-field">Dashboard name<input placeholder="e.g. Infrastructure Operations" value={newDashboardName} onChange={(event) => setNewDashboardName(event.target.value)} /></label>
+            <div className="dashboard-template-grid">
+              {DASHBOARD_TEMPLATES.map((template) => (
+                <button className={newDashboardTemplate === template.id ? 'active' : ''} key={template.id} onClick={() => setNewDashboardTemplate(template.id)} type="button">
+                  <LayoutDashboard size={19} /><strong>{template.name}</strong><span>{template.description}</span><small>{template.widgets.length} widgets</small>
+                </button>
+              ))}
+              <button className={newDashboardTemplate === 'blank' ? 'active' : ''} onClick={() => setNewDashboardTemplate('blank')} type="button"><Plus size={19} /><strong>Blank dashboard</strong><span>Start with an empty canvas.</span><small>0 widgets</small></button>
+            </div>
+            <footer><button onClick={() => setCreateOpen(false)} type="button">Cancel</button><button className="primary" onClick={createDashboard} type="button">Create dashboard</button></footer>
+          </section>
+        </div>
+      )}
     </div>
   )
 }
