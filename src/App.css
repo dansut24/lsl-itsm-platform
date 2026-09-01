@@ -10211,3 +10211,150 @@ textarea:focus {
     font-size: 11px;
   }
 }
+
+/* ================================================================
+   WORKSPACE-FIRST CHROME — DEDICATED TAB RAIL + CONTEXT COMMAND RAIL
+   Desktop/tablet tabs now own the full horizontal workspace row. Global
+   commands live alongside breadcrumbs beneath it, mirroring the compact
+   mobile shell and freeing substantially more room for tab labels.
+   ================================================================ */
+@media (min-width: 681px) and (min-height: 601px) {
+  .main-frame {
+    grid-template-rows: 48px 40px minmax(0, 1fr);
+  }
+
+  .tabbar {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 1fr;
+    height: 48px;
+    gap: 0;
+    padding: 5px 10px;
+  }
+
+  .tab-list {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .breadcrumbs {
+    min-height: 40px;
+    gap: 10px;
+    padding: 0 10px 0 16px;
+  }
+
+  .breadcrumb-trail {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .context-rail-actions {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    margin-left: auto;
+    padding: 0;
+  }
+
+  .context-rail-actions .icon-button {
+    width: 30px;
+    min-width: 30px;
+    height: 30px;
+    border-radius: 9px;
+  }
+
+  .context-rail-actions .new-ticket-button {
+    min-height: 30px;
+    padding: 0 10px;
+    font-size: 11px;
+  }
+
+  .context-rail-actions .chrome-search {
+    width: 210px;
+    min-height: 30px;
+    padding-inline: 9px;
+  }
+
+  .context-rail-actions .chrome-search input {
+    min-height: 24px;
+    font-size: 11px;
+  }
+
+  .context-rail-actions .user-pill {
+    min-height: 30px;
+    padding: 0 7px 0 4px;
+  }
+
+  .context-rail-actions .user-pill span {
+    width: 24px;
+    height: 24px;
+    font-size: 10px;
+  }
+
+  .workspace-tab {
+    flex-basis: 190px;
+    max-width: 280px;
+    padding-inline: 10px;
+  }
+}
+
+/* Medium/narrow non-mobile workspaces keep the same two-rail layout but
+   use the already-supported compact breadcrumb search and icon commands. */
+@media (min-width: 681px) and (max-width: 1120px) and (min-height: 601px) {
+  .breadcrumbs {
+    gap: 7px;
+    padding-inline: 10px;
+  }
+
+  .context-rail-actions {
+    gap: 5px;
+  }
+
+  .context-rail-actions .icon-button {
+    width: 29px;
+    min-width: 29px;
+    height: 29px;
+  }
+
+  .context-rail-actions .user-pill {
+    min-height: 29px;
+  }
+
+  .breadcrumb-compact-search {
+    flex-basis: min(220px, 31vw);
+    min-width: 145px;
+    min-height: 29px;
+  }
+}
+
+/* Active workspace signature: a full-width Hi5 gradient cap rather than
+   a short hairline, so the selected tab is unmistakable at a glance. */
+.workspace-tab.active {
+  border-color: color-mix(in srgb, rgb(var(--accent-rgb)) 38%, var(--line));
+  background:
+    linear-gradient(180deg, rgba(var(--accent-rgb), 0.13) 0%, rgba(var(--accent-rgb), 0.055) 48%, transparent 100%),
+    var(--surface);
+  box-shadow:
+    0 7px 16px rgba(8, 30, 66, 0.09),
+    0 0 0 1px rgba(21, 191, 232, 0.045);
+}
+
+.workspace-tab.active::after {
+  top: 0;
+  right: 0;
+  left: 0;
+  width: auto;
+  height: 5px;
+  border-radius: 11px 11px 3px 3px;
+  background: linear-gradient(90deg, #17488d 0%, #15bfe8 48%, rgb(var(--accent-rgb)) 100%);
+  box-shadow: 0 2px 8px rgba(var(--accent-rgb), 0.2);
+}
+
+@media (max-width: 680px) and (any-pointer: coarse),
+       (max-height: 600px) and (any-pointer: coarse) {
+  .workspace-tab.active::after {
+    height: 4px;
+    border-radius: 9px 9px 2px 2px;
+  }
+}

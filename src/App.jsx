@@ -1824,8 +1824,45 @@ function App() {
               <Plus size={18} strokeWidth={2.4} aria-hidden="true" />
             </button>
           </div>
+        </header>
 
-          <div className="chrome-actions">
+        <nav className="breadcrumbs" aria-label="Breadcrumb">
+          <div className="breadcrumb-trail">
+            {breadcrumbs.map((crumb, index) => (
+              <span className="breadcrumb-segment" key={`${crumb.label}-${crumb.key || index}`}>
+                {index > 0 && <ChevronRight className="breadcrumb-separator" size={14} aria-hidden="true" />}
+                <button
+                  aria-current={index === breadcrumbs.length - 1 ? 'page' : undefined}
+                  className={index === breadcrumbs.length - 1 ? 'breadcrumb-item current' : 'breadcrumb-item'}
+                  onClick={() => openBreadcrumb(crumb)}
+                  type="button"
+                >
+                  {crumb.label}
+                </button>
+              </span>
+            ))}
+          </div>
+
+          <label className="breadcrumb-compact-search">
+            <Search size={15} aria-hidden="true" />
+            <input
+              aria-label="Search Hi5Central"
+              onChange={(event) => {
+                setGlobalSearchQuery(event.target.value)
+                setGlobalSearchOpen(true)
+                setNotificationsOpen(false)
+              }}
+              onFocus={() => {
+                setGlobalSearchOpen(true)
+                setNotificationsOpen(false)
+              }}
+              placeholder="Search records"
+              type="search"
+              value={globalSearchQuery}
+            />
+          </label>
+
+          <div className="chrome-actions context-rail-actions">
             {sidebarHidden && (
               <button
                 className="icon-button"
@@ -1892,43 +1929,6 @@ function App() {
               <LogOut size={15} aria-hidden="true" />
             </button>
           </div>
-        </header>
-
-        <nav className="breadcrumbs" aria-label="Breadcrumb">
-          <div className="breadcrumb-trail">
-            {breadcrumbs.map((crumb, index) => (
-              <span className="breadcrumb-segment" key={`${crumb.label}-${crumb.key || index}`}>
-                {index > 0 && <ChevronRight className="breadcrumb-separator" size={14} aria-hidden="true" />}
-                <button
-                  aria-current={index === breadcrumbs.length - 1 ? 'page' : undefined}
-                  className={index === breadcrumbs.length - 1 ? 'breadcrumb-item current' : 'breadcrumb-item'}
-                  onClick={() => openBreadcrumb(crumb)}
-                  type="button"
-                >
-                  {crumb.label}
-                </button>
-              </span>
-            ))}
-          </div>
-
-          <label className="breadcrumb-compact-search">
-            <Search size={15} aria-hidden="true" />
-            <input
-              aria-label="Search Hi5Central"
-              onChange={(event) => {
-                setGlobalSearchQuery(event.target.value)
-                setGlobalSearchOpen(true)
-                setNotificationsOpen(false)
-              }}
-              onFocus={() => {
-                setGlobalSearchOpen(true)
-                setNotificationsOpen(false)
-              }}
-              placeholder="Search records"
-              type="search"
-              value={globalSearchQuery}
-            />
-          </label>
 
           <div className="breadcrumb-mobile-actions" aria-label="Mobile quick actions">
             <button
