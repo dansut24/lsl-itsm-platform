@@ -1,4 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
+import ReactGridLayout, { useContainerWidth, verticalCompactor } from 'react-grid-layout'
+import 'react-grid-layout/css/styles.css'
+import { createSortedRowModel, rowSortingFeature, sortFns, tableFeatures, useTable } from '@tanstack/react-table'
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import {
   AlertCircle,
   ArrowDown,
@@ -424,23 +428,24 @@ export function NewTabView({ navItems, openNewRecord, openRecordTab, openTab, ti
   )
 }
 
-const DASHBOARD_STORAGE_KEY = 'hi5central-demo-dashboards-v1'
+const DASHBOARD_STORAGE_KEY = 'hi5central-demo-dashboards-v3'
+const DASHBOARD_MAX_WIDGETS = 12
 
 const DASHBOARD_WIDGET_LIBRARY = [
-  { id: 'active-records', label: 'Active Records', category: 'Attention', description: 'Open workload count', defaultSpan: 3 },
-  { id: 'high-priority', label: 'High Priority', category: 'Attention', description: 'Critical and high priority work', defaultSpan: 3 },
-  { id: 'approvals', label: 'Approvals', category: 'Attention', description: 'Requests and changes waiting for approval', defaultSpan: 3 },
-  { id: 'sla-watch', label: 'SLA Watch', category: 'Attention', description: 'Records approaching SLA targets', defaultSpan: 3 },
-  { id: 'my-work', label: 'My Work', category: 'Records', description: 'Records assigned to the current analyst', defaultSpan: 6 },
-  { id: 'needs-attention', label: 'Needs Attention', category: 'Records', description: 'Unassigned, high priority and SLA-risk work', defaultSpan: 6 },
-  { id: 'service-queue', label: 'Live Service Queue', category: 'Records', description: 'Full-width operational queue table', defaultSpan: 12 },
-  { id: 'team-workload', label: 'Team Workload', category: 'Analytics', description: 'Current workload by assignment group', defaultSpan: 6 },
-  { id: 'priority-mix', label: 'Priority Mix', category: 'Analytics', description: 'Workload split by priority', defaultSpan: 6 },
-  { id: 'change-schedule', label: 'Upcoming Changes', category: 'Change', description: 'Implementation schedule and CAB work', defaultSpan: 6 },
-  { id: 'recent-activity', label: 'Recent Activity', category: 'Activity', description: 'Latest meaningful record activity', defaultSpan: 6 },
-  { id: 'service-health', label: 'Service Health', category: 'Analytics', description: 'Open work grouped by service', defaultSpan: 6 },
-  { id: 'saved-filter', label: 'Saved Filter', category: 'Custom', description: 'Reusable filtered record list', defaultSpan: 6 },
-  { id: 'heading', label: 'Heading / Note', category: 'Custom', description: 'Add explanatory text to a dashboard', defaultSpan: 12 },
+  { id: 'active-records', label: 'Active Records', category: 'Metrics', description: 'Open workload with trend context', defaultSpan: 4 },
+  { id: 'high-priority', label: 'High Priority', category: 'Metrics', description: 'Critical and high priority workload', defaultSpan: 4 },
+  { id: 'approvals', label: 'Approvals', category: 'Metrics', description: 'Records waiting for approval', defaultSpan: 4 },
+  { id: 'sla-watch', label: 'SLA Watch', category: 'Metrics', description: 'Records approaching SLA targets', defaultSpan: 4 },
+  { id: 'my-work', label: 'My Work', category: 'Records', description: 'Records assigned to the current analyst', defaultSpan: 4 },
+  { id: 'needs-attention', label: 'Needs Attention', category: 'Records', description: 'High priority and SLA-risk work', defaultSpan: 4 },
+  { id: 'service-queue', label: 'Live Service Queue', category: 'Tables', description: 'Full-width sortable operational table', defaultSpan: 12 },
+  { id: 'team-workload', label: 'Team Workload', category: 'Analytics', description: 'Current workload by assignment group', defaultSpan: 4 },
+  { id: 'priority-mix', label: 'Priority Mix', category: 'Analytics', description: 'Current workload split by priority', defaultSpan: 4 },
+  { id: 'service-health', label: 'Service Health', category: 'Analytics', description: 'Open work grouped by service', defaultSpan: 4 },
+  { id: 'change-schedule', label: 'Upcoming Changes', category: 'Records', description: 'Implementation schedule and CAB work', defaultSpan: 4 },
+  { id: 'recent-activity', label: 'Recent Activity', category: 'Activity', description: 'Latest meaningful record activity', defaultSpan: 4 },
+  { id: 'saved-filter', label: 'Saved Filter', category: 'Records', description: 'Reusable filtered record list', defaultSpan: 4 },
+  { id: 'heading', label: 'Heading / Note', category: 'Custom', description: 'Short operational note for a dashboard', defaultSpan: 4 },
 ]
 
 const DASHBOARD_SIZE_OPTIONS = [
@@ -452,40 +457,49 @@ const DASHBOARD_TEMPLATES = [
   {
     id: 'my-work-template',
     name: 'My Work',
-    description: 'A focused personal workspace for daily analyst work.',
+    description: 'A compact personal analyst dashboard designed to fit one screen.',
     widgets: [
-      ['active-records', 3], ['high-priority', 3], ['approvals', 3], ['sla-watch', 3],
-      ['my-work', 6], ['needs-attention', 6], ['service-queue', 12], ['recent-activity', 6], ['team-workload', 6],
+      ['active-records', 4], ['high-priority', 4], ['sla-watch', 4],
+      ['my-work', 4], ['needs-attention', 4], ['team-workload', 4],
+      ['service-queue', 12],
     ],
   },
   {
     id: 'service-desk-template',
     name: 'Service Desk Operations',
-    description: 'Queues, SLA pressure and assignment-group workload.',
+    description: 'Queues, SLA pressure and team workload in a three-row operations view.',
     widgets: [
-      ['active-records', 3], ['high-priority', 3], ['sla-watch', 3], ['approvals', 3],
-      ['service-queue', 12], ['team-workload', 6], ['priority-mix', 6], ['recent-activity', 12],
+      ['active-records', 4], ['high-priority', 4], ['sla-watch', 4],
+      ['team-workload', 4], ['priority-mix', 4], ['service-health', 4],
+      ['service-queue', 12],
     ],
   },
   {
     id: 'cab-template',
     name: 'CAB & Change',
-    description: 'Change schedule, approvals and implementation attention.',
+    description: 'Approvals, upcoming change activity and a sortable change queue.',
     widgets: [
-      ['approvals', 4], ['high-priority', 4], ['sla-watch', 4], ['change-schedule', 12],
-      ['recent-activity', 6], ['service-health', 6],
+      ['approvals', 4], ['high-priority', 4], ['change-schedule', 4],
+      ['recent-activity', 4], ['service-health', 4], ['priority-mix', 4],
+      ['service-queue', 12, { title: 'Change Queue', filterType: 'Change' }],
     ],
   },
   {
     id: 'executive-template',
     name: 'Executive Service Overview',
-    description: 'A high-level service-management overview for leaders.',
+    description: 'High-level workload, risk and service distribution.',
     widgets: [
-      ['active-records', 3], ['high-priority', 3], ['approvals', 3], ['sla-watch', 3],
-      ['service-health', 6], ['priority-mix', 6], ['team-workload', 12],
+      ['active-records', 4], ['high-priority', 4], ['sla-watch', 4],
+      ['service-health', 4], ['priority-mix', 4], ['team-workload', 4],
     ],
   },
 ]
+
+const DASHBOARD_TABLE_FEATURES = tableFeatures({
+  rowSortingFeature,
+  sortedRowModel: createSortedRowModel(),
+  sortFns,
+})
 
 function makeDashboardWidget(type, span, overrides = {}) {
   const definition = DASHBOARD_WIDGET_LIBRARY.find((item) => item.id === type)
@@ -501,17 +515,13 @@ function makeDashboardWidget(type, span, overrides = {}) {
 }
 
 function widgetsFromTemplate(template) {
-  return template.widgets.map(([type, span], index) =>
-    makeDashboardWidget(type, span, { id: `${template.id}-${type}-${index}` }),
+  return template.widgets.map(([type, span, overrides], index) =>
+    makeDashboardWidget(type, span, { ...(overrides || {}), id: `${template.id}-${type}-${index}` }),
   )
 }
 
 function seedDashboards() {
-  const myWork = DASHBOARD_TEMPLATES[0]
-  const serviceDesk = DASHBOARD_TEMPLATES[1]
-  const cab = DASHBOARD_TEMPLATES[2]
-  const executive = DASHBOARD_TEMPLATES[3]
-
+  const [myWork, serviceDesk, cab, executive] = DASHBOARD_TEMPLATES
   return [
     {
       id: 'DB-MY-WORK',
@@ -585,39 +595,266 @@ function loadDashboards() {
   }
 }
 
-function DashboardMetric({ detail, icon: Icon, label, onClick, tone, value }) {
+function dashboardWidgetIcon(type) {
+  return {
+    'active-records': Inbox,
+    'high-priority': AlertCircle,
+    approvals: ClipboardCheck,
+    'sla-watch': Clock3,
+    'my-work': UserCheck,
+    'needs-attention': CircleGauge,
+    'service-queue': ListChecks,
+    'team-workload': Users,
+    'priority-mix': CircleGauge,
+    'service-health': Server,
+    'change-schedule': CalendarClock,
+    'recent-activity': MessageSquarePlus,
+    'saved-filter': SlidersHorizontal,
+    heading: BookOpen,
+  }[type] || LayoutDashboard
+}
+
+function dashboardWidgetKind(type) {
+  if (['active-records', 'high-priority', 'approvals', 'sla-watch'].includes(type)) return 'Metric'
+  if (['team-workload', 'priority-mix', 'service-health'].includes(type)) return 'Analytics'
+  if (type === 'service-queue') return 'Table'
+  if (type === 'heading') return 'Note'
+  return 'List'
+}
+
+function buildTrend(value, seed = 0) {
+  const base = Math.max(2, Number(value) || 2)
+  const shifts = [0.72, 0.81, 0.76, 0.88, 0.84, 0.94, 1]
+  return shifts.map((ratio, index) => ({ day: index + 1, value: Math.max(1, Math.round(base * ratio + ((seed + index) % 3 - 1))) }))
+}
+
+function objectToChartData(value, limit = 5) {
+  return Object.entries(value || {})
+    .map(([name, count]) => ({ name, value: count }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, limit)
+}
+
+function packDashboardLayout(widgets, cols) {
+  const layout = []
+  let x = 0
+  let y = 0
+  widgets.forEach((widget) => {
+    const fullWidth = widget.span === 12
+    if (fullWidth) {
+      if (x !== 0) {
+        y += 1
+        x = 0
+      }
+      layout.push({ i: widget.id, x: 0, y, w: cols, h: 1, minW: cols, maxW: cols, minH: 1, maxH: 1 })
+      y += 1
+      return
+    }
+    layout.push({ i: widget.id, x, y, w: 1, h: 1, minW: 1, maxW: 1, minH: 1, maxH: 1 })
+    x += 1
+    if (x >= cols) {
+      x = 0
+      y += 1
+    }
+  })
+  return layout
+}
+
+function dashboardRowCount(layout) {
+  if (!layout.length) return 1
+  return Math.max(...layout.map((item) => item.y + item.h))
+}
+
+function DashboardMetric({ detail, onClick, trend, trendLabel, value }) {
+  const trendData = buildTrend(value, trend)
   return (
-    <button className={`dashboard-kpi dashboard-tone-${tone}`} onClick={onClick} type="button">
-      <Icon size={19} aria-hidden="true" />
-      <span>
+    <button className="dashboard-metric-v3" onClick={onClick} type="button">
+      <div className="dashboard-metric-value-row">
         <strong>{value}</strong>
-        <b>{label}</b>
-        <small>{detail}</small>
-      </span>
+        <span className={`dashboard-metric-trend ${trend < 0 ? 'is-good' : trend > 0 ? 'is-up' : ''}`}>{trend > 0 ? '+' : ''}{trend}%</span>
+      </div>
+      <div className="dashboard-metric-context">
+        <span>{detail}</span>
+        <small>{trendLabel}</small>
+      </div>
+      <div className="dashboard-sparkline" aria-hidden="true">
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={trendData} margin={{ top: 4, right: 2, left: 2, bottom: 1 }}>
+            <defs>
+              <linearGradient id={`spark-${String(detail).replace(/\W/g, '')}`} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="var(--dashboard-accent)" stopOpacity={0.24} />
+                <stop offset="100%" stopColor="var(--dashboard-accent)" stopOpacity={0.01} />
+              </linearGradient>
+            </defs>
+            <Area type="monotone" dataKey="value" stroke="var(--dashboard-accent)" strokeWidth={2} fill={`url(#spark-${String(detail).replace(/\W/g, '')})`} isAnimationActive={false} />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
     </button>
   )
 }
 
-function DashboardWidgetFrame({ children, editMode, index, onConfigure, onDragStart, onMove, onRemove, widget }) {
+function DashboardBarChart({ data }) {
+  const rows = objectToChartData(data)
+  if (!rows.length) return <div className="dashboard-widget-empty">No data in this view.</div>
   return (
-    <article
-      className={`dashboard-widget dashboard-widget-${widget.type}`}
-      draggable={editMode}
-      onDragStart={(event) => onDragStart?.(event, index)}
-      style={{ '--dashboard-widget-span': widget.span }}
-    >
-      {editMode && (
-        <div className="dashboard-widget-editbar">
-          <span className="dashboard-drag-handle" title="Drag to reorder">
-            <GripVertical size={15} aria-hidden="true" />
+    <div className="dashboard-chart-v3">
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={rows} layout="vertical" margin={{ top: 4, right: 12, left: 4, bottom: 4 }}>
+          <CartesianGrid stroke="var(--dashboard-grid-line)" horizontal={false} />
+          <XAxis type="number" hide />
+          <YAxis dataKey="name" type="category" width={82} tick={{ fill: 'var(--muted)', fontSize: 10 }} axisLine={false} tickLine={false} />
+          <Tooltip cursor={{ fill: 'var(--surface-soft)' }} contentStyle={{ border: '1px solid var(--line)', borderRadius: 10, background: 'var(--surface)', color: 'var(--ink)', fontSize: 11 }} />
+          <Bar dataKey="value" fill="var(--dashboard-accent)" radius={[0, 7, 7, 0]} maxBarSize={15} isAnimationActive={false} />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  )
+}
+
+function DashboardPriorityChart({ data }) {
+  const rows = objectToChartData(data, 6)
+  const total = rows.reduce((sum, item) => sum + item.value, 0)
+  const palette = ['#d64545', '#ef7d32', '#d6a72f', 'var(--dashboard-accent)', '#6f7f94', '#9aa5b4']
+  if (!rows.length) return <div className="dashboard-widget-empty">No data in this view.</div>
+  return (
+    <div className="dashboard-donut-v3">
+      <div className="dashboard-donut-chart">
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Tooltip contentStyle={{ border: '1px solid var(--line)', borderRadius: 10, background: 'var(--surface)', color: 'var(--ink)', fontSize: 11 }} />
+            <Pie data={rows} dataKey="value" nameKey="name" innerRadius="58%" outerRadius="80%" paddingAngle={3} stroke="none" isAnimationActive={false}>
+              {rows.map((entry, index) => <Cell fill={palette[index % palette.length]} key={entry.name} />)}
+            </Pie>
+          </PieChart>
+        </ResponsiveContainer>
+        <span><strong>{total}</strong><small>records</small></span>
+      </div>
+      <div className="dashboard-donut-legend">
+        {rows.slice(0, 4).map((entry, index) => <span key={entry.name}><i style={{ background: palette[index % palette.length] }} /><b>{entry.name}</b><small>{entry.value}</small></span>)}
+      </div>
+    </div>
+  )
+}
+
+function Hi5DashboardTable({ onOpen, rows }) {
+  const columns = useMemo(() => [
+    {
+      accessorKey: 'id',
+      header: 'Reference',
+      cell: (info) => <strong className="dashboard-table-ref">{info.getValue()}</strong>,
+    },
+    {
+      accessorKey: 'title',
+      header: 'Summary',
+      cell: (info) => <span className="dashboard-table-summary">{info.getValue()}</span>,
+    },
+    {
+      accessorKey: 'priority',
+      header: 'Priority',
+      cell: (info) => <span className={`dashboard-priority-label ${priorityClass(info.getValue())}`}><i />{info.getValue()}</span>,
+    },
+    {
+      accessorKey: 'status',
+      header: 'Status',
+      cell: (info) => <span className={`status-pill ${statusClass(info.getValue())}`}>{info.getValue()}</span>,
+    },
+    { accessorKey: 'team', header: 'Team' },
+    {
+      accessorKey: 'assignee',
+      header: 'Assignee',
+      cell: (info) => info.getValue() || 'Unassigned',
+    },
+    {
+      accessorKey: 'slaPercent',
+      header: 'SLA',
+      cell: (info) => <SlaBar value={info.getValue()} label={info.row.original.sla} />,
+    },
+  ], [])
+
+  const table = useTable({
+    key: 'hi5-dashboard-service-queue',
+    features: DASHBOARD_TABLE_FEATURES,
+    columns,
+    data: rows,
+  })
+
+  return (
+    <div className="dashboard-data-table-wrap">
+      <table className="dashboard-data-table">
+        <thead>
+          {table.getHeaderGroups().map((headerGroup) => (
+            <tr key={headerGroup.id}>
+              {headerGroup.headers.map((header) => {
+                const sorted = header.column.getIsSorted()
+                return (
+                  <th data-column={header.column.id} key={header.id}>
+                    {header.isPlaceholder ? null : (
+                      <button className={header.column.getCanSort() ? 'is-sortable' : ''} onClick={header.column.getToggleSortingHandler()} type="button">
+                        <table.FlexRender header={header} />
+                        {sorted === 'asc' && <ArrowUp size={11} />}
+                        {sorted === 'desc' && <ArrowDown size={11} />}
+                      </button>
+                    )}
+                  </th>
+                )
+              })}
+            </tr>
+          ))}
+        </thead>
+        <tbody>
+          {table.getRowModel().rows.map((row) => (
+            <tr
+              key={row.id}
+              onClick={() => onOpen(row.original)}
+              onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onOpen(row.original) }}
+              role="button"
+              tabIndex={0}
+            >
+              {row.getAllCells().map((cell) => <td data-column={cell.column.id} key={cell.id}><table.FlexRender cell={cell} /></td>)}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function DashboardRecordList({ emptyText = 'Nothing matches this view.', onOpen, rows }) {
+  if (!rows.length) return <div className="dashboard-widget-empty">{emptyText}</div>
+  return (
+    <div className="dashboard-record-list-v3">
+      {rows.map((ticket) => (
+        <button key={ticket.id} onClick={() => onOpen(ticket)} type="button">
+          <span className={`priority-dot ${priorityClass(ticket.priority)}`} />
+          <span className="dashboard-record-copy"><strong>{ticket.id}</strong><small>{ticket.title}</small></span>
+          <span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span>
+          <small className="dashboard-record-sla">{ticket.sla}</small>
+          <ChevronRight size={14} aria-hidden="true" />
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function DashboardWidgetFrame({ children, editMode, index, onConfigure, onMove, onRemove, widget }) {
+  const Icon = dashboardWidgetIcon(widget.type)
+  return (
+    <article className={`dashboard-widget dashboard-widget-${widget.type}`}>
+      <header className="dashboard-widget-header-v3">
+        <span className="dashboard-widget-icon"><Icon size={14} aria-hidden="true" /></span>
+        <span className="dashboard-widget-title"><strong>{widget.title}</strong><small>{dashboardWidgetKind(widget.type)}</small></span>
+        {editMode && (
+          <span className="dashboard-widget-edit-actions">
+            <button className="dashboard-drag-handle" title="Drag widget" type="button"><GripVertical size={14} /></button>
+            <button onClick={() => onMove?.(index, -1)} title="Move earlier" type="button"><ArrowUp size={13} /></button>
+            <button onClick={() => onMove?.(index, 1)} title="Move later" type="button"><ArrowDown size={13} /></button>
+            <button onClick={() => onConfigure?.(widget)} title="Configure widget" type="button"><Settings size={13} /></button>
+            <button onClick={() => onRemove?.(widget.id)} title="Remove widget" type="button"><Trash2 size={13} /></button>
           </span>
-          <button onClick={() => onMove?.(index, -1)} title="Move earlier" type="button"><ArrowUp size={14} /></button>
-          <button onClick={() => onMove?.(index, 1)} title="Move later" type="button"><ArrowDown size={14} /></button>
-          <button onClick={() => onConfigure?.(widget)} title="Configure widget" type="button"><Settings size={14} /></button>
-          <button onClick={() => onRemove?.(widget.id)} title="Remove widget" type="button"><Trash2 size={14} /></button>
-        </div>
-      )}
-      {children}
+        )}
+      </header>
+      <div className="dashboard-widget-body-v3">{children}</div>
     </article>
   )
 }
@@ -629,7 +866,7 @@ function DashboardWidgetContent({ dashboardMetrics, filters, openRecordTab, open
     .filter((ticket) => widget.filterType === 'All' || ticket.type === widget.filterType)
 
   const activeTickets = workingTickets.filter((ticket) => !['Closed', 'Resolved'].includes(ticket.status))
-  const riskTickets = workingTickets
+  const riskTickets = [...workingTickets]
     .filter((ticket) => ticket.status !== 'Resolved')
     .sort((a, b) => b.slaPercent - a.slaPercent)
   const myWork = activeTickets.filter((ticket) => ['Dana Sinclair', 'Priya Raman', 'Noah Williams'].includes(ticket.assignee))
@@ -639,126 +876,61 @@ function DashboardWidgetContent({ dashboardMetrics, filters, openRecordTab, open
   const changes = workingTickets.filter((ticket) => ticket.type === 'Change')
 
   if (widget.type === 'active-records') {
-    return <DashboardMetric detail="Unresolved workload" icon={Inbox} label={widget.title} onClick={() => openTab('tickets')} tone="blue" value={dashboardMetrics.active} />
+    return <DashboardMetric detail="Open workload" onClick={() => openTab('tickets')} trend={8} trendLabel="vs last week" value={dashboardMetrics.active} />
   }
   if (widget.type === 'high-priority') {
-    return <DashboardMetric detail="Critical and high items" icon={AlertCircle} label={widget.title} onClick={() => openTab('incidents')} tone="red" value={dashboardMetrics.highRisk} />
+    return <DashboardMetric detail="Critical + high" onClick={() => openTab('incidents')} trend={-6} trendLabel="risk improving" value={dashboardMetrics.highRisk} />
   }
   if (widget.type === 'approvals') {
-    return <DashboardMetric detail="Waiting for approval" icon={ClipboardCheck} label={widget.title} onClick={() => openTab('requests')} tone="amber" value={dashboardMetrics.approvals} />
+    return <DashboardMetric detail="Awaiting decision" onClick={() => openTab('requests')} trend={3} trendLabel="since yesterday" value={dashboardMetrics.approvals} />
   }
   if (widget.type === 'sla-watch') {
-    return <DashboardMetric detail="Needs attention today" icon={Clock3} label={widget.title} onClick={() => openTab('incidents')} tone="amber" value={dashboardMetrics.slaPressure} />
+    return <DashboardMetric detail="At risk today" onClick={() => openTab('incidents')} trend={-4} trendLabel="vs yesterday" value={dashboardMetrics.slaPressure} />
   }
 
   if (widget.type === 'heading') {
-    return (
-      <div className="dashboard-note-widget">
-        <span className="eyebrow">Dashboard note</span>
-        <h2>{widget.title}</h2>
-        <p>{widget.note}</p>
-      </div>
-    )
+    return <div className="dashboard-note-v3"><p>{widget.note}</p></div>
   }
-
-  const listHeader = (eyebrow, actionLabel, action) => (
-    <div className="dashboard-widget-heading">
-      <div>
-        <span className="eyebrow">{eyebrow}</span>
-        <h2>{widget.title}</h2>
-      </div>
-      {actionLabel && <button className="text-button" onClick={action} type="button">{actionLabel}<ChevronRight size={15} /></button>}
-    </div>
-  )
 
   if (widget.type === 'service-queue') {
     const rows = riskTickets.slice(0, Math.max(widget.limit, 8))
-    return (
-      <div className="dashboard-table-widget">
-        {listHeader('Operational queue', 'Open all records', () => openTab('tickets'))}
-        <div className="dashboard-table-scroll">
-          <div className="dashboard-record-table dashboard-record-table-head" aria-hidden="true">
-            <span>Reference</span><span>Summary</span><span>Priority</span><span>Status</span><span>Team</span><span>Assignee</span><span>SLA</span>
-          </div>
-          {rows.map((ticket) => (
-            <button className="dashboard-record-table" key={ticket.id} onClick={() => openRecordTab(ticket)} type="button">
-              <strong>{ticket.id}</strong>
-              <span className="dashboard-record-summary">{ticket.title}</span>
-              <span>{ticket.priority}</span>
-              <span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span>
-              <span>{ticket.team}</span>
-              <span>{ticket.assignee || 'Unassigned'}</span>
-              <SlaBar value={ticket.slaPercent} label={ticket.sla} />
-            </button>
-          ))}
-        </div>
-      </div>
-    )
+    return <Hi5DashboardTable onOpen={openRecordTab} rows={rows} />
   }
 
-  if (widget.type === 'my-work' || widget.type === 'needs-attention' || widget.type === 'saved-filter') {
-    const rows = (widget.type === 'my-work' ? myWork : widget.type === 'needs-attention' ? needsAttention : activeTickets)
-      .slice(0, widget.limit)
-    return (
-      <div className="dashboard-list-widget">
-        {listHeader(widget.type === 'my-work' ? 'Personal queue' : widget.type === 'needs-attention' ? 'Attention' : 'Saved filter', 'Open queue', () => openTab('tickets'))}
-        <div className="dashboard-compact-records">
-          {rows.map((ticket) => (
-            <button key={ticket.id} onClick={() => openRecordTab(ticket)} type="button">
-              <span className={`priority-dot ${priorityClass(ticket.priority)}`} />
-              <span><strong>{ticket.id}</strong><small>{ticket.title}</small></span>
-              <span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span>
-              <small>{ticket.sla}</small>
-              <ChevronRight size={15} aria-hidden="true" />
-            </button>
-          ))}
-          {!rows.length && <div className="dashboard-widget-empty">Nothing matches this view.</div>}
-        </div>
-      </div>
-    )
+  if (widget.type === 'my-work') {
+    return <DashboardRecordList onOpen={openRecordTab} rows={myWork.slice(0, widget.limit)} />
+  }
+  if (widget.type === 'needs-attention') {
+    return <DashboardRecordList onOpen={openRecordTab} rows={needsAttention.slice(0, widget.limit)} />
+  }
+  if (widget.type === 'saved-filter') {
+    return <DashboardRecordList onOpen={openRecordTab} rows={activeTickets.slice(0, widget.limit)} />
   }
 
   if (widget.type === 'team-workload') {
-    return <div className="dashboard-chart-widget">{listHeader('Workload')}<BarList data={dashboardMetrics.teamCounts} /></div>
-  }
-  if (widget.type === 'priority-mix') {
-    return <div className="dashboard-chart-widget">{listHeader('Priority')}<BarList data={dashboardMetrics.priorityCounts} palette="risk" /></div>
+    return <DashboardBarChart data={dashboardMetrics.teamCounts} />
   }
   if (widget.type === 'service-health') {
-    return <div className="dashboard-chart-widget">{listHeader('Services')}<BarList data={dashboardMetrics.serviceCounts} /></div>
+    return <DashboardBarChart data={dashboardMetrics.serviceCounts} />
+  }
+  if (widget.type === 'priority-mix') {
+    return <DashboardPriorityChart data={dashboardMetrics.priorityCounts} />
   }
 
   if (widget.type === 'change-schedule') {
-    return (
-      <div className="dashboard-list-widget">
-        {listHeader('Change management', 'Open Changes', () => openTab('changes'))}
-        <div className="dashboard-change-list">
-          {changes.slice(0, widget.limit).map((ticket) => (
-            <button key={ticket.id} onClick={() => openRecordTab(ticket)} type="button">
-              <span><strong>{ticket.id}</strong><small>{ticket.title}</small></span>
-              <span>{ticket.status}</span>
-              <small>{ticket.plannedStart || ticket.sla}</small>
-            </button>
-          ))}
-        </div>
-      </div>
-    )
+    return <DashboardRecordList emptyText="No upcoming changes." onOpen={openRecordTab} rows={changes.slice(0, widget.limit)} />
   }
 
   if (widget.type === 'recent-activity') {
-    const recent = workingTickets.slice(0, widget.limit)
     return (
-      <div className="dashboard-list-widget">
-        {listHeader('Activity')}
-        <div className="dashboard-activity-list">
-          {recent.map((ticket, index) => (
-            <button key={`${ticket.id}-${index}`} onClick={() => openRecordTab(ticket)} type="button">
-              <span className={`priority-dot ${priorityClass(ticket.priority)}`} />
-              <span><strong>{ticket.id} updated</strong><small>{ticket.title}</small></span>
-              <time>{ticket.updated}</time>
-            </button>
-          ))}
-        </div>
+      <div className="dashboard-activity-v3">
+        {workingTickets.slice(0, widget.limit).map((ticket, index) => (
+          <button key={`${ticket.id}-${index}`} onClick={() => openRecordTab(ticket)} type="button">
+            <span className="dashboard-activity-dot" />
+            <span><strong>{ticket.id}</strong><small>{index % 2 === 0 ? 'Record updated' : 'Assignment changed'} · {ticket.title}</small></span>
+            <time>{index + 2}m</time>
+          </button>
+        ))}
       </div>
     )
   }
@@ -778,14 +950,15 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
   const [createOpen, setCreateOpen] = useState(false)
   const [moreOpen, setMoreOpen] = useState(false)
   const [filterOpen, setFilterOpen] = useState(false)
-  const [draggedIndex, setDraggedIndex] = useState(null)
   const [dashboardFilters, setDashboardFilters] = useState({ service: 'All', team: 'All', period: 'Last 30 days' })
   const [newDashboardName, setNewDashboardName] = useState('')
   const [newDashboardTemplate, setNewDashboardTemplate] = useState('my-work-template')
   const [shareTarget, setShareTarget] = useState('Service Desk')
   const [shareKind, setShareKind] = useState('team')
   const [sharePermission, setSharePermission] = useState('Can view')
+  const [gridHeight, setGridHeight] = useState(560)
 
+  const { width: gridWidth, containerRef: gridContainerRef, mounted: gridMounted } = useContainerWidth({ initialWidth: 1200 })
   const activeDashboard = dashboards.find((item) => item.id === activeDashboardId) || dashboards[0]
   const configuredWidget = activeDashboard?.widgets.find((widget) => widget.id === configureWidgetId)
   const currentUserName = currentUser?.name || 'Dana Sinclair'
@@ -797,6 +970,16 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
       // Demo persistence is best-effort only.
     }
   }, [dashboards])
+
+  useEffect(() => {
+    const node = gridContainerRef.current
+    if (!node || typeof ResizeObserver === 'undefined') return undefined
+    const measure = () => setGridHeight(Math.max(180, Math.round(node.getBoundingClientRect().height)))
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [gridContainerRef, gridMounted, activeDashboardId])
 
   const filteredTickets = useMemo(() => tickets
     .filter((ticket) => dashboardFilters.team === 'All' || ticket.team === dashboardFilters.team)
@@ -825,6 +1008,13 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
   }, [filteredTickets])
 
   const services = useMemo(() => ['All', ...new Set(tickets.map((ticket) => ticket.service).filter(Boolean))], [tickets])
+  const pointerIsCoarse = typeof window !== 'undefined' && window.matchMedia?.('(any-pointer: coarse)').matches
+  const mobileStack = Boolean(pointerIsCoarse && (gridWidth < 680 || gridHeight < 460))
+  const gridCols = gridWidth >= 980 ? 3 : gridWidth >= 620 ? 2 : 1
+  const packedLayout = useMemo(() => packDashboardLayout(activeDashboard.widgets, gridCols), [activeDashboard.widgets, gridCols])
+  const rowCount = dashboardRowCount(packedLayout)
+  const gridGap = 10
+  const rowHeight = Math.max(36, Math.floor((gridHeight - Math.max(0, rowCount - 1) * gridGap) / Math.max(rowCount, 1)))
 
   function updateDashboard(id, updater) {
     setDashboards((current) => current.map((dashboard) => dashboard.id === id ? updater(dashboard) : dashboard))
@@ -854,6 +1044,7 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
   }
 
   function addWidget(type) {
+    if (activeDashboard.widgets.length >= DASHBOARD_MAX_WIDGETS) return
     const definition = DASHBOARD_WIDGET_LIBRARY.find((item) => item.id === type)
     updateDashboard(activeDashboard.id, (dashboard) => ({
       ...dashboard,
@@ -888,15 +1079,16 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
     })
   }
 
-  function dropWidget(targetIndex) {
-    if (draggedIndex === null || draggedIndex === targetIndex) return
+  function commitGridOrder(layout) {
+    if (!editMode || !Array.isArray(layout) || !layout.length) return
+    const order = [...layout].sort((a, b) => a.y - b.y || a.x - b.x).map((item) => item.i)
     updateDashboard(activeDashboard.id, (dashboard) => {
-      const widgets = [...dashboard.widgets]
-      const [widget] = widgets.splice(draggedIndex, 1)
-      widgets.splice(targetIndex, 0, widget)
-      return { ...dashboard, widgets }
+      const byId = new Map(dashboard.widgets.map((widget) => [widget.id, widget]))
+      const widgets = order.map((id) => byId.get(id)).filter(Boolean)
+      dashboard.widgets.forEach((widget) => { if (!order.includes(widget.id)) widgets.push(widget) })
+      const unchanged = widgets.every((widget, index) => widget.id === dashboard.widgets[index]?.id)
+      return unchanged ? dashboard : { ...dashboard, widgets }
     })
-    setDraggedIndex(null)
   }
 
   function createDashboard() {
@@ -977,12 +1169,12 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
   }
 
   return (
-    <div className="dashboard-builder" data-sidebar-mode={sidebarMode || 'expanded'}>
+    <div className="dashboard-builder dashboard-builder-v3" data-sidebar-mode={sidebarMode || 'expanded'}>
       <div className="dashboard-toolbar-row">
         <div className="dashboard-icon-toolbar" aria-label="Dashboard controls">
           {editMode ? (
             <>
-              <button aria-label="Add widget" onClick={() => setWidgetCatalogOpen(true)} title="Add widget" type="button"><Plus size={16} /></button>
+              <button aria-label="Add widget" disabled={activeDashboard.widgets.length >= DASHBOARD_MAX_WIDGETS} onClick={() => setWidgetCatalogOpen(true)} title="Add widget" type="button"><Plus size={16} /></button>
               <button aria-label="Cancel dashboard edits" onClick={cancelEdit} title="Cancel" type="button"><X size={16} /></button>
               <button className="primary" aria-label="Save dashboard" onClick={saveEdit} title="Save dashboard" type="button"><CheckCircle2 size={16} /></button>
             </>
@@ -1045,42 +1237,41 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
       </div>
 
       <div className="dashboard-canvas" onClick={() => { setDashboardMenuOpen(false); setMoreOpen(false); setFilterOpen(false) }}>
-        <div className="dashboard-canvas-grid">
-          {activeDashboard.widgets.map((widget, index) => (
-            <div
-              className={`dashboard-widget-dropzone ${widget.span === 12 ? 'is-full-width' : ''}`}
-              key={widget.id}
-              onDragOver={(event) => editMode && event.preventDefault()}
-              onDrop={() => editMode && dropWidget(index)}
-              style={{ '--dashboard-widget-span': widget.span }}
-            >
-              <DashboardWidgetFrame
-                editMode={editMode}
-                index={index}
-                onConfigure={(item) => setConfigureWidgetId(item.id)}
-                onDragStart={(event, itemIndex) => { setDraggedIndex(itemIndex); event.dataTransfer.effectAllowed = 'move' }}
-                onMove={moveWidget}
-                onRemove={removeWidget}
-                widget={widget}
-              >
-                <DashboardWidgetContent
-                  dashboardMetrics={dashboardMetrics}
-                  filters={dashboardFilters}
-                  openRecordTab={openRecordTab}
-                  openTab={openTab}
-                  tickets={tickets}
-                  widget={widget}
-                />
-              </DashboardWidgetFrame>
-            </div>
-          ))}
-          {!activeDashboard.widgets.length && (
+        <div className={`dashboard-grid-host ${mobileStack ? 'is-mobile-stack' : ''}`} ref={gridContainerRef}>
+          {!activeDashboard.widgets.length ? (
             <button className="dashboard-empty-canvas" onClick={() => { if (!editMode) beginEdit(); setWidgetCatalogOpen(true) }} type="button">
               <Plus size={22} />
               <strong>Add your first widget</strong>
               <span>Build this dashboard from the Hi5Central widget catalogue.</span>
             </button>
-          )}
+          ) : mobileStack ? (
+            <div className="dashboard-mobile-stack-v3">
+              {activeDashboard.widgets.map((widget, index) => (
+                <DashboardWidgetFrame editMode={editMode} index={index} key={widget.id} onConfigure={(item) => setConfigureWidgetId(item.id)} onMove={moveWidget} onRemove={removeWidget} widget={widget}>
+                  <DashboardWidgetContent dashboardMetrics={dashboardMetrics} filters={dashboardFilters} openRecordTab={openRecordTab} openTab={openTab} tickets={tickets} widget={widget} />
+                </DashboardWidgetFrame>
+              ))}
+            </div>
+          ) : gridMounted ? (
+            <ReactGridLayout
+              className="dashboard-rgl-v3"
+              compactor={verticalCompactor}
+              dragConfig={{ enabled: editMode, handle: '.dashboard-drag-handle', bounded: true }}
+              gridConfig={{ cols: gridCols, rowHeight, margin: [gridGap, gridGap], containerPadding: [0, 0] }}
+              layout={packedLayout}
+              onLayoutChange={commitGridOrder}
+              resizeConfig={{ enabled: false }}
+              width={gridWidth}
+            >
+              {activeDashboard.widgets.map((widget, index) => (
+                <div className={`dashboard-grid-item-v3 ${widget.span === 12 ? 'is-full-width' : ''}`} key={widget.id}>
+                  <DashboardWidgetFrame editMode={editMode} index={index} onConfigure={(item) => setConfigureWidgetId(item.id)} onMove={moveWidget} onRemove={removeWidget} widget={widget}>
+                    <DashboardWidgetContent dashboardMetrics={dashboardMetrics} filters={dashboardFilters} openRecordTab={openRecordTab} openTab={openTab} tickets={tickets} widget={widget} />
+                  </DashboardWidgetFrame>
+                </div>
+              ))}
+            </ReactGridLayout>
+          ) : null}
         </div>
       </div>
 
@@ -1090,11 +1281,12 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
           <aside className="dashboard-side-panel" aria-label="Widget catalogue">
             <header><div><span className="eyebrow">Dashboard builder</span><h2>Add widget</h2></div><button onClick={() => setWidgetCatalogOpen(false)} type="button"><X size={17} /></button></header>
             <div className="dashboard-widget-catalog">
+              <div className="dashboard-widget-limit">{activeDashboard.widgets.length} / {DASHBOARD_MAX_WIDGETS} widgets</div>
               {[...new Set(DASHBOARD_WIDGET_LIBRARY.map((item) => item.category))].map((category) => (
                 <section key={category}>
                   <span>{category}</span>
                   {DASHBOARD_WIDGET_LIBRARY.filter((item) => item.category === category).map((item) => (
-                    <button key={item.id} onClick={() => addWidget(item.id)} type="button">
+                    <button disabled={activeDashboard.widgets.length >= DASHBOARD_MAX_WIDGETS} key={item.id} onClick={() => addWidget(item.id)} type="button">
                       <Plus size={15} /><span><strong>{item.label}</strong><small>{item.description}</small></span>
                     </button>
                   ))}
@@ -1120,7 +1312,7 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
                 <label>Record type<select value={configuredWidget.filterType} onChange={(event) => updateWidget(configuredWidget.id, { filterType: event.target.value })}>{['All', ...types].map((type) => <option key={type}>{type}</option>)}</select></label>
               )}
               {configuredWidget.type === 'heading' && <label>Text<textarea rows="6" value={configuredWidget.note} onChange={(event) => updateWidget(configuredWidget.id, { note: event.target.value })} /></label>}
-              <div className="dashboard-config-preview"><span>Responsive width</span><strong>{DASHBOARD_SIZE_OPTIONS.find((size) => size.id === configuredWidget.span)?.label}</strong><small>Standard widgets automatically reflow up to three columns. Full-width widgets span the complete available canvas in every sidebar state.</small></div>
+              <div className="dashboard-config-preview"><span>Responsive behaviour</span><strong>{DASHBOARD_SIZE_OPTIONS.find((size) => size.id === configuredWidget.span)?.label}</strong><small>Standard widgets use equal-height slots with a maximum of three columns. The canvas measures its real width, so sidebar expanded, collapsed and hidden states reflow automatically.</small></div>
             </div>
           </aside>
         </>
@@ -1173,6 +1365,7 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
     </div>
   )
 }
+
 
 export function TicketRecordView({
   addComment,
