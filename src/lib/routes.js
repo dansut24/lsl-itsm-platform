@@ -62,6 +62,13 @@ const LIST_ROUTES = {
     key: 'projects',
     title: 'Projects',
   },
+  '/rota': {
+    kind: 'workspace',
+    path: '/rota',
+    viewId: 'rota',
+    key: 'rota',
+    title: 'Rota & Availability',
+  },
   '/cmdb': {
     kind: 'workspace',
     path: '/cmdb',
@@ -362,6 +369,7 @@ export function pathForTab(tab, tickets = []) {
     portal: '/portal',
     changes: '/changes',
     projects: '/projects',
+    rota: '/rota',
     cmdb: '/cmdb',
     knowledge: '/knowledge',
     reports: '/reports',
