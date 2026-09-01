@@ -9953,9 +9953,9 @@ textarea:focus {
 
   .tabbar-tab-zone {
     display: grid;
-    grid-template-columns: 40px minmax(0, 1fr);
+    grid-template-columns: 34px minmax(0, 1fr);
     grid-template-rows: 40px;
-    column-gap: 4px;
+    column-gap: 0;
     width: 100%;
     min-width: 0;
     height: 40px;
