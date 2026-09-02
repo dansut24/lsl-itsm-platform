@@ -94,6 +94,7 @@ import {
   LoginScreen,
   NewRecordView,
   NewTabView,
+  RecordCreateMenu,
   ReportsView,
   SelfServicePortal,
   SelfServiceShell,
@@ -1111,24 +1112,40 @@ function App() {
     })
   }
 
-  function openNewRecord(recordType = 'Incident', navigation = {}) {
-    const config = {
-      Incident: { navId: 'incidents', section: 'incidents', title: 'New Incident' },
-      'Service Request': { navId: 'requests', section: 'requests', title: 'New Service Request' },
-      Problem: { navId: 'problems', section: 'problems', title: 'New Problem' },
-      Change: { navId: 'changes', section: 'changes', title: 'New Change' },
-    }[recordType] || { navId: 'incidents', section: 'incidents', title: 'New Incident' }
+  function newRecordConfig(recordType = 'Incident') {
+    return {
+      Incident: { navId: 'incidents', section: 'incidents' },
+      'Service Request': { navId: 'requests', section: 'requests' },
+      Problem: { navId: 'problems', section: 'problems' },
+      Change: { navId: 'changes', section: 'changes' },
+    }[recordType] || { navId: 'incidents', section: 'incidents' }
+  }
 
+  function openNewRecord(recordType = 'Incident', navigation = {}) {
+    const config = newRecordConfig(recordType)
     openTab(
       'newrecord',
       {
-        key: `new-${config.section}`,
-        title: config.title,
+        key: 'new-record',
+        title: 'New Record',
         newRecordType: recordType,
         navId: config.navId,
       },
       navigation,
     )
+  }
+
+  function updateNewRecordType(recordType) {
+    const config = newRecordConfig(recordType)
+    const updatedTab = makeTab('newrecord', {
+      ...activeTab,
+      key: activeTabKey,
+      title: 'New Record',
+      newRecordType: recordType,
+      navId: config.navId,
+    })
+    setTabs((currentTabs) => currentTabs.map((tab) => tab.key === activeTabKey ? updatedTab : tab))
+    writeRoute(pathForTab(updatedTab, tickets), { replace: true })
   }
 
   function openAsset(asset) {
@@ -2075,6 +2092,7 @@ function App() {
           handleTicketSubmit={handleTicketSubmit}
           hasUnsavedChanges={activeHasUnsavedChanges}
           recordType={activeTab.newRecordType || ticketDraft.type}
+          onRecordTypeChange={updateNewRecordType}
           setTicketDraft={setTicketDraft}
           ticketDraft={ticketDraft}
         />
@@ -2151,6 +2169,7 @@ function App() {
             openTab('tickets', { key: `ticket-${ticket.id}`, title: ticket.id, recordId: ticket.id })
           }
           tickets={tickets.filter((ticket) => ticket.type === 'Change')}
+          updateTicket={updateTicket}
         />
       )
     }
@@ -2517,14 +2536,7 @@ function App() {
           </div>
 
           <div className="chrome-actions">
-            <button
-              className="new-ticket-button"
-              onClick={() => openNewRecord('Incident')}
-              type="button"
-            >
-              <Plus size={16} aria-hidden="true" />
-              New Incident
-            </button>
+            <RecordCreateMenu className="chrome-record-create" openNewRecord={openNewRecord} />
             <label className="chrome-search">
               <Search size={16} aria-hidden="true" />
               <input
