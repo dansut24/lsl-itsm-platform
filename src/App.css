@@ -13768,11 +13768,80 @@ textarea:focus {
   display: grid;
   align-content: start;
   gap: 14px;
-  width: min(1180px, 100%);
+  width: 100%;
+  max-width: none;
   min-height: 100%;
-  margin: 0 auto;
+  margin: 0;
   padding: 18px;
   padding-bottom: max(30px, env(safe-area-inset-bottom));
+}
+
+.unified-record-stepper {
+  width: 100%;
+}
+
+.unified-requester-lookup-stage {
+  display: grid;
+  gap: 18px;
+  width: 100%;
+  justify-self: stretch;
+}
+
+.unified-user-combobox {
+  position: relative;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.unified-user-results {
+  width: 100%;
+}
+
+.unified-typeahead-hint {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 2px 9px;
+  min-height: 66px;
+  padding: 10px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 9px;
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+
+.unified-typeahead-hint svg {
+  grid-row: 1 / span 2;
+  color: var(--brand-2);
+}
+
+.unified-typeahead-hint span {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.unified-typeahead-hint small {
+  font-size: 11px;
+}
+
+.unified-typeahead-hint.no-results {
+  border-style: solid;
+}
+
+.unified-new-record-details-layout {
+  display: grid;
+  grid-template-columns: minmax(270px, 320px) minmax(0, 1fr);
+  align-items: start;
+  gap: 14px;
+  min-width: 0;
+  width: 100%;
+}
+
+.unified-record-requester-card {
+  position: sticky;
+  top: 0;
 }
 
 .unified-new-record-header {
@@ -14016,6 +14085,21 @@ textarea:focus {
   }
 }
 
+@media (max-width: 1050px) {
+  .unified-new-record-details-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .unified-record-requester-card {
+    position: static;
+  }
+
+  .unified-record-requester-card .requester-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 18px;
+  }
+}
+
 @media (max-width: 760px) {
   .record-create-popover {
     position: fixed;
@@ -14038,6 +14122,35 @@ textarea:focus {
     gap: 11px;
     padding: 12px;
     padding-bottom: max(24px, env(safe-area-inset-bottom));
+  }
+
+
+  .unified-requester-lookup-stage {
+    gap: 13px;
+    padding: 14px;
+  }
+
+  .unified-requester-lookup-stage .incident-user-results button {
+    grid-template-columns: 38px minmax(0, 1fr) 18px;
+    gap: 9px;
+  }
+
+  .unified-requester-lookup-stage .directory-secondary {
+    grid-column: 2;
+    margin-top: -2px;
+  }
+
+  .unified-requester-lookup-stage .directory-location {
+    display: none;
+  }
+
+  .unified-requester-lookup-stage .incident-user-results button > svg {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+  }
+
+  .unified-record-requester-card .requester-facts {
+    grid-template-columns: 1fr;
   }
 
   .unified-record-header,
