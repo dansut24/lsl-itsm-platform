@@ -45,6 +45,7 @@ import {
 import { authenticateDemoUser } from './services/demoAuth.js'
 import {
   loadAccent,
+  loadCalendarEvents,
   loadDensity,
   loadSession,
   loadSidebarMode,
@@ -54,6 +55,7 @@ import {
   loadRotaEntries,
   loadWorkspace,
   saveAccent,
+  saveCalendarEvents,
   saveDensity,
   saveSession,
   saveSidebarMode,
@@ -63,6 +65,7 @@ import {
   saveRotaEntries,
   saveWorkspace,
 } from './services/demoStore.js'
+import { CalendarView } from './features/calendar/CalendarView.jsx'
 import { ProjectManagementView } from './features/projects/ProjectViews.jsx'
 import { RotaView } from './features/rota/RotaView.jsx'
 import {
@@ -293,6 +296,7 @@ function App() {
   const [initialTickets] = useState(loadTickets)
   const [initialProjects] = useState(loadProjects)
   const [initialRotaEntries] = useState(loadRotaEntries)
+  const [initialCalendarEvents] = useState(loadCalendarEvents)
   const [initialSession] = useState(loadSession)
   const [initialWorkspace] = useState(loadWorkspace)
   const [initialRoute] = useState(routeFromLocation)
@@ -330,6 +334,7 @@ function App() {
   const [tickets, setTickets] = useState(initialTickets)
   const [projects, setProjects] = useState(initialProjects)
   const [rotaEntries, setRotaEntries] = useState(initialRotaEntries)
+  const [calendarEvents, setCalendarEvents] = useState(initialCalendarEvents)
   const [tabs, setTabs] = useState(initialTabs)
   const [activeTabKey, setActiveTabKey] = useState(initialRouteTab.key)
   const initialRouteType =
@@ -381,6 +386,10 @@ function App() {
   useEffect(() => {
     saveRotaEntries(rotaEntries)
   }, [rotaEntries])
+
+  useEffect(() => {
+    saveCalendarEvents(calendarEvents)
+  }, [calendarEvents])
 
   useEffect(() => {
     saveTheme(theme)
@@ -1135,6 +1144,23 @@ function App() {
     setToast(`${created.length} rota entries copied`)
   }
 
+  function saveCalendarEvent(event) {
+    if (event.id) {
+      setCalendarEvents((current) => current.map((item) => item.id === event.id ? event : item))
+      setToast('Calendar event updated')
+      return
+    }
+
+    const created = { ...event, id: `CAL-${Date.now()}` }
+    setCalendarEvents((current) => [...current, created])
+    setToast('Calendar event created')
+  }
+
+  function deleteCalendarEvent(eventId) {
+    setCalendarEvents((current) => current.filter((event) => event.id !== eventId))
+    setToast('Calendar event removed')
+  }
+
   function openSettingsSection(section) {
     openTab('settings', {
       key: `settings-${section}`,
@@ -1780,6 +1806,30 @@ function App() {
             openTab('tickets', { key: `ticket-${ticket.id}`, title: ticket.id, recordId: ticket.id })
           }
           tickets={tickets.filter((ticket) => ticket.type === 'Change')}
+        />
+      )
+    }
+
+    if (activeView === 'calendar') {
+      return (
+        <CalendarView
+          calendarEvents={calendarEvents}
+          onDeleteCalendarEvent={deleteCalendarEvent}
+          onOpenProject={(projectId) => {
+            const project = projects.find((item) => item.id === projectId)
+            if (project) openProject(project)
+          }}
+          onOpenRecord={(recordId) => {
+            const ticket = tickets.find((item) => item.id === recordId)
+            if (ticket) openTab('tickets', { key: `ticket-${ticket.id}`, title: ticket.id, recordId: ticket.id })
+          }}
+          onOpenRota={() => openTab('rota')}
+          onSaveCalendarEvent={saveCalendarEvent}
+          people={workPeople}
+          projects={projects}
+          rotaEntries={rotaEntries}
+          teams={workTeams}
+          tickets={tickets}
         />
       )
     }
