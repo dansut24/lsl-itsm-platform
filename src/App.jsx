@@ -29,6 +29,7 @@ import {
 } from './data/demoData.jsx'
 import { workPeople, workTeams } from './data/workPlanningData.js'
 import { liveChatReplyOptions } from './data/liveChatData.js'
+import { createNotification } from './data/notificationData.js'
 import {
   countBy,
   getBreadcrumbs,
@@ -50,6 +51,7 @@ import {
   loadDensity,
   loadLiveChatConversations,
   loadLiveChatPreferences,
+  loadNotifications,
   loadSession,
   loadSidebarMode,
   loadTheme,
@@ -62,6 +64,7 @@ import {
   saveDensity,
   saveLiveChatConversations,
   saveLiveChatPreferences,
+  saveNotifications,
   saveSession,
   saveSidebarMode,
   saveTheme,
@@ -74,6 +77,7 @@ import { CalendarView } from './features/calendar/CalendarView.jsx'
 import { ProjectManagementView } from './features/projects/ProjectViews.jsx'
 import { RotaView } from './features/rota/RotaView.jsx'
 import { LiveChatView } from './features/live-chat/LiveChatView.jsx'
+import { NotificationDrawer } from './features/notifications/NotificationDrawer.jsx'
 import {
   ChangesView,
   CmdbRecordView,
@@ -145,36 +149,6 @@ function tabFromRoute(route) {
     query: route.query,
   })
 }
-
-const demoNotifications = [
-  {
-    id: 'sla-inc-1032',
-    title: 'SLA at risk',
-    detail: 'INC-1032 has 43 minutes remaining on its resolution target.',
-    recordId: 'INC-1032',
-    meta: '8 min ago',
-    tone: 'critical',
-    read: false,
-  },
-  {
-    id: 'approval-req-2217',
-    title: 'Approval required',
-    detail: 'REQ-2217 is waiting for an approval before fulfilment can continue.',
-    recordId: 'REQ-2217',
-    meta: '18 min ago',
-    tone: 'warning',
-    read: false,
-  },
-  {
-    id: 'change-chg-0891',
-    title: 'Change window approaching',
-    detail: 'CHG-0891 is scheduled for implementation this evening.',
-    recordId: 'CHG-0891',
-    meta: '42 min ago',
-    tone: 'info',
-    read: true,
-  },
-]
 
 const MAX_WORKSPACE_TABS = 12
 const NEW_TAB_KEY = 'newtab'
@@ -331,6 +305,7 @@ function App() {
   const [initialCalendarEvents] = useState(loadCalendarEvents)
   const [initialLiveChatConversations] = useState(loadLiveChatConversations)
   const [initialLiveChatPreferences] = useState(loadLiveChatPreferences)
+  const [initialNotifications] = useState(loadNotifications)
   const [initialSession] = useState(loadSession)
   const [initialWorkspace] = useState(loadWorkspace)
   const [initialRoute] = useState(routeFromLocation)
@@ -397,7 +372,7 @@ function App() {
     initialActiveTab.filter || allTicketFilters(),
   )
   const [toast, setToast] = useState('')
-  const [notifications, setNotifications] = useState(demoNotifications)
+  const [notifications, setNotifications] = useState(initialNotifications)
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [globalSearchQuery, setGlobalSearchQuery] = useState('')
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false)
@@ -442,6 +417,10 @@ function App() {
   useEffect(() => {
     saveLiveChatPreferences(liveChatPreferences)
   }, [liveChatPreferences])
+
+  useEffect(() => {
+    saveNotifications(notifications)
+  }, [notifications])
 
   useEffect(() => {
     saveTheme(theme)
@@ -1230,6 +1209,13 @@ function App() {
         ? { ...conversation, unread: 0 }
         : conversation,
     ))
+    setNotifications((current) => current.map((notification) =>
+      notification.target?.type === 'livechat'
+        && notification.target.conversationId === conversationId
+        && !notification.read
+        ? { ...notification, read: true }
+        : notification,
+    ))
   }
 
   function claimLiveChatConversation(conversationId) {
@@ -1338,6 +1324,19 @@ function App() {
           ],
         }
       }))
+
+      const incomingConversation = liveChatConversations.find((conversation) => conversation.id === conversationId)
+      if (incomingConversation) {
+        const viewingConversation = activeTabKey === LIVE_CHAT_TAB_KEY && selectedLiveChatId === conversationId
+        pushNotification({
+          source: 'livechat',
+          title: `New message from ${incomingConversation.participant.name}`,
+          detail: incomingText,
+          target: { type: 'livechat', conversationId },
+          tone: 'info',
+          read: viewingConversation,
+        })
+      }
     }, 1400)
   }
 
@@ -1897,13 +1896,68 @@ function App() {
     setNotifications((current) =>
       current.map((item) => (item.id === notification.id ? { ...item, read: true } : item)),
     )
-    const ticket = tickets.find((item) => item.id === notification.recordId)
-    if (ticket) {
-      openTicketRecord(ticket)
-    } else {
-      closeHeaderOverlays()
-      setToast('That demo record is not available in this workspace yet')
+
+    const target = notification.target || (notification.recordId
+      ? { type: 'ticket', recordId: notification.recordId }
+      : null)
+
+    if (target?.type === 'ticket') {
+      const ticket = tickets.find((item) => item.id === target.recordId)
+      if (ticket) {
+        openTicketRecord(ticket)
+        return
+      }
     }
+
+    if (target?.type === 'livechat') {
+      const conversation = liveChatConversations.find((item) => item.id === target.conversationId)
+      if (conversation && liveChatPreferences.enabled) {
+        setSelectedLiveChatId(conversation.id)
+        markLiveChatConversationRead(conversation.id)
+        closeHeaderOverlays()
+        openTab('livechat', { key: LIVE_CHAT_TAB_KEY, title: 'Live Chat', pinned: true })
+        return
+      }
+      closeHeaderOverlays()
+      setToast(liveChatPreferences.enabled ? 'That conversation is no longer available' : 'Enable Live Chat to open this conversation')
+      return
+    }
+
+    if (target?.type === 'project') {
+      const project = projects.find((item) => item.id === target.projectId)
+      if (project) {
+        closeHeaderOverlays()
+        openProject(project)
+        return
+      }
+    }
+
+    if (target?.type === 'calendar') {
+      closeHeaderOverlays()
+      openTab('calendar', { key: 'calendar', title: 'Calendar' })
+      return
+    }
+
+    if (target?.type === 'rota') {
+      closeHeaderOverlays()
+      openTab('rota', { key: 'rota', title: 'Rota & Availability' })
+      return
+    }
+
+    closeHeaderOverlays()
+    setToast('That notification target is no longer available')
+  }
+
+  function markAllNotificationsRead() {
+    setNotifications((current) => current.map((item) => ({ ...item, read: true })))
+  }
+
+  function clearReadNotifications() {
+    setNotifications((current) => current.filter((item) => !item.read))
+  }
+
+  function pushNotification(notification) {
+    setNotifications((current) => [createNotification(notification), ...current].slice(0, 80))
   }
 
   function openGlobalSearchAsset(asset) {
@@ -2596,52 +2650,13 @@ function App() {
         )}
 
         {notificationsOpen && (
-          <aside className="notifications-panel" aria-label="Notifications">
-            <div className="header-panel-heading">
-              <div>
-                <span className="eyebrow">Inbox</span>
-                <strong>Notifications</strong>
-              </div>
-              <div className="notification-panel-actions">
-                <button
-                  disabled={!unreadNotificationCount}
-                  onClick={() =>
-                    setNotifications((current) => current.map((item) => ({ ...item, read: true })))
-                  }
-                  type="button"
-                >
-                  Mark all read
-                </button>
-                <button
-                  aria-label="Close notifications"
-                  className="notification-panel-close"
-                  onClick={() => setNotificationsOpen(false)}
-                  title="Close notifications"
-                  type="button"
-                >
-                  <X size={17} aria-hidden="true" />
-                </button>
-              </div>
-            </div>
-            <div className="notification-list">
-              {notifications.map((notification) => (
-                <button
-                  className={notification.read ? 'notification-item read' : 'notification-item'}
-                  key={notification.id}
-                  onClick={() => openNotification(notification)}
-                  type="button"
-                >
-                  <span className={`notification-tone ${notification.tone}`} aria-hidden="true" />
-                  <span className="notification-copy">
-                    <strong>{notification.title}</strong>
-                    <span>{notification.detail}</span>
-                    <small>{notification.meta}</small>
-                  </span>
-                  <ChevronRight size={16} aria-hidden="true" />
-                </button>
-              ))}
-            </div>
-          </aside>
+          <NotificationDrawer
+            notifications={notifications}
+            onClearRead={clearReadNotifications}
+            onClose={() => setNotificationsOpen(false)}
+            onMarkAllRead={markAllNotificationsRead}
+            onOpenNotification={openNotification}
+          />
         )}
 
         {globalSearchOpen && (
