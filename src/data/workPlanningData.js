@@ -1,23 +1,9 @@
-export const workPeople = [
-  { id: 'AGT-DANA', name: 'Dana Sinclair', initials: 'DS', role: 'Senior Service Desk Analyst', team: 'Service Desk', location: 'London HQ', capacityHours: 35, tone: 'blue' },
-  { id: 'AGT-SOFIA', name: 'Sofia Martinez', initials: 'SM', role: 'Service Desk Analyst', team: 'Service Desk', location: 'Manchester', capacityHours: 35, tone: 'rose' },
-  { id: 'AGT-LEWIS', name: 'Lewis Morgan', initials: 'LM', role: 'Service Desk Analyst', team: 'Service Desk', location: 'London HQ', capacityHours: 35, tone: 'cyan' },
-  { id: 'AGT-EMILY', name: 'Emily Chen', initials: 'EC', role: 'Service Desk Analyst', team: 'Service Desk', location: 'Birmingham', capacityHours: 35, tone: 'emerald' },
-  { id: 'AGT-PRIYA', name: 'Priya Raman', initials: 'PR', role: 'Infrastructure Engineer', team: 'Infrastructure', location: 'London HQ', capacityHours: 35, tone: 'violet' },
-  { id: 'AGT-NOAH', name: 'Noah Williams', initials: 'NW', role: 'EUC Analyst', team: 'End User Compute', location: 'Birmingham', capacityHours: 35, tone: 'emerald' },
-  { id: 'AGT-MAYA', name: 'Maya Ford', initials: 'MF', role: 'EUC Team Lead', team: 'End User Compute', location: 'Birmingham', capacityHours: 28, tone: 'amber' },
-  { id: 'AGT-AISHA', name: 'Aisha Khan', initials: 'AK', role: 'Change Manager', team: 'Change Management', location: 'Manchester', capacityHours: 30, tone: 'rose' },
-  { id: 'AGT-JAMES', name: 'James Howard', initials: 'JH', role: 'Infrastructure Lead', team: 'Infrastructure', location: 'London HQ', capacityHours: 28, tone: 'cyan' },
-  { id: 'AGT-OLIVIA', name: 'Olivia Grant', initials: 'OG', role: 'Technology Director', team: 'Technology Leadership', location: 'London HQ', capacityHours: 20, tone: 'slate' },
-]
+import { organisationPeople, organisationTeams } from './organisationData.js'
 
-export const workTeams = [
-  { id: 'TEAM-SD', name: 'Service Desk', leadId: 'AGT-DANA', colour: 'blue' },
-  { id: 'TEAM-INFRA', name: 'Infrastructure', leadId: 'AGT-JAMES', colour: 'violet' },
-  { id: 'TEAM-EUC', name: 'End User Compute', leadId: 'AGT-MAYA', colour: 'emerald' },
-  { id: 'TEAM-CHANGE', name: 'Change Management', leadId: 'AGT-AISHA', colour: 'rose' },
-  { id: 'TEAM-LEADERSHIP', name: 'Technology Leadership', leadId: 'AGT-OLIVIA', colour: 'amber' },
-]
+// Backwards-compatible aliases for existing planning imports. The organisation
+// directory is now the single source of truth for people and teams.
+export const workPeople = organisationPeople
+export const workTeams = organisationTeams
 
 export const projectTaskStatuses = ['Backlog', 'To Do', 'In Progress', 'Blocked', 'Done']
 export const projectStatuses = ['Planned', 'In Progress', 'On Hold', 'Complete']

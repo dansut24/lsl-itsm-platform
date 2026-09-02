@@ -42,6 +42,7 @@ export const viewMeta = {
   calendar: { id: 'calendar', label: 'Calendar', icon: CalendarRange },
   projects: { id: 'projects', label: 'Projects', icon: FolderKanban },
   rota: { id: 'rota', label: 'Rota & Availability', icon: CalendarDays },
+  people: { id: 'people', label: 'People', icon: Users },
   cmdb: { id: 'cmdb', label: 'CMDB', icon: Database },
   knowledge: { id: 'knowledge', label: 'Knowledge', icon: BookOpen },
   livechat: { id: 'livechat', label: 'Live Chat', icon: MessageCircle },
@@ -93,6 +94,11 @@ export const analystNavGroups = [
     id: 'planning',
     label: 'Planning',
     items: ['calendar', 'projects', 'rota'],
+  },
+  {
+    id: 'organisation',
+    label: 'Organisation',
+    items: ['people'],
   },
   {
     id: 'knowledge-data',
