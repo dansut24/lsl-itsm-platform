@@ -51,6 +51,7 @@ import {
 } from 'lucide-react'
 import { accentOptions, demoUsers, incidentServices, loginProfiles, priorities, statusOptions, teams, types } from '../../data/demoData.jsx'
 import { priorityClass, statusClass } from '../../lib/workspace.js'
+import { UnifiedRecordDetailView } from './UnifiedRecordDetailView.jsx'
 
 export function LoginScreen({
   accent,
@@ -1567,128 +1568,18 @@ export function TicketRecordView({
     )
   }
 
-  if (selectedTicket.type === 'Incident') {
-    return (
-      <IncidentRecordWorkspace
-        addComment={addComment}
-        key={selectedTicket.id}
-        newComment={newComment}
-        openAssetByName={openAssetByName}
-        setNewComment={setNewComment}
-        ticket={selectedTicket}
-        updateTicket={updateTicket}
-      />
-    )
-  }
-
-  if (selectedTicket.type === 'Service Request') {
-    return (
-      <ServiceRequestRecordWorkspace
-        addComment={addComment}
-        key={selectedTicket.id}
-        newComment={newComment}
-        setNewComment={setNewComment}
-        ticket={selectedTicket}
-        updateTicket={updateTicket}
-      />
-    )
-  }
-
-  if (selectedTicket.type === 'Problem') {
-    return (
-      <ProblemRecordWorkspace
-        addComment={addComment}
-        key={selectedTicket.id}
-        newComment={newComment}
-        openAssetByName={openAssetByName}
-        openRecordTab={openRecordTab}
-        setNewComment={setNewComment}
-        ticket={selectedTicket}
-        tickets={tickets}
-        updateTicket={updateTicket}
-      />
-    )
-  }
-
-  if (selectedTicket.type === 'Change') {
-    return (
-      <ChangeRecordWorkspace
-        addComment={addComment}
-        key={selectedTicket.id}
-        newComment={newComment}
-        openAssetByName={openAssetByName}
-        openRecordTab={openRecordTab}
-        setNewComment={setNewComment}
-        ticket={selectedTicket}
-        tickets={tickets}
-        updateTicket={updateTicket}
-      />
-    )
-  }
-
   return (
-    <div className="record-page">
-      <section className="record-primary">
-        <TicketDetailContent
-          addComment={addComment}
-          newComment={newComment}
-          setNewComment={setNewComment}
-          ticket={selectedTicket}
-          updateTicket={updateTicket}
-        />
-      </section>
-
-      <aside className="record-context-panel">
-        <div className="section-heading tight">
-          <div>
-            <span className="eyebrow">Record Context</span>
-            <h2>{selectedTicket.id}</h2>
-          </div>
-        </div>
-
-        <div className="record-fact-grid">
-          <InfoItem label="Type" value={selectedTicket.type} icon={Inbox} />
-          <InfoItem label="Priority" value={selectedTicket.priority} icon={CircleGauge} />
-          <InfoItem label="Created" value={selectedTicket.created} icon={CalendarClock} />
-          <InfoItem label="Updated" value={selectedTicket.updated} icon={Clock3} />
-        </div>
-
-        <div className="record-context-block">
-          <span className="eyebrow">SLA Position</span>
-          <SlaBar value={selectedTicket.slaPercent} label={selectedTicket.sla} />
-        </div>
-
-        <div className="record-context-block">
-          <span className="eyebrow">Linked CIs</span>
-          <div className="linked-ci-list">
-            {(selectedTicket.linkedAssets?.length ? selectedTicket.linkedAssets : ['No CI linked']).map((asset) => (
-              asset === 'No CI linked' ? (
-                <span key={asset}>{asset}</span>
-              ) : (
-                <button className="linked-ci-button" key={asset} onClick={() => openAssetByName?.(asset)} type="button">
-                  {asset}
-                </button>
-              )
-            ))}
-          </div>
-        </div>
-
-        {selectedTicket.requesterEmail && (
-          <div className="record-context-block requester-record-context">
-            <span className="eyebrow">Requester</span>
-            <strong>{selectedTicket.requester}</strong>
-            <span>{selectedTicket.requesterEmail}</span>
-            {selectedTicket.requesterStaffNumber && <small>{selectedTicket.requesterStaffNumber}</small>}
-            {selectedTicket.requesterDepartment && <small>{selectedTicket.requesterDepartment}</small>}
-          </div>
-        )}
-
-        <div className="record-context-block">
-          <span className="eyebrow">Requester Location</span>
-          <strong>{selectedTicket.location}</strong>
-        </div>
-      </aside>
-    </div>
+    <UnifiedRecordDetailView
+      addComment={addComment}
+      key={selectedTicket.id}
+      newComment={newComment}
+      openAssetByName={openAssetByName}
+      openRecordTab={openRecordTab}
+      setNewComment={setNewComment}
+      ticket={selectedTicket}
+      tickets={tickets}
+      updateTicket={updateTicket}
+    />
   )
 }
 
