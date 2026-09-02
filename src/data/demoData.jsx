@@ -11,6 +11,7 @@ import {
   Inbox,
   LayoutDashboard,
   LifeBuoy,
+  MessageCircle,
   Plus,
   Settings,
   ShieldCheck,
@@ -43,6 +44,7 @@ export const viewMeta = {
   rota: { id: 'rota', label: 'Rota & Availability', icon: CalendarDays },
   cmdb: { id: 'cmdb', label: 'CMDB', icon: Database },
   knowledge: { id: 'knowledge', label: 'Knowledge', icon: BookOpen },
+  livechat: { id: 'livechat', label: 'Live Chat', icon: MessageCircle },
   reports: { id: 'reports', label: 'Reports', icon: BarChart3 },
   settings: { id: 'settings', label: 'Settings', icon: Settings },
 }
