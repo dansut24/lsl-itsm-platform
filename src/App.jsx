@@ -28,6 +28,7 @@ import {
   viewMeta,
 } from './data/demoData.jsx'
 import { workPeople, workTeams } from './data/workPlanningData.js'
+import { liveChatReplyOptions } from './data/liveChatData.js'
 import {
   countBy,
   getBreadcrumbs,
@@ -47,6 +48,8 @@ import {
   loadAccent,
   loadCalendarEvents,
   loadDensity,
+  loadLiveChatConversations,
+  loadLiveChatPreferences,
   loadSession,
   loadSidebarMode,
   loadTheme,
@@ -57,6 +60,8 @@ import {
   saveAccent,
   saveCalendarEvents,
   saveDensity,
+  saveLiveChatConversations,
+  saveLiveChatPreferences,
   saveSession,
   saveSidebarMode,
   saveTheme,
@@ -68,6 +73,7 @@ import {
 import { CalendarView } from './features/calendar/CalendarView.jsx'
 import { ProjectManagementView } from './features/projects/ProjectViews.jsx'
 import { RotaView } from './features/rota/RotaView.jsx'
+import { LiveChatView } from './features/live-chat/LiveChatView.jsx'
 import {
   ChangesView,
   CmdbRecordView,
@@ -126,7 +132,7 @@ function tabFromRoute(route) {
     // /new-tab/:key routes; canonicalise all of them back to one tab identity.
     key: route.viewId === 'newtab' ? NEW_TAB_KEY : route.key,
     title: asset?.name || article?.title || route.title,
-    pinned: route.viewId === 'home' || (route.viewId === 'portal' && !route.portalRequestId),
+    pinned: route.viewId === 'home' || route.viewId === 'livechat' || (route.viewId === 'portal' && !route.portalRequestId),
     recordId: route.recordId,
     assetId: route.assetId,
     articleSlug: route.articleSlug,
@@ -172,6 +178,32 @@ const demoNotifications = [
 
 const MAX_WORKSPACE_TABS = 12
 const NEW_TAB_KEY = 'newtab'
+const LIVE_CHAT_TAB_KEY = 'livechat'
+
+function liveChatTab() {
+  return makeTab('livechat', { key: LIVE_CHAT_TAB_KEY, title: 'Live Chat', pinned: true })
+}
+
+function syncLiveChatFixedTab(currentTabs, enabled) {
+  const withoutLiveChat = currentTabs.filter((tab) => tab.key !== LIVE_CHAT_TAB_KEY)
+  if (!enabled) {
+    return withoutLiveChat.length
+      ? withoutLiveChat
+      : [makeTab('home', { key: 'home', title: 'Dashboard', pinned: true })]
+  }
+
+  const fixedTab = liveChatTab()
+  const homeIndex = withoutLiveChat.findIndex((tab) => tab.key === 'home')
+  const insertAt = homeIndex >= 0 ? homeIndex + 1 : 0
+  const nextTabs = [...withoutLiveChat]
+  nextTabs.splice(insertAt, 0, fixedTab)
+
+  if (nextTabs.length <= MAX_WORKSPACE_TABS) return nextTabs
+
+  const removableIndex = nextTabs.findLastIndex?.((tab) => !tab.pinned) ?? -1
+  if (removableIndex >= 0) nextTabs.splice(removableIndex, 1)
+  return nextTabs.slice(0, MAX_WORKSPACE_TABS)
+}
 
 function emptyTicketDraft(type = 'Incident') {
   return {
@@ -297,6 +329,8 @@ function App() {
   const [initialProjects] = useState(loadProjects)
   const [initialRotaEntries] = useState(loadRotaEntries)
   const [initialCalendarEvents] = useState(loadCalendarEvents)
+  const [initialLiveChatConversations] = useState(loadLiveChatConversations)
+  const [initialLiveChatPreferences] = useState(loadLiveChatPreferences)
   const [initialSession] = useState(loadSession)
   const [initialWorkspace] = useState(loadWorkspace)
   const [initialRoute] = useState(routeFromLocation)
@@ -305,10 +339,17 @@ function App() {
     initialSession?.role || 'analyst',
   )
   const initialRouteTab = tabFromRoute(initialWorkspaceRoute)
-  const initialTabs = initialSession?.role === 'analyst'
+  const restoredInitialTabs = initialSession?.role === 'analyst'
     ? restoreWorkspaceTabs(initialWorkspace, initialRouteTab)
     : [initialRouteTab]
-  const initialActiveTab = initialTabs.find((tab) => tab.key === initialRouteTab.key) || initialRouteTab
+  const initialTabs = initialSession?.role === 'analyst'
+    ? syncLiveChatFixedTab(restoredInitialTabs, initialLiveChatPreferences.enabled)
+    : restoredInitialTabs
+  const initialActiveTab =
+    initialTabs.find((tab) => tab.key === initialRouteTab.key) ||
+    initialTabs.find((tab) => tab.key === initialWorkspace?.activeTabKey) ||
+    initialTabs[0] ||
+    initialRouteTab
   const [session, setSession] = useState(initialSession)
   const [theme, setTheme] = useState(loadTheme)
   const [systemTheme, setSystemTheme] = useState(getSystemTheme)
@@ -335,8 +376,11 @@ function App() {
   const [projects, setProjects] = useState(initialProjects)
   const [rotaEntries, setRotaEntries] = useState(initialRotaEntries)
   const [calendarEvents, setCalendarEvents] = useState(initialCalendarEvents)
+  const [liveChatConversations, setLiveChatConversations] = useState(initialLiveChatConversations)
+  const [liveChatPreferences, setLiveChatPreferences] = useState(initialLiveChatPreferences)
+  const [selectedLiveChatId, setSelectedLiveChatId] = useState(() => initialLiveChatConversations.find((conversation) => conversation.status !== 'Closed')?.id || initialLiveChatConversations[0]?.id || '')
   const [tabs, setTabs] = useState(initialTabs)
-  const [activeTabKey, setActiveTabKey] = useState(initialRouteTab.key)
+  const [activeTabKey, setActiveTabKey] = useState(initialActiveTab.key)
   const initialRouteType =
     initialActiveTab.newRecordType ||
     (initialActiveTab.filter?.type && initialActiveTab.filter.type !== 'All'
@@ -390,6 +434,14 @@ function App() {
   useEffect(() => {
     saveCalendarEvents(calendarEvents)
   }, [calendarEvents])
+
+  useEffect(() => {
+    saveLiveChatConversations(liveChatConversations)
+  }, [liveChatConversations])
+
+  useEffect(() => {
+    saveLiveChatPreferences(liveChatPreferences)
+  }, [liveChatPreferences])
 
   useEffect(() => {
     saveTheme(theme)
@@ -644,6 +696,11 @@ function App() {
   }, [activeTabKey, session?.role, tabs])
 
   useEffect(() => {
+    if (session?.role !== 'analyst') return
+    setTabs((currentTabs) => syncLiveChatFixedTab(currentTabs, liveChatPreferences.enabled))
+  }, [liveChatPreferences.enabled, session?.role])
+
+  useEffect(() => {
     const currentRoute = routeFromLocation()
 
     if (!session) {
@@ -651,11 +708,16 @@ function App() {
       return
     }
 
+    if (session.role === 'analyst' && currentRoute.viewId === 'livechat' && !liveChatPreferences.enabled) {
+      writeRoute('/dashboard', { replace: true })
+      return
+    }
+
     const resolvedRoute = resolveRouteForRole(currentRoute, session.role)
     if (resolvedRoute.path !== currentRoute.path) {
       writeRoute(resolvedRoute.path, { replace: true })
     }
-  }, [session])
+  }, [liveChatPreferences.enabled, session])
 
   useEffect(() => {
     function handlePopState() {
@@ -663,6 +725,16 @@ function App() {
 
       const currentRoute = routeFromLocation()
       const route = resolveRouteForRole(currentRoute, session.role)
+
+      if (session.role === 'analyst' && route.viewId === 'livechat' && !liveChatPreferences.enabled) {
+        const fallback = tabs.find((tab) => tab.key === 'home') || tabs.find((tab) => tab.key !== LIVE_CHAT_TAB_KEY)
+        if (fallback) {
+          setActiveTabKey(fallback.key)
+          writeRoute(pathForTab(fallback, tickets), { replace: true })
+        }
+        return
+      }
+
       const currentTab = tabs.find((tab) => tab.key === activeTabKey)
       const leavingDirtyDraft =
         currentTab?.viewId === 'newrecord' &&
@@ -706,7 +778,7 @@ function App() {
 
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
-  }, [activeTabKey, session, tabs, ticketDraft, tickets])
+  }, [activeTabKey, liveChatPreferences.enabled, session, tabs, ticketDraft, tickets])
 
   useEffect(() => {
     if (!toast) return undefined
@@ -764,6 +836,10 @@ function App() {
     ? tabs.find((tab) => tab.key === tabContextMenu.tabKey)
     : undefined
   const activeView = activeTab?.viewId || 'home'
+  const liveChatUnreadCount = useMemo(
+    () => liveChatConversations.reduce((total, conversation) => total + (Number(conversation.unread) || 0), 0),
+    [liveChatConversations],
+  )
   const activeModule = serviceDeskModules[activeView]
   const activeModuleType = activeModule?.type
   const activeHasUnsavedChanges =
@@ -780,6 +856,19 @@ function App() {
     window.addEventListener('beforeunload', handleBeforeUnload)
     return () => window.removeEventListener('beforeunload', handleBeforeUnload)
   }, [activeHasUnsavedChanges])
+
+  useEffect(() => {
+    if (activeView !== 'livechat' || !selectedLiveChatId) return
+    setLiveChatConversations((current) => {
+      let changed = false
+      const next = current.map((conversation) => {
+        if (conversation.id !== selectedLiveChatId || !conversation.unread) return conversation
+        changed = true
+        return { ...conversation, unread: 0 }
+      })
+      return changed ? next : current
+    })
+  }, [activeView, liveChatConversations, selectedLiveChatId])
 
   useEffect(() => {
     if (!(activeView === 'tickets' || serviceDeskModules[activeView])) return
@@ -1116,6 +1205,142 @@ function App() {
       : project))
   }
 
+  function liveChatTimestamp() {
+    return new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit' }).format(new Date())
+  }
+
+  function setLiveChatEnabled(enabled) {
+    setLiveChatPreferences((current) => ({ ...current, enabled }))
+    setTabs((currentTabs) => syncLiveChatFixedTab(currentTabs, enabled))
+
+    if (!enabled && activeTabKey === LIVE_CHAT_TAB_KEY) {
+      const fallback = tabs.find((tab) => tab.key === 'home') || tabs.find((tab) => tab.key !== LIVE_CHAT_TAB_KEY)
+      if (fallback) {
+        setActiveTabKey(fallback.key)
+        writeRoute(pathForTab(fallback, tickets), { replace: true })
+      }
+    }
+
+    setToast(enabled ? 'Live Chat enabled — the workspace tab is now fixed' : 'Live Chat disabled')
+  }
+
+  function markLiveChatConversationRead(conversationId) {
+    setLiveChatConversations((current) => current.map((conversation) =>
+      conversation.id === conversationId && conversation.unread
+        ? { ...conversation, unread: 0 }
+        : conversation,
+    ))
+  }
+
+  function claimLiveChatConversation(conversationId) {
+    const timestamp = liveChatTimestamp()
+    setLiveChatConversations((current) => current.map((conversation) => {
+      if (conversation.id !== conversationId) return conversation
+      return {
+        ...conversation,
+        status: 'Open',
+        assignedTo: session?.name || 'Dana Sinclair',
+        unread: 0,
+        updatedAt: 'Now',
+        messages: [
+          ...conversation.messages,
+          {
+            id: `MSG-${Date.now()}`,
+            sender: 'system',
+            text: `${session?.name || 'Dana Sinclair'} joined the conversation.`,
+            time: timestamp,
+          },
+        ],
+      }
+    }))
+    setSelectedLiveChatId(conversationId)
+    setToast('Conversation claimed')
+  }
+
+  function toggleLiveChatConversationClosed(conversationId) {
+    const timestamp = liveChatTimestamp()
+    setLiveChatConversations((current) => current.map((conversation) => {
+      if (conversation.id !== conversationId) return conversation
+      const reopening = conversation.status === 'Closed'
+      return {
+        ...conversation,
+        status: reopening ? 'Open' : 'Closed',
+        updatedAt: 'Now',
+        messages: [
+          ...conversation.messages,
+          {
+            id: `MSG-${Date.now()}`,
+            sender: 'system',
+            text: reopening
+              ? `Conversation reopened by ${session?.name || 'Dana Sinclair'}.`
+              : `Conversation closed by ${session?.name || 'Dana Sinclair'}.`,
+            time: timestamp,
+          },
+        ],
+      }
+    }))
+  }
+
+  function sendLiveChatMessage(conversationId, body) {
+    const timestamp = liveChatTimestamp()
+    let replyIndex = 0
+
+    setLiveChatConversations((current) => current.map((conversation) => {
+      if (conversation.id !== conversationId) return conversation
+      replyIndex = conversation.messages.length % liveChatReplyOptions.length
+      const claimMessage = conversation.status === 'Waiting'
+        ? [{
+            id: `MSG-${Date.now()}-claim`,
+            sender: 'system',
+            text: `${session?.name || 'Dana Sinclair'} joined the conversation.`,
+            time: timestamp,
+          }]
+        : []
+      return {
+        ...conversation,
+        status: 'Open',
+        assignedTo: conversation.assignedTo || session?.name || 'Dana Sinclair',
+        unread: 0,
+        updatedAt: 'Now',
+        lastMessage: body,
+        messages: [
+          ...conversation.messages,
+          ...claimMessage,
+          {
+            id: `MSG-${Date.now()}`,
+            sender: 'agent',
+            text: body,
+            time: timestamp,
+            state: 'Sent',
+          },
+        ],
+      }
+    }))
+
+    window.setTimeout(() => {
+      const incomingText = liveChatReplyOptions[replyIndex]
+      const incomingTime = liveChatTimestamp()
+      setLiveChatConversations((current) => current.map((conversation) => {
+        if (conversation.id !== conversationId || conversation.status === 'Closed') return conversation
+        return {
+          ...conversation,
+          unread: (Number(conversation.unread) || 0) + 1,
+          updatedAt: 'Now',
+          lastMessage: incomingText,
+          messages: [
+            ...conversation.messages,
+            {
+              id: `MSG-${Date.now()}-reply`,
+              sender: 'requester',
+              text: incomingText,
+              time: incomingTime,
+            },
+          ],
+        }
+      }))
+    }, 1400)
+  }
+
   function saveRotaEntry(entry) {
     const person = workPeople.find((item) => item.id === entry.personId)
     if (entry.id) {
@@ -1277,7 +1502,7 @@ function App() {
 
   function duplicateWorkspaceTab(tabKey) {
     const sourceTab = tabs.find((tab) => tab.key === tabKey)
-    if (!sourceTab || sourceTab.viewId === 'newtab') return
+    if (!sourceTab || sourceTab.viewId === 'newtab' || sourceTab.viewId === 'livechat') return
     if (sourceTab.key !== activeTabKey && !confirmLeavingDraft()) return
 
     const duplicate = {
@@ -1571,34 +1796,38 @@ function App() {
     const activeLoginTab = savedActiveTab
       ? makeTab(savedActiveTab.viewId, savedActiveTab)
       : requestedTab
-    const nextTabs = profile.role === 'analyst'
+    const restoredLoginTabs = profile.role === 'analyst'
       ? restoreWorkspaceTabs(storedWorkspace, activeLoginTab)
       : [requestedTab]
+    const nextTabs = profile.role === 'analyst'
+      ? syncLiveChatFixedTab(restoredLoginTabs, liveChatPreferences.enabled)
+      : restoredLoginTabs
+    const resolvedLoginTab = nextTabs.find((tab) => tab.key === activeLoginTab.key) || nextTabs[0] || requestedTab
 
     setSession(nextSession)
     setLoginError('')
     setTabs(nextTabs)
-    setActiveTabKey(activeLoginTab.key)
+    setActiveTabKey(resolvedLoginTab.key)
 
-    if (activeLoginTab.recordId) {
-      setSelectedTicketId(activeLoginTab.recordId)
-    } else if (activeLoginTab.newRecordType) {
-      setTicketDraft(emptyTicketDraft(activeLoginTab.newRecordType))
-    } else if (serviceDeskModules[activeLoginTab.viewId]) {
-      const moduleConfig = serviceDeskModules[activeLoginTab.viewId]
+    if (resolvedLoginTab.recordId) {
+      setSelectedTicketId(resolvedLoginTab.recordId)
+    } else if (resolvedLoginTab.newRecordType) {
+      setTicketDraft(emptyTicketDraft(resolvedLoginTab.newRecordType))
+    } else if (serviceDeskModules[resolvedLoginTab.viewId]) {
+      const moduleConfig = serviceDeskModules[resolvedLoginTab.viewId]
       const firstModuleTicket = tickets.find((ticket) => ticket.type === moduleConfig.type)
       if (firstModuleTicket) setSelectedTicketId(firstModuleTicket.id)
       setTicketDraft(emptyTicketDraft(moduleConfig.type))
     }
 
-    if (activeLoginTab.filter) {
-      setFilters(activeLoginTab.filter)
-    } else if (serviceDeskModules[activeLoginTab.viewId]) {
-      setFilters({ ...allTicketFilters(), type: serviceDeskModules[activeLoginTab.viewId].type })
+    if (resolvedLoginTab.filter) {
+      setFilters(resolvedLoginTab.filter)
+    } else if (serviceDeskModules[resolvedLoginTab.viewId]) {
+      setFilters({ ...allTicketFilters(), type: serviceDeskModules[resolvedLoginTab.viewId].type })
     } else {
       setFilters(allTicketFilters())
     }
-    setQuery(activeLoginTab.query || '')
+    setQuery(resolvedLoginTab.query || '')
 
     setPortalDraft({
       requester: profile.role === 'requester' ? profile.name : '',
@@ -1610,7 +1839,7 @@ function App() {
     })
 
     const nextPath = profile.role === 'analyst'
-      ? pathForTab(activeLoginTab, tickets)
+      ? pathForTab(resolvedLoginTab, tickets)
       : requestedRoute.path
     writeRoute(nextPath, { replace: true })
     setToast(`Signed in as ${profile.label}`)
@@ -1810,6 +2039,24 @@ function App() {
       )
     }
 
+    if (activeView === 'livechat') {
+      return (
+        <LiveChatView
+          conversations={liveChatConversations}
+          currentUser={session}
+          onClaimConversation={claimLiveChatConversation}
+          onCloseConversation={toggleLiveChatConversationClosed}
+          onDisableLiveChat={() => setLiveChatEnabled(false)}
+          onMarkRead={markLiveChatConversationRead}
+          onSendMessage={sendLiveChatMessage}
+          onUpdatePreferences={(updates) => setLiveChatPreferences((current) => ({ ...current, ...updates }))}
+          preferences={liveChatPreferences}
+          selectedConversationId={selectedLiveChatId}
+          setSelectedConversationId={setSelectedLiveChatId}
+        />
+      )
+    }
+
     if (activeView === 'calendar') {
       return (
         <CalendarView
@@ -1902,6 +2149,8 @@ function App() {
       <SettingsView
         accent={accent}
         density={density}
+        liveChatEnabled={liveChatPreferences.enabled}
+        onSetLiveChatEnabled={setLiveChatEnabled}
         openSettingsSection={openSettingsSection}
         resolvedTheme={resolvedTheme}
         session={session}
@@ -2077,6 +2326,7 @@ function App() {
                 <button
                   className={[
                     'workspace-tab',
+                    tab.viewId === 'livechat' ? 'workspace-tab-livechat' : '',
                     activeTabKey === tab.key ? 'active' : '',
                     activeTabKey === tab.key && activeHasUnsavedChanges ? 'dirty' : '',
                   ].filter(Boolean).join(' ')}
@@ -2089,6 +2339,12 @@ function App() {
                 >
                   <span className="workspace-tab-label">
                     {tab.title}
+                    {tab.viewId === 'livechat' && liveChatUnreadCount > 0 && (
+                      <span className="live-chat-tab-notification" aria-label={`${liveChatUnreadCount} unread Live Chat messages`}>
+                        <Bell size={10} aria-hidden="true" />
+                        {liveChatUnreadCount}
+                      </span>
+                    )}
                     {activeTabKey === tab.key && activeHasUnsavedChanges && (
                       <span className="unsaved-dot" aria-label="Unsaved changes" />
                     )}
@@ -2178,7 +2434,7 @@ function App() {
             style={{ left: tabContextMenu.x, top: tabContextMenu.y }}
           >
             <button
-              disabled={contextMenuTab.viewId === 'newtab'}
+              disabled={contextMenuTab.viewId === 'newtab' || contextMenuTab.viewId === 'livechat'}
               onClick={() => duplicateWorkspaceTab(contextMenuTab.key)}
               role="menuitem"
               type="button"
