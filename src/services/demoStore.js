@@ -1,6 +1,7 @@
 import { loginProfiles, seedTickets } from '../data/demoData.jsx'
 import { seedRotaEntries } from '../data/rotaData.js'
 import { seedCalendarEvents } from '../data/calendarData.js'
+import { defaultLiveChatPreferences, seedLiveChatConversations } from '../data/liveChatData.js'
 import { seedProjects } from '../data/workPlanningData.js'
 
 function readJson(key, fallback) {
@@ -133,6 +134,20 @@ export function loadCalendarEvents() {
   return stored
 }
 
+
+export function loadLiveChatPreferences() {
+  const stored = readJson('hi5central-live-chat-preferences-v1', defaultLiveChatPreferences)
+  return {
+    ...defaultLiveChatPreferences,
+    ...(stored && typeof stored === 'object' ? stored : {}),
+  }
+}
+
+export function loadLiveChatConversations() {
+  const stored = readJson('hi5central-live-chat-conversations-v1', seedLiveChatConversations)
+  return Array.isArray(stored) && stored.length ? stored : seedLiveChatConversations
+}
+
 export function loadSession() {
   const storedSession = readMigratedJson('hi5central-session', 'lsl-itsm-session', null)
   const storedProfile = storedSession?.profile
@@ -201,6 +216,15 @@ export function saveRotaEntries(entries) {
 
 export function saveCalendarEvents(events) {
   writeJson('hi5central-calendar-v1', events)
+}
+
+
+export function saveLiveChatPreferences(preferences) {
+  writeJson('hi5central-live-chat-preferences-v1', preferences)
+}
+
+export function saveLiveChatConversations(conversations) {
+  writeJson('hi5central-live-chat-conversations-v1', conversations)
 }
 
 export function saveTheme(theme) {
