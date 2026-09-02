@@ -3,6 +3,7 @@ import { seedRotaEntries } from '../data/rotaData.js'
 import { seedCalendarEvents } from '../data/calendarData.js'
 import { defaultLiveChatPreferences, seedLiveChatConversations } from '../data/liveChatData.js'
 import { seedProjects } from '../data/workPlanningData.js'
+import { createSeedNotifications } from '../data/notificationData.js'
 
 function readJson(key, fallback) {
   try {
@@ -148,6 +149,20 @@ export function loadLiveChatConversations() {
   return Array.isArray(stored) && stored.length ? stored : seedLiveChatConversations
 }
 
+
+export function loadNotifications() {
+  const stored = readJson('hi5central-notifications-v1', null)
+  if (!Array.isArray(stored)) return createSeedNotifications()
+
+  return stored.map((notification) => ({
+    source: 'itsm',
+    tone: 'info',
+    read: false,
+    createdAt: new Date().toISOString(),
+    ...notification,
+  }))
+}
+
 export function loadSession() {
   const storedSession = readMigratedJson('hi5central-session', 'lsl-itsm-session', null)
   const storedProfile = storedSession?.profile
@@ -225,6 +240,10 @@ export function saveLiveChatPreferences(preferences) {
 
 export function saveLiveChatConversations(conversations) {
   writeJson('hi5central-live-chat-conversations-v1', conversations)
+}
+
+export function saveNotifications(notifications) {
+  writeJson('hi5central-notifications-v1', notifications)
 }
 
 export function saveTheme(theme) {
