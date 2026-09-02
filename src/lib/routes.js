@@ -55,6 +55,13 @@ const LIST_ROUTES = {
     key: 'changes',
     title: 'Changes',
   },
+  '/live-chat': {
+    kind: 'workspace',
+    path: '/live-chat',
+    viewId: 'livechat',
+    key: 'livechat',
+    title: 'Live Chat',
+  },
   '/calendar': {
     kind: 'workspace',
     path: '/calendar',
@@ -375,6 +382,7 @@ export function pathForTab(tab, tickets = []) {
     tickets: '/tickets',
     portal: '/portal',
     changes: '/changes',
+    livechat: '/live-chat',
     calendar: '/calendar',
     projects: '/projects',
     rota: '/rota',
