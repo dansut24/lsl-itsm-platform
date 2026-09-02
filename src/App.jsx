@@ -27,7 +27,6 @@ import {
   serviceDeskModules,
   viewMeta,
 } from './data/demoData.jsx'
-import { workPeople, workTeams } from './data/workPlanningData.js'
 import { liveChatReplyOptions } from './data/liveChatData.js'
 import { createNotification } from './data/notificationData.js'
 import {
@@ -52,6 +51,9 @@ import {
   loadLiveChatConversations,
   loadLiveChatPreferences,
   loadNotifications,
+  loadOrganisationDepartments,
+  loadOrganisationPeople,
+  loadOrganisationTeams,
   loadSession,
   loadSidebarMode,
   loadTheme,
@@ -65,6 +67,9 @@ import {
   saveLiveChatConversations,
   saveLiveChatPreferences,
   saveNotifications,
+  saveOrganisationDepartments,
+  saveOrganisationPeople,
+  saveOrganisationTeams,
   saveSession,
   saveSidebarMode,
   saveTheme,
@@ -78,6 +83,7 @@ import { ProjectManagementView } from './features/projects/ProjectViews.jsx'
 import { RotaView } from './features/rota/RotaView.jsx'
 import { LiveChatView } from './features/live-chat/LiveChatView.jsx'
 import { NotificationDrawer } from './features/notifications/NotificationDrawer.jsx'
+import { PeopleView } from './features/people/PeopleView.jsx'
 import {
   ChangesView,
   CmdbRecordView,
@@ -306,6 +312,9 @@ function App() {
   const [initialLiveChatConversations] = useState(loadLiveChatConversations)
   const [initialLiveChatPreferences] = useState(loadLiveChatPreferences)
   const [initialNotifications] = useState(loadNotifications)
+  const [initialOrganisationPeople] = useState(loadOrganisationPeople)
+  const [initialOrganisationTeams] = useState(loadOrganisationTeams)
+  const [initialOrganisationDepartments] = useState(loadOrganisationDepartments)
   const [initialSession] = useState(loadSession)
   const [initialWorkspace] = useState(loadWorkspace)
   const [initialRoute] = useState(routeFromLocation)
@@ -373,6 +382,9 @@ function App() {
   )
   const [toast, setToast] = useState('')
   const [notifications, setNotifications] = useState(initialNotifications)
+  const [people, setPeople] = useState(initialOrganisationPeople)
+  const [teams, setTeams] = useState(initialOrganisationTeams)
+  const [departments, setDepartments] = useState(initialOrganisationDepartments)
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [globalSearchQuery, setGlobalSearchQuery] = useState('')
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false)
@@ -421,6 +433,18 @@ function App() {
   useEffect(() => {
     saveNotifications(notifications)
   }, [notifications])
+
+  useEffect(() => {
+    saveOrganisationPeople(people)
+  }, [people])
+
+  useEffect(() => {
+    saveOrganisationTeams(teams)
+  }, [teams])
+
+  useEffect(() => {
+    saveOrganisationDepartments(departments)
+  }, [departments])
 
   useEffect(() => {
     saveTheme(theme)
@@ -1146,8 +1170,8 @@ function App() {
       return Number.isFinite(numericId) ? Math.max(highest, numericId) : highest
     }, 0)
     const id = `PRJ-${String(highestId + 1).padStart(4, '0')}`
-    const owner = workPeople.find((person) => person.id === draft.ownerId)
-    const teamLead = workTeams.find((team) => team.name === draft.team)?.leadId
+    const owner = people.find((person) => person.id === draft.ownerId)
+    const teamLead = teams.find((team) => team.name === draft.team)?.leadId
     const createdProject = {
       id,
       name: draft.name,
@@ -1340,8 +1364,46 @@ function App() {
     }, 1400)
   }
 
+  function savePerson(person) {
+    const exists = people.some((item) => item.id === person.id)
+    setPeople((current) => exists
+      ? current.map((item) => item.id === person.id ? person : item)
+      : [person, ...current])
+    setToast(`${person.name} ${exists ? 'updated' : 'added'}`)
+  }
+
+  function saveTeam(team) {
+    const previous = teams.find((item) => item.id === team.id)
+    const exists = Boolean(previous)
+    setTeams((current) => exists
+      ? current.map((item) => item.id === team.id ? team : item)
+      : [team, ...current])
+
+    if (previous) {
+      setPeople((current) => current.map((person) => person.teamId === team.id
+        ? { ...person, team: team.name, departmentId: team.departmentId }
+        : person))
+    }
+
+    if (previous && previous.name !== team.name) {
+      setProjects((current) => current.map((project) => project.team === previous.name ? { ...project, team: team.name } : project))
+      setTickets((current) => current.map((ticket) => ticket.team === previous.name ? { ...ticket, team: team.name } : ticket))
+      setLiveChatConversations((current) => current.map((conversation) => conversation.team === previous.name ? { ...conversation, team: team.name } : conversation))
+    }
+
+    setToast(`${team.name} ${exists ? 'updated' : 'created'}`)
+  }
+
+  function saveDepartment(department) {
+    const exists = departments.some((item) => item.id === department.id)
+    setDepartments((current) => exists
+      ? current.map((item) => item.id === department.id ? department : item)
+      : [department, ...current])
+    setToast(`${department.name} ${exists ? 'updated' : 'created'}`)
+  }
+
   function saveRotaEntry(entry) {
-    const person = workPeople.find((item) => item.id === entry.personId)
+    const person = people.find((item) => item.id === entry.personId)
     if (entry.id) {
       setRotaEntries((current) => current.map((item) => item.id === entry.id ? entry : item))
       setToast(`${entry.type} updated for ${person?.name || 'team member'}`)
@@ -2126,10 +2188,10 @@ function App() {
           }}
           onOpenRota={() => openTab('rota')}
           onSaveCalendarEvent={saveCalendarEvent}
-          people={workPeople}
+          people={people}
           projects={projects}
           rotaEntries={rotaEntries}
-          teams={workTeams}
+          teams={teams}
           tickets={tickets}
         />
       )
@@ -2144,10 +2206,10 @@ function App() {
             openTab('tickets', { key: `ticket-${ticket.id}`, title: ticket.id, recordId: ticket.id })
           }
           onUpdateProject={updateProject}
-          people={workPeople}
+          people={people}
           projects={projects}
           selectedProject={selectedProject}
-          teams={workTeams}
+          teams={teams}
           tickets={tickets}
         />
       )
@@ -2160,8 +2222,21 @@ function App() {
           onCopyEntries={copyRotaEntries}
           onDeleteEntry={deleteRotaEntry}
           onSaveEntry={saveRotaEntry}
-          people={workPeople}
-          teams={workTeams}
+          people={people}
+          teams={teams}
+        />
+      )
+    }
+
+    if (activeView === 'people') {
+      return (
+        <PeopleView
+          departments={departments}
+          onSaveDepartment={saveDepartment}
+          onSavePerson={savePerson}
+          onSaveTeam={saveTeam}
+          people={people}
+          teams={teams}
         />
       )
     }
