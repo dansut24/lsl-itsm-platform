@@ -1,5 +1,6 @@
 import { loginProfiles, seedTickets } from '../data/demoData.jsx'
 import { seedRotaEntries } from '../data/rotaData.js'
+import { seedCalendarEvents } from '../data/calendarData.js'
 import { seedProjects } from '../data/workPlanningData.js'
 
 function readJson(key, fallback) {
@@ -126,6 +127,12 @@ export function loadRotaEntries() {
   }))
 }
 
+export function loadCalendarEvents() {
+  const stored = readJson('hi5central-calendar-v1', seedCalendarEvents)
+  if (!Array.isArray(stored)) return seedCalendarEvents
+  return stored
+}
+
 export function loadSession() {
   const storedSession = readMigratedJson('hi5central-session', 'lsl-itsm-session', null)
   const storedProfile = storedSession?.profile
@@ -190,6 +197,10 @@ export function saveProjects(projects) {
 
 export function saveRotaEntries(entries) {
   writeJson('hi5central-rota-v1', entries)
+}
+
+export function saveCalendarEvents(events) {
+  writeJson('hi5central-calendar-v1', events)
 }
 
 export function saveTheme(theme) {
