@@ -3,6 +3,7 @@ import { seedRotaEntries } from '../data/rotaData.js'
 import { seedCalendarEvents } from '../data/calendarData.js'
 import { defaultLiveChatPreferences, seedLiveChatConversations } from '../data/liveChatData.js'
 import { seedProjects } from '../data/workPlanningData.js'
+import { organisationDepartments, organisationPeople, organisationTeams } from '../data/organisationData.js'
 import { createSeedNotifications } from '../data/notificationData.js'
 
 function readJson(key, fallback) {
@@ -93,6 +94,28 @@ export function loadTickets() {
   )
 
   return [...hydrated, ...supplemental]
+}
+
+
+export function loadOrganisationPeople() {
+  const stored = readJson('hi5central-organisation-people-v1', organisationPeople)
+  if (!Array.isArray(stored) || !stored.length) return organisationPeople
+  const seedsById = new Map(organisationPeople.map((person) => [person.id, person]))
+  return stored.map((person) => ({ ...seedsById.get(person.id), ...person }))
+}
+
+export function loadOrganisationTeams() {
+  const stored = readJson('hi5central-organisation-teams-v1', organisationTeams)
+  if (!Array.isArray(stored) || !stored.length) return organisationTeams
+  const seedsById = new Map(organisationTeams.map((team) => [team.id, team]))
+  return stored.map((team) => ({ ...seedsById.get(team.id), ...team }))
+}
+
+export function loadOrganisationDepartments() {
+  const stored = readJson('hi5central-organisation-departments-v1', organisationDepartments)
+  if (!Array.isArray(stored) || !stored.length) return organisationDepartments
+  const seedsById = new Map(organisationDepartments.map((department) => [department.id, department]))
+  return stored.map((department) => ({ ...seedsById.get(department.id), ...department }))
 }
 
 export function loadProjects() {
@@ -219,6 +242,18 @@ export function saveWorkspace(workspace) {
 
 export function saveTickets(tickets) {
   writeJson('hi5central-tickets', tickets)
+}
+
+export function saveOrganisationPeople(people) {
+  writeJson('hi5central-organisation-people-v1', people)
+}
+
+export function saveOrganisationTeams(teams) {
+  writeJson('hi5central-organisation-teams-v1', teams)
+}
+
+export function saveOrganisationDepartments(departments) {
+  writeJson('hi5central-organisation-departments-v1', departments)
 }
 
 export function saveProjects(projects) {
