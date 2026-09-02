@@ -230,6 +230,8 @@ export function PeopleView({ departments, onSaveDepartment, onSavePerson, onSave
 
   return (
     <div className="organisation-view">
+      <div className="organisation-scroll">
+        <div className="organisation-content">
       <header className="organisation-header">
         <div><span className="eyebrow">Organisation</span><h1>People, Teams & Departments</h1><p>One shared directory for assignments, availability, project delivery, rota planning and service routing.</p></div>
         <button className="primary-action" onClick={startCreate} type="button"><Plus size={18} /> New {section === 'people' ? 'person' : section === 'teams' ? 'team' : 'department'}</button>
@@ -292,6 +294,8 @@ export function PeopleView({ departments, onSaveDepartment, onSavePerson, onSave
         const members = people.filter((person) => memberIds.has(person.teamId) && person.active !== false)
         return <article className="org-entity-card department" key={department.id}><header><span className="org-entity-icon tone-slate"><Building2 size={20} /></span><button className="org-icon-button" onClick={() => setEditor({ kind: 'department', entity: department })} type="button"><Settings2 size={17} /></button></header><div><span className="eyebrow">Department</span><h3>{department.name}</h3><p>{department.description}</p></div><dl><div><dt>Department lead</dt><dd>{lead?.name || 'Not assigned'}</dd></div><div><dt>Teams</dt><dd>{departmentTeams.length}</dd></div><div><dt>People</dt><dd>{members.length}</dd></div></dl><footer className="org-team-tags">{departmentTeams.map((team) => <span key={team.id}>{team.name}</span>)}</footer></article>
       })}</section>}
+        </div>
+      </div>
 
       <PersonDrawer departments={departments} onClose={() => setSelectedPersonId('')} onEdit={() => setEditor({ kind: 'person', entity: selectedPerson })} person={selectedPerson} people={people} teams={teams} />
       {editor?.kind === 'person' && <PersonEditor departments={departments} onClose={() => setEditor(null)} onSave={(value) => { onSavePerson(value); setSelectedPersonId(value.id); setEditor(null) }} person={editor.entity} people={people} teams={teams} />}
