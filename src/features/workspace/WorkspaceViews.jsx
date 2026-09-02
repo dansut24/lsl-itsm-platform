@@ -3096,11 +3096,30 @@ function UnifiedNewRecordForm({
   setTicketDraft,
   ticketDraft,
 }) {
+  const [userQuery, setUserQuery] = useState('')
   const recordType = ticketDraft.type || 'Incident'
   const selectedTemplate = serviceRequestCatalogTemplates.find((template) => template.id === ticketDraft.requestTemplateId)
   const selectedUser = ticketDraft.requesterId ? demoUsers.find((user) => user.id === ticketDraft.requesterId) : null
   const requestCost = (ticketDraft.requestedItems || []).reduce((sum, item) => sum + Number(item.unitCost || 0) * Number(item.quantity || 1), 0)
   const meta = unifiedRecordMeta[recordType] || unifiedRecordMeta.Incident
+  const normalizedQuery = userQuery.trim().toLowerCase()
+  const userResults = normalizedQuery
+    ? demoUsers
+        .filter((user) =>
+          [
+            user.name,
+            user.email,
+            user.staffNumber,
+            user.jobTitle,
+            user.department,
+            user.location,
+          ]
+            .join(' ')
+            .toLowerCase()
+            .includes(normalizedQuery),
+        )
+        .slice(0, 8)
+    : []
 
   const update = (patch) => setTicketDraft({ ...ticketDraft, ...patch })
   const changeType = (nextType) => {
@@ -3111,12 +3130,7 @@ function UnifiedNewRecordForm({
     })
     onRecordTypeChange?.(nextType)
   }
-  const selectRequester = (value) => {
-    const user = demoUsers.find((item) => item.id === value)
-    if (!user) {
-      update({ requesterId: '', requester: value })
-      return
-    }
+  const selectRequester = (user) => {
     update({
       requesterId: user.id,
       requester: user.name,
@@ -3127,6 +3141,20 @@ function UnifiedNewRecordForm({
       requesterLocation: user.location,
       requesterManager: user.manager,
     })
+    setUserQuery('')
+  }
+  const clearRequester = () => {
+    update({
+      requesterId: '',
+      requester: '',
+      requesterEmail: '',
+      requesterStaffNumber: '',
+      requesterJobTitle: '',
+      requesterDepartment: '',
+      requesterLocation: '',
+      requesterManager: '',
+    })
+    setUserQuery('')
   }
   const selectRequestTemplate = (templateId) => {
     const template = serviceRequestCatalogTemplates.find((item) => item.id === templateId)
@@ -3157,7 +3185,7 @@ function UnifiedNewRecordForm({
           <div>
             <span className="eyebrow">Create record</span>
             <h2>New record</h2>
-            <p>Use one creation form across ITSM. The fields below adapt to the selected record type.</p>
+            <p>Select the record type and requester first. The relevant form appears once the requester is confirmed.</p>
           </div>
           {hasUnsavedChanges && <span className="draft-status">Unsaved changes</span>}
         </header>
@@ -3172,92 +3200,186 @@ function UnifiedNewRecordForm({
           ))}
         </nav>
 
-        <form className="unified-new-record-form" onSubmit={handleTicketSubmit}>
-          <section className="unified-form-section">
-            <div className="unified-form-section-heading"><span>1</span><div><strong>Record details</strong><small>Common information used by every ITSM record.</small></div></div>
-            <div className="unified-form-grid two">
-              <label>Record type<select value={recordType} onChange={(event) => changeType(event.target.value)}>{unifiedRecordTypes.map((type) => <option key={type}>{type}</option>)}</select></label>
-              <label>Priority<select value={ticketDraft.priority} onChange={(event) => update({ priority: event.target.value })}>{priorities.map((priority) => <option key={priority}>{priority}</option>)}</select></label>
-            </div>
-            <label>{recordType === 'Change' ? 'Change summary' : recordType === 'Problem' ? 'Problem summary' : 'Summary'}<input autoFocus required value={ticketDraft.title} onChange={(event) => update({ title: event.target.value })} placeholder={`Short ${meta.singular.toLowerCase()} summary`} /></label>
-            <div className="unified-form-grid two">
-              <label>Requester
-                <select required value={ticketDraft.requesterId || ticketDraft.requester} onChange={(event) => selectRequester(event.target.value)}>
-                  <option value="">Select person or enter below</option>
-                  {demoUsers.map((user) => <option key={user.id} value={user.id}>{user.name} · {user.department}</option>)}
-                  {ticketDraft.requester && !ticketDraft.requesterId && <option value={ticketDraft.requester}>{ticketDraft.requester}</option>}
-                </select>
-              </label>
-              <label>Requester / team override<input value={ticketDraft.requesterId ? '' : ticketDraft.requester} onChange={(event) => update({ requesterId: '', requester: event.target.value })} placeholder="Use when the requester is not in People" /></label>
-            </div>
-            {selectedUser && <div className="unified-requester-summary"><span className="directory-avatar">{userInitials(selectedUser.name)}</span><div><strong>{selectedUser.name}</strong><small>{selectedUser.jobTitle} · {selectedUser.department} · {selectedUser.location}</small></div><span>{selectedUser.email}</span></div>}
-            <div className="unified-form-grid three">
-              <label>Service<select value={ticketDraft.service} onChange={(event) => update({ service: event.target.value })}>{['Collaboration', 'Identity', 'Hardware', 'Network Security', 'Wireless', 'Access', 'Print'].map((service) => <option key={service}>{service}</option>)}</select></label>
-              <label>Assignment group<select value={ticketDraft.team} onChange={(event) => update({ team: event.target.value })}>{teams.map((team) => <option key={team}>{team}</option>)}</select></label>
-              <label>Category<input value={ticketDraft.category || ''} onChange={(event) => update({ category: event.target.value })} placeholder="Classification" /></label>
-            </div>
-          </section>
+        <ol className="incident-stepper unified-record-stepper" aria-label="Record creation progress">
+          <li className={selectedUser ? 'complete' : 'active'}>
+            <span>1</span>
+            <div><strong>Select requester</strong><small>Name, email or staff number</small></div>
+          </li>
+          <li className={selectedUser ? 'active' : ''}>
+            <span>2</span>
+            <div><strong>{recordType} details</strong><small>Fields adapt to record type</small></div>
+          </li>
+          <li>
+            <span>3</span>
+            <div><strong>Submitted</strong><small>{meta.singular} workspace</small></div>
+          </li>
+        </ol>
 
-          {recordType === 'Incident' && (
-            <section className="unified-form-section">
-              <div className="unified-form-section-heading"><span>2</span><div><strong>Incident impact</strong><small>Capture impact and urgency so the service desk can prioritise correctly.</small></div></div>
-              <div className="unified-form-grid three">
-                <label>Impact<select value={ticketDraft.impact} onChange={(event) => { const impact = event.target.value; update({ impact, priority: incidentPriority(impact, ticketDraft.urgency) }) }}><option>Low</option><option>Medium</option><option>High</option></select></label>
-                <label>Urgency<select value={ticketDraft.urgency} onChange={(event) => { const urgency = event.target.value; update({ urgency, priority: incidentPriority(ticketDraft.impact, urgency) }) }}><option>Low</option><option>Medium</option><option>High</option></select></label>
-                <label>Calculated priority<input readOnly value={ticketDraft.priority} /></label>
+        {!selectedUser ? (
+          <section className="incident-stage-card unified-requester-lookup-stage">
+            <div className="incident-stage-heading">
+              <span className="stage-number">1</span>
+              <div>
+                <span className="eyebrow">Requester</span>
+                <h3>Who is this {meta.singular.toLowerCase()} for?</h3>
+                <p>Start typing and select a person from the People directory. The {meta.singular.toLowerCase()} form will appear after selection.</p>
               </div>
-              <label>Description<textarea rows="6" value={ticketDraft.description} onChange={(event) => update({ description: event.target.value })} placeholder="Symptoms, impact, affected users and troubleshooting already completed" /></label>
-            </section>
-          )}
+            </div>
 
-          {recordType === 'Service Request' && (
-            <section className="unified-form-section">
-              <div className="unified-form-section-heading"><span>2</span><div><strong>Catalogue & fulfilment</strong><small>Select a service to snapshot requested items, cost, approvals and workflow tasks.</small></div></div>
-              <label>Catalogue service<select value={ticketDraft.requestTemplateId || ''} onChange={(event) => selectRequestTemplate(event.target.value)}><option value="">Select catalogue service</option>{serviceRequestCatalogTemplates.map((template) => <option key={template.id} value={template.id}>{template.title}</option>)}</select></label>
-              {selectedTemplate && (
-                <div className="unified-catalogue-summary">
-                  <div><span className="eyebrow">Selected service</span><strong>{selectedTemplate.title}</strong><p>{selectedTemplate.description}</p></div>
-                  <div className="unified-catalogue-cost"><span>Snapshot cost</span><strong>£{requestCost.toLocaleString('en-GB')}</strong></div>
-                  <div className="unified-catalogue-items">{ticketDraft.requestedItems.map((item) => <div key={item.id}><span><strong>{item.name}</strong><small>{item.category} · Qty {item.quantity || 1}</small></span><strong>£{(Number(item.unitCost || 0) * Number(item.quantity || 1)).toLocaleString('en-GB')}</strong></div>)}</div>
-                  <div className="unified-catalogue-flow"><span>{ticketDraft.requestApprovals.length} approval{ticketDraft.requestApprovals.length === 1 ? '' : 's'}</span><span>{ticketDraft.requestTasks.length} fulfilment task{ticketDraft.requestTasks.length === 1 ? '' : 's'}</span></div>
+            <div className="unified-user-combobox">
+              <label className="incident-user-search" htmlFor="unified-requester-search">
+                <Search size={20} aria-hidden="true" />
+                <input
+                  aria-autocomplete="list"
+                  aria-controls="unified-requester-results"
+                  aria-expanded={Boolean(normalizedQuery)}
+                  autoComplete="off"
+                  autoFocus
+                  id="unified-requester-search"
+                  onChange={(event) => setUserQuery(event.target.value)}
+                  placeholder="Start typing a name, email, staff number, department..."
+                  role="combobox"
+                  type="search"
+                  value={userQuery}
+                />
+              </label>
+
+              {!normalizedQuery ? (
+                <div className="unified-typeahead-hint">
+                  <UserRound size={22} aria-hidden="true" />
+                  <span>Start typing to search People</span>
+                  <small>Matches appear immediately as you type.</small>
+                </div>
+              ) : userResults.length ? (
+                <div className="incident-user-results unified-user-results" id="unified-requester-results" role="listbox">
+                  {userResults.map((user) => (
+                    <button key={user.id} onClick={() => selectRequester(user)} role="option" type="button">
+                      <span className="directory-avatar">{userInitials(user.name)}</span>
+                      <span className="directory-primary">
+                        <strong>{user.name}</strong>
+                        <small>{user.email}</small>
+                      </span>
+                      <span className="directory-secondary">
+                        <strong>{user.staffNumber}</strong>
+                        <small>{user.jobTitle}</small>
+                      </span>
+                      <span className="directory-location">
+                        <strong>{user.department}</strong>
+                        <small>{user.location}</small>
+                      </span>
+                      <ChevronRight size={18} aria-hidden="true" />
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="unified-typeahead-hint no-results" id="unified-requester-results">
+                  <Search size={22} aria-hidden="true" />
+                  <span>No matching people</span>
+                  <small>Try another name, email address or staff number.</small>
                 </div>
               )}
-              <div className="unified-form-grid two"><label>Cost centre<input value={ticketDraft.requestCostCentre || ''} onChange={(event) => update({ requestCostCentre: event.target.value })} placeholder="Optional" /></label><label>Required by<input type="date" value={ticketDraft.requestRequiredBy || ''} onChange={(event) => update({ requestRequiredBy: event.target.value })} /></label></div>
-              <label>Request details<textarea rows="5" value={ticketDraft.description} onChange={(event) => update({ description: event.target.value })} placeholder="Business need, options, delivery location or other fulfilment information" /></label>
-            </section>
-          )}
+            </div>
+          </section>
+        ) : (
+          <div className="unified-new-record-details-layout">
+            <aside className="incident-requester-card unified-record-requester-card">
+              <div className="incident-stage-heading compact">
+                <span className="stage-number complete">1</span>
+                <div><span className="eyebrow">Requester selected</span><h3>{selectedUser.name}</h3></div>
+              </div>
+              <div className="requester-profile">
+                <span className="directory-avatar large">{userInitials(selectedUser.name)}</span>
+                <div><strong>{selectedUser.name}</strong><span>{selectedUser.jobTitle}</span></div>
+              </div>
+              <dl className="requester-facts">
+                <div><dt>Email</dt><dd>{selectedUser.email}</dd></div>
+                <div><dt>Staff number</dt><dd>{selectedUser.staffNumber}</dd></div>
+                <div><dt>Department</dt><dd>{selectedUser.department}</dd></div>
+                <div><dt>Location</dt><dd>{selectedUser.location}</dd></div>
+                <div><dt>Manager</dt><dd>{selectedUser.manager}</dd></div>
+              </dl>
+              <button className="secondary-action full-width" onClick={clearRequester} type="button">Change requester</button>
+            </aside>
 
-          {recordType === 'Problem' && (
-            <section className="unified-form-section">
-              <div className="unified-form-section-heading"><span>2</span><div><strong>Investigation context</strong><small>Capture the recurring pattern, evidence and current theory.</small></div></div>
-              <label>Problem description<textarea rows="5" value={ticketDraft.description} onChange={(event) => update({ description: event.target.value })} placeholder="Recurring symptoms, pattern and business impact" /></label>
-              <div className="unified-form-grid two"><label>Impact scope<input value={ticketDraft.problemImpactScope || ''} onChange={(event) => update({ problemImpactScope: event.target.value })} placeholder="Users, sites, services or versions affected" /></label><label>Related incidents<input value={ticketDraft.problemRelatedIncidentsText || ''} onChange={(event) => update({ problemRelatedIncidentsText: event.target.value })} placeholder="INC-1032, INC-1044" /></label></div>
-              <div className="unified-form-grid two"><label>Initial hypothesis<textarea rows="4" value={ticketDraft.problemHypothesis || ''} onChange={(event) => update({ problemHypothesis: event.target.value })} placeholder="Current root-cause theory" /></label><label>Known workaround<textarea rows="4" value={ticketDraft.problemWorkaround || ''} onChange={(event) => update({ problemWorkaround: event.target.value })} placeholder="Safe mitigation already known" /></label></div>
-            </section>
-          )}
-
-          {recordType === 'Change' && (
-            <>
+            <form className="unified-new-record-form" onSubmit={handleTicketSubmit}>
               <section className="unified-form-section">
-                <div className="unified-form-section-heading"><span>2</span><div><strong>Change assessment</strong><small>Define the change type, risk, approval route and affected scope.</small></div></div>
-                <div className="unified-form-grid three"><label>Change type<select value={ticketDraft.changeType || 'Normal'} onChange={(event) => update({ changeType: event.target.value })}><option>Standard</option><option>Normal</option><option>Emergency</option></select></label><label>Risk<select value={ticketDraft.changeRisk || 'Medium'} onChange={(event) => update({ changeRisk: event.target.value, priority: event.target.value })}><option>Low</option><option>Medium</option><option>High</option><option>Critical</option></select></label><label>Approval route<select value={ticketDraft.changeApprovalRoute || 'CAB'} onChange={(event) => update({ changeApprovalRoute: event.target.value })}><option>CAB</option><option>Service owner</option><option>Security approval</option><option>Emergency CAB</option></select></label></div>
-                <label>Affected CIs<input value={ticketDraft.changeAffectedCisText || ''} onChange={(event) => update({ changeAffectedCisText: event.target.value })} placeholder="FW-EDGE-A, M365-TENANT" /></label>
-                <label>Business reason<textarea rows="4" value={ticketDraft.changeBusinessReason || ''} onChange={(event) => update({ changeBusinessReason: event.target.value, description: event.target.value })} placeholder="Why the change is required and the expected outcome" /></label>
+                <div className="unified-form-section-heading"><span>2A</span><div><strong>Record details</strong><small>Core information for this {meta.singular.toLowerCase()}.</small></div></div>
+                <label>{recordType === 'Change' ? 'Change summary' : recordType === 'Problem' ? 'Problem summary' : 'Summary'}<input autoFocus required value={ticketDraft.title} onChange={(event) => update({ title: event.target.value })} placeholder={`Short ${meta.singular.toLowerCase()} summary`} /></label>
+                <div className="unified-form-grid three">
+                  <label>Service<select value={ticketDraft.service} onChange={(event) => update({ service: event.target.value })}>{['Collaboration', 'Identity', 'Hardware', 'Network Security', 'Wireless', 'Access', 'Print'].map((service) => <option key={service}>{service}</option>)}</select></label>
+                  <label>Assignment group<select value={ticketDraft.team} onChange={(event) => update({ team: event.target.value })}>{teams.map((team) => <option key={team}>{team}</option>)}</select></label>
+                  <label>Category<input value={ticketDraft.category || ''} onChange={(event) => update({ category: event.target.value })} placeholder="Classification" /></label>
+                </div>
+                {(recordType === 'Service Request' || recordType === 'Problem') && (
+                  <div className="unified-form-grid two">
+                    <label>Priority<select value={ticketDraft.priority} onChange={(event) => update({ priority: event.target.value })}>{priorities.map((priority) => <option key={priority}>{priority}</option>)}</select></label>
+                    <label>Requester location<input readOnly value={ticketDraft.requesterLocation || selectedUser.location} /></label>
+                  </div>
+                )}
               </section>
-              <section className="unified-form-section">
-                <div className="unified-form-section-heading"><span>3</span><div><strong>Plan & schedule</strong><small>Capture implementation, validation, recovery and the proposed window.</small></div></div>
-                <label>Implementation plan<textarea rows="5" value={ticketDraft.changeImplementationPlan || ''} onChange={(event) => update({ changeImplementationPlan: event.target.value })} placeholder="Ordered implementation steps" /></label>
-                <div className="unified-form-grid two"><label>Test plan<textarea rows="4" value={ticketDraft.changeTestPlan || ''} onChange={(event) => update({ changeTestPlan: event.target.value })} placeholder="How success will be validated" /></label><label>Backout plan<textarea rows="4" value={ticketDraft.changeBackoutPlan || ''} onChange={(event) => update({ changeBackoutPlan: event.target.value })} placeholder="How service will be restored if validation fails" /></label></div>
-                <div className="unified-form-grid three"><label>Planned start<input type="datetime-local" value={ticketDraft.changePlannedStart || ''} onChange={(event) => update({ changePlannedStart: event.target.value })} /></label><label>Planned end<input type="datetime-local" value={ticketDraft.changePlannedEnd || ''} onChange={(event) => update({ changePlannedEnd: event.target.value })} /></label><label>Expected impact<input value={ticketDraft.changeDowntime || ''} onChange={(event) => update({ changeDowntime: event.target.value })} placeholder="No outage expected" /></label></div>
-              </section>
-            </>
-          )}
 
-          <div className="unified-new-record-submit">
-            <div><span className="eyebrow">Create {recordType}</span><strong>The submitted record will replace this New record tab.</strong></div>
-            <button className="primary-action" type="submit"><Plus size={17} aria-hidden="true" />Create {recordType}</button>
+              {recordType === 'Incident' && (
+                <section className="unified-form-section">
+                  <div className="unified-form-section-heading"><span>2B</span><div><strong>Incident impact</strong><small>Capture impact and urgency so the service desk can prioritise correctly.</small></div></div>
+                  <div className="unified-form-grid three">
+                    <label>Impact<select value={ticketDraft.impact} onChange={(event) => { const impact = event.target.value; update({ impact, priority: incidentPriority(impact, ticketDraft.urgency) }) }}><option>Low</option><option>Medium</option><option>High</option></select></label>
+                    <label>Urgency<select value={ticketDraft.urgency} onChange={(event) => { const urgency = event.target.value; update({ urgency, priority: incidentPriority(ticketDraft.impact, urgency) }) }}><option>Low</option><option>Medium</option><option>High</option></select></label>
+                    <label>Calculated priority<input readOnly value={ticketDraft.priority} /></label>
+                  </div>
+                  <label>Description<textarea rows="6" value={ticketDraft.description} onChange={(event) => update({ description: event.target.value })} placeholder="Symptoms, impact, affected users and troubleshooting already completed" /></label>
+                </section>
+              )}
+
+              {recordType === 'Service Request' && (
+                <section className="unified-form-section">
+                  <div className="unified-form-section-heading"><span>2B</span><div><strong>Catalogue & fulfilment</strong><small>Select a service to snapshot requested items, cost, approvals and workflow tasks.</small></div></div>
+                  <label>Catalogue service<select value={ticketDraft.requestTemplateId || ''} onChange={(event) => selectRequestTemplate(event.target.value)}><option value="">Select catalogue service</option>{serviceRequestCatalogTemplates.map((template) => <option key={template.id} value={template.id}>{template.title}</option>)}</select></label>
+                  {selectedTemplate && (
+                    <div className="unified-catalogue-summary">
+                      <div><span className="eyebrow">Selected service</span><strong>{selectedTemplate.title}</strong><p>{selectedTemplate.description}</p></div>
+                      <div className="unified-catalogue-cost"><span>Snapshot cost</span><strong>£{requestCost.toLocaleString('en-GB')}</strong></div>
+                      <div className="unified-catalogue-items">{ticketDraft.requestedItems.map((item) => <div key={item.id}><span><strong>{item.name}</strong><small>{item.category} · Qty {item.quantity || 1}</small></span><strong>£{(Number(item.unitCost || 0) * Number(item.quantity || 1)).toLocaleString('en-GB')}</strong></div>)}</div>
+                      <div className="unified-catalogue-flow"><span>{ticketDraft.requestApprovals.length} approval{ticketDraft.requestApprovals.length === 1 ? '' : 's'}</span><span>{ticketDraft.requestTasks.length} fulfilment task{ticketDraft.requestTasks.length === 1 ? '' : 's'}</span></div>
+                    </div>
+                  )}
+                  <div className="unified-form-grid two"><label>Cost centre<input value={ticketDraft.requestCostCentre || ''} onChange={(event) => update({ requestCostCentre: event.target.value })} placeholder="Optional" /></label><label>Required by<input type="date" value={ticketDraft.requestRequiredBy || ''} onChange={(event) => update({ requestRequiredBy: event.target.value })} /></label></div>
+                  <label>Request details<textarea rows="5" value={ticketDraft.description} onChange={(event) => update({ description: event.target.value })} placeholder="Business need, options, delivery location or other fulfilment information" /></label>
+                </section>
+              )}
+
+              {recordType === 'Problem' && (
+                <section className="unified-form-section">
+                  <div className="unified-form-section-heading"><span>2B</span><div><strong>Investigation context</strong><small>Capture the recurring pattern, evidence and current theory.</small></div></div>
+                  <label>Problem description<textarea rows="5" value={ticketDraft.description} onChange={(event) => update({ description: event.target.value })} placeholder="Recurring symptoms, pattern and business impact" /></label>
+                  <div className="unified-form-grid two"><label>Impact scope<input value={ticketDraft.problemImpactScope || ''} onChange={(event) => update({ problemImpactScope: event.target.value })} placeholder="Users, sites, services or versions affected" /></label><label>Related incidents<input value={ticketDraft.problemRelatedIncidentsText || ''} onChange={(event) => update({ problemRelatedIncidentsText: event.target.value })} placeholder="INC-1032, INC-1044" /></label></div>
+                  <div className="unified-form-grid two"><label>Initial hypothesis<textarea rows="4" value={ticketDraft.problemHypothesis || ''} onChange={(event) => update({ problemHypothesis: event.target.value })} placeholder="Current root-cause theory" /></label><label>Known workaround<textarea rows="4" value={ticketDraft.problemWorkaround || ''} onChange={(event) => update({ problemWorkaround: event.target.value })} placeholder="Safe mitigation already known" /></label></div>
+                </section>
+              )}
+
+              {recordType === 'Change' && (
+                <>
+                  <section className="unified-form-section">
+                    <div className="unified-form-section-heading"><span>2B</span><div><strong>Change assessment</strong><small>Define the change type, risk, approval route and affected scope.</small></div></div>
+                    <div className="unified-form-grid three"><label>Change type<select value={ticketDraft.changeType || 'Normal'} onChange={(event) => update({ changeType: event.target.value })}><option>Standard</option><option>Normal</option><option>Emergency</option></select></label><label>Risk<select value={ticketDraft.changeRisk || 'Medium'} onChange={(event) => update({ changeRisk: event.target.value, priority: event.target.value })}><option>Low</option><option>Medium</option><option>High</option><option>Critical</option></select></label><label>Approval route<select value={ticketDraft.changeApprovalRoute || 'CAB'} onChange={(event) => update({ changeApprovalRoute: event.target.value })}><option>CAB</option><option>Service owner</option><option>Security approval</option><option>Emergency CAB</option></select></label></div>
+                    <label>Affected CIs<input value={ticketDraft.changeAffectedCisText || ''} onChange={(event) => update({ changeAffectedCisText: event.target.value })} placeholder="FW-EDGE-A, M365-TENANT" /></label>
+                    <label>Business reason<textarea rows="4" value={ticketDraft.changeBusinessReason || ''} onChange={(event) => update({ changeBusinessReason: event.target.value, description: event.target.value })} placeholder="Why the change is required and the expected outcome" /></label>
+                  </section>
+                  <section className="unified-form-section">
+                    <div className="unified-form-section-heading"><span>2C</span><div><strong>Plan & schedule</strong><small>Capture implementation, validation, recovery and the proposed window.</small></div></div>
+                    <label>Implementation plan<textarea rows="5" value={ticketDraft.changeImplementationPlan || ''} onChange={(event) => update({ changeImplementationPlan: event.target.value })} placeholder="Ordered implementation steps" /></label>
+                    <div className="unified-form-grid two"><label>Test plan<textarea rows="4" value={ticketDraft.changeTestPlan || ''} onChange={(event) => update({ changeTestPlan: event.target.value })} placeholder="How success will be validated" /></label><label>Backout plan<textarea rows="4" value={ticketDraft.changeBackoutPlan || ''} onChange={(event) => update({ changeBackoutPlan: event.target.value })} placeholder="How service will be restored if validation fails" /></label></div>
+                    <div className="unified-form-grid three"><label>Planned start<input type="datetime-local" value={ticketDraft.changePlannedStart || ''} onChange={(event) => update({ changePlannedStart: event.target.value })} /></label><label>Planned end<input type="datetime-local" value={ticketDraft.changePlannedEnd || ''} onChange={(event) => update({ changePlannedEnd: event.target.value })} /></label><label>Expected impact<input value={ticketDraft.changeDowntime || ''} onChange={(event) => update({ changeDowntime: event.target.value })} placeholder="No outage expected" /></label></div>
+                  </section>
+                </>
+              )}
+
+              <div className="unified-new-record-submit">
+                <div><span className="eyebrow">Create {recordType}</span><strong>The submitted record will replace this New record tab.</strong></div>
+                <button className="primary-action" type="submit"><Plus size={17} aria-hidden="true" />Create {recordType}</button>
+              </div>
+            </form>
           </div>
-        </form>
+        )}
       </section>
     </div>
   )
