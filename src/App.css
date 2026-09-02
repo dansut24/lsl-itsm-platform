@@ -15819,3 +15819,225 @@ textarea:focus {
     grid-template-columns: minmax(74px, auto) minmax(0, 1fr) 16px;
   }
 }
+
+/* ========================================================================== */
+/* Unified ITSM lifecycle & workflow rules                                    */
+/* ========================================================================== */
+
+.unified-detail-page.incident .unified-detail-lifecycle,
+.unified-detail-page.request .unified-detail-lifecycle {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.unified-detail-status-control select:disabled {
+  opacity: .62;
+  cursor: not-allowed;
+}
+
+.unified-detail-lifecycle > div.exception {
+  border-color: color-mix(in srgb, #dc2626 42%, var(--line));
+  background: color-mix(in srgb, #dc2626 8%, var(--surface));
+  color: #b91c1c;
+}
+
+.unified-detail-lifecycle > div.exception.current > span {
+  background: #dc2626;
+  color: #fff;
+}
+
+.lifecycle-transition-panel {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 12px;
+  border-color: color-mix(in srgb, var(--brand-2) 38%, var(--line));
+  box-shadow: 0 12px 30px color-mix(in srgb, var(--ink) 7%, transparent);
+}
+
+.lifecycle-transition-panel.blocked {
+  border-color: color-mix(in srgb, #dc2626 32%, var(--line));
+}
+
+.lifecycle-transition-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.lifecycle-transition-heading h3 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.lifecycle-rule-chip {
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  border: 1px solid color-mix(in srgb, var(--brand-2) 30%, var(--line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--brand-2) 8%, var(--surface));
+  color: var(--brand-2);
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.lifecycle-transition-fields {
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.lifecycle-transition-fields input[type='text'],
+.lifecycle-transition-fields input[type='datetime-local'] {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+
+.lifecycle-confirmation {
+  grid-column: 1 / -1;
+  grid-template-columns: auto minmax(0, 1fr) !important;
+  align-items: flex-start;
+  gap: 9px !important;
+  padding: 10px 11px;
+  border: 1px solid color-mix(in srgb, var(--brand-2) 24%, var(--line));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--brand-2) 5%, var(--surface));
+  cursor: pointer;
+}
+
+.lifecycle-confirmation input {
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  accent-color: var(--brand-2);
+}
+
+.lifecycle-confirmation > span {
+  display: grid;
+  gap: 3px;
+  color: var(--ink);
+}
+
+.lifecycle-confirmation strong {
+  font-size: 10px;
+}
+
+.lifecycle-confirmation small {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.lifecycle-transition-blockers,
+.lifecycle-transition-ready {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px 11px;
+  border-radius: 8px;
+  font-size: 9px;
+}
+
+.lifecycle-transition-blockers {
+  border: 1px solid color-mix(in srgb, #dc2626 28%, var(--line));
+  background: color-mix(in srgb, #dc2626 6%, var(--surface));
+  color: #b91c1c;
+}
+
+.lifecycle-transition-ready {
+  border: 1px solid color-mix(in srgb, #16a34a 28%, var(--line));
+  background: color-mix(in srgb, #16a34a 6%, var(--surface));
+  color: #15803d;
+}
+
+.lifecycle-transition-blockers > div,
+.lifecycle-transition-ready > span {
+  display: grid;
+  gap: 3px;
+}
+
+.lifecycle-transition-blockers span,
+.lifecycle-transition-ready span {
+  line-height: 1.45;
+}
+
+.lifecycle-transition-panel footer {
+  justify-content: flex-end;
+}
+
+.lifecycle-transition-panel footer .primary-action:disabled {
+  opacity: .48;
+  cursor: not-allowed;
+}
+
+@media (max-width: 760px) {
+  .lifecycle-transition-heading {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .lifecycle-rule-chip {
+    justify-self: start;
+    align-self: flex-start;
+  }
+
+  .lifecycle-transition-fields {
+    padding: 9px;
+  }
+
+  .lifecycle-transition-panel footer {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.status-pill.assigned {
+  background: #e4f0ff;
+  color: #17488d;
+}
+
+.status-pill.approved,
+.status-pill.completed {
+  background: #e5f7ec;
+  color: #176b3a;
+}
+
+.status-pill.failed {
+  background: #fde8e8;
+  color: #b42318;
+}
+
+.app-shell[data-theme='dark'] .status-pill.assigned,
+.portal-shell[data-theme='dark'] .status-pill.assigned {
+  background: rgba(118, 167, 247, 0.16);
+  color: #bad3ff;
+}
+
+.app-shell[data-theme='dark'] .status-pill.approved,
+.app-shell[data-theme='dark'] .status-pill.completed,
+.portal-shell[data-theme='dark'] .status-pill.approved,
+.portal-shell[data-theme='dark'] .status-pill.completed {
+  background: rgba(74, 222, 128, 0.14);
+  color: #9de7b9;
+}
+
+.app-shell[data-theme='dark'] .status-pill.failed,
+.portal-shell[data-theme='dark'] .status-pill.failed {
+  background: rgba(248, 113, 113, 0.14);
+  color: #fca5a5;
+}
+
+.unified-detail-lifecycle.has-exception {
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+}

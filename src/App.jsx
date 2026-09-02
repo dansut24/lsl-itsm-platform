@@ -29,6 +29,7 @@ import {
 } from './data/demoData.jsx'
 import { liveChatReplyOptions } from './data/liveChatData.js'
 import { createNotification } from './data/notificationData.js'
+import { buildLifecycleTransition } from './lib/lifecycle.js'
 import {
   countBy,
   getBreadcrumbs,
@@ -1667,6 +1668,29 @@ function App() {
     )
   }
 
+  function transitionTicket(id, targetStatus, values = {}) {
+    const currentTicket = tickets.find((ticket) => ticket.id === id)
+    if (!currentTicket) return { ok: false, blockers: ['Record not found.'] }
+
+    const actor = session?.name || 'Dana Sinclair'
+    const result = buildLifecycleTransition(currentTicket, targetStatus, values, actor)
+    if (!result.ok) {
+      setToast(result.blockers?.[0] || `Unable to move ${id} to ${targetStatus}`)
+      return result
+    }
+
+    updateTicket(id, result.updates)
+    pushNotification({
+      source: 'itsm',
+      title: `${id} moved to ${targetStatus}`,
+      detail: `${actor} changed ${currentTicket.type.toLowerCase()} ${id} from ${currentTicket.status} to ${targetStatus}.`,
+      target: { type: 'ticket', recordId: id },
+      tone: targetStatus === 'Failed' ? 'critical' : ['Pending', 'Pending Approval', 'CAB Review'].includes(targetStatus) ? 'warning' : 'info',
+    })
+    setToast(`${id} moved to ${targetStatus}`)
+    return result
+  }
+
   function addComment(noteMode = 'work') {
     if (!newComment.trim() || !selectedTicket) return
     const prefix = noteMode === 'customer' ? 'Customer comment: ' : 'Work note: '
@@ -2109,6 +2133,7 @@ function App() {
           setNewComment={setNewComment}
           tickets={tickets}
           updateTicket={updateTicket}
+          transitionTicket={transitionTicket}
           openRecordTab={(ticket) =>
             openTab('tickets', { key: `ticket-${ticket.id}`, title: ticket.id, recordId: ticket.id })
           }
