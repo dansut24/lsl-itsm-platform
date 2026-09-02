@@ -5168,6 +5168,8 @@ export function ReportsView({ metrics, tickets }) {
 export function SettingsView({
   accent,
   density,
+  liveChatEnabled,
+  onSetLiveChatEnabled,
   openSettingsSection,
   resolvedTheme,
   session,
@@ -5297,6 +5299,24 @@ export function SettingsView({
               </button>
               <button className={density === 'compact' ? 'active' : ''} onClick={() => setDensity('compact')} type="button">
                 Compact
+              </button>
+            </div>
+          </div>
+
+          <div className="setting-row live-chat-settings-toggle-row">
+            <div>
+              <strong>Live Chat workspace</strong>
+              <span>Pin Live Chat beside Dashboard and keep it available as a fixed ITSM workspace tab.</span>
+              <small>When disabled, the Live Chat tab is removed. Enable it again here at any time.</small>
+            </div>
+            <div className="live-chat-settings-state">
+              <small>{liveChatEnabled ? 'Enabled' : 'Disabled'}</small>
+              <button
+                className={liveChatEnabled ? 'enabled' : ''}
+                onClick={() => onSetLiveChatEnabled(!liveChatEnabled)}
+                type="button"
+              >
+                {liveChatEnabled ? 'Disable' : 'Enable'}
               </button>
             </div>
           </div>
