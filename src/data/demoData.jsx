@@ -4,6 +4,7 @@ import {
   BookOpen,
   BriefcaseBusiness,
   CalendarDays,
+  CalendarRange,
   ClipboardCheck,
   Database,
   FolderKanban,
@@ -37,6 +38,7 @@ export const viewMeta = {
   problems: { id: 'problems', label: 'Problems', icon: ShieldCheck },
   portal: { id: 'portal', label: 'Self-Service', icon: LifeBuoy },
   changes: { id: 'changes', label: 'Changes', icon: ClipboardCheck },
+  calendar: { id: 'calendar', label: 'Calendar', icon: CalendarRange },
   projects: { id: 'projects', label: 'Projects', icon: FolderKanban },
   rota: { id: 'rota', label: 'Rota & Availability', icon: CalendarDays },
   cmdb: { id: 'cmdb', label: 'CMDB', icon: Database },
@@ -88,7 +90,7 @@ export const analystNavGroups = [
   {
     id: 'planning',
     label: 'Planning',
-    items: ['projects', 'rota'],
+    items: ['calendar', 'projects', 'rota'],
   },
   {
     id: 'knowledge-data',
