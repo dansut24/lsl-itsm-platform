@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import ReactGridLayout, { useContainerWidth, verticalCompactor } from 'react-grid-layout'
 import 'react-grid-layout/css/styles.css'
 import { createSortedRowModel, rowSortingFeature, sortFns, tableFeatures, useTable } from '@tanstack/react-table'
@@ -2359,52 +2360,241 @@ function TicketDetailContent({
 }
 
 
-function IncidentQueueView({
+
+const unifiedRecordTypes = ['Incident', 'Service Request', 'Change', 'Problem']
+
+const unifiedRecordMeta = {
+  Incident: {
+    eyebrow: 'Service Desk',
+    title: 'Incidents',
+    singular: 'Incident',
+    description: 'Triage service interruptions, protect SLA targets and keep ownership clear.',
+    attentionLabel: 'At risk',
+  },
+  'Service Request': {
+    eyebrow: 'Service Desk',
+    title: 'Service Requests',
+    singular: 'Service Request',
+    description: 'Track catalogue requests, approvals, fulfilment ownership and delivery progress.',
+    attentionLabel: 'Awaiting approval',
+  },
+  Change: {
+    eyebrow: 'Change Management',
+    title: 'Changes',
+    singular: 'Change',
+    description: 'Assess risk, protect implementation windows and keep approvals visible before execution.',
+    attentionLabel: 'High risk',
+  },
+  Problem: {
+    eyebrow: 'Problem Management',
+    title: 'Problems',
+    singular: 'Problem',
+    description: 'Investigate recurring issues, connect evidence and drive work toward a permanent fix.',
+    attentionLabel: 'Known errors',
+  },
+}
+
+export function RecordCreateMenu({ openNewRecord, className = '' }) {
+  const [open, setOpen] = useState(false)
+  const [position, setPosition] = useState({ top: 56, right: 12 })
+  const menuRef = useRef(null)
+  const popoverRef = useRef(null)
+
+  const updatePosition = () => {
+    const trigger = menuRef.current?.querySelector('.record-create-trigger')
+    if (!trigger) return
+    const rect = trigger.getBoundingClientRect()
+    setPosition({
+      top: Math.round(rect.bottom + 8),
+      right: Math.max(10, Math.round(window.innerWidth - rect.right)),
+    })
+  }
+
+  useEffect(() => {
+    if (!open) return undefined
+    updatePosition()
+    const close = (event) => {
+      if (event.key === 'Escape') {
+        setOpen(false)
+        return
+      }
+      if (
+        event.type === 'pointerdown' &&
+        !menuRef.current?.contains(event.target) &&
+        !popoverRef.current?.contains(event.target)
+      ) {
+        setOpen(false)
+      }
+    }
+    const reposition = () => updatePosition()
+    document.addEventListener('pointerdown', close)
+    document.addEventListener('keydown', close)
+    window.addEventListener('resize', reposition)
+    window.addEventListener('scroll', reposition, true)
+    return () => {
+      document.removeEventListener('pointerdown', close)
+      document.removeEventListener('keydown', close)
+      window.removeEventListener('resize', reposition)
+      window.removeEventListener('scroll', reposition, true)
+    }
+  }, [open])
+
+  const popover = open && typeof document !== 'undefined'
+    ? createPortal(
+        <div
+          className="record-create-popover"
+          ref={popoverRef}
+          role="menu"
+          style={{ '--record-menu-top': `${position.top}px`, '--record-menu-right': `${position.right}px` }}
+        >
+          <div className="record-create-popover-heading">
+            <span className="eyebrow">Create record</span>
+            <strong>Choose a record type</strong>
+          </div>
+          {unifiedRecordTypes.map((recordType) => {
+            const meta = unifiedRecordMeta[recordType]
+            return (
+              <button
+                key={recordType}
+                onClick={() => {
+                  setOpen(false)
+                  openNewRecord?.(recordType)
+                }}
+                role="menuitem"
+                type="button"
+              >
+                <span className={`record-type-mark ${recordType.toLowerCase().replace(/\s+/g, '-')}`}>
+                  {recordType === 'Service Request' ? 'SR' : recordType[0]}
+                </span>
+                <span>
+                  <strong>{recordType}</strong>
+                  <small>{meta.description}</small>
+                </span>
+                <ChevronRight size={16} aria-hidden="true" />
+              </button>
+            )
+          })}
+        </div>,
+        document.querySelector('.app-shell') || document.body,
+      )
+    : null
+
+  return (
+    <div className={`record-create-menu ${className}`.trim()} ref={menuRef}>
+      <button
+        aria-expanded={open}
+        aria-haspopup="menu"
+        className="record-create-trigger"
+        onClick={() => {
+          updatePosition()
+          setOpen((current) => !current)
+        }}
+        type="button"
+      >
+        <Plus size={16} aria-hidden="true" />
+        <span>New</span>
+        <ChevronDown size={15} aria-hidden="true" />
+      </button>
+      {popover}
+    </div>
+  )
+}
+
+function unifiedAttention(ticket, recordType) {
+  if (recordType === 'Incident') return Number(ticket.slaPercent || 0) >= 60 && !['Resolved', 'Closed'].includes(ticket.status)
+  if (recordType === 'Service Request') return ['Pending Approval', 'Awaiting Approval'].includes(ticket.status) || ticket.requestApprovals?.some((item) => item.status === 'Pending')
+  if (recordType === 'Change') return ['High', 'Critical'].includes(ticket.risk || ticket.priority)
+  if (recordType === 'Problem') return String(ticket.knownErrorStatus || '').toLowerCase().includes('known') || String(ticket.knownErrorStatus || '').toLowerCase().includes('declared')
+  return false
+}
+
+function unifiedKeyDetail(ticket, recordType) {
+  if (recordType === 'Incident') {
+    return {
+      primary: ticket.sla || 'No SLA',
+      secondary: `${Number(ticket.slaPercent || 0)}% elapsed`,
+    }
+  }
+  if (recordType === 'Service Request') {
+    const cost = (ticket.requestedItems || []).reduce((sum, item) => sum + Number(item.unitCost || 0) * Number(item.quantity || 1), 0)
+    return {
+      primary: cost ? `£${cost.toLocaleString('en-GB')}` : 'No charge',
+      secondary: `${ticket.requestedItems?.length || 0} requested item${ticket.requestedItems?.length === 1 ? '' : 's'}`,
+    }
+  }
+  if (recordType === 'Change') {
+    return {
+      primary: ticket.window || 'To be scheduled',
+      secondary: ticket.changeType || 'Normal change',
+    }
+  }
+  return {
+    primary: `${ticket.relatedIncidents?.length || 0} linked incident${ticket.relatedIncidents?.length === 1 ? '' : 's'}`,
+    secondary: ticket.knownErrorStatus || 'Not declared',
+  }
+}
+
+function unifiedPriority(ticket, recordType) {
+  return recordType === 'Change' ? (ticket.risk || ticket.priority || 'Medium') : (ticket.priority || 'Medium')
+}
+
+function UnifiedRecordQueue({
   filters,
-  filteredTickets,
   openNewRecord,
   openRecordTab,
   query,
+  recordType,
   setFilters,
   setQuery,
   tickets,
   updateTicket,
 }) {
+  const meta = unifiedRecordMeta[recordType]
+  const [localQuery, setLocalQuery] = useState('')
+  const [localFilters, setLocalFilters] = useState({ status: 'All', priority: 'All' })
   const [quickView, setQuickView] = useState('all')
-  const [sortKey, setSortKey] = useState('sla')
+  const [sortKey, setSortKey] = useState('updated')
   const [sortDirection, setSortDirection] = useState('desc')
   const [filtersOpen, setFiltersOpen] = useState(false)
+  const [teamFilter, setTeamFilter] = useState('All')
+  const [assigneeFilter, setAssigneeFilter] = useState('All')
+  const [serviceFilter, setServiceFilter] = useState('All')
   const [selectedIds, setSelectedIds] = useState([])
-  const [advancedFilters, setAdvancedFilters] = useState({
-    team: 'All',
-    assignee: 'All',
-    service: 'All',
-  })
 
-  const incidentTickets = tickets.filter((ticket) => ticket.type === 'Incident')
-  const openIncidents = incidentTickets.filter((ticket) => !['Resolved', 'Closed'].includes(ticket.status))
-  const mineCount = openIncidents.filter((ticket) => ticket.assignee === 'Dana Sinclair').length
-  const unassignedCount = openIncidents.filter((ticket) => !ticket.assignee || ticket.assignee === 'Unassigned').length
-  const atRiskCount = openIncidents.filter((ticket) => ticket.slaPercent >= 60).length
+  const searchValue = typeof query === 'string' ? query : localQuery
+  const updateSearch = setQuery || setLocalQuery
+  const statusFilter = filters?.status || localFilters.status
+  const priorityFilter = filters?.priority || localFilters.priority
+  const updateStatusFilter = (value) => setFilters
+    ? setFilters({ ...filters, status: value })
+    : setLocalFilters((current) => ({ ...current, status: value }))
+  const updatePriorityFilter = (value) => setFilters
+    ? setFilters({ ...filters, priority: value })
+    : setLocalFilters((current) => ({ ...current, priority: value }))
 
-  const availableTeams = ['All', ...new Set(incidentTickets.map((ticket) => ticket.team).filter(Boolean))]
-  const availableAssignees = ['All', ...new Set(incidentTickets.map((ticket) => ticket.assignee).filter(Boolean))]
-  const availableServices = ['All', ...new Set(incidentTickets.map((ticket) => ticket.service).filter(Boolean))]
+  const records = tickets.filter((ticket) => ticket.type === recordType)
+  const openRecords = records.filter((ticket) => !['Resolved', 'Closed', 'Cancelled'].includes(ticket.status))
+  const mineCount = openRecords.filter((ticket) => ticket.assignee === 'Dana Sinclair').length
+  const unassignedCount = openRecords.filter((ticket) => !ticket.assignee || ticket.assignee === 'Unassigned').length
+  const attentionCount = records.filter((ticket) => unifiedAttention(ticket, recordType)).length
 
-  const applyQuickView = (ticket) => {
-    if (quickView === 'mine') return ticket.assignee === 'Dana Sinclair' && !['Resolved', 'Closed'].includes(ticket.status)
-    if (quickView === 'unassigned') return (!ticket.assignee || ticket.assignee === 'Unassigned') && !['Resolved', 'Closed'].includes(ticket.status)
-    if (quickView === 'priority') return ['Critical', 'High'].includes(ticket.priority) && !['Resolved', 'Closed'].includes(ticket.status)
-    if (quickView === 'risk') return ticket.slaPercent >= 60 && !['Resolved', 'Closed'].includes(ticket.status)
-    if (quickView === 'pending') return ticket.status === 'Pending'
-    if (quickView === 'resolved') return ['Resolved', 'Closed'].includes(ticket.status)
+  const teamsAvailable = ['All', ...new Set(records.map((ticket) => ticket.team).filter(Boolean))]
+  const assigneesAvailable = ['All', ...new Set(records.map((ticket) => ticket.assignee).filter(Boolean))]
+  const servicesAvailable = ['All', ...new Set(records.map((ticket) => ticket.service).filter(Boolean))]
+  const statusesAvailable = ['All', ...new Set(records.map((ticket) => ticket.status).filter(Boolean))]
+
+  const normalizedQuery = searchValue.trim().toLowerCase()
+  const quickMatch = (ticket) => {
+    if (quickView === 'mine') return ticket.assignee === 'Dana Sinclair' && !['Resolved', 'Closed', 'Cancelled'].includes(ticket.status)
+    if (quickView === 'unassigned') return (!ticket.assignee || ticket.assignee === 'Unassigned') && !['Resolved', 'Closed', 'Cancelled'].includes(ticket.status)
+    if (quickView === 'priority') return ['Critical', 'High'].includes(unifiedPriority(ticket, recordType)) && !['Resolved', 'Closed', 'Cancelled'].includes(ticket.status)
+    if (quickView === 'attention') return unifiedAttention(ticket, recordType)
+    if (quickView === 'pending') return String(ticket.status || '').toLowerCase().includes('pending') || String(ticket.status || '').toLowerCase().includes('approval')
+    if (quickView === 'closed') return ['Resolved', 'Closed', 'Cancelled'].includes(ticket.status)
     return true
   }
 
-  const priorityWeight = { Critical: 4, High: 3, Medium: 2, Low: 1 }
-  const statusWeight = { New: 1, 'In Progress': 2, Pending: 3, Resolved: 4, Closed: 5 }
-  const recordNumber = (id) => Number(String(id || '').match(/\d+/)?.[0] || 0)
-  const ageMinutes = (value) => {
+  const updatedWeight = (value) => {
     const normalized = String(value || '').toLowerCase()
     if (normalized.includes('just now')) return 0
     const minutes = normalized.match(/(\d+)\s*min/)
@@ -2412,44 +2602,53 @@ function IncidentQueueView({
     const hours = normalized.match(/(\d+)\s*hr/)
     if (hours) return Number(hours[1]) * 60
     if (normalized.includes('yesterday')) return 1440
-    if (/^\d{1,2}:\d{2}$/.test(normalized)) return 720
     return 2880
   }
-
-  const visibleTickets = filteredTickets
-    .filter((ticket) =>
-      (advancedFilters.team === 'All' || ticket.team === advancedFilters.team) &&
-      (advancedFilters.assignee === 'All' || ticket.assignee === advancedFilters.assignee) &&
-      (advancedFilters.service === 'All' || ticket.service === advancedFilters.service) &&
-      applyQuickView(ticket),
-    )
+  const priorityWeight = { Critical: 4, High: 3, Medium: 2, Low: 1 }
+  const visibleRecords = records
+    .filter((ticket) => {
+      const queryMatches = !normalizedQuery || [ticket.id, ticket.title, ticket.requester, ticket.service, ticket.team, ticket.assignee, ticket.status]
+        .join(' ')
+        .toLowerCase()
+        .includes(normalizedQuery)
+      if (!queryMatches) return false
+      if (statusFilter !== 'All' && ticket.status !== statusFilter) return false
+      if (priorityFilter !== 'All' && unifiedPriority(ticket, recordType) !== priorityFilter) return false
+      if (teamFilter !== 'All' && ticket.team !== teamFilter) return false
+      if (assigneeFilter !== 'All' && ticket.assignee !== assigneeFilter) return false
+      if (serviceFilter !== 'All' && ticket.service !== serviceFilter) return false
+      return quickMatch(ticket)
+    })
     .sort((a, b) => {
       let aValue
       let bValue
       if (sortKey === 'reference') {
-        aValue = recordNumber(a.id)
-        bValue = recordNumber(b.id)
+        aValue = Number(String(a.id).match(/\d+/)?.[0] || 0)
+        bValue = Number(String(b.id).match(/\d+/)?.[0] || 0)
       } else if (sortKey === 'priority') {
-        aValue = priorityWeight[a.priority] || 0
-        bValue = priorityWeight[b.priority] || 0
-      } else if (sortKey === 'status') {
-        aValue = statusWeight[a.status] || 0
-        bValue = statusWeight[b.status] || 0
-      } else if (sortKey === 'sla') {
-        aValue = a.slaPercent || 0
-        bValue = b.slaPercent || 0
+        aValue = priorityWeight[unifiedPriority(a, recordType)] || 0
+        bValue = priorityWeight[unifiedPriority(b, recordType)] || 0
       } else if (sortKey === 'updated') {
-        aValue = ageMinutes(a.updated)
-        bValue = ageMinutes(b.updated)
+        aValue = updatedWeight(a.updated)
+        bValue = updatedWeight(b.updated)
       } else {
         aValue = String(a[sortKey] || '').toLowerCase()
         bValue = String(b[sortKey] || '').toLowerCase()
       }
-      const comparison = typeof aValue === 'string'
-        ? aValue.localeCompare(bValue)
-        : aValue - bValue
-      return sortDirection === 'asc' ? comparison : -comparison
+      const result = typeof aValue === 'string' ? aValue.localeCompare(bValue) : aValue - bValue
+      return sortDirection === 'asc' ? result : -result
     })
+
+  const activeFilterCount = [statusFilter, priorityFilter, teamFilter, assigneeFilter, serviceFilter].filter((value) => value !== 'All').length
+  const quickViews = [
+    ['all', 'All'],
+    ['mine', 'Mine'],
+    ['unassigned', 'Unassigned'],
+    ['priority', 'High priority'],
+    ['attention', meta.attentionLabel],
+    ['pending', 'Pending'],
+    ['closed', 'Closed'],
+  ]
 
   const sortBy = (key) => {
     if (sortKey === key) {
@@ -2457,1257 +2656,183 @@ function IncidentQueueView({
       return
     }
     setSortKey(key)
-    setSortDirection(key === 'sla' || key === 'priority' ? 'desc' : 'asc')
+    setSortDirection(key === 'priority' ? 'desc' : 'asc')
   }
-
   const sortIndicator = (key) => sortKey === key ? (sortDirection === 'asc' ? ' ↑' : ' ↓') : ''
-  const advancedCount = [advancedFilters.team, advancedFilters.assignee, advancedFilters.service].filter((value) => value !== 'All').length
-  const filterCount = advancedCount + (filters.priority !== 'All' ? 1 : 0) + (filters.status !== 'All' ? 1 : 0)
-
-  const toggleSelected = (id) => {
-    setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])
+  const clearFilters = () => {
+    updateStatusFilter('All')
+    updatePriorityFilter('All')
+    setTeamFilter('All')
+    setAssigneeFilter('All')
+    setServiceFilter('All')
+    setQuickView('all')
   }
-
   const bulkUpdate = (patch) => {
+    if (!updateTicket) return
     selectedIds.forEach((id) => updateTicket(id, patch))
     setSelectedIds([])
   }
 
-  const clearFilters = () => {
-    setFilters({ ...filters, status: 'All', priority: 'All' })
-    setAdvancedFilters({ team: 'All', assignee: 'All', service: 'All' })
-    setQuickView('all')
-  }
-
-  const slaTone = (ticket) => {
-    if (['Resolved', 'Closed'].includes(ticket.status)) return 'met'
-    if (ticket.slaPercent >= 80) return 'critical'
-    if (ticket.slaPercent >= 60) return 'watch'
-    return 'healthy'
-  }
-
-  const quickViews = [
-    ['all', 'All'],
-    ['mine', 'Mine'],
-    ['unassigned', 'Unassigned'],
-    ['priority', 'P1 / P2'],
-    ['risk', 'At risk'],
-    ['pending', 'Pending'],
-    ['resolved', 'Resolved'],
-  ]
-
   return (
-    <section className="incident-queue-v2">
-      <header className="incident-queue-heading">
-        <div>
-          <span className="eyebrow">Service Desk</span>
-          <h2>Incidents</h2>
-          <p>Triage interruptions, protect SLA targets and keep ownership clear.</p>
-        </div>
-        <button className="primary-action compact" onClick={() => openNewRecord?.('Incident')} type="button">
-          <Plus size={16} aria-hidden="true" />
-          New Incident
-        </button>
-      </header>
-
-      <div className="incident-queue-metrics" aria-label="Incident queue summary">
-        <div><strong>{openIncidents.length}</strong><span>Open</span></div>
-        <div><strong>{mineCount}</strong><span>Mine</span></div>
-        <div><strong>{unassignedCount}</strong><span>Unassigned</span></div>
-        <div className={atRiskCount ? 'attention' : ''}><strong>{atRiskCount}</strong><span>At risk</span></div>
-      </div>
-
-      <div className="incident-queue-toolbar">
-        <label className="incident-queue-search">
-          <Search size={18} aria-hidden="true" />
-          <input
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search reference, summary, requester, service..."
-            type="search"
-            value={query}
-          />
-        </label>
-        <button className={filterCount ? 'incident-filter-button active' : 'incident-filter-button'} onClick={() => setFiltersOpen(true)} type="button">
-          <SlidersHorizontal size={17} aria-hidden="true" />
-          Filters
-          {filterCount > 0 && <span>{filterCount}</span>}
-        </button>
-      </div>
-
-      <div className="incident-quick-views" aria-label="Incident saved views">
-        {quickViews.map(([id, label]) => (
-          <button className={quickView === id ? 'active' : ''} key={id} onClick={() => setQuickView(id)} type="button">
-            {label}
-          </button>
-        ))}
-      </div>
-
-      <div className="incident-queue-result-meta">
-        <span><strong>{visibleTickets.length}</strong> incidents</span>
-        <span className="incident-desktop-sort-summary">Sorted by {sortKey === 'sla' ? 'SLA position' : sortKey} {sortDirection === 'asc' ? 'ascending' : 'descending'}</span>
-        <label className="incident-mobile-sort">
-          <span>Sort</span>
-          <select
-            onChange={(event) => {
-              const nextKey = event.target.value
-              setSortKey(nextKey)
-              setSortDirection(nextKey === 'sla' || nextKey === 'priority' ? 'desc' : 'asc')
-            }}
-            value={sortKey}
-          >
-            <option value="sla">SLA risk</option>
-            <option value="priority">Priority</option>
-            <option value="updated">Updated</option>
-            <option value="reference">Reference</option>
-          </select>
-        </label>
-      </div>
-
-      {selectedIds.length > 0 && (
-        <div className="incident-bulk-bar">
-          <strong>{selectedIds.length} selected</strong>
+    <section className="unified-record-queue">
+      <div className="unified-record-queue-inner">
+        <header className="unified-record-header">
           <div>
-            <button onClick={() => bulkUpdate({ assignee: 'Dana Sinclair' })} type="button">Assign to me</button>
-            <button onClick={() => bulkUpdate({ status: 'In Progress' })} type="button">Start work</button>
-            <button onClick={() => setSelectedIds([])} type="button">Clear</button>
+            <span className="eyebrow">{meta.eyebrow}</span>
+            <h2>{meta.title}</h2>
+            <p>{meta.description}</p>
           </div>
-        </div>
-      )}
+          <RecordCreateMenu openNewRecord={openNewRecord} />
+        </header>
 
-      {visibleTickets.length ? (
-        <>
-          <div className="incident-table-wrap">
-            <table className="incident-queue-table">
-              <thead>
-                <tr>
-                  <th className="select-column"><span className="sr-only">Select</span></th>
-                  <th><button onClick={() => sortBy('reference')} type="button">Reference{sortIndicator('reference')}</button></th>
-                  <th>Summary</th>
-                  <th><button onClick={() => sortBy('priority')} type="button">Priority{sortIndicator('priority')}</button></th>
-                  <th><button onClick={() => sortBy('status')} type="button">Status{sortIndicator('status')}</button></th>
-                  <th><button onClick={() => sortBy('team')} type="button">Team{sortIndicator('team')}</button></th>
-                  <th>Assignee</th>
-                  <th><button onClick={() => sortBy('sla')} type="button">SLA{sortIndicator('sla')}</button></th>
-                  <th><button onClick={() => sortBy('updated')} type="button">Updated{sortIndicator('updated')}</button></th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibleTickets.map((ticket) => (
-                  <tr key={ticket.id}>
-                    <td className="select-column">
-                      <input
-                        aria-label={`Select ${ticket.id}`}
-                        checked={selectedIds.includes(ticket.id)}
-                        onChange={() => toggleSelected(ticket.id)}
-                        type="checkbox"
-                      />
-                    </td>
-                    <td>
-                      <button className="incident-reference-link" onClick={() => openRecordTab(ticket)} type="button">
-                        <span className={`priority-dot ${priorityClass(ticket.priority)}`} />
-                        {ticket.id}
-                      </button>
-                    </td>
-                    <td className="incident-summary-cell">
-                      <button onClick={() => openRecordTab(ticket)} type="button">
-                        <strong>{ticket.title}</strong>
-                        <small>{ticket.requester} · {ticket.service}</small>
-                      </button>
-                    </td>
-                    <td><span className={`incident-priority-text ${priorityClass(ticket.priority)}`}>{ticket.priority}</span></td>
-                    <td><span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span></td>
-                    <td>{ticket.team}</td>
-                    <td>{ticket.assignee || 'Unassigned'}</td>
-                    <td>
-                      <div className={`incident-sla-cell ${slaTone(ticket)}`}>
-                        <strong>{['Resolved', 'Closed'].includes(ticket.status) ? 'Met' : ticket.sla}</strong>
-                        <span><i style={{ width: `${Math.min(100, ticket.slaPercent || 0)}%` }} /></span>
-                      </div>
-                    </td>
-                    <td>{ticket.updated}</td>
+        <div className="unified-record-metrics" aria-label={`${meta.title} summary`}>
+          <div><strong>{openRecords.length}</strong><span>Open</span></div>
+          <div><strong>{mineCount}</strong><span>Mine</span></div>
+          <div><strong>{unassignedCount}</strong><span>Unassigned</span></div>
+          <div className={attentionCount ? 'attention' : ''}><strong>{attentionCount}</strong><span>{meta.attentionLabel}</span></div>
+        </div>
+
+        <div className="unified-record-toolbar">
+          <label className="unified-record-search">
+            <Search size={18} aria-hidden="true" />
+            <input
+              onChange={(event) => updateSearch(event.target.value)}
+              placeholder={`Search ${meta.title.toLowerCase()}, requester, service...`}
+              type="search"
+              value={searchValue}
+            />
+          </label>
+          <button className={activeFilterCount ? 'unified-filter-button active' : 'unified-filter-button'} onClick={() => setFiltersOpen((current) => !current)} type="button">
+            <SlidersHorizontal size={17} aria-hidden="true" />
+            Filters
+            {activeFilterCount > 0 && <span>{activeFilterCount}</span>}
+          </button>
+          <label className="unified-mobile-sort">
+            <span>Sort</span>
+            <select value={sortKey} onChange={(event) => setSortKey(event.target.value)}>
+              <option value="updated">Updated</option>
+              <option value="priority">Priority / risk</option>
+              <option value="reference">Reference</option>
+              <option value="status">Status</option>
+            </select>
+          </label>
+        </div>
+
+        {filtersOpen && (
+          <div className="unified-record-filter-panel">
+            <label>Status<select value={statusFilter} onChange={(event) => updateStatusFilter(event.target.value)}>{statusesAvailable.map((value) => <option key={value}>{value}</option>)}</select></label>
+            <label>Priority / risk<select value={priorityFilter} onChange={(event) => updatePriorityFilter(event.target.value)}><option>All</option>{priorities.map((value) => <option key={value}>{value}</option>)}</select></label>
+            <label>Team<select value={teamFilter} onChange={(event) => setTeamFilter(event.target.value)}>{teamsAvailable.map((value) => <option key={value}>{value}</option>)}</select></label>
+            <label>Assignee<select value={assigneeFilter} onChange={(event) => setAssigneeFilter(event.target.value)}>{assigneesAvailable.map((value) => <option key={value}>{value}</option>)}</select></label>
+            <label>Service<select value={serviceFilter} onChange={(event) => setServiceFilter(event.target.value)}>{servicesAvailable.map((value) => <option key={value}>{value}</option>)}</select></label>
+            <button className="text-button" onClick={clearFilters} type="button">Clear filters</button>
+          </div>
+        )}
+
+        <div className="unified-record-quick-views" aria-label={`${meta.title} saved views`}>
+          {quickViews.map(([id, label]) => (
+            <button className={quickView === id ? 'active' : ''} key={id} onClick={() => setQuickView(id)} type="button">{label}</button>
+          ))}
+        </div>
+
+        <div className="unified-record-result-line">
+          <span><strong>{visibleRecords.length}</strong> {visibleRecords.length === 1 ? meta.singular.toLowerCase() : meta.title.toLowerCase()}</span>
+          <span>Sorted by {sortKey} {sortDirection === 'asc' ? 'ascending' : 'descending'}</span>
+        </div>
+
+        {selectedIds.length > 0 && updateTicket && (
+          <div className="unified-record-bulk-bar">
+            <strong>{selectedIds.length} selected</strong>
+            <div>
+              <button onClick={() => bulkUpdate({ assignee: 'Dana Sinclair' })} type="button">Assign to me</button>
+              <button onClick={() => bulkUpdate({ status: 'In Progress' })} type="button">Start work</button>
+              <button onClick={() => setSelectedIds([])} type="button">Clear</button>
+            </div>
+          </div>
+        )}
+
+        {visibleRecords.length ? (
+          <>
+            <div className="unified-record-table-wrap">
+              <table className="unified-record-table">
+                <thead>
+                  <tr>
+                    <th className="unified-select-column"><span className="sr-only">Select</span></th>
+                    <th><button onClick={() => sortBy('reference')} type="button">Reference{sortIndicator('reference')}</button></th>
+                    <th>Summary</th>
+                    <th><button onClick={() => sortBy('priority')} type="button">Priority / risk{sortIndicator('priority')}</button></th>
+                    <th><button onClick={() => sortBy('status')} type="button">Status{sortIndicator('status')}</button></th>
+                    <th>Requester</th>
+                    <th>Service</th>
+                    <th>Assignment</th>
+                    <th>Key detail</th>
+                    <th><button onClick={() => sortBy('updated')} type="button">Updated{sortIndicator('updated')}</button></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="incident-mobile-list">
-            {visibleTickets.map((ticket) => (
-              <button className="incident-mobile-card" key={ticket.id} onClick={() => openRecordTab(ticket)} type="button">
-                <div className="incident-mobile-card-top">
-                  <span className="incident-mobile-reference">
-                    <span className={`priority-dot ${priorityClass(ticket.priority)}`} />
-                    <strong>{ticket.id}</strong>
-                  </span>
-                  <span className={`incident-priority-text ${priorityClass(ticket.priority)}`}>{ticket.priority}</span>
-                </div>
-                <h3>{ticket.title}</h3>
-                <div className="incident-mobile-card-state">
-                  <span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span>
-                  <span>{ticket.team} · {ticket.assignee || 'Unassigned'}</span>
-                </div>
-                <div className="incident-mobile-card-context">
-                  <span>{ticket.requester}</span>
-                  <span className={`mobile-sla-label ${slaTone(ticket)}`}>{['Resolved', 'Closed'].includes(ticket.status) ? 'SLA met' : `${ticket.sla} SLA`}</span>
-                </div>
-                <div className="incident-mobile-card-footer">
-                  <span>Updated {ticket.updated}</span>
-                  <ChevronRight size={17} aria-hidden="true" />
-                </div>
-              </button>
-            ))}
-          </div>
-        </>
-      ) : (
-        <div className="incident-queue-empty">
-          <CheckCircle2 size={28} aria-hidden="true" />
-          <strong>No incidents match this view</strong>
-          <span>Try another saved view or clear your filters.</span>
-          <button onClick={clearFilters} type="button">Clear filters</button>
-        </div>
-      )}
-
-      {filtersOpen && (
-        <div className="incident-filter-overlay" role="presentation" onMouseDown={(event) => {
-          if (event.target === event.currentTarget) setFiltersOpen(false)
-        }}>
-          <aside className="incident-filter-panel" aria-label="Incident filters">
-            <header>
-              <div>
-                <span className="eyebrow">Queue controls</span>
-                <h3>Filter incidents</h3>
-              </div>
-              <button aria-label="Close filters" className="icon-button" onClick={() => setFiltersOpen(false)} type="button">×</button>
-            </header>
-
-            <div className="incident-filter-fields">
-              <label>
-                Status
-                <select value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}>
-                  <option>All</option>
-                  {['New', 'In Progress', 'Pending', 'Resolved', 'Closed'].map((status) => <option key={status}>{status}</option>)}
-                </select>
-              </label>
-              <label>
-                Priority
-                <select value={filters.priority} onChange={(event) => setFilters({ ...filters, priority: event.target.value })}>
-                  <option>All</option>
-                  {priorities.map((priority) => <option key={priority}>{priority}</option>)}
-                </select>
-              </label>
-              <label>
-                Assignment group
-                <select value={advancedFilters.team} onChange={(event) => setAdvancedFilters({ ...advancedFilters, team: event.target.value })}>
-                  {availableTeams.map((team) => <option key={team}>{team}</option>)}
-                </select>
-              </label>
-              <label>
-                Assignee
-                <select value={advancedFilters.assignee} onChange={(event) => setAdvancedFilters({ ...advancedFilters, assignee: event.target.value })}>
-                  {availableAssignees.map((assignee) => <option key={assignee}>{assignee}</option>)}
-                </select>
-              </label>
-              <label>
-                Service
-                <select value={advancedFilters.service} onChange={(event) => setAdvancedFilters({ ...advancedFilters, service: event.target.value })}>
-                  {availableServices.map((service) => <option key={service}>{service}</option>)}
-                </select>
-              </label>
+                </thead>
+                <tbody>
+                  {visibleRecords.map((ticket) => {
+                    const detail = unifiedKeyDetail(ticket, recordType)
+                    const priority = unifiedPriority(ticket, recordType)
+                    return (
+                      <tr key={ticket.id} onClick={() => openRecordTab(ticket)}>
+                        <td className="unified-select-column" onClick={(event) => event.stopPropagation()}>
+                          <input aria-label={`Select ${ticket.id}`} checked={selectedIds.includes(ticket.id)} onChange={() => setSelectedIds((current) => current.includes(ticket.id) ? current.filter((id) => id !== ticket.id) : [...current, ticket.id])} type="checkbox" />
+                        </td>
+                        <td><button className="unified-record-link" onClick={(event) => { event.stopPropagation(); openRecordTab(ticket) }} type="button">{ticket.id}</button></td>
+                        <td><strong>{ticket.title}</strong><small>{ticket.category || ticket.type}</small></td>
+                        <td><span className={`unified-priority ${priorityClass(priority)}`}>{priority}</span></td>
+                        <td><span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span></td>
+                        <td><strong>{ticket.requester || 'Not recorded'}</strong><small>{ticket.location || ''}</small></td>
+                        <td>{ticket.service || 'Unclassified'}</td>
+                        <td><strong>{ticket.team || 'Unassigned team'}</strong><small>{ticket.assignee || 'Unassigned'}</small></td>
+                        <td><strong>{detail.primary}</strong><small>{detail.secondary}</small></td>
+                        <td>{ticket.updated || '—'}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
             </div>
 
-            <footer>
-              <button className="secondary-action" onClick={clearFilters} type="button">Clear all</button>
-              <button className="primary-action compact" onClick={() => setFiltersOpen(false)} type="button">Apply filters</button>
-            </footer>
-          </aside>
-        </div>
-      )}
+            <div className="unified-record-mobile-list">
+              {visibleRecords.map((ticket) => {
+                const detail = unifiedKeyDetail(ticket, recordType)
+                const priority = unifiedPriority(ticket, recordType)
+                return (
+                  <button className="unified-record-mobile-card" key={ticket.id} onClick={() => openRecordTab(ticket)} type="button">
+                    <div className="unified-record-mobile-top"><strong>{ticket.id}</strong><span className={`unified-priority ${priorityClass(priority)}`}>{priority}</span></div>
+                    <h3>{ticket.title}</h3>
+                    <div className="unified-record-mobile-state"><span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span><span>{ticket.service || 'Unclassified'}</span></div>
+                    <dl>
+                      <div><dt>Requester</dt><dd>{ticket.requester || 'Not recorded'}</dd></div>
+                      <div><dt>Assignment</dt><dd>{ticket.team || 'Unassigned'} · {ticket.assignee || 'Unassigned'}</dd></div>
+                      <div><dt>Key detail</dt><dd>{detail.primary}</dd></div>
+                    </dl>
+                    <footer><span>Updated {ticket.updated || '—'}</span><ChevronRight size={17} aria-hidden="true" /></footer>
+                  </button>
+                )
+              })}
+            </div>
+          </>
+        ) : (
+          <div className="unified-record-empty"><Inbox size={28} /><strong>No {meta.title.toLowerCase()} match this view</strong><span>Change the saved view, search or filters to see more records.</span></div>
+        )}
+      </div>
     </section>
   )
 }
 
-
-
-const serviceRequestSections = [
-  { id: 'overview', label: 'Overview', icon: Inbox },
-  { id: 'items', label: 'Requested items', icon: Server },
-  { id: 'approvals', label: 'Approvals', icon: ClipboardCheck },
-  { id: 'tasks', label: 'Tasks', icon: ListChecks },
-  { id: 'activity', label: 'Activity', icon: MessageSquarePlus },
-]
-
-function requestItemsFor(ticket) {
-  if (ticket.requestedItems?.length) return ticket.requestedItems
-  return [
-    {
-      id: `CAT-${String(ticket.service || 'SERVICE').toUpperCase().replace(/\s+/g, '-')}`,
-      name: ticket.title,
-      category: ticket.service || 'Service',
-      quantity: 1,
-      unitCost: 0,
-      options: ['Standard request configuration'],
-    },
-  ]
+function IncidentQueueView(props) {
+  return <UnifiedRecordQueue {...props} recordType="Incident" />
 }
 
-function requestApprovalsFor(ticket) {
-  if (ticket.requestApprovals?.length) return ticket.requestApprovals
-  if (ticket.status === 'Pending Approval') {
-    return [
-      {
-        id: `${ticket.id}-APPROVAL-1`,
-        label: 'Request approval',
-        approver: 'Request approver',
-        status: 'Pending',
-        updated: 'Awaiting decision',
-      },
-    ]
-  }
-  return []
+function ServiceRequestQueueView(props) {
+  return <UnifiedRecordQueue {...props} recordType="Service Request" />
 }
 
-function requestTasksFor(ticket) {
-  if (ticket.requestTasks?.length) return ticket.requestTasks
-  return [
-    {
-      id: `${ticket.id}-TASK-1`,
-      title: 'Review and validate request',
-      team: ticket.team || 'Service Desk',
-      assignee: ticket.assignee || 'Unassigned',
-      status: 'Ready',
-      dependsOn: [],
-      due: 'Within 4 hr',
-      instructions: 'Confirm the request information and requested items are complete before fulfilment begins.',
-    },
-    {
-      id: `${ticket.id}-TASK-2`,
-      title: 'Complete fulfilment',
-      team: ticket.team || 'Service Desk',
-      assignee: 'Unassigned',
-      status: 'Waiting',
-      dependsOn: [`${ticket.id}-TASK-1`],
-      due: ticket.sla || 'Within SLA',
-      instructions: 'Complete the requested service and record the fulfilment outcome.',
-    },
-  ]
+function ProblemQueueView(props) {
+  return <UnifiedRecordQueue {...props} recordType="Problem" />
 }
-
-function requestTotalCost(ticket) {
-  return requestItemsFor(ticket).reduce(
-    (total, item) => total + Number(item.unitCost || 0) * Number(item.quantity || 1),
-    0,
-  )
-}
-
-function formatRequestCost(value) {
-  return new Intl.NumberFormat('en-GB', {
-    style: 'currency',
-    currency: 'GBP',
-    minimumFractionDigits: value % 1 ? 2 : 0,
-  }).format(value || 0)
-}
-
-function requestApprovalsComplete(ticket) {
-  const approvals = requestApprovalsFor(ticket)
-  return !approvals.length || approvals.every((approval) => approval.status === 'Approved')
-}
-
-function requestTaskUnlocked(task, tasks, approvalsComplete) {
-  if (task.requiresApproval && !approvalsComplete) return false
-  const dependencies = task.dependsOn || []
-  return dependencies.every((dependencyId) =>
-    tasks.find((candidate) => candidate.id === dependencyId)?.status === 'Completed',
-  )
-}
-
-function requestVisibleTasks(ticket) {
-  const tasks = requestTasksFor(ticket)
-  const approvalsComplete = requestApprovalsComplete(ticket)
-  return tasks.filter((task) => requestTaskUnlocked(task, tasks, approvalsComplete))
-}
-
-function requestWorkflowProgress(ticket) {
-  const tasks = requestTasksFor(ticket)
-  const completed = tasks.filter((task) => task.status === 'Completed').length
-  const percent = tasks.length ? Math.round((completed / tasks.length) * 100) : 100
-  return { completed, total: tasks.length, percent }
-}
-
-function ServiceRequestQueueView({
-  filteredTickets,
-  openNewRecord,
-  openRecordTab,
-  query,
-  setQuery,
-  tickets,
-}) {
-  const [quickView, setQuickView] = useState('all')
-  const [sortKey, setSortKey] = useState('updated')
-  const [filtersOpen, setFiltersOpen] = useState(false)
-  const [advancedFilters, setAdvancedFilters] = useState({ service: 'All', team: 'All' })
-
-  const requests = tickets.filter((ticket) => ticket.type === 'Service Request')
-  const openRequests = requests.filter((ticket) => !['Resolved', 'Closed'].includes(ticket.status))
-  const awaitingApproval = openRequests.filter((ticket) => !requestApprovalsComplete(ticket)).length
-  const readyTasks = openRequests.reduce(
-    (count, ticket) => count + requestVisibleTasks(ticket).filter((task) => ['Ready', 'Waiting'].includes(task.status)).length,
-    0,
-  )
-  const totalValue = openRequests.reduce((sum, ticket) => sum + requestTotalCost(ticket), 0)
-
-  const services = ['All', ...new Set(requests.map((ticket) => ticket.service).filter(Boolean))]
-  const teamsAvailable = ['All', ...new Set(requests.map((ticket) => ticket.team).filter(Boolean))]
-
-  const matchesQuickView = (ticket) => {
-    const progress = requestWorkflowProgress(ticket)
-    const ready = requestVisibleTasks(ticket).filter((task) => task.status !== 'Completed')
-    if (quickView === 'approval') return !requestApprovalsComplete(ticket)
-    if (quickView === 'fulfilment') return requestApprovalsComplete(ticket) && !['Resolved', 'Closed'].includes(ticket.status)
-    if (quickView === 'ready') return ready.length > 0
-    if (quickView === 'mine') return ready.some((task) => task.assignee === 'Dana Sinclair') || ticket.assignee === 'Dana Sinclair'
-    if (quickView === 'complete') return ['Resolved', 'Closed'].includes(ticket.status) || progress.percent === 100
-    return true
-  }
-
-  const ageMinutes = (value) => {
-    const normalized = String(value || '').toLowerCase()
-    const minutes = normalized.match(/(\d+)\s*min/)
-    if (minutes) return Number(minutes[1])
-    const hours = normalized.match(/(\d+)\s*hr/)
-    if (hours) return Number(hours[1]) * 60
-    if (normalized.includes('just now')) return 0
-    if (normalized.includes('yesterday')) return 1440
-    return 720
-  }
-
-  const visibleRequests = filteredTickets
-    .filter((ticket) =>
-      matchesQuickView(ticket) &&
-      (advancedFilters.service === 'All' || ticket.service === advancedFilters.service) &&
-      (advancedFilters.team === 'All' || ticket.team === advancedFilters.team),
-    )
-    .sort((a, b) => {
-      if (sortKey === 'reference') return Number(String(b.id).replace(/\D/g, '')) - Number(String(a.id).replace(/\D/g, ''))
-      if (sortKey === 'cost') return requestTotalCost(b) - requestTotalCost(a)
-      if (sortKey === 'progress') return requestWorkflowProgress(a).percent - requestWorkflowProgress(b).percent
-      return ageMinutes(a.updated) - ageMinutes(b.updated)
-    })
-
-  const quickViews = [
-    ['all', 'All'],
-    ['approval', 'Awaiting approval'],
-    ['fulfilment', 'In fulfilment'],
-    ['ready', 'Ready tasks'],
-    ['mine', 'My work'],
-    ['complete', 'Completed'],
-  ]
-
-  return (
-    <section className="request-queue-v2">
-      <header className="request-queue-heading">
-        <div>
-          <span className="eyebrow">Service Requests</span>
-          <h2>Request fulfilment</h2>
-          <p>Track approvals, requested items, cost and fulfilment work from one queue.</p>
-        </div>
-        <button className="primary-action compact" onClick={() => openNewRecord?.('Service Request')} type="button">
-          <Plus size={16} aria-hidden="true" />
-          New Service Request
-        </button>
-      </header>
-
-      <div className="request-queue-metrics" aria-label="Service request queue summary">
-        <div><strong>{openRequests.length}</strong><span>Open</span></div>
-        <div><strong>{awaitingApproval}</strong><span>Awaiting approval</span></div>
-        <div><strong>{readyTasks}</strong><span>Ready tasks</span></div>
-        <div><strong>{formatRequestCost(totalValue)}</strong><span>Open value</span></div>
-      </div>
-
-      <div className="request-queue-toolbar">
-        <label className="incident-queue-search request-queue-search">
-          <Search size={17} aria-hidden="true" />
-          <input
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search requests, requester, service or team"
-            type="search"
-            value={query}
-          />
-        </label>
-        <button className={filtersOpen ? 'secondary-action active' : 'secondary-action'} onClick={() => setFiltersOpen(true)} type="button">
-          <SlidersHorizontal size={16} aria-hidden="true" />
-          Filters
-        </button>
-      </div>
-
-      <div className="request-quick-views" aria-label="Service request views">
-        {quickViews.map(([id, label]) => (
-          <button className={quickView === id ? 'active' : ''} key={id} onClick={() => setQuickView(id)} type="button">
-            {label}
-          </button>
-        ))}
-      </div>
-
-      <div className="request-queue-subbar">
-        <span><strong>{visibleRequests.length}</strong> requests</span>
-        <label>
-          Sort
-          <select onChange={(event) => setSortKey(event.target.value)} value={sortKey}>
-            <option value="updated">Recently updated</option>
-            <option value="reference">Reference</option>
-            <option value="cost">Highest cost</option>
-            <option value="progress">Workflow progress</option>
-          </select>
-        </label>
-      </div>
-
-      <div className="request-desktop-table" role="table" aria-label="Service request queue">
-        <div className="request-table-row request-table-head" role="row">
-          <span>Reference / request</span>
-          <span>Requester</span>
-          <span>Approval</span>
-          <span>Workflow</span>
-          <span>Cost</span>
-          <span>Updated</span>
-        </div>
-        {visibleRequests.map((ticket) => {
-          const progress = requestWorkflowProgress(ticket)
-          const approvalsComplete = requestApprovalsComplete(ticket)
-          const ready = requestVisibleTasks(ticket).filter((task) => ['Ready', 'Waiting'].includes(task.status))
-          return (
-            <button className="request-table-row request-table-record" key={ticket.id} onClick={() => openRecordTab(ticket)} role="row" type="button">
-              <span className="request-table-primary">
-                <strong>{ticket.id}</strong>
-                <span>{ticket.title}</span>
-                <small>{ticket.service} · {ticket.team}</small>
-              </span>
-              <span><strong>{ticket.requester}</strong><small>{ticket.location}</small></span>
-              <span><span className={`status-pill ${approvalsComplete ? 'resolved' : 'pending-approval'}`}>{approvalsComplete ? 'Approved' : 'Pending'}</span></span>
-              <span className="request-progress-cell">
-                <strong>{progress.completed}/{progress.total}</strong>
-                <small>{ready.length ? `${ready.length} task${ready.length === 1 ? '' : 's'} ready` : progress.percent === 100 ? 'Complete' : 'Waiting'}</small>
-                <span className="request-progress-track"><i style={{ width: `${progress.percent}%` }} /></span>
-              </span>
-              <span><strong>{formatRequestCost(requestTotalCost(ticket))}</strong></span>
-              <span><strong>{ticket.updated}</strong><small>{ticket.status}</small></span>
-            </button>
-          )
-        })}
-      </div>
-
-      <div className="request-mobile-list">
-        {visibleRequests.map((ticket) => {
-          const progress = requestWorkflowProgress(ticket)
-          const approvalsComplete = requestApprovalsComplete(ticket)
-          const ready = requestVisibleTasks(ticket).filter((task) => ['Ready', 'Waiting'].includes(task.status))
-          return (
-            <button className="request-mobile-card" key={ticket.id} onClick={() => openRecordTab(ticket)} type="button">
-              <div className="request-mobile-card-top">
-                <strong>{ticket.id}</strong>
-                <span>{formatRequestCost(requestTotalCost(ticket))}</span>
-              </div>
-              <h3>{ticket.title}</h3>
-              <div className="request-mobile-card-status">
-                <span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span>
-                <span>{ticket.service}</span>
-              </div>
-              <div className="request-mobile-progress">
-                <span><strong>{progress.completed}/{progress.total}</strong> workflow tasks</span>
-                <span>{ready.length ? `${ready.length} ready` : approvalsComplete ? 'Waiting' : 'Approval required'}</span>
-                <div><i style={{ width: `${progress.percent}%` }} /></div>
-              </div>
-              <footer>
-                <span>{ticket.requester}</span>
-                <span>{ticket.updated} <ChevronRight size={15} aria-hidden="true" /></span>
-              </footer>
-            </button>
-          )
-        })}
-      </div>
-
-      {!visibleRequests.length && (
-        <div className="incident-queue-empty">
-          <ListChecks size={24} aria-hidden="true" />
-          <strong>No service requests match this view</strong>
-          <span>Try another view or clear the active filters.</span>
-        </div>
-      )}
-
-      {filtersOpen && (
-        <div className="request-filter-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setFiltersOpen(false)}>
-          <aside className="request-filter-panel" aria-label="Service request filters">
-            <header>
-              <div><span className="eyebrow">Queue filters</span><h3>Filter requests</h3></div>
-              <button className="icon-button" onClick={() => setFiltersOpen(false)} type="button">×</button>
-            </header>
-            <div className="request-filter-fields">
-              <label>Service<select value={advancedFilters.service} onChange={(event) => setAdvancedFilters({ ...advancedFilters, service: event.target.value })}>{services.map((service) => <option key={service}>{service}</option>)}</select></label>
-              <label>Fulfilment team<select value={advancedFilters.team} onChange={(event) => setAdvancedFilters({ ...advancedFilters, team: event.target.value })}>{teamsAvailable.map((team) => <option key={team}>{team}</option>)}</select></label>
-            </div>
-            <footer>
-              <button className="secondary-action" onClick={() => setAdvancedFilters({ service: 'All', team: 'All' })} type="button">Clear all</button>
-              <button className="primary-action compact" onClick={() => setFiltersOpen(false)} type="button">Apply filters</button>
-            </footer>
-          </aside>
-        </div>
-      )}
-    </section>
-  )
-}
-
-function ServiceRequestRecordWorkspace({ addComment, newComment, setNewComment, ticket, updateTicket }) {
-  const [activeSection, setActiveSection] = useState('overview')
-  const [activityMode, setActivityMode] = useState('work')
-  const items = requestItemsFor(ticket)
-  const approvals = requestApprovalsFor(ticket)
-  const tasks = requestTasksFor(ticket)
-  const approvalsComplete = requestApprovalsComplete(ticket)
-  const visibleTasks = requestVisibleTasks(ticket)
-  const progress = requestWorkflowProgress(ticket)
-  const totalCost = requestTotalCost(ticket)
-
-  const writeTasks = (nextTasks, updates = {}) => {
-    const completed = nextTasks.filter((task) => task.status === 'Completed').length
-    const allComplete = nextTasks.length > 0 && completed === nextTasks.length
-    updateTicket(ticket.id, {
-      requestTasks: nextTasks,
-      ...(allComplete ? { status: 'Resolved', nextStep: 'Fulfilment complete. Confirm requester acceptance and close the request.' } : {}),
-      ...updates,
-    })
-  }
-
-  const materialiseNewlyUnlockedTasks = (candidateTasks, approvalState = approvalsComplete) =>
-    candidateTasks.map((task) => {
-      if (!requestTaskUnlocked(task, candidateTasks, approvalState)) return task
-      if (!['Waiting', 'Blocked'].includes(task.status)) return task
-      return {
-        ...task,
-        status: 'Ready',
-        assignee: task.autoAssignee || task.assignee || 'Unassigned',
-      }
-    })
-
-  const updateTask = (taskId, updates) => {
-    const nextTasks = materialiseNewlyUnlockedTasks(
-      tasks.map((task) => task.id === taskId ? { ...task, ...updates } : task),
-    )
-    writeTasks(nextTasks)
-  }
-
-  const completeTask = (task) => {
-    const completedTasks = tasks.map((candidate) =>
-      candidate.id === task.id
-        ? { ...candidate, status: 'Completed', completedAt: 'Just now', assignee: candidate.assignee || 'Dana Sinclair' }
-        : candidate,
-    )
-    const nextTasks = materialiseNewlyUnlockedTasks(completedTasks)
-    const newlyVisible = nextTasks.filter((candidate) =>
-      candidate.status === 'Ready' && !visibleTasks.some((visible) => visible.id === candidate.id),
-    )
-    writeTasks(nextTasks, {
-      comments: [
-        `Work note: Fulfilment task completed — ${task.title}.`,
-        ...(newlyVisible.length ? [`System: ${newlyVisible.map((candidate) => candidate.title).join(', ')} released to fulfilment.`] : []),
-        ...ticket.comments,
-      ],
-    })
-  }
-
-  const updateApproval = (approvalId, status) => {
-    const nextApprovals = approvals.map((approval) =>
-      approval.id === approvalId ? { ...approval, status, updated: 'Just now' } : approval,
-    )
-    const nextApproved = nextApprovals.length > 0 && nextApprovals.every((approval) => approval.status === 'Approved')
-    let nextTasks = tasks
-    if (nextApproved) nextTasks = materialiseNewlyUnlockedTasks(tasks, true)
-    updateTicket(ticket.id, {
-      requestApprovals: nextApprovals,
-      requestTasks: nextTasks,
-      status: nextApproved ? 'In Progress' : ticket.status,
-      nextStep: nextApproved ? 'Approval complete. Fulfilment tasks have been released.' : ticket.nextStep,
-      comments: [
-        `System: ${nextApprovals.find((approval) => approval.id === approvalId)?.label || 'Approval'} ${status.toLowerCase()}.`,
-        ...ticket.comments,
-      ],
-    })
-  }
-
-  const taskDisplayStatus = (task) => task.status === 'Waiting' ? 'Ready' : task.status
-
-  const renderOverview = () => (
-    <div className="request-detail-overview">
-      <section className="request-detail-section">
-        <div className="request-section-heading"><span className="eyebrow">Requester</span><h3>{ticket.requester}</h3></div>
-        <div className="request-requester-summary">
-          <div className="request-avatar">{userInitials(ticket.requester)}</div>
-          <div>
-            <strong>{ticket.requester}</strong>
-            <span>{ticket.requesterJobTitle || 'Requester'}{ticket.requesterDepartment ? ` · ${ticket.requesterDepartment}` : ''}</span>
-            {ticket.requesterEmail && <small>{ticket.requesterEmail}</small>}
-          </div>
-        </div>
-        <div className="request-information-grid">
-          {(ticket.requestInformation?.length ? ticket.requestInformation : [
-            { label: 'Location', value: ticket.location },
-            { label: 'Service', value: ticket.service },
-            { label: 'Priority', value: ticket.priority },
-            { label: 'Fulfilment team', value: ticket.team },
-          ]).map((field) => <IncidentProperty key={`${field.label}-${field.value}`} label={field.label} value={field.value} />)}
-        </div>
-      </section>
-
-      <section className="request-detail-section">
-        <div className="request-section-heading"><span className="eyebrow">Request</span><h3>Request information</h3></div>
-        <p className="request-description-copy">{ticket.description}</p>
-      </section>
-
-      <section className="request-detail-summary-grid">
-        <div><span>Requested items</span><strong>{items.reduce((sum, item) => sum + Number(item.quantity || 1), 0)}</strong><small>{formatRequestCost(totalCost)} cost snapshot</small></div>
-        <div><span>Approvals</span><strong>{approvals.filter((approval) => approval.status === 'Approved').length}/{approvals.length || 0}</strong><small>{approvalsComplete ? 'Approval complete' : 'Awaiting approval'}</small></div>
-        <div><span>Fulfilment</span><strong>{progress.completed}/{progress.total}</strong><small>{progress.percent}% complete</small></div>
-      </section>
-
-      <section className="request-next-step-card">
-        <span className="eyebrow">Next step</span>
-        <strong>{ticket.nextStep}</strong>
-      </section>
-    </div>
-  )
-
-  const renderItems = () => (
-    <div className="request-items-panel">
-      <div className="request-panel-intro">
-        <div><span className="eyebrow">Cost snapshot</span><h3>Requested items</h3><p>Items and prices are captured with the request so later catalogue changes do not alter this record.</p></div>
-        <div className="request-total-cost"><span>Total</span><strong>{formatRequestCost(totalCost)}</strong></div>
-      </div>
-      <div className="request-item-list">
-        {items.map((item) => (
-          <article className="request-item-card" key={item.id}>
-            <div className="request-item-icon"><Server size={18} aria-hidden="true" /></div>
-            <div className="request-item-main">
-              <span>{item.category} · {item.id}</span>
-              <h4>{item.name}</h4>
-              <div className="request-item-options">{(item.options || []).map((option) => <span key={option}>{option}</span>)}</div>
-            </div>
-            <div className="request-item-price">
-              <span>Qty {item.quantity || 1}</span>
-              <strong>{formatRequestCost(Number(item.unitCost || 0) * Number(item.quantity || 1))}</strong>
-              <small>{formatRequestCost(item.unitCost || 0)} each</small>
-            </div>
-          </article>
-        ))}
-      </div>
-    </div>
-  )
-
-  const renderApprovals = () => (
-    <div className="request-approvals-panel">
-      <div className="request-panel-intro">
-        <div><span className="eyebrow">Governance</span><h3>Approvals</h3><p>Fulfilment work that requires approval is not released until every required approval is complete.</p></div>
-        <span className={`status-pill ${approvalsComplete ? 'resolved' : 'pending-approval'}`}>{approvalsComplete ? 'Approved' : 'Approval required'}</span>
-      </div>
-      {!approvals.length ? (
-        <div className="request-empty-section"><CheckCircle2 size={22} /><strong>No approval required</strong><span>This request can move directly into fulfilment.</span></div>
-      ) : (
-        <div className="request-approval-list">
-          {approvals.map((approval) => (
-            <article className="request-approval-card" key={approval.id}>
-              <div className={`request-approval-state ${approval.status.toLowerCase()}`}><ClipboardCheck size={18} aria-hidden="true" /></div>
-              <div><span>{approval.label}</span><strong>{approval.approver}</strong><small>{approval.updated}</small></div>
-              <span className={`status-pill ${approval.status === 'Approved' ? 'resolved' : approval.status === 'Rejected' ? 'closed' : 'pending-approval'}`}>{approval.status}</span>
-              {approval.status === 'Pending' && (
-                <div className="request-approval-actions">
-                  <button onClick={() => updateApproval(approval.id, 'Rejected')} type="button">Reject</button>
-                  <button className="primary-action compact" onClick={() => updateApproval(approval.id, 'Approved')} type="button">Approve</button>
-                </div>
-              )}
-            </article>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-
-  const renderTasks = () => {
-    const available = visibleTasks.filter((task) => task.status !== 'Completed')
-    return (
-      <div className="request-tasks-panel">
-        <div className="request-panel-intro">
-          <div>
-            <span className="eyebrow">Fulfilment workflow</span>
-            <h3>Tasks</h3>
-            <p>Only work that is currently available is shown. Dependent tasks stay hidden and unassigned until their prerequisite task is completed.</p>
-          </div>
-          <div className="request-task-progress"><strong>{progress.completed}/{progress.total}</strong><span>complete</span></div>
-        </div>
-
-        <div className="request-task-context">
-          <div><span className="eyebrow">Request context</span><strong>{ticket.requester}</strong><small>{ticket.requesterJobTitle || ticket.requesterDepartment || ticket.location}</small></div>
-          <div><span className="eyebrow">Requested items</span><strong>{items.map((item) => `${item.name} ×${item.quantity || 1}`).join(' · ')}</strong><small>{formatRequestCost(totalCost)} captured cost</small></div>
-        </div>
-
-        <div className="request-task-list">
-          {visibleTasks.map((task, index) => {
-            const displayStatus = taskDisplayStatus(task)
-            return (
-              <article className={`request-task-card status-${displayStatus.toLowerCase().replace(/\s+/g, '-')}`} key={task.id}>
-                <div className="request-task-index">{task.status === 'Completed' ? <CheckCircle2 size={18} /> : index + 1}</div>
-                <div className="request-task-main">
-                  <div className="request-task-title-row"><div><span>{task.id}</span><h4>{task.title}</h4></div><span className={`status-pill ${task.status === 'Completed' ? 'resolved' : task.status === 'In Progress' ? 'in-progress' : 'new'}`}>{displayStatus}</span></div>
-                  <p>{task.instructions}</p>
-                  <div className="request-task-meta">
-                    <span><Users size={14} /> {task.team}</span>
-                    <span><UserRound size={14} /> {task.assignee || 'Unassigned'}</span>
-                    <span><Clock3 size={14} /> {task.due}</span>
-                  </div>
-                  {task.status !== 'Completed' && (
-                    <div className="request-task-actions">
-                      {(!task.assignee || task.assignee === 'Unassigned') && <button onClick={() => updateTask(task.id, { assignee: 'Dana Sinclair' })} type="button"><UserCheck size={15} /> Claim task</button>}
-                      {['Ready', 'Waiting'].includes(task.status) && <button className="primary-action compact" onClick={() => updateTask(task.id, { status: 'In Progress', assignee: task.assignee === 'Unassigned' ? 'Dana Sinclair' : task.assignee })} type="button"><Wrench size={15} /> Start task</button>}
-                      {task.status === 'In Progress' && <button className="primary-action compact" onClick={() => completeTask(task)} type="button"><CheckCircle2 size={15} /> Complete task</button>}
-                    </div>
-                  )}
-                </div>
-              </article>
-            )
-          })}
-        </div>
-
-        {!visibleTasks.length && (
-          <div className="request-empty-section">
-            <Clock3 size={22} aria-hidden="true" />
-            <strong>{approvalsComplete ? 'No fulfilment work available yet' : 'Waiting for approval'}</strong>
-            <span>{approvalsComplete ? 'The workflow will release its first task when its prerequisites are satisfied.' : 'No technician tasks are exposed or assigned until the required approvals are complete.'}</span>
-          </div>
-        )}
-        {visibleTasks.length > 0 && !available.length && progress.percent < 100 && (
-          <div className="request-empty-section compact"><Clock3 size={20} /><strong>Waiting for the next workflow transition</strong></div>
-        )}
-      </div>
-    )
-  }
-
-  const renderActivity = () => (
-    <div className="request-activity-panel">
-      <div className="request-panel-intro"><div><span className="eyebrow">History</span><h3>Activity</h3><p>Keep internal fulfilment notes separate from updates intended for the requester.</p></div></div>
-      <div className="incident-activity-composer request-activity-composer">
-        <div className="incident-note-mode">
-          <button className={activityMode === 'work' ? 'active' : ''} onClick={() => setActivityMode('work')} type="button">Work note</button>
-          <button className={activityMode === 'customer' ? 'active' : ''} onClick={() => setActivityMode('customer')} type="button">Requester comment</button>
-        </div>
-        <textarea onChange={(event) => setNewComment(event.target.value)} placeholder={activityMode === 'work' ? 'Add fulfilment notes, handover details or task context' : 'Write an update the requester can see'} value={newComment} />
-        <div className="incident-composer-footer"><span>{activityMode === 'work' ? 'Visible to analysts and fulfilment teams' : 'Visible to the requester'}</span><button className="primary-action compact" onClick={() => addComment(activityMode)} type="button"><Send size={15} /> Add update</button></div>
-      </div>
-      <div className="incident-activity-timeline request-activity-timeline">
-        {ticket.comments.map((comment, index) => {
-          const lower = comment.toLowerCase()
-          const kind = lower.startsWith('customer comment') ? 'customer' : lower.startsWith('system') ? 'system' : 'work'
-          return <article className={`incident-activity-event ${kind}`} key={`${ticket.id}-request-${index}-${comment}`}><span className="incident-event-dot" /><div><header><strong>{kind === 'system' ? 'System' : 'Dana Sinclair'}</strong><span>{kind === 'customer' ? 'Requester comment' : kind === 'system' ? 'Workflow event' : 'Work note'}</span></header><p>{comment.replace(/^(Customer comment:|Work note:|System:)\s*/i, '')}</p></div></article>
-        })}
-      </div>
-    </div>
-  )
-
-  const panel = activeSection === 'items'
-    ? renderItems()
-    : activeSection === 'approvals'
-      ? renderApprovals()
-      : activeSection === 'tasks'
-        ? renderTasks()
-        : activeSection === 'activity'
-          ? renderActivity()
-          : renderOverview()
-
-  return (
-    <div className="service-request-record-v2">
-      <header className="request-record-header">
-        <div className="request-record-title">
-          <span className="eyebrow">{ticket.id}</span>
-          <h2>{ticket.title}</h2>
-          <div className="request-record-badges"><span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span><span>{ticket.service}</span><span>{ticket.priority} priority</span></div>
-        </div>
-        <div className="request-record-summary">
-          <div><span>Total cost</span><strong>{formatRequestCost(totalCost)}</strong></div>
-          <div><span>Workflow</span><strong>{progress.completed}/{progress.total}</strong><small>{progress.percent}% complete</small></div>
-        </div>
-      </header>
-
-      <div className="request-record-progress" aria-label="Request workflow progress"><span><i style={{ width: `${progress.percent}%` }} /></span></div>
-
-      <nav className="request-record-tabs" aria-label="Service request sections">
-        {serviceRequestSections.map(({ id, label, icon: Icon }) => (
-          <button aria-current={activeSection === id ? 'page' : undefined} className={activeSection === id ? 'active' : ''} key={id} onClick={() => setActiveSection(id)} type="button"><Icon size={16} aria-hidden="true" />{label}</button>
-        ))}
-      </nav>
-
-      <div className="request-record-panel">{panel}</div>
-    </div>
-  )
-}
-
-
-const problemRecordSections = [
-  { id: 'overview', label: 'Overview', icon: Inbox },
-  { id: 'investigation', label: 'Investigation', icon: Wrench },
-  { id: 'related', label: 'Related', icon: Server },
-  { id: 'known-error', label: 'Known Error', icon: AlertCircle },
-  { id: 'activity', label: 'Activity', icon: MessageSquarePlus },
-]
-
-const problemLifecycle = ['New', 'Under Investigation', 'Known Error', 'Fix in Progress', 'Resolved', 'Closed']
-
-function problemLifecycleIndex(status) {
-  if (status === 'Monitoring') return 2
-  const index = problemLifecycle.indexOf(status)
-  return index < 0 ? 0 : index
-}
-
-function ProblemRecordWorkspace({
-  addComment,
-  newComment,
-  openAssetByName,
-  openRecordTab,
-  setNewComment,
-  ticket,
-  tickets,
-  updateTicket,
-}) {
-  const [activeSection, setActiveSection] = useState('overview')
-  const lifecycleIndex = problemLifecycleIndex(ticket.status)
-  const relatedIncidents = (ticket.relatedIncidents || [])
-    .map((id) => tickets?.find((candidate) => candidate.id === id))
-    .filter(Boolean)
-  const relatedChanges = (ticket.relatedChanges || [])
-    .map((id) => tickets?.find((candidate) => candidate.id === id))
-    .filter(Boolean)
-  const knownErrorActive = ticket.knownErrorStatus && ticket.knownErrorStatus !== 'Not declared'
-
-  const setStatus = (status, nextStep) => {
-    updateTicket(ticket.id, {
-      status,
-      nextStep,
-      comments: [`System: Problem moved to ${status}.`, ...ticket.comments],
-    })
-  }
-
-  const renderOverview = () => (
-    <div className="problem-overview-grid">
-      <section className="problem-section-card problem-statement-card">
-        <div className="problem-section-heading"><span className="eyebrow">Problem statement</span><h3>Recurring issue</h3></div>
-        <p>{ticket.description}</p>
-        <div className="problem-impact-callout"><span>Impact scope</span><strong>{ticket.problemImpactScope || 'Scope still being established'}</strong></div>
-      </section>
-
-      <section className="problem-section-card">
-        <div className="problem-section-heading"><span className="eyebrow">Ownership</span><h3>Investigation owner</h3></div>
-        <div className="problem-property-grid">
-          <IncidentProperty label="Service" value={ticket.service} />
-          <IncidentProperty label="Assignment group" value={ticket.team} />
-          <IncidentProperty label="Problem owner" value={ticket.assignee} />
-          <IncidentProperty label="Priority" strong value={ticket.priority} />
-          <IncidentProperty label="Location / scope" value={ticket.location} />
-          <IncidentProperty label="Updated" value={ticket.updated} />
-        </div>
-      </section>
-
-      <section className="problem-section-card problem-next-card">
-        <div className="problem-section-heading"><span className="eyebrow">Current position</span><h3>What happens next</h3></div>
-        <p>{ticket.nextStep}</p>
-        <div className="problem-overview-counts">
-          <div><span>Related incidents</span><strong>{ticket.relatedIncidents?.length || 0}</strong></div>
-          <div><span>Affected CIs</span><strong>{ticket.linkedAssets?.length || 0}</strong></div>
-          <div><span>Known error</span><strong>{knownErrorActive ? 'Declared' : 'No'}</strong></div>
-        </div>
-      </section>
-    </div>
-  )
-
-  const renderInvestigation = () => (
-    <div className="problem-investigation-layout">
-      <section className="problem-section-card">
-        <div className="problem-section-heading"><span className="eyebrow">Working theory</span><h3>Current hypothesis</h3></div>
-        <textarea
-          className="problem-editor"
-          onChange={(event) => updateTicket(ticket.id, { problemHypothesis: event.target.value })}
-          placeholder="What do we currently believe is causing the recurring issue?"
-          value={ticket.problemHypothesis || ''}
-        />
-      </section>
-      <section className="problem-section-card">
-        <div className="problem-section-heading"><span className="eyebrow">Mitigation</span><h3>Current workaround</h3></div>
-        <textarea
-          className="problem-editor"
-          onChange={(event) => updateTicket(ticket.id, { problemWorkaround: event.target.value })}
-          placeholder="Document a safe workaround analysts can use while investigation continues."
-          value={ticket.problemWorkaround || ''}
-        />
-      </section>
-      <section className="problem-section-card">
-        <div className="problem-section-heading"><span className="eyebrow">Confirmed cause</span><h3>Root cause</h3></div>
-        <textarea
-          className="problem-editor"
-          onChange={(event) => updateTicket(ticket.id, { problemRootCause: event.target.value })}
-          placeholder="Capture the confirmed technical or process root cause."
-          value={ticket.problemRootCause || ''}
-        />
-      </section>
-      <section className="problem-section-card">
-        <div className="problem-section-heading"><span className="eyebrow">Permanent resolution</span><h3>Permanent fix</h3></div>
-        <textarea
-          className="problem-editor"
-          onChange={(event) => updateTicket(ticket.id, { problemPermanentFix: event.target.value })}
-          placeholder="Describe the permanent corrective action or linked change."
-          value={ticket.problemPermanentFix || ''}
-        />
-      </section>
-    </div>
-  )
-
-  const renderRelated = () => (
-    <div className="problem-related-grid">
-      <section className="problem-section-card">
-        <div className="problem-section-heading"><span className="eyebrow">Recurring demand</span><h3>Related incidents</h3></div>
-        <div className="problem-linked-record-list">
-          {relatedIncidents.length ? relatedIncidents.map((incident) => (
-            <button key={incident.id} onClick={() => openRecordTab?.(incident)} type="button">
-              <span><strong>{incident.id}</strong><small>{incident.title}</small></span>
-              <ChevronRight size={16} aria-hidden="true" />
-            </button>
-          )) : <div className="problem-empty-state">No linked incidents yet.</div>}
-        </div>
-      </section>
-      <section className="problem-section-card">
-        <div className="problem-section-heading"><span className="eyebrow">Configuration</span><h3>Affected CIs</h3></div>
-        <div className="problem-ci-grid">
-          {(ticket.linkedAssets?.length ? ticket.linkedAssets : ['No CI linked']).map((asset) => asset === 'No CI linked' ? (
-            <span key={asset}>{asset}</span>
-          ) : (
-            <button key={asset} onClick={() => openAssetByName?.(asset)} type="button"><Server size={15} />{asset}</button>
-          ))}
-        </div>
-      </section>
-      <section className="problem-section-card">
-        <div className="problem-section-heading"><span className="eyebrow">Corrective work</span><h3>Related changes</h3></div>
-        <div className="problem-linked-record-list">
-          {relatedChanges.length ? relatedChanges.map((change) => (
-            <button key={change.id} onClick={() => openRecordTab?.(change)} type="button">
-              <span><strong>{change.id}</strong><small>{change.title}</small></span>
-              <ChevronRight size={16} aria-hidden="true" />
-            </button>
-          )) : <div className="problem-empty-state">No corrective change linked yet.</div>}
-        </div>
-      </section>
-    </div>
-  )
-
-  const renderKnownError = () => (
-    <div className="problem-known-error-layout">
-      <section className={`problem-known-error-hero ${knownErrorActive ? 'active' : ''}`}>
-        <div><span className="eyebrow">Known error status</span><h3>{knownErrorActive ? ticket.knownErrorStatus : 'Not declared'}</h3></div>
-        <button
-          className={knownErrorActive ? 'secondary-action compact' : 'primary-action compact'}
-          onClick={() => updateTicket(ticket.id, {
-            knownErrorStatus: knownErrorActive ? 'Not declared' : 'Published internally',
-            status: knownErrorActive ? 'Under Investigation' : 'Known Error',
-            knownErrorTitle: ticket.knownErrorTitle || ticket.title,
-            comments: [`System: Known error ${knownErrorActive ? 'withdrawn' : 'declared'}.`, ...ticket.comments],
-          })}
-          type="button"
-        >
-          <AlertCircle size={16} />
-          {knownErrorActive ? 'Withdraw known error' : 'Declare known error'}
-        </button>
-      </section>
-      <section className="problem-section-card">
-        <label>Known error title<input onChange={(event) => updateTicket(ticket.id, { knownErrorTitle: event.target.value })} value={ticket.knownErrorTitle || ''} /></label>
-        <label>Published workaround<textarea onChange={(event) => updateTicket(ticket.id, { problemWorkaround: event.target.value })} value={ticket.problemWorkaround || ''} /></label>
-      </section>
-      <section className="problem-section-card">
-        <div className="problem-section-heading"><span className="eyebrow">Affected versions / scope</span><h3>Known impact</h3></div>
-        <div className="problem-version-chips">
-          {(ticket.affectedVersions?.length ? ticket.affectedVersions : ['Scope not yet defined']).map((item) => <span key={item}>{item}</span>)}
-        </div>
-        <div className="problem-kb-link"><BookOpen size={16} /><span>{ticket.knowledgeArticle || 'No knowledge article linked yet'}</span></div>
-      </section>
-    </div>
-  )
-
-  const renderActivity = () => (
-    <div className="problem-activity-layout">
-      <div className="incident-activity-composer">
-        <div className="incident-composer-heading"><span className="eyebrow">Investigation journal</span><strong>Add work note</strong></div>
-        <textarea onChange={(event) => setNewComment(event.target.value)} placeholder="Add evidence, investigation progress or handover context" value={newComment} />
-        <div className="incident-composer-footer"><span>Internal Problem Management activity</span><button className="primary-action compact" onClick={() => addComment('work')} type="button"><Send size={15} /> Add note</button></div>
-      </div>
-      <div className="incident-activity-timeline">
-        {ticket.comments.map((comment, index) => {
-          const system = comment.toLowerCase().startsWith('system:')
-          return <article className={`incident-activity-event ${system ? 'system' : 'work'}`} key={`${ticket.id}-problem-${index}-${comment}`}><span className="incident-event-dot" /><div><header><strong>{system ? 'System' : 'Dana Sinclair'}</strong><span>{system ? 'Problem event' : 'Work note'}</span></header><p>{comment.replace(/^(Work note:|System:)\s*/i, '')}</p></div></article>
-        })}
-      </div>
-    </div>
-  )
-
-  const panel = activeSection === 'investigation'
-    ? renderInvestigation()
-    : activeSection === 'related'
-      ? renderRelated()
-      : activeSection === 'known-error'
-        ? renderKnownError()
-        : activeSection === 'activity'
-          ? renderActivity()
-          : renderOverview()
-
-  return (
-    <div className="problem-record-v2">
-      <header className="problem-record-header">
-        <div className="problem-record-title">
-          <span className="eyebrow">{ticket.id}</span>
-          <h2>{ticket.title}</h2>
-          <div className="problem-record-badges"><span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span><span>{ticket.service}</span><span>{ticket.priority} priority</span></div>
-        </div>
-        <div className="problem-record-actions">
-          <button onClick={() => updateTicket(ticket.id, { assignee: 'Dana Sinclair' })} type="button"><UserCheck size={16} />Assign to me</button>
-          {ticket.status === 'New' && <button onClick={() => setStatus('Under Investigation', 'Establish evidence, scope and current hypothesis.')} type="button"><Wrench size={16} />Start investigation</button>}
-          {!knownErrorActive && !['Resolved', 'Closed'].includes(ticket.status) && <button onClick={() => { updateTicket(ticket.id, { knownErrorStatus: 'Published internally', knownErrorTitle: ticket.knownErrorTitle || ticket.title }); setStatus('Known Error', 'Publish the workaround and progress the permanent fix.') }} type="button"><AlertCircle size={16} />Known error</button>}
-          {['Known Error', 'Monitoring'].includes(ticket.status) && <button onClick={() => setStatus('Fix in Progress', 'Implement or validate the permanent corrective action.')} type="button"><Wrench size={16} />Fix in progress</button>}
-          {!['Resolved', 'Closed'].includes(ticket.status) && <button onClick={() => setStatus('Resolved', 'Monitor the permanent fix before closure.')} type="button"><CheckCircle2 size={16} />Resolve</button>}
-          {ticket.status === 'Resolved' && <button onClick={() => setStatus('Closed', 'Problem closed.')} type="button"><CheckCircle2 size={16} />Close</button>}
-        </div>
-      </header>
-
-      <div className="problem-lifecycle" aria-label="Problem lifecycle">
-        {problemLifecycle.map((status, index) => <div className={index === lifecycleIndex ? 'current' : index < lifecycleIndex ? 'complete' : ''} key={status}><span>{index < lifecycleIndex ? '✓' : index + 1}</span><strong>{status}</strong></div>)}
-      </div>
-
-      <nav className="problem-record-tabs" aria-label="Problem record sections">
-        {problemRecordSections.map(({ id, label, icon: Icon }) => <button aria-current={activeSection === id ? 'page' : undefined} className={activeSection === id ? 'active' : ''} key={id} onClick={() => setActiveSection(id)} type="button"><Icon size={16} />{label}</button>)}
-      </nav>
-      <div className="problem-record-panel">{panel}</div>
-    </div>
-  )
-}
-
-function ProblemQueueView({ openNewRecord, openRecordTab, query, setQuery, tickets }) {
-  const [quickView, setQuickView] = useState('all')
-  const [sortKey, setSortKey] = useState('updated')
-  const problems = tickets.filter((ticket) => ticket.type === 'Problem')
-  const openProblems = problems.filter((ticket) => !['Resolved', 'Closed'].includes(ticket.status))
-  const knownErrors = problems.filter((ticket) => ticket.knownErrorStatus && ticket.knownErrorStatus !== 'Not declared')
-  const relatedIncidentCount = problems.reduce((total, ticket) => total + (ticket.relatedIncidents?.length || 0), 0)
-
-  const visible = problems
-    .filter((ticket) => {
-      const needle = query.trim().toLowerCase()
-      const matchesQuery = !needle || [ticket.id, ticket.title, ticket.service, ticket.assignee, ticket.problemImpactScope].some((value) => String(value || '').toLowerCase().includes(needle))
-      if (!matchesQuery) return false
-      if (quickView === 'mine') return ticket.assignee === 'Dana Sinclair'
-      if (quickView === 'investigation') return ['New', 'Under Investigation', 'Monitoring'].includes(ticket.status)
-      if (quickView === 'known') return ticket.knownErrorStatus && ticket.knownErrorStatus !== 'Not declared'
-      if (quickView === 'no-workaround') return !ticket.problemWorkaround
-      if (quickView === 'resolved') return ['Resolved', 'Closed'].includes(ticket.status)
-      return true
-    })
-    .sort((a, b) => {
-      if (sortKey === 'priority') return priorities.indexOf(a.priority) - priorities.indexOf(b.priority)
-      if (sortKey === 'incidents') return (b.relatedIncidents?.length || 0) - (a.relatedIncidents?.length || 0)
-      return b.id.localeCompare(a.id)
-    })
-
-  const quickViews = [
-    ['all', 'All'], ['mine', 'Mine'], ['investigation', 'Investigation'], ['known', 'Known errors'], ['no-workaround', 'No workaround'], ['resolved', 'Resolved'],
-  ]
-
-  return (
-    <div className="problem-queue-v2">
-      <header className="problem-queue-header">
-        <div><span className="eyebrow">Problem Management</span><h2>Problems</h2><p>Find recurring causes, publish safe workarounds and drive permanent fixes.</p></div>
-        <button className="primary-action compact" onClick={() => openNewRecord('Problem')} type="button"><Plus size={16} />New Problem</button>
-      </header>
-      <div className="problem-queue-metrics">
-        <div><span>Open problems</span><strong>{openProblems.length}</strong></div>
-        <div><span>Known errors</span><strong>{knownErrors.length}</strong></div>
-        <div><span>Related incidents</span><strong>{relatedIncidentCount}</strong></div>
-        <div><span>Fix in progress</span><strong>{problems.filter((ticket) => ticket.status === 'Fix in Progress').length}</strong></div>
-      </div>
-      <div className="problem-queue-toolbar">
-        <label className="problem-search"><Search size={18} /><input onChange={(event) => setQuery(event.target.value)} placeholder="Search problems, services, owners..." type="search" value={query} /></label>
-        <label className="problem-sort">Sort<select onChange={(event) => setSortKey(event.target.value)} value={sortKey}><option value="updated">Updated</option><option value="priority">Priority</option><option value="incidents">Related incidents</option></select></label>
-      </div>
-      <div className="problem-quick-views">{quickViews.map(([id, label]) => <button className={quickView === id ? 'active' : ''} key={id} onClick={() => setQuickView(id)} type="button">{label}</button>)}</div>
-      <div className="problem-queue-result-line"><strong>{visible.length} problems</strong><span>{quickViews.find(([id]) => id === quickView)?.[1]}</span></div>
-
-      <div className="problem-table-wrap">
-        <table className="problem-table"><thead><tr><th>Reference</th><th>Problem</th><th>Status</th><th>Related incidents</th><th>Service</th><th>Owner</th><th>Known error</th><th>Updated</th></tr></thead><tbody>{visible.map((ticket) => <tr key={ticket.id} onClick={() => openRecordTab(ticket)}><td><button onClick={(event) => { event.stopPropagation(); openRecordTab(ticket) }} type="button">{ticket.id}</button></td><td><strong>{ticket.title}</strong><small>{ticket.problemImpactScope || ticket.location}</small></td><td><span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span></td><td><strong>{ticket.relatedIncidents?.length || 0}</strong></td><td>{ticket.service}</td><td>{ticket.assignee}</td><td>{ticket.knownErrorStatus && ticket.knownErrorStatus !== 'Not declared' ? <span className="problem-known-chip">Declared</span> : '—'}</td><td>{ticket.updated}</td></tr>)}</tbody></table>
-      </div>
-
-      <div className="problem-mobile-list">{visible.map((ticket) => <button className="problem-mobile-card" key={ticket.id} onClick={() => openRecordTab(ticket)} type="button"><div className="problem-mobile-card-top"><strong>{ticket.id}</strong><span className={`priority-label ${priorityClass(ticket.priority)}`}>{ticket.priority}</span></div><h3>{ticket.title}</h3><div className="problem-mobile-state"><span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span>{ticket.knownErrorStatus && ticket.knownErrorStatus !== 'Not declared' && <span className="problem-known-chip">Known error</span>}</div><div className="problem-mobile-meta"><span>{ticket.service} · {ticket.assignee}</span><span>{ticket.relatedIncidents?.length || 0} incidents</span></div><footer><span>Updated {ticket.updated}</span><ChevronRight size={17} /></footer></button>)}</div>
-      {!visible.length && <div className="problem-empty-state queue">No problems match this view.</div>}
-    </div>
-  )
-}
-
-const changeRecordSections = [
-  { id: 'overview', label: 'Overview', icon: Inbox },
-  { id: 'plan', label: 'Plan', icon: ListChecks },
-  { id: 'risk', label: 'Risk & Approval', icon: ClipboardCheck },
-  { id: 'schedule', label: 'Schedule', icon: CalendarClock },
-  { id: 'cis', label: 'Affected CIs', icon: Server },
-  { id: 'implementation', label: 'Implementation', icon: Wrench },
-  { id: 'activity', label: 'Activity', icon: MessageSquarePlus },
-]
-
-const changeLifecycle = ['Draft', 'Assessment', 'Pending Approval', 'Scheduled', 'Implementing', 'Review', 'Closed']
-
-function changeLifecycleIndex(status) {
-  if (status === 'CAB Review') return 2
-  if (status === 'In Progress') return 4
-  if (status === 'Approved') return 3
-  const index = changeLifecycle.indexOf(status)
-  return index < 0 ? 0 : index
-}
-
-function ChangeRecordWorkspace({ addComment, newComment, openAssetByName, openRecordTab, setNewComment, ticket, tickets, updateTicket }) {
-  const [activeSection, setActiveSection] = useState('overview')
-  const lifecycleIndex = changeLifecycleIndex(ticket.status)
-  const relatedProblems = (ticket.relatedProblems || []).map((id) => tickets?.find((candidate) => candidate.id === id)).filter(Boolean)
-
-  const transition = (status, nextStep, updates = {}) => updateTicket(ticket.id, {
-    status,
-    nextStep,
-    ...updates,
-    comments: [`System: Change moved to ${status}.`, ...ticket.comments],
-  })
-
-  const renderOverview = () => <div className="change-overview-grid">
-    <section className="change-section-card change-reason-card"><div className="change-section-heading"><span className="eyebrow">Business reason</span><h3>Why this change is needed</h3></div><p>{ticket.businessReason || ticket.description}</p><div className="change-next-step"><span>Next step</span><strong>{ticket.nextStep}</strong></div></section>
-    <section className="change-section-card"><div className="change-section-heading"><span className="eyebrow">Ownership</span><h3>Change record</h3></div><div className="problem-property-grid"><IncidentProperty label="Type" value={ticket.changeType || 'Normal'} /><IncidentProperty label="Service" value={ticket.service} /><IncidentProperty label="Owner" value={ticket.assignee} /><IncidentProperty label="Assignment group" value={ticket.team} /><IncidentProperty label="Risk" strong value={ticket.risk || 'Medium'} /><IncidentProperty label="Approval" value={ticket.approval || 'Not submitted'} /></div></section>
-    {relatedProblems.length > 0 && <section className="change-section-card"><div className="change-section-heading"><span className="eyebrow">Related Problems</span><h3>Corrective context</h3></div><div className="problem-linked-record-list">{relatedProblems.map((problem) => <button key={problem.id} onClick={() => openRecordTab?.(problem)} type="button"><span><strong>{problem.id}</strong><small>{problem.title}</small></span><ChevronRight size={16} /></button>)}</div></section>}
-  </div>
-
-  const renderPlan = () => <div className="change-plan-grid">
-    <section className="change-section-card"><div className="change-section-heading"><span className="eyebrow">Implementation</span><h3>Implementation plan</h3></div><textarea className="change-plan-editor" onChange={(event) => updateTicket(ticket.id, { implementationPlan: event.target.value })} value={ticket.implementationPlan || ''} /></section>
-    <section className="change-section-card"><div className="change-section-heading"><span className="eyebrow">Validation</span><h3>Test plan</h3></div><textarea className="change-plan-editor" onChange={(event) => updateTicket(ticket.id, { testPlan: event.target.value })} value={ticket.testPlan || ''} /></section>
-    <section className="change-section-card"><div className="change-section-heading"><span className="eyebrow">Recovery</span><h3>Backout plan</h3></div><textarea className="change-plan-editor" onChange={(event) => updateTicket(ticket.id, { backoutPlan: event.target.value })} value={ticket.backoutPlan || ''} /></section>
-  </div>
-
-  const renderRisk = () => <div className="change-risk-layout">
-    <section className="change-risk-hero"><div><span className="eyebrow">Overall risk</span><h3>{ticket.risk || 'Medium'}</h3><p>{ticket.riskSummary || 'Risk assessment still needs to be completed.'}</p></div><label>Risk<select onChange={(event) => updateTicket(ticket.id, { risk: event.target.value })} value={ticket.risk || 'Medium'}><option>Low</option><option>Medium</option><option>High</option><option>Critical</option></select></label></section>
-    <section className="change-section-card"><div className="change-section-heading"><span className="eyebrow">Approval route</span><h3>{ticket.approvalRoute || 'CAB'}</h3></div><div className="change-approval-status"><span>Current decision</span><strong>{ticket.approval || 'Not submitted'}</strong></div><div className="change-approval-actions"><button className="secondary-action compact" onClick={() => transition('Pending Approval', 'Awaiting the configured approval route.', { approval: 'Pending' })} type="button"><ClipboardCheck size={16} />Submit</button><button className="primary-action compact" onClick={() => transition('Scheduled', 'Confirm implementation readiness for the approved window.', { approval: 'Approved' })} type="button"><CheckCircle2 size={16} />Approve</button><button className="secondary-action compact" onClick={() => updateTicket(ticket.id, { approval: 'Rejected', status: 'Assessment', nextStep: 'Address approval feedback before resubmitting.' })} type="button"><AlertCircle size={16} />Reject</button></div></section>
-  </div>
-
-  const renderSchedule = () => <div className="change-schedule-layout"><section className="change-schedule-hero"><div><span className="eyebrow">Implementation window</span><h3>{ticket.window || 'To be scheduled'}</h3><p>{ticket.downtime || 'No outage statement recorded'}</p></div><CalendarClock size={28} /></section><section className="change-section-card"><div className="change-schedule-grid"><label>Planned start<input onChange={(event) => updateTicket(ticket.id, { plannedStart: event.target.value, window: `${event.target.value || 'TBC'} → ${ticket.plannedEnd || 'TBC'}` })} value={ticket.plannedStart || ''} /></label><label>Planned end<input onChange={(event) => updateTicket(ticket.id, { plannedEnd: event.target.value, window: `${ticket.plannedStart || 'TBC'} → ${event.target.value || 'TBC'}` })} value={ticket.plannedEnd || ''} /></label><label className="span-two">Expected customer impact<input onChange={(event) => updateTicket(ticket.id, { downtime: event.target.value })} value={ticket.downtime || ''} /></label></div></section></div>
-
-  const renderCis = () => <div className="change-ci-layout"><section className="change-section-card"><div className="change-section-heading"><span className="eyebrow">Configuration scope</span><h3>Affected configuration items</h3></div><div className="change-ci-grid">{(ticket.linkedAssets?.length ? ticket.linkedAssets : ['No CI linked']).map((asset) => asset === 'No CI linked' ? <span key={asset}>{asset}</span> : <button key={asset} onClick={() => openAssetByName?.(asset)} type="button"><Server size={16} /><strong>{asset}</strong><small>Open configuration item</small></button>)}</div></section><section className="change-section-card"><div className="change-section-heading"><span className="eyebrow">Service impact</span><h3>{ticket.service}</h3></div><p>{ticket.description}</p></section></div>
-
-  const renderImplementation = () => <div className="change-implementation-layout"><section className="change-section-card"><div className="change-section-heading"><span className="eyebrow">Execution log</span><h3>Implementation notes</h3></div><textarea className="change-plan-editor" onChange={(event) => updateTicket(ticket.id, { implementationNotes: event.target.value })} placeholder="Record implementation evidence, timings and deviations from plan" value={ticket.implementationNotes || ''} /></section><section className="change-section-card"><div className="change-section-heading"><span className="eyebrow">Post implementation</span><h3>Review outcome</h3></div><textarea className="change-plan-editor" onChange={(event) => updateTicket(ticket.id, { reviewOutcome: event.target.value })} placeholder="Capture success criteria, issues, lessons learned and follow-up actions" value={ticket.reviewOutcome || ''} /></section></div>
-
-  const renderActivity = () => <div className="change-activity-layout"><div className="incident-activity-composer"><div className="incident-composer-heading"><span className="eyebrow">Change journal</span><strong>Add work note</strong></div><textarea onChange={(event) => setNewComment(event.target.value)} placeholder="Add CAB context, implementation evidence or review notes" value={newComment} /><div className="incident-composer-footer"><span>Internal change activity</span><button className="primary-action compact" onClick={() => addComment('work')} type="button"><Send size={15} />Add note</button></div></div><div className="incident-activity-timeline">{ticket.comments.map((comment, index) => { const system = comment.toLowerCase().startsWith('system:'); return <article className={`incident-activity-event ${system ? 'system' : 'work'}`} key={`${ticket.id}-change-${index}-${comment}`}><span className="incident-event-dot" /><div><header><strong>{system ? 'System' : 'Dana Sinclair'}</strong><span>{system ? 'Change event' : 'Work note'}</span></header><p>{comment.replace(/^(Work note:|System:)\s*/i, '')}</p></div></article> })}</div></div>
-
-  const panel = activeSection === 'plan' ? renderPlan() : activeSection === 'risk' ? renderRisk() : activeSection === 'schedule' ? renderSchedule() : activeSection === 'cis' ? renderCis() : activeSection === 'implementation' ? renderImplementation() : activeSection === 'activity' ? renderActivity() : renderOverview()
-
-  return <div className="change-record-v2"><header className="change-record-header"><div className="change-record-title"><span className="eyebrow">{ticket.id}</span><h2>{ticket.title}</h2><div className="change-record-badges"><span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span><span>{ticket.changeType || 'Normal'} change</span><span className={`change-risk-badge ${String(ticket.risk || 'Medium').toLowerCase()}`}>{ticket.risk || 'Medium'} risk</span></div></div><div className="change-record-actions"><button onClick={() => updateTicket(ticket.id, { assignee: 'Dana Sinclair' })} type="button"><UserCheck size={16} />Assign to me</button>{ticket.status === 'Draft' && <button onClick={() => transition('Assessment', 'Complete risk, plan and schedule assessment before approval.')} type="button"><ListChecks size={16} />Start assessment</button>}{ticket.status === 'Assessment' && <button onClick={() => transition('Pending Approval', 'Awaiting the configured approval route.', { approval: 'Pending' })} type="button"><ClipboardCheck size={16} />Submit</button>}{['Pending Approval', 'CAB Review'].includes(ticket.status) && <button onClick={() => transition('Scheduled', 'Approved. Confirm readiness for the implementation window.', { approval: 'Approved' })} type="button"><CheckCircle2 size={16} />Approve</button>}{ticket.status === 'Scheduled' && <button onClick={() => transition('Implementing', 'Execute the approved implementation plan and capture evidence.')} type="button"><Wrench size={16} />Implement</button>}{ticket.status === 'Implementing' && <button onClick={() => transition('Review', 'Complete post-implementation validation and review.')} type="button"><ClipboardCheck size={16} />Review</button>}{ticket.status === 'Review' && <button onClick={() => transition('Closed', 'Change closed after successful review.')} type="button"><CheckCircle2 size={16} />Close</button>}</div></header><div className="change-lifecycle" aria-label="Change lifecycle">{changeLifecycle.map((status, index) => <div className={index === lifecycleIndex ? 'current' : index < lifecycleIndex ? 'complete' : ''} key={status}><span>{index < lifecycleIndex ? '✓' : index + 1}</span><strong>{status}</strong></div>)}</div><nav className="change-record-tabs" aria-label="Change record sections">{changeRecordSections.map(({ id, label, icon: Icon }) => <button aria-current={activeSection === id ? 'page' : undefined} className={activeSection === id ? 'active' : ''} key={id} onClick={() => setActiveSection(id)} type="button"><Icon size={16} />{label}</button>)}</nav><div className="change-record-panel">{panel}</div></div>
-}
-
 
 export function TicketsView({
   addComment,
@@ -3748,12 +2873,14 @@ export function TicketsView({
   if (moduleConfig?.type === 'Service Request') {
     return (
       <ServiceRequestQueueView
-        filteredTickets={filteredTickets}
+        filters={filters}
         openNewRecord={openNewRecord}
         openRecordTab={openRecordTab}
         query={query}
+        setFilters={setFilters}
         setQuery={setQuery}
         tickets={tickets}
+        updateTicket={updateTicket}
       />
     )
   }
@@ -3761,11 +2888,14 @@ export function TicketsView({
   if (moduleConfig?.type === 'Problem') {
     return (
       <ProblemQueueView
+        filters={filters}
         openNewRecord={openNewRecord}
         openRecordTab={openRecordTab}
         query={query}
+        setFilters={setFilters}
         setQuery={setQuery}
         tickets={tickets}
+        updateTicket={updateTicket}
       />
     )
   }
@@ -3958,38 +3088,36 @@ function userInitials(name) {
     .toUpperCase()
 }
 
-function IncidentIntakeView({
+
+function UnifiedNewRecordForm({
   handleTicketSubmit,
   hasUnsavedChanges,
+  onRecordTypeChange,
   setTicketDraft,
   ticketDraft,
 }) {
-  const [userQuery, setUserQuery] = useState('')
-  const selectedUser = ticketDraft.requesterId
-    ? demoUsers.find((user) => user.id === ticketDraft.requesterId)
-    : null
-  const normalizedQuery = userQuery.trim().toLowerCase()
-  const userResults = normalizedQuery
-    ? demoUsers
-        .filter((user) =>
-          [
-            user.name,
-            user.email,
-            user.staffNumber,
-            user.department,
-            user.location,
-          ]
-            .join(' ')
-            .toLowerCase()
-            .includes(normalizedQuery),
-        )
-        .slice(0, 6)
-    : []
+  const recordType = ticketDraft.type || 'Incident'
+  const selectedTemplate = serviceRequestCatalogTemplates.find((template) => template.id === ticketDraft.requestTemplateId)
+  const selectedUser = ticketDraft.requesterId ? demoUsers.find((user) => user.id === ticketDraft.requesterId) : null
+  const requestCost = (ticketDraft.requestedItems || []).reduce((sum, item) => sum + Number(item.unitCost || 0) * Number(item.quantity || 1), 0)
+  const meta = unifiedRecordMeta[recordType] || unifiedRecordMeta.Incident
 
-  const selectUser = (user) => {
-    setTicketDraft({
-      ...ticketDraft,
-      type: 'Incident',
+  const update = (patch) => setTicketDraft({ ...ticketDraft, ...patch })
+  const changeType = (nextType) => {
+    if (nextType === recordType) return
+    update({
+      type: nextType,
+      priority: nextType === 'Change' ? (ticketDraft.changeRisk || 'Medium') : ticketDraft.priority,
+    })
+    onRecordTypeChange?.(nextType)
+  }
+  const selectRequester = (value) => {
+    const user = demoUsers.find((item) => item.id === value)
+    if (!user) {
+      update({ requesterId: '', requester: value })
+      return
+    }
+    update({
       requesterId: user.id,
       requester: user.name,
       requesterEmail: user.email,
@@ -3999,284 +3127,145 @@ function IncidentIntakeView({
       requesterLocation: user.location,
       requesterManager: user.manager,
     })
-    setUserQuery('')
   }
-
-  const clearUser = () => {
-    setTicketDraft({
-      ...ticketDraft,
-      requesterId: '',
-      requester: '',
-      requesterEmail: '',
-      requesterStaffNumber: '',
-      requesterJobTitle: '',
-      requesterDepartment: '',
-      requesterLocation: '',
-      requesterManager: '',
+  const selectRequestTemplate = (templateId) => {
+    const template = serviceRequestCatalogTemplates.find((item) => item.id === templateId)
+    if (!template) {
+      update({ requestTemplateId: '', requestedItems: [], requestApprovals: [], requestTasks: [] })
+      return
+    }
+    const approvals = template.approvals.map((approval) => ({
+      ...approval,
+      approver: approval.approver === 'Line manager' ? ticketDraft.requesterManager || 'Line manager' : approval.approver,
+    }))
+    update({
+      requestTemplateId: template.id,
+      title: ticketDraft.title || template.title,
+      service: template.service,
+      team: template.team,
+      priority: 'Medium',
+      requestedItems: template.items.map((item) => ({ ...item })),
+      requestApprovals: approvals,
+      requestTasks: template.tasks.map((task) => ({ ...task })),
     })
-    setUserQuery('')
   }
-
-  const updateIncidentField = (field, value) => {
-    const next = { ...ticketDraft, [field]: value }
-    if (field === 'impact' || field === 'urgency') {
-      next.priority = incidentPriority(
-        field === 'impact' ? value : next.impact,
-        field === 'urgency' ? value : next.urgency,
-      )
-    }
-    if (field === 'service') {
-      next.category = incidentServices.find((service) => service.name === value)?.categories[0] || ''
-    }
-    setTicketDraft(next)
-  }
-
-  const activeService =
-    incidentServices.find((service) => service.name === ticketDraft.service) || incidentServices[0]
 
   return (
-    <div className="new-record-page incident-intake-page">
-      <section className="incident-intake-shell">
-        <header className="incident-intake-header">
+    <div className="unified-new-record-page">
+      <section className="unified-new-record-shell">
+        <header className="unified-new-record-header">
           <div>
-            <span className="eyebrow">Create incident</span>
-            <h2>New Incident</h2>
-            <p>Identify the affected user, capture the issue, then submit it into the same workspace tab.</p>
+            <span className="eyebrow">Create record</span>
+            <h2>New record</h2>
+            <p>Use one creation form across ITSM. The fields below adapt to the selected record type.</p>
           </div>
           {hasUnsavedChanges && <span className="draft-status">Unsaved changes</span>}
         </header>
 
-        <ol className="incident-stepper" aria-label="Incident creation progress">
-          <li className="complete">
-            <span>1</span>
-            <div>
-              <strong>Find user</strong>
-              <small>Name, email or staff number</small>
-            </div>
-          </li>
-          <li className={selectedUser ? 'active' : ''}>
-            <span>2</span>
-            <div>
-              <strong>Incident details</strong>
-              <small>Impact and symptoms</small>
-            </div>
-          </li>
-          <li>
-            <span>3</span>
-            <div>
-              <strong>Submitted</strong>
-              <small>Incident workspace</small>
-            </div>
-          </li>
-        </ol>
+        <nav className="unified-record-type-picker" aria-label="Record type">
+          {unifiedRecordTypes.map((type) => (
+            <button className={recordType === type ? 'active' : ''} key={type} onClick={() => changeType(type)} type="button">
+              <span className={`record-type-mark ${type.toLowerCase().replace(/\s+/g, '-')}`}>{type === 'Service Request' ? 'SR' : type[0]}</span>
+              <span><strong>{type}</strong><small>{unifiedRecordMeta[type].description}</small></span>
+              {recordType === type && <CheckCircle2 size={17} aria-hidden="true" />}
+            </button>
+          ))}
+        </nav>
 
-        {!selectedUser ? (
-          <section className="incident-stage-card user-lookup-stage">
-            <div className="incident-stage-heading">
-              <span className="stage-number">1</span>
-              <div>
-                <span className="eyebrow">Affected user</span>
-                <h3>Who is experiencing the issue?</h3>
-                <p>Search the people directory before recording any incident information.</p>
-              </div>
+        <form className="unified-new-record-form" onSubmit={handleTicketSubmit}>
+          <section className="unified-form-section">
+            <div className="unified-form-section-heading"><span>1</span><div><strong>Record details</strong><small>Common information used by every ITSM record.</small></div></div>
+            <div className="unified-form-grid two">
+              <label>Record type<select value={recordType} onChange={(event) => changeType(event.target.value)}>{unifiedRecordTypes.map((type) => <option key={type}>{type}</option>)}</select></label>
+              <label>Priority<select value={ticketDraft.priority} onChange={(event) => update({ priority: event.target.value })}>{priorities.map((priority) => <option key={priority}>{priority}</option>)}</select></label>
             </div>
-
-            <label className="incident-user-search">
-              <Search size={20} aria-hidden="true" />
-              <input
-                autoFocus
-                onChange={(event) => setUserQuery(event.target.value)}
-                placeholder="Search name, email, staff number, department..."
-                type="search"
-                value={userQuery}
-              />
-            </label>
-
-            {!normalizedQuery ? (
-              <div className="incident-search-empty">
-                <UserRound size={28} aria-hidden="true" />
-                <strong>Start typing to find a user</strong>
-                <span>Try “Eleanor”, “HC-10482” or an email address.</span>
-              </div>
-            ) : userResults.length ? (
-              <div className="incident-user-results" aria-live="polite">
-                {userResults.map((user) => (
-                  <button key={user.id} onClick={() => selectUser(user)} type="button">
-                    <span className="directory-avatar">{userInitials(user.name)}</span>
-                    <span className="directory-primary">
-                      <strong>{user.name}</strong>
-                      <small>{user.email}</small>
-                    </span>
-                    <span className="directory-secondary">
-                      <strong>{user.staffNumber}</strong>
-                      <small>{user.jobTitle}</small>
-                    </span>
-                    <span className="directory-location">
-                      <strong>{user.department}</strong>
-                      <small>{user.location}</small>
-                    </span>
-                    <ChevronRight size={18} aria-hidden="true" />
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <div className="incident-search-empty">
-                <Search size={28} aria-hidden="true" />
-                <strong>No matching users</strong>
-                <span>Check the spelling, email address or staff number and try again.</span>
-              </div>
-            )}
+            <label>{recordType === 'Change' ? 'Change summary' : recordType === 'Problem' ? 'Problem summary' : 'Summary'}<input autoFocus required value={ticketDraft.title} onChange={(event) => update({ title: event.target.value })} placeholder={`Short ${meta.singular.toLowerCase()} summary`} /></label>
+            <div className="unified-form-grid two">
+              <label>Requester
+                <select required value={ticketDraft.requesterId || ticketDraft.requester} onChange={(event) => selectRequester(event.target.value)}>
+                  <option value="">Select person or enter below</option>
+                  {demoUsers.map((user) => <option key={user.id} value={user.id}>{user.name} · {user.department}</option>)}
+                  {ticketDraft.requester && !ticketDraft.requesterId && <option value={ticketDraft.requester}>{ticketDraft.requester}</option>}
+                </select>
+              </label>
+              <label>Requester / team override<input value={ticketDraft.requesterId ? '' : ticketDraft.requester} onChange={(event) => update({ requesterId: '', requester: event.target.value })} placeholder="Use when the requester is not in People" /></label>
+            </div>
+            {selectedUser && <div className="unified-requester-summary"><span className="directory-avatar">{userInitials(selectedUser.name)}</span><div><strong>{selectedUser.name}</strong><small>{selectedUser.jobTitle} · {selectedUser.department} · {selectedUser.location}</small></div><span>{selectedUser.email}</span></div>}
+            <div className="unified-form-grid three">
+              <label>Service<select value={ticketDraft.service} onChange={(event) => update({ service: event.target.value })}>{['Collaboration', 'Identity', 'Hardware', 'Network Security', 'Wireless', 'Access', 'Print'].map((service) => <option key={service}>{service}</option>)}</select></label>
+              <label>Assignment group<select value={ticketDraft.team} onChange={(event) => update({ team: event.target.value })}>{teams.map((team) => <option key={team}>{team}</option>)}</select></label>
+              <label>Category<input value={ticketDraft.category || ''} onChange={(event) => update({ category: event.target.value })} placeholder="Classification" /></label>
+            </div>
           </section>
-        ) : (
-          <div className="incident-details-layout">
-            <aside className="incident-requester-card">
-              <div className="incident-stage-heading compact">
-                <span className="stage-number complete">1</span>
-                <div>
-                  <span className="eyebrow">Affected user</span>
-                  <h3>{selectedUser.name}</h3>
-                </div>
+
+          {recordType === 'Incident' && (
+            <section className="unified-form-section">
+              <div className="unified-form-section-heading"><span>2</span><div><strong>Incident impact</strong><small>Capture impact and urgency so the service desk can prioritise correctly.</small></div></div>
+              <div className="unified-form-grid three">
+                <label>Impact<select value={ticketDraft.impact} onChange={(event) => { const impact = event.target.value; update({ impact, priority: incidentPriority(impact, ticketDraft.urgency) }) }}><option>Low</option><option>Medium</option><option>High</option></select></label>
+                <label>Urgency<select value={ticketDraft.urgency} onChange={(event) => { const urgency = event.target.value; update({ urgency, priority: incidentPriority(ticketDraft.impact, urgency) }) }}><option>Low</option><option>Medium</option><option>High</option></select></label>
+                <label>Calculated priority<input readOnly value={ticketDraft.priority} /></label>
               </div>
-
-              <div className="requester-profile">
-                <span className="directory-avatar large">{userInitials(selectedUser.name)}</span>
-                <div>
-                  <strong>{selectedUser.name}</strong>
-                  <span>{selectedUser.jobTitle}</span>
-                </div>
-              </div>
-
-              <dl className="requester-facts">
-                <div><dt>Email</dt><dd>{selectedUser.email}</dd></div>
-                <div><dt>Staff number</dt><dd>{selectedUser.staffNumber}</dd></div>
-                <div><dt>Department</dt><dd>{selectedUser.department}</dd></div>
-                <div><dt>Location</dt><dd>{selectedUser.location}</dd></div>
-                <div><dt>Manager</dt><dd>{selectedUser.manager}</dd></div>
-              </dl>
-
-              <button className="secondary-action full-width" onClick={clearUser} type="button">
-                Change user
-              </button>
-            </aside>
-
-            <section className="incident-stage-card incident-form-stage">
-              <div className="incident-stage-heading">
-                <span className="stage-number">2</span>
-                <div>
-                  <span className="eyebrow">Incident information</span>
-                  <h3>What is happening?</h3>
-                  <p>Capture enough detail for triage without leaving this workspace.</p>
-                </div>
-              </div>
-
-              <form className="new-record-form incident-form" onSubmit={handleTicketSubmit}>
-                <label>
-                  Short description
-                  <input
-                    autoFocus
-                    onChange={(event) => updateIncidentField('title', event.target.value)}
-                    placeholder="Briefly describe the issue"
-                    value={ticketDraft.title}
-                  />
-                </label>
-
-                <label>
-                  Description
-                  <textarea
-                    onChange={(event) => updateIncidentField('description', event.target.value)}
-                    placeholder="Symptoms, business impact, error messages and what the user was trying to do"
-                    value={ticketDraft.description}
-                  />
-                </label>
-
-                <div className="form-row">
-                  <label>
-                    Service
-                    <select
-                      onChange={(event) => updateIncidentField('service', event.target.value)}
-                      value={ticketDraft.service}
-                    >
-                      {incidentServices.map((service) => (
-                        <option key={service.name}>{service.name}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    Category
-                    <select
-                      onChange={(event) => updateIncidentField('category', event.target.value)}
-                      value={ticketDraft.category}
-                    >
-                      {activeService.categories.map((category) => (
-                        <option key={category}>{category}</option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-
-                <div className="incident-priority-grid">
-                  <label>
-                    Impact
-                    <select
-                      onChange={(event) => updateIncidentField('impact', event.target.value)}
-                      value={ticketDraft.impact}
-                    >
-                      {['High', 'Medium', 'Low'].map((value) => <option key={value}>{value}</option>)}
-                    </select>
-                  </label>
-                  <label>
-                    Urgency
-                    <select
-                      onChange={(event) => updateIncidentField('urgency', event.target.value)}
-                      value={ticketDraft.urgency}
-                    >
-                      {['High', 'Medium', 'Low'].map((value) => <option key={value}>{value}</option>)}
-                    </select>
-                  </label>
-                  <div className="calculated-priority" aria-live="polite">
-                    <span>Calculated priority</span>
-                    <strong className={`priority-text ${priorityClass(ticketDraft.priority)}`}>
-                      {ticketDraft.priority}
-                    </strong>
-                  </div>
-                </div>
-
-                <div className="form-row">
-                  <label>
-                    Assignment group
-                    <select
-                      onChange={(event) => updateIncidentField('team', event.target.value)}
-                      value={ticketDraft.team}
-                    >
-                      {teams.map((team) => <option key={team}>{team}</option>)}
-                    </select>
-                  </label>
-                  <label>
-                    Affected location
-                    <input readOnly value={ticketDraft.requesterLocation || selectedUser.location} />
-                  </label>
-                </div>
-
-                <div className="incident-submit-strip">
-                  <div>
-                    <span className="eyebrow">Next</span>
-                    <strong>The tab will become the submitted incident.</strong>
-                  </div>
-                  <button className="primary-action" type="submit">
-                    <Plus size={17} aria-hidden="true" />
-                    Create Incident
-                  </button>
-                </div>
-              </form>
+              <label>Description<textarea rows="6" value={ticketDraft.description} onChange={(event) => update({ description: event.target.value })} placeholder="Symptoms, impact, affected users and troubleshooting already completed" /></label>
             </section>
+          )}
+
+          {recordType === 'Service Request' && (
+            <section className="unified-form-section">
+              <div className="unified-form-section-heading"><span>2</span><div><strong>Catalogue & fulfilment</strong><small>Select a service to snapshot requested items, cost, approvals and workflow tasks.</small></div></div>
+              <label>Catalogue service<select value={ticketDraft.requestTemplateId || ''} onChange={(event) => selectRequestTemplate(event.target.value)}><option value="">Select catalogue service</option>{serviceRequestCatalogTemplates.map((template) => <option key={template.id} value={template.id}>{template.title}</option>)}</select></label>
+              {selectedTemplate && (
+                <div className="unified-catalogue-summary">
+                  <div><span className="eyebrow">Selected service</span><strong>{selectedTemplate.title}</strong><p>{selectedTemplate.description}</p></div>
+                  <div className="unified-catalogue-cost"><span>Snapshot cost</span><strong>£{requestCost.toLocaleString('en-GB')}</strong></div>
+                  <div className="unified-catalogue-items">{ticketDraft.requestedItems.map((item) => <div key={item.id}><span><strong>{item.name}</strong><small>{item.category} · Qty {item.quantity || 1}</small></span><strong>£{(Number(item.unitCost || 0) * Number(item.quantity || 1)).toLocaleString('en-GB')}</strong></div>)}</div>
+                  <div className="unified-catalogue-flow"><span>{ticketDraft.requestApprovals.length} approval{ticketDraft.requestApprovals.length === 1 ? '' : 's'}</span><span>{ticketDraft.requestTasks.length} fulfilment task{ticketDraft.requestTasks.length === 1 ? '' : 's'}</span></div>
+                </div>
+              )}
+              <div className="unified-form-grid two"><label>Cost centre<input value={ticketDraft.requestCostCentre || ''} onChange={(event) => update({ requestCostCentre: event.target.value })} placeholder="Optional" /></label><label>Required by<input type="date" value={ticketDraft.requestRequiredBy || ''} onChange={(event) => update({ requestRequiredBy: event.target.value })} /></label></div>
+              <label>Request details<textarea rows="5" value={ticketDraft.description} onChange={(event) => update({ description: event.target.value })} placeholder="Business need, options, delivery location or other fulfilment information" /></label>
+            </section>
+          )}
+
+          {recordType === 'Problem' && (
+            <section className="unified-form-section">
+              <div className="unified-form-section-heading"><span>2</span><div><strong>Investigation context</strong><small>Capture the recurring pattern, evidence and current theory.</small></div></div>
+              <label>Problem description<textarea rows="5" value={ticketDraft.description} onChange={(event) => update({ description: event.target.value })} placeholder="Recurring symptoms, pattern and business impact" /></label>
+              <div className="unified-form-grid two"><label>Impact scope<input value={ticketDraft.problemImpactScope || ''} onChange={(event) => update({ problemImpactScope: event.target.value })} placeholder="Users, sites, services or versions affected" /></label><label>Related incidents<input value={ticketDraft.problemRelatedIncidentsText || ''} onChange={(event) => update({ problemRelatedIncidentsText: event.target.value })} placeholder="INC-1032, INC-1044" /></label></div>
+              <div className="unified-form-grid two"><label>Initial hypothesis<textarea rows="4" value={ticketDraft.problemHypothesis || ''} onChange={(event) => update({ problemHypothesis: event.target.value })} placeholder="Current root-cause theory" /></label><label>Known workaround<textarea rows="4" value={ticketDraft.problemWorkaround || ''} onChange={(event) => update({ problemWorkaround: event.target.value })} placeholder="Safe mitigation already known" /></label></div>
+            </section>
+          )}
+
+          {recordType === 'Change' && (
+            <>
+              <section className="unified-form-section">
+                <div className="unified-form-section-heading"><span>2</span><div><strong>Change assessment</strong><small>Define the change type, risk, approval route and affected scope.</small></div></div>
+                <div className="unified-form-grid three"><label>Change type<select value={ticketDraft.changeType || 'Normal'} onChange={(event) => update({ changeType: event.target.value })}><option>Standard</option><option>Normal</option><option>Emergency</option></select></label><label>Risk<select value={ticketDraft.changeRisk || 'Medium'} onChange={(event) => update({ changeRisk: event.target.value, priority: event.target.value })}><option>Low</option><option>Medium</option><option>High</option><option>Critical</option></select></label><label>Approval route<select value={ticketDraft.changeApprovalRoute || 'CAB'} onChange={(event) => update({ changeApprovalRoute: event.target.value })}><option>CAB</option><option>Service owner</option><option>Security approval</option><option>Emergency CAB</option></select></label></div>
+                <label>Affected CIs<input value={ticketDraft.changeAffectedCisText || ''} onChange={(event) => update({ changeAffectedCisText: event.target.value })} placeholder="FW-EDGE-A, M365-TENANT" /></label>
+                <label>Business reason<textarea rows="4" value={ticketDraft.changeBusinessReason || ''} onChange={(event) => update({ changeBusinessReason: event.target.value, description: event.target.value })} placeholder="Why the change is required and the expected outcome" /></label>
+              </section>
+              <section className="unified-form-section">
+                <div className="unified-form-section-heading"><span>3</span><div><strong>Plan & schedule</strong><small>Capture implementation, validation, recovery and the proposed window.</small></div></div>
+                <label>Implementation plan<textarea rows="5" value={ticketDraft.changeImplementationPlan || ''} onChange={(event) => update({ changeImplementationPlan: event.target.value })} placeholder="Ordered implementation steps" /></label>
+                <div className="unified-form-grid two"><label>Test plan<textarea rows="4" value={ticketDraft.changeTestPlan || ''} onChange={(event) => update({ changeTestPlan: event.target.value })} placeholder="How success will be validated" /></label><label>Backout plan<textarea rows="4" value={ticketDraft.changeBackoutPlan || ''} onChange={(event) => update({ changeBackoutPlan: event.target.value })} placeholder="How service will be restored if validation fails" /></label></div>
+                <div className="unified-form-grid three"><label>Planned start<input type="datetime-local" value={ticketDraft.changePlannedStart || ''} onChange={(event) => update({ changePlannedStart: event.target.value })} /></label><label>Planned end<input type="datetime-local" value={ticketDraft.changePlannedEnd || ''} onChange={(event) => update({ changePlannedEnd: event.target.value })} /></label><label>Expected impact<input value={ticketDraft.changeDowntime || ''} onChange={(event) => update({ changeDowntime: event.target.value })} placeholder="No outage expected" /></label></div>
+              </section>
+            </>
+          )}
+
+          <div className="unified-new-record-submit">
+            <div><span className="eyebrow">Create {recordType}</span><strong>The submitted record will replace this New record tab.</strong></div>
+            <button className="primary-action" type="submit"><Plus size={17} aria-hidden="true" />Create {recordType}</button>
           </div>
-        )}
+        </form>
       </section>
     </div>
   )
 }
 
-
+function IncidentIntakeView(props) {
+  return <UnifiedNewRecordForm {...props} />
+}
 
 const serviceRequestCatalogTemplates = [
   {
@@ -4357,212 +3346,17 @@ const serviceRequestCatalogTemplates = [
   },
 ]
 
-function ServiceRequestIntakeView({
-  handleTicketSubmit,
-  hasUnsavedChanges,
-  setTicketDraft,
-  ticketDraft,
-}) {
-  const [userQuery, setUserQuery] = useState('')
-  const selectedUser = ticketDraft.requesterId
-    ? demoUsers.find((user) => user.id === ticketDraft.requesterId)
-    : null
-  const selectedTemplate = serviceRequestCatalogTemplates.find((template) => template.id === ticketDraft.requestTemplateId)
-  const normalizedQuery = userQuery.trim().toLowerCase()
-  const userResults = normalizedQuery
-    ? demoUsers.filter((user) => [user.name, user.email, user.staffNumber, user.department, user.location].join(' ').toLowerCase().includes(normalizedQuery)).slice(0, 6)
-    : []
-
-  const selectUser = (user) => {
-    setTicketDraft({
-      ...ticketDraft,
-      type: 'Service Request',
-      requesterId: user.id,
-      requester: user.name,
-      requesterEmail: user.email,
-      requesterStaffNumber: user.staffNumber,
-      requesterJobTitle: user.jobTitle,
-      requesterDepartment: user.department,
-      requesterLocation: user.location,
-      requesterManager: user.manager,
-    })
-    setUserQuery('')
-  }
-
-  const clearUser = () => {
-    setTicketDraft({
-      ...ticketDraft,
-      requesterId: '', requester: '', requesterEmail: '', requesterStaffNumber: '', requesterJobTitle: '', requesterDepartment: '', requesterLocation: '', requesterManager: '',
-    })
-  }
-
-  const selectTemplate = (template) => {
-    const approvals = template.approvals.map((approval) => ({
-      ...approval,
-      approver: approval.approver === 'Line manager' ? ticketDraft.requesterManager || 'Line manager' : approval.approver,
-    }))
-    setTicketDraft({
-      ...ticketDraft,
-      type: 'Service Request',
-      requestTemplateId: template.id,
-      title: template.title,
-      service: template.service,
-      team: template.team,
-      priority: 'Medium',
-      requestedItems: template.items.map((item) => ({ ...item })),
-      requestApprovals: approvals,
-      requestTasks: template.tasks.map((task) => ({ ...task })),
-    })
-  }
-
-  const templateCost = selectedTemplate
-    ? selectedTemplate.items.reduce((sum, item) => sum + Number(item.unitCost || 0) * Number(item.quantity || 1), 0)
-    : 0
-
-  return (
-    <div className="new-record-page service-request-intake-page">
-      <section className="service-request-intake-shell">
-        <header className="incident-intake-header request-intake-header">
-          <div><span className="eyebrow">Create request</span><h2>New Service Request</h2><p>Identify the requester, select a catalogue service, then capture the fulfilment information.</p></div>
-          {hasUnsavedChanges && <span className="draft-status">Unsaved changes</span>}
-        </header>
-
-        <ol className="incident-stepper request-stepper" aria-label="Service request creation progress">
-          <li className={selectedUser ? 'complete' : 'active'}><span>1</span><div><strong>Find requester</strong><small>Name, email or staff number</small></div></li>
-          <li className={selectedUser && selectedTemplate ? 'complete' : selectedUser ? 'active' : ''}><span>2</span><div><strong>Choose service</strong><small>Catalogue item and cost</small></div></li>
-          <li className={selectedUser && selectedTemplate ? 'active' : ''}><span>3</span><div><strong>Request details</strong><small>Submit into fulfilment</small></div></li>
-        </ol>
-
-        {!selectedUser ? (
-          <section className="incident-stage-card user-lookup-stage">
-            <div className="incident-stage-heading"><span className="stage-number">1</span><div><span className="eyebrow">Requester</span><h3>Who is this request for?</h3><p>Search the people directory before selecting the service.</p></div></div>
-            <label className="incident-user-search"><Search size={20} /><input autoFocus onChange={(event) => setUserQuery(event.target.value)} placeholder="Search name, email, staff number, department..." type="search" value={userQuery} /></label>
-            {!normalizedQuery ? (
-              <div className="incident-search-empty"><UserRound size={28} /><strong>Start typing to find a user</strong><span>Try “Marcus”, “HC-10177” or an email address.</span></div>
-            ) : userResults.length ? (
-              <div className="incident-user-results">
-                {userResults.map((user) => (
-                  <button key={user.id} onClick={() => selectUser(user)} type="button"><span className="directory-avatar">{userInitials(user.name)}</span><span className="directory-primary"><strong>{user.name}</strong><small>{user.email}</small></span><span className="directory-secondary"><strong>{user.staffNumber}</strong><small>{user.jobTitle}</small></span><span className="directory-location"><strong>{user.department}</strong><small>{user.location}</small></span><ChevronRight size={18} /></button>
-                ))}
-              </div>
-            ) : <div className="incident-search-empty"><Search size={28} /><strong>No matching users</strong><span>Check the spelling, email address or staff number.</span></div>}
-          </section>
-        ) : !selectedTemplate ? (
-          <div className="request-catalogue-layout">
-            <aside className="incident-requester-card request-intake-requester">
-              <div className="requester-profile"><span className="directory-avatar large">{userInitials(selectedUser.name)}</span><div><strong>{selectedUser.name}</strong><span>{selectedUser.jobTitle}</span></div></div>
-              <dl className="requester-facts"><div><dt>Email</dt><dd>{selectedUser.email}</dd></div><div><dt>Staff number</dt><dd>{selectedUser.staffNumber}</dd></div><div><dt>Department</dt><dd>{selectedUser.department}</dd></div><div><dt>Location</dt><dd>{selectedUser.location}</dd></div><div><dt>Manager</dt><dd>{selectedUser.manager}</dd></div></dl>
-              <button className="secondary-action full-width" onClick={clearUser} type="button">Change requester</button>
-            </aside>
-            <section className="request-catalogue-stage">
-              <div className="incident-stage-heading"><span className="stage-number">2</span><div><span className="eyebrow">Service catalogue</span><h3>What does {selectedUser.name.split(' ')[0]} need?</h3><p>Select a catalogue request. Costs and fulfilment workflow are captured with the request.</p></div></div>
-              <div className="request-template-grid">
-                {serviceRequestCatalogTemplates.map((template) => {
-                  const cost = template.items.reduce((sum, item) => sum + Number(item.unitCost || 0) * Number(item.quantity || 1), 0)
-                  return <button key={template.id} onClick={() => selectTemplate(template)} type="button"><span className="request-template-icon"><ListChecks size={19} /></span><span className="request-template-copy"><strong>{template.title}</strong><small>{template.description}</small><em>{template.items.length} item{template.items.length === 1 ? '' : 's'} · {template.tasks.length} workflow tasks</em></span><span className="request-template-cost">{formatRequestCost(cost)}<ChevronRight size={17} /></span></button>
-                })}
-              </div>
-            </section>
-          </div>
-        ) : (
-          <div className="request-details-layout">
-            <aside className="request-selected-summary">
-              <div className="requester-profile"><span className="directory-avatar large">{userInitials(selectedUser.name)}</span><div><strong>{selectedUser.name}</strong><span>{selectedUser.jobTitle}</span></div></div>
-              <div className="request-selected-template"><span className="eyebrow">Selected service</span><strong>{selectedTemplate.title}</strong><small>{selectedTemplate.service} · {selectedTemplate.team}</small></div>
-              <div className="request-selected-cost"><span>Cost snapshot</span><strong>{formatRequestCost(templateCost)}</strong><small>{selectedTemplate.items.length} requested item{selectedTemplate.items.length === 1 ? '' : 's'}</small></div>
-              <button className="secondary-action full-width" onClick={() => setTicketDraft({ ...ticketDraft, requestTemplateId: '', requestedItems: [], requestApprovals: [], requestTasks: [], title: '' })} type="button">Change service</button>
-            </aside>
-
-            <section className="incident-stage-card request-form-stage">
-              <div className="incident-stage-heading"><span className="stage-number">3</span><div><span className="eyebrow">Request information</span><h3>Complete the request</h3><p>This information and the current item prices will be stored with the submitted request.</p></div></div>
-              <form className="new-record-form request-intake-form" onSubmit={handleTicketSubmit}>
-                <label>Request summary<input onChange={(event) => setTicketDraft({ ...ticketDraft, title: event.target.value })} value={ticketDraft.title} /></label>
-                <label>Business reason / additional information<textarea onChange={(event) => setTicketDraft({ ...ticketDraft, description: event.target.value })} placeholder="Explain why this service is needed and include any fulfilment detail" value={ticketDraft.description} /></label>
-                <div className="form-row"><label>Cost centre<input onChange={(event) => setTicketDraft({ ...ticketDraft, requestCostCentre: event.target.value })} placeholder="e.g. FIN-4102" value={ticketDraft.requestCostCentre || ''} /></label><label>Required by<input onChange={(event) => setTicketDraft({ ...ticketDraft, requestRequiredBy: event.target.value })} placeholder="e.g. 04 Sep 2026" value={ticketDraft.requestRequiredBy || ''} /></label></div>
-                <div className="request-intake-items"><span className="eyebrow">Requested items</span>{selectedTemplate.items.map((item) => <div key={item.id}><span><strong>{item.name}</strong><small>{item.options.join(' · ')}</small></span><strong>{formatRequestCost(item.unitCost * (item.quantity || 1))}</strong></div>)}</div>
-                <div className="request-intake-workflow-summary"><div><span>Approvals</span><strong>{selectedTemplate.approvals.length || 'None'}</strong></div><div><span>Workflow tasks</span><strong>{selectedTemplate.tasks.length}</strong></div><div><span>Total cost</span><strong>{formatRequestCost(templateCost)}</strong></div></div>
-                <div className="incident-submit-strip"><div><span className="eyebrow">Next</span><strong>The same tab becomes the submitted request.</strong></div><button className="primary-action" type="submit"><Plus size={17} />Submit Service Request</button></div>
-              </form>
-            </section>
-          </div>
-        )}
-      </section>
-    </div>
-  )
+function ServiceRequestIntakeView(props) {
+  return <UnifiedNewRecordForm {...props} />
 }
 
-
-function ProblemIntakeView({ handleTicketSubmit, hasUnsavedChanges, setTicketDraft, ticketDraft }) {
-  return (
-    <div className="problem-intake-page">
-      <section className="problem-intake-panel">
-        <header className="problem-intake-header">
-          <div><span className="eyebrow">Problem Management</span><h2>New Problem</h2><p>Capture a recurring issue, its scope and the evidence needed to drive root-cause investigation.</p></div>
-          {hasUnsavedChanges && <span className="draft-status">Unsaved changes</span>}
-        </header>
-        <form className="problem-intake-form" onSubmit={handleTicketSubmit}>
-          <section className="problem-intake-section">
-            <div className="problem-intake-section-title"><span>1</span><div><strong>Problem statement</strong><small>Describe the recurring pattern rather than a single user incident.</small></div></div>
-            <label>Problem summary<input autoFocus onChange={(event) => setTicketDraft({ ...ticketDraft, title: event.target.value })} placeholder="e.g. Payroll SSO breaks after certificate rotations" value={ticketDraft.title} /></label>
-            <label>Problem description<textarea onChange={(event) => setTicketDraft({ ...ticketDraft, description: event.target.value })} placeholder="Describe the recurring symptoms, pattern and business impact" value={ticketDraft.description} /></label>
-            <div className="form-row"><label>Raised by<input onChange={(event) => setTicketDraft({ ...ticketDraft, requester: event.target.value })} placeholder="Team or person raising the problem" value={ticketDraft.requester} /></label><label>Impact scope<input onChange={(event) => setTicketDraft({ ...ticketDraft, problemImpactScope: event.target.value })} placeholder="Users, sites, services or versions affected" value={ticketDraft.problemImpactScope || ''} /></label></div>
-          </section>
-
-          <section className="problem-intake-section">
-            <div className="problem-intake-section-title"><span>2</span><div><strong>Classification & ownership</strong><small>Set the service context and investigation owner.</small></div></div>
-            <div className="problem-intake-grid three"><label>Priority<select onChange={(event) => setTicketDraft({ ...ticketDraft, priority: event.target.value })} value={ticketDraft.priority}>{priorities.map((priority) => <option key={priority}>{priority}</option>)}</select></label><label>Service<select onChange={(event) => setTicketDraft({ ...ticketDraft, service: event.target.value })} value={ticketDraft.service}>{['Collaboration', 'Identity', 'Hardware', 'Network Security', 'Wireless', 'Access', 'Print'].map((service) => <option key={service}>{service}</option>)}</select></label><label>Assignment group<select onChange={(event) => setTicketDraft({ ...ticketDraft, team: event.target.value })} value={ticketDraft.team}>{teams.map((team) => <option key={team}>{team}</option>)}</select></label></div>
-            <label>Related incidents<input onChange={(event) => setTicketDraft({ ...ticketDraft, problemRelatedIncidentsText: event.target.value })} placeholder="INC-1032, INC-1044 (comma separated)" value={ticketDraft.problemRelatedIncidentsText || ''} /></label>
-          </section>
-
-          <section className="problem-intake-section">
-            <div className="problem-intake-section-title"><span>3</span><div><strong>Investigation starting point</strong><small>Record the current theory and any safe workaround already known.</small></div></div>
-            <label>Initial hypothesis<textarea onChange={(event) => setTicketDraft({ ...ticketDraft, problemHypothesis: event.target.value })} placeholder="What do we currently believe may be causing the pattern?" value={ticketDraft.problemHypothesis || ''} /></label>
-            <label>Current workaround<textarea onChange={(event) => setTicketDraft({ ...ticketDraft, problemWorkaround: event.target.value })} placeholder="Optional: document a known safe mitigation" value={ticketDraft.problemWorkaround || ''} /></label>
-          </section>
-
-          <div className="problem-intake-submit"><div><span className="eyebrow">Create problem</span><strong>The same workspace tab becomes the submitted Problem record.</strong></div><button className="primary-action" type="submit"><Plus size={17} />Create Problem</button></div>
-        </form>
-      </section>
-    </div>
-  )
+function ProblemIntakeView(props) {
+  return <UnifiedNewRecordForm {...props} />
 }
 
-function ChangeIntakeView({ handleTicketSubmit, hasUnsavedChanges, setTicketDraft, ticketDraft }) {
-  return (
-    <div className="change-intake-page">
-      <section className="change-intake-panel">
-        <header className="change-intake-header">
-          <div><span className="eyebrow">Change Management</span><h2>New Change</h2><p>Build the implementation, risk, schedule and recovery context before the change enters approval.</p></div>
-          {hasUnsavedChanges && <span className="draft-status">Unsaved changes</span>}
-        </header>
-        <form className="change-intake-form" onSubmit={handleTicketSubmit}>
-          <section className="change-intake-section">
-            <div className="change-intake-section-title"><span>1</span><div><strong>Change overview</strong><small>Describe what is changing and why.</small></div></div>
-            <label>Change summary<input autoFocus onChange={(event) => setTicketDraft({ ...ticketDraft, title: event.target.value })} placeholder="e.g. Upgrade perimeter firewall cluster" value={ticketDraft.title} /></label>
-            <div className="change-intake-grid three"><label>Change type<select onChange={(event) => setTicketDraft({ ...ticketDraft, changeType: event.target.value })} value={ticketDraft.changeType || 'Normal'}><option>Standard</option><option>Normal</option><option>Emergency</option></select></label><label>Risk<select onChange={(event) => setTicketDraft({ ...ticketDraft, changeRisk: event.target.value, priority: event.target.value })} value={ticketDraft.changeRisk || 'Medium'}><option>Low</option><option>Medium</option><option>High</option><option>Critical</option></select></label><label>Approval route<select onChange={(event) => setTicketDraft({ ...ticketDraft, changeApprovalRoute: event.target.value })} value={ticketDraft.changeApprovalRoute || 'CAB'}><option>CAB</option><option>Service owner</option><option>Security approval</option><option>Emergency CAB</option></select></label></div>
-            <div className="form-row"><label>Requested by<input onChange={(event) => setTicketDraft({ ...ticketDraft, requester: event.target.value })} placeholder="Person or team requesting the change" value={ticketDraft.requester} /></label><label>Service<select onChange={(event) => setTicketDraft({ ...ticketDraft, service: event.target.value })} value={ticketDraft.service}>{['Collaboration', 'Identity', 'Hardware', 'Network Security', 'Wireless', 'Access'].map((service) => <option key={service}>{service}</option>)}</select></label></div>
-            <div className="form-row"><label>Assignment group<select onChange={(event) => setTicketDraft({ ...ticketDraft, team: event.target.value })} value={ticketDraft.team}>{teams.map((team) => <option key={team}>{team}</option>)}</select></label><label>Affected CIs<input onChange={(event) => setTicketDraft({ ...ticketDraft, changeAffectedCisText: event.target.value })} placeholder="FW-EDGE-A, M365-TENANT" value={ticketDraft.changeAffectedCisText || ''} /></label></div>
-            <label>Business reason<textarea onChange={(event) => setTicketDraft({ ...ticketDraft, changeBusinessReason: event.target.value, description: event.target.value })} placeholder="Why is the change required and what outcome should it deliver?" value={ticketDraft.changeBusinessReason || ''} /></label>
-          </section>
-
-          <section className="change-intake-section">
-            <div className="change-intake-section-title"><span>2</span><div><strong>Implementation & recovery</strong><small>Plans should be detailed enough for another technician to execute safely.</small></div></div>
-            <label>Implementation plan<textarea onChange={(event) => setTicketDraft({ ...ticketDraft, changeImplementationPlan: event.target.value })} placeholder="Ordered implementation steps" value={ticketDraft.changeImplementationPlan || ''} /></label>
-            <div className="change-intake-plan-grid"><label>Test plan<textarea onChange={(event) => setTicketDraft({ ...ticketDraft, changeTestPlan: event.target.value })} placeholder="How success will be validated" value={ticketDraft.changeTestPlan || ''} /></label><label>Backout plan<textarea onChange={(event) => setTicketDraft({ ...ticketDraft, changeBackoutPlan: event.target.value })} placeholder="How the service will be restored if validation fails" value={ticketDraft.changeBackoutPlan || ''} /></label></div>
-          </section>
-
-          <section className="change-intake-section">
-            <div className="change-intake-section-title"><span>3</span><div><strong>Schedule & customer impact</strong><small>Capture the proposed window; approval can adjust it later.</small></div></div>
-            <div className="change-intake-grid three"><label>Planned start<input onChange={(event) => setTicketDraft({ ...ticketDraft, changePlannedStart: event.target.value })} placeholder="01 Sep 2026 · 22:00" value={ticketDraft.changePlannedStart || ''} /></label><label>Planned end<input onChange={(event) => setTicketDraft({ ...ticketDraft, changePlannedEnd: event.target.value })} placeholder="01 Sep 2026 · 23:00" value={ticketDraft.changePlannedEnd || ''} /></label><label>Expected impact<input onChange={(event) => setTicketDraft({ ...ticketDraft, changeDowntime: event.target.value })} placeholder="No outage expected" value={ticketDraft.changeDowntime || ''} /></label></div>
-          </section>
-
-          <div className="change-intake-submit"><div><span className="eyebrow">Create draft</span><strong>The change is created as Draft in this same workspace tab.</strong></div><button className="primary-action" type="submit"><Plus size={17} />Create Change</button></div>
-        </form>
-      </section>
-    </div>
-  )
+function ChangeIntakeView(props) {
+  return <UnifiedNewRecordForm {...props} />
 }
-
 
 function GenericNewRecordView({
   handleTicketSubmit,
@@ -4865,81 +3659,15 @@ export function SelfServicePortal({
   )
 }
 
-export function ChangesView({ openNewRecord, openRecordTab, tickets }) {
-  const [query, setQuery] = useState('')
-  const [quickView, setQuickView] = useState('all')
-  const [sortKey, setSortKey] = useState('window')
-  const [filtersOpen, setFiltersOpen] = useState(false)
-  const [riskFilter, setRiskFilter] = useState('All')
-  const [typeFilter, setTypeFilter] = useState('All')
-
-  const pendingApproval = tickets.filter((ticket) => ['Pending Approval', 'CAB Review'].includes(ticket.status)).length
-  const scheduled = tickets.filter((ticket) => ticket.status === 'Scheduled').length
-  const highRisk = tickets.filter((ticket) => ['High', 'Critical'].includes(ticket.risk)).length
-  const implementing = tickets.filter((ticket) => ['Implementing', 'In Progress', 'Review'].includes(ticket.status)).length
-
-  const quickViews = [
-    ['all', 'All'],
-    ['approval', 'Awaiting approval'],
-    ['scheduled', 'Scheduled'],
-    ['high-risk', 'High risk'],
-    ['implementation', 'In progress'],
-    ['closed', 'Closed'],
-  ]
-
-  const visible = tickets
-    .filter((ticket) => {
-      const needle = query.trim().toLowerCase()
-      const matchesQuery = !needle || [ticket.id, ticket.title, ticket.service, ticket.assignee, ticket.window, ticket.requester].some((value) => String(value || '').toLowerCase().includes(needle))
-      if (!matchesQuery) return false
-      if (riskFilter !== 'All' && ticket.risk !== riskFilter) return false
-      if (typeFilter !== 'All' && (ticket.changeType || 'Normal') !== typeFilter) return false
-      if (quickView === 'approval') return ['Pending Approval', 'CAB Review'].includes(ticket.status)
-      if (quickView === 'scheduled') return ticket.status === 'Scheduled'
-      if (quickView === 'high-risk') return ['High', 'Critical'].includes(ticket.risk)
-      if (quickView === 'implementation') return ['Implementing', 'In Progress', 'Review'].includes(ticket.status)
-      if (quickView === 'closed') return ticket.status === 'Closed'
-      return true
-    })
-    .sort((a, b) => {
-      if (sortKey === 'risk') {
-        const riskOrder = ['Critical', 'High', 'Medium', 'Low']
-        return riskOrder.indexOf(a.risk || 'Medium') - riskOrder.indexOf(b.risk || 'Medium')
-      }
-      if (sortKey === 'status') return a.status.localeCompare(b.status)
-      return b.id.localeCompare(a.id)
-    })
-
+export function ChangesView({ openNewRecord, openRecordTab, tickets, updateTicket }) {
   return (
-    <div className="change-queue-v2">
-      <header className="change-queue-header">
-        <div><span className="eyebrow">Change Management</span><h2>Changes</h2><p>Assess risk, protect implementation windows and keep approvals visible before execution.</p></div>
-        <button className="primary-action compact" onClick={() => openNewRecord('Change')} type="button"><Plus size={16} />New Change</button>
-      </header>
-
-      <div className="change-queue-metrics">
-        <div><span>Awaiting approval</span><strong>{pendingApproval}</strong></div>
-        <div><span>Scheduled</span><strong>{scheduled}</strong></div>
-        <div><span>High risk</span><strong>{highRisk}</strong></div>
-        <div><span>Implementing / review</span><strong>{implementing}</strong></div>
-      </div>
-
-      <div className="change-queue-toolbar">
-        <label className="change-search"><Search size={18} /><input onChange={(event) => setQuery(event.target.value)} placeholder="Search changes, services, owners..." type="search" value={query} /></label>
-        <button className={filtersOpen || riskFilter !== 'All' || typeFilter !== 'All' ? 'change-filter-button active' : 'change-filter-button'} onClick={() => setFiltersOpen((current) => !current)} type="button"><SlidersHorizontal size={17} />Filters{(riskFilter !== 'All' || typeFilter !== 'All') && <span>{Number(riskFilter !== 'All') + Number(typeFilter !== 'All')}</span>}</button>
-        <label className="change-sort">Sort<select onChange={(event) => setSortKey(event.target.value)} value={sortKey}><option value="window">Window</option><option value="risk">Risk</option><option value="status">Status</option></select></label>
-      </div>
-
-      {filtersOpen && <div className="change-filter-panel"><label>Risk<select onChange={(event) => setRiskFilter(event.target.value)} value={riskFilter}><option>All</option><option>Low</option><option>Medium</option><option>High</option><option>Critical</option></select></label><label>Change type<select onChange={(event) => setTypeFilter(event.target.value)} value={typeFilter}><option>All</option><option>Standard</option><option>Normal</option><option>Emergency</option></select></label><button className="text-button" onClick={() => { setRiskFilter('All'); setTypeFilter('All') }} type="button">Clear filters</button></div>}
-
-      <div className="change-quick-views">{quickViews.map(([id, label]) => <button className={quickView === id ? 'active' : ''} key={id} onClick={() => setQuickView(id)} type="button">{label}</button>)}</div>
-      <div className="change-queue-result-line"><strong>{visible.length} changes</strong><span>{quickViews.find(([id]) => id === quickView)?.[1]}</span></div>
-
-      <div className="change-table-wrap"><table className="change-table"><thead><tr><th>Reference</th><th>Change</th><th>Type / risk</th><th>Status</th><th>Approval</th><th>Window</th><th>Owner</th><th>Affected CIs</th><th>Updated</th></tr></thead><tbody>{visible.map((ticket) => <tr key={ticket.id} onClick={() => openRecordTab(ticket)}><td><button onClick={(event) => { event.stopPropagation(); openRecordTab(ticket) }} type="button">{ticket.id}</button></td><td><strong>{ticket.title}</strong><small>{ticket.service}</small></td><td><span>{ticket.changeType || 'Normal'}</span><strong className={`change-risk-text ${String(ticket.risk || 'Medium').toLowerCase()}`}>{ticket.risk || 'Medium'}</strong></td><td><span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span></td><td>{ticket.approval || 'Not submitted'}</td><td><strong>{ticket.window || 'To be scheduled'}</strong><small>{ticket.downtime || ''}</small></td><td>{ticket.assignee}</td><td>{ticket.linkedAssets?.length || 0}</td><td>{ticket.updated}</td></tr>)}</tbody></table></div>
-
-      <div className="change-mobile-list">{visible.map((ticket) => <button className="change-mobile-card" key={ticket.id} onClick={() => openRecordTab(ticket)} type="button"><div className="change-mobile-card-top"><strong>{ticket.id}</strong><span className={`change-risk-badge ${String(ticket.risk || 'Medium').toLowerCase()}`}>{ticket.risk || 'Medium'} risk</span></div><h3>{ticket.title}</h3><div className="change-mobile-state"><span className={`status-pill ${statusClass(ticket.status)}`}>{ticket.status}</span><span>{ticket.changeType || 'Normal'} · {ticket.approval || 'Not submitted'}</span></div><div className="change-mobile-window"><CalendarClock size={15} /><span>{ticket.window || 'To be scheduled'}</span></div><div className="change-mobile-meta"><span>{ticket.service} · {ticket.assignee}</span><span>{ticket.linkedAssets?.length || 0} CIs</span></div><footer><span>Updated {ticket.updated}</span><ChevronRight size={17} /></footer></button>)}</div>
-      {!visible.length && <div className="problem-empty-state queue">No changes match this view.</div>}
-    </div>
+    <UnifiedRecordQueue
+      openNewRecord={openNewRecord}
+      openRecordTab={openRecordTab}
+      recordType="Change"
+      tickets={tickets}
+      updateTicket={updateTicket}
+    />
   )
 }
 
