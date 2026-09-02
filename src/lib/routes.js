@@ -55,6 +55,13 @@ const LIST_ROUTES = {
     key: 'changes',
     title: 'Changes',
   },
+  '/calendar': {
+    kind: 'workspace',
+    path: '/calendar',
+    viewId: 'calendar',
+    key: 'calendar',
+    title: 'Calendar',
+  },
   '/projects': {
     kind: 'workspace',
     path: '/projects',
@@ -368,6 +375,7 @@ export function pathForTab(tab, tickets = []) {
     tickets: '/tickets',
     portal: '/portal',
     changes: '/changes',
+    calendar: '/calendar',
     projects: '/projects',
     rota: '/rota',
     cmdb: '/cmdb',
