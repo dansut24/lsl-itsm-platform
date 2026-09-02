@@ -20,13 +20,23 @@ import {
 
 export const statusOptions = [
   'New',
-  'In Progress',
-  'Pending',
+  'Assigned',
+  'Draft',
   'Pending Approval',
+  'Approved',
   'CAB Review',
-  'Monitoring',
+  'Scheduled',
+  'Under Investigation',
+  'Known Error',
+  'In Progress',
+  'Fix in Progress',
+  'Pending',
+  'Review',
+  'Completed',
   'Resolved',
+  'Failed',
   'Closed',
+  'Monitoring',
 ]
 
 export const viewMeta = {
