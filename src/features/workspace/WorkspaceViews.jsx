@@ -1554,6 +1554,7 @@ export function TicketRecordView({
   selectedTicket,
   setNewComment,
   tickets,
+  transitionTicket,
   updateTicket,
 }) {
   if (!selectedTicket) {
@@ -1578,6 +1579,7 @@ export function TicketRecordView({
       setNewComment={setNewComment}
       ticket={selectedTicket}
       tickets={tickets}
+      transitionTicket={transitionTicket}
       updateTicket={updateTicket}
     />
   )
@@ -2636,8 +2638,7 @@ function UnifiedRecordQueue({
             <strong>{selectedIds.length} selected</strong>
             <div>
               <button onClick={() => bulkUpdate({ assignee: 'Dana Sinclair' })} type="button">Assign to me</button>
-              <button onClick={() => bulkUpdate({ status: 'In Progress' })} type="button">Start work</button>
-              <button onClick={() => setSelectedIds([])} type="button">Clear</button>
+                            <button onClick={() => setSelectedIds([])} type="button">Clear</button>
             </div>
           </div>
         )}

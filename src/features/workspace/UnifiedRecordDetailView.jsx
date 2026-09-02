@@ -24,28 +24,21 @@ import {
   Wrench,
 } from 'lucide-react'
 import { priorityClass, statusClass } from '../../lib/workspace.js'
+import {
+  buildLifecycleTransition,
+  getAllowedTransitions,
+  getLifecycleDefinition,
+  getLifecycleIndex,
+  getTransitionBlockers,
+  getTransitionRequirements,
+  transitionLabel,
+} from '../../lib/lifecycle.js'
 
 const recordTypeMeta = {
-  Incident: {
-    className: 'incident',
-    label: 'Incident',
-    lifecycle: ['New', 'In Progress', 'Pending', 'Resolved', 'Closed'],
-  },
-  'Service Request': {
-    className: 'request',
-    label: 'Service Request',
-    lifecycle: ['New', 'Pending Approval', 'In Progress', 'Resolved', 'Closed'],
-  },
-  Problem: {
-    className: 'problem',
-    label: 'Problem',
-    lifecycle: ['New', 'Under Investigation', 'Known Error', 'Fix in Progress', 'Resolved', 'Closed'],
-  },
-  Change: {
-    className: 'change',
-    label: 'Change',
-    lifecycle: ['Draft', 'Pending Approval', 'CAB Review', 'Scheduled', 'In Progress', 'Review', 'Closed'],
-  },
+  Incident: { className: 'incident', label: 'Incident' },
+  'Service Request': { className: 'request', label: 'Service Request' },
+  Problem: { className: 'problem', label: 'Problem' },
+  Change: { className: 'change', label: 'Change' },
 }
 
 const commonTabs = [
@@ -56,21 +49,7 @@ const commonTabs = [
   { id: 'attachments', label: 'Attachments', icon: Paperclip },
 ]
 
-const incidentPendingReasons = [
-  'Awaiting customer',
-  'Awaiting vendor',
-  'Awaiting change',
-  'Awaiting third party',
-  'Scheduled',
-]
 
-const incidentResolutionCodes = [
-  'Resolved - fix applied',
-  'Resolved - workaround provided',
-  'Resolved - user action',
-  'Resolved - no fault found',
-  'Resolved - duplicate',
-]
 
 function initials(value = '') {
   return value
@@ -121,23 +100,7 @@ function inferredUrgency(priority) {
   return 'Low'
 }
 
-function lifecycleIndex(ticket, lifecycle) {
-  const direct = lifecycle.indexOf(ticket.status)
-  if (direct >= 0) return direct
 
-  const aliases = {
-    Monitoring: 'In Progress',
-    'Pending Approval': 'Pending Approval',
-    'CAB Review': 'CAB Review',
-    Scheduled: 'Scheduled',
-    'Under Investigation': 'Under Investigation',
-    'Known Error': 'Known Error',
-    'Fix in Progress': 'Fix in Progress',
-  }
-  const alias = aliases[ticket.status]
-  const index = alias ? lifecycle.indexOf(alias) : -1
-  return index >= 0 ? index : 0
-}
 
 function relatedRecordIds(ticket, tickets) {
   const ids = new Set([
@@ -353,6 +316,16 @@ function RequestOverview({ ticket }) {
           </div>
         ) : <p className="unified-detail-empty-copy">This request has no approval stage.</p>}
       </DetailSection>
+
+      {(ticket.approvalNote || ticket.completionNotes || ticket.reopenReason) && (
+        <DetailSection eyebrow="Lifecycle" icon={Clock3} title="Approval and completion notes">
+          <div className="unified-detail-stack">
+            {ticket.approvalNote && <div><span>Approval note</span><p>{ticket.approvalNote}</p></div>}
+            {ticket.completionNotes && <div><span>Fulfilment summary</span><p>{ticket.completionNotes}</p></div>}
+            {ticket.reopenReason && <div><span>Reopen reason</span><p>{ticket.reopenReason}</p></div>}
+          </div>
+        </DetailSection>
+      )}
     </div>
   )
 }
@@ -421,6 +394,18 @@ function ChangeOverview({ ticket }) {
         <DetailSection eyebrow="Validation" title="Test plan"><p className="unified-detail-long-copy">{valueOrFallback(ticket.testPlan)}</p></DetailSection>
         <DetailSection eyebrow="Recovery" title="Backout plan"><p className="unified-detail-long-copy">{valueOrFallback(ticket.backoutPlan)}</p></DetailSection>
       </div>
+
+      {(ticket.implementationNotes || ticket.failureReason || ticket.backoutOutcome || ticket.reviewOutcome || ticket.reworkReason) && (
+        <DetailSection eyebrow="Execution" icon={Clock3} title="Implementation and review outcome">
+          <div className="unified-detail-stack">
+            {ticket.implementationNotes && <div><span>Implementation outcome</span><p>{ticket.implementationNotes}</p></div>}
+            {ticket.failureReason && <div><span>Failure reason</span><p>{ticket.failureReason}</p></div>}
+            {ticket.backoutOutcome && <div><span>Backout / recovery outcome</span><p>{ticket.backoutOutcome}</p></div>}
+            {ticket.reviewOutcome && <div><span>Post-implementation review</span><p>{ticket.reviewOutcome}</p></div>}
+            {ticket.reworkReason && <div><span>Returned to draft</span><p>{ticket.reworkReason}</p></div>}
+          </div>
+        </DetailSection>
+      )}
     </div>
   )
 }
@@ -486,17 +471,25 @@ export function UnifiedRecordDetailView({
   setNewComment,
   ticket,
   tickets,
+  transitionTicket,
   updateTicket,
 }) {
   const [activeTab, setActiveTab] = useState('overview')
   const [noteMode, setNoteMode] = useState('work')
-  const [workflowMode, setWorkflowMode] = useState(null)
-  const [pendingReason, setPendingReason] = useState(ticket.pendingReason || incidentPendingReasons[0])
-  const [resolutionCode, setResolutionCode] = useState(ticket.resolutionCode || incidentResolutionCodes[0])
-  const [resolutionNotes, setResolutionNotes] = useState(ticket.resolutionNotes || '')
+  const [transitionTarget, setTransitionTarget] = useState(null)
+  const [transitionValues, setTransitionValues] = useState({})
   const fileInputRef = useRef(null)
   const meta = recordTypeMeta[ticket.type] || recordTypeMeta.Incident
-  const currentLifecycleIndex = lifecycleIndex(ticket, meta.lifecycle)
+  const lifecycleDefinition = getLifecycleDefinition(ticket.type)
+  const lifecycle = lifecycleDefinition.stages
+  const currentLifecycleIndex = getLifecycleIndex(ticket)
+  const allowedTransitions = getAllowedTransitions(ticket)
+  const transitionRequirements = transitionTarget
+    ? getTransitionRequirements(ticket, transitionTarget, transitionValues)
+    : []
+  const transitionBlockers = transitionTarget
+    ? getTransitionBlockers(ticket, transitionTarget, transitionValues)
+    : []
   const tasks = useMemo(() => syntheticTasks(ticket), [ticket])
   const attachments = ticket.attachments || []
 
@@ -511,35 +504,47 @@ export function UnifiedRecordDetailView({
       .slice(0, 6)
   ), [ticket, tickets])
 
-  function handleStatusChange(event) {
-    const status = event.target.value
-    updateTicket(ticket.id, {
-      status,
-      nextStep: status === 'Closed' ? `${meta.label} closed.` : ticket.nextStep,
-    })
+  function beginTransition(targetStatus) {
+    if (!targetStatus || targetStatus === ticket.status) return
+    const requirements = getTransitionRequirements(ticket, targetStatus, {})
+    const initialValues = Object.fromEntries(
+      requirements.map((requirement) => [requirement.key, requirement.value]),
+    )
+    setTransitionTarget(targetStatus)
+    setTransitionValues(initialValues)
   }
 
-  function confirmPending() {
-    updateTicket(ticket.id, {
-      status: 'Pending',
-      pendingReason,
-      nextStep: pendingReason,
-    })
-    setWorkflowMode(null)
+  function updateTransitionValue(key, nextValue) {
+    setTransitionValues((current) => ({ ...current, [key]: nextValue }))
   }
 
-  function confirmResolution() {
-    if (!resolutionNotes.trim()) return
-    updateTicket(ticket.id, {
-      status: 'Resolved',
-      resolutionCode,
-      resolutionNotes: resolutionNotes.trim(),
-      sla: 'Met',
-      slaPercent: 100,
-      nextStep: 'Confirm service restoration and close after validation.',
-    })
-    setWorkflowMode(null)
+  function confirmTransition() {
+    if (!transitionTarget) return
+    const result = transitionTicket
+      ? transitionTicket(ticket.id, transitionTarget, transitionValues)
+      : buildLifecycleTransition(ticket, transitionTarget, transitionValues, 'Dana Sinclair')
+    if (!result?.ok) return
+    if (!transitionTicket) updateTicket(ticket.id, result.updates)
+    setTransitionTarget(null)
+    setTransitionValues({})
   }
+
+  function assignToMe() {
+    if (ticket.type === 'Incident' && ticket.status === 'New' && allowedTransitions.includes('Assigned')) {
+      if (transitionTicket) {
+        const result = transitionTicket(ticket.id, 'Assigned', {})
+        if (result?.ok) return
+      } else {
+        const result = buildLifecycleTransition(ticket, 'Assigned', {}, 'Dana Sinclair')
+        if (result.ok) {
+          updateTicket(ticket.id, result.updates)
+          return
+        }
+      }
+    }
+    updateTicket(ticket.id, { assignee: 'Dana Sinclair' })
+  }
+
 
   function attachFiles(event) {
     const files = Array.from(event.target.files || [])
@@ -561,29 +566,67 @@ export function UnifiedRecordDetailView({
   }
 
   function renderWorkflowPanel() {
-    if (ticket.type !== 'Incident' || !workflowMode) return null
-
-    if (workflowMode === 'pending') {
-      return (
-        <section className="unified-detail-workflow-panel">
-          <div><span className="eyebrow">Status transition</span><h3>Place incident on hold</h3><p>Capture why progress is paused so SLA and requester communication can follow the correct rule.</p></div>
-          <label>Pending reason<select value={pendingReason} onChange={(event) => setPendingReason(event.target.value)}>{incidentPendingReasons.map((reason) => <option key={reason}>{reason}</option>)}</select></label>
-          <footer><button onClick={() => setWorkflowMode(null)} type="button">Cancel</button><button className="primary-action compact" onClick={confirmPending} type="button">Set pending</button></footer>
-        </section>
-      )
-    }
+    if (!transitionTarget) return null
 
     return (
-      <section className="unified-detail-workflow-panel">
-        <div><span className="eyebrow">Status transition</span><h3>Resolve incident</h3><p>Capture a structured resolution before moving the incident to Resolved.</p></div>
-        <div className="unified-detail-form-grid two">
-          <label>Resolution code<select value={resolutionCode} onChange={(event) => setResolutionCode(event.target.value)}>{incidentResolutionCodes.map((code) => <option key={code}>{code}</option>)}</select></label>
-          <label>Resolution notes<textarea value={resolutionNotes} onChange={(event) => setResolutionNotes(event.target.value)} placeholder="What restored the service?" /></label>
+      <section className={`unified-detail-workflow-panel lifecycle-transition-panel ${transitionBlockers.length ? 'blocked' : ''}`}>
+        <div className="lifecycle-transition-heading">
+          <div>
+            <span className="eyebrow">Lifecycle transition</span>
+            <h3>{ticket.status} <ChevronRight size={18} /> {transitionTarget}</h3>
+            <p>Hi5Central validates this transition before the record can move forward. Required information is written back to the record and the change is added to Activity automatically.</p>
+          </div>
+          <span className="lifecycle-rule-chip">Workflow controlled</span>
         </div>
-        <footer><button onClick={() => setWorkflowMode(null)} type="button">Cancel</button><button className="primary-action compact" disabled={!resolutionNotes.trim()} onClick={confirmResolution} type="button">Resolve incident</button></footer>
+
+        {transitionRequirements.length > 0 && (
+          <div className="unified-detail-form-grid two lifecycle-transition-fields">
+            {transitionRequirements.map((requirement) => {
+              const fieldValue = transitionValues[requirement.key] ?? requirement.value ?? ''
+              if (requirement.type === 'checkbox') {
+                return (
+                  <label className="lifecycle-confirmation" key={requirement.key}>
+                    <input checked={Boolean(fieldValue)} onChange={(event) => updateTransitionValue(requirement.key, event.target.checked)} type="checkbox" />
+                    <span><strong>{requirement.label}</strong>{requirement.description && <small>{requirement.description}</small>}</span>
+                  </label>
+                )
+              }
+              if (requirement.type === 'select') {
+                return (
+                  <label key={requirement.key}>{requirement.label}<select value={fieldValue} onChange={(event) => updateTransitionValue(requirement.key, event.target.value)}>{(requirement.options || []).map((option) => <option key={option}>{option}</option>)}</select></label>
+                )
+              }
+              if (requirement.type === 'text' || requirement.type === 'datetime-local') {
+                return (
+                  <label key={requirement.key}>{requirement.label}<input type={requirement.type} value={fieldValue} placeholder={requirement.placeholder} onChange={(event) => updateTransitionValue(requirement.key, event.target.value)} /></label>
+                )
+              }
+              return (
+                <label key={requirement.key}>{requirement.label}<textarea value={fieldValue} placeholder={requirement.placeholder} onChange={(event) => updateTransitionValue(requirement.key, event.target.value)} /></label>
+              )
+            })}
+          </div>
+        )}
+
+        {transitionBlockers.length > 0 && (
+          <div className="lifecycle-transition-blockers" role="alert">
+            <AlertCircle size={18} />
+            <div><strong>This transition is not ready yet</strong>{transitionBlockers.map((blocker) => <span key={blocker}>{blocker}</span>)}</div>
+          </div>
+        )}
+
+        {!transitionRequirements.length && !transitionBlockers.length && (
+          <div className="lifecycle-transition-ready"><CheckCircle2 size={18} /><span><strong>Ready to transition</strong>No additional information is required for this status change.</span></div>
+        )}
+
+        <footer>
+          <button onClick={() => { setTransitionTarget(null); setTransitionValues({}) }} type="button">Cancel</button>
+          <button className="primary-action compact" disabled={transitionBlockers.length > 0} onClick={confirmTransition} type="button">{transitionLabel(transitionTarget)}</button>
+        </footer>
       </section>
     )
   }
+
 
   function renderOverview() {
     return (
@@ -791,29 +834,25 @@ export function UnifiedRecordDetailView({
           </div>
 
           <div className="unified-detail-header-actions">
-            <button onClick={() => updateTicket(ticket.id, { assignee: 'Dana Sinclair' })} type="button"><UserCheck size={15} /> Assign to me</button>
-            {ticket.type === 'Incident' && !['Resolved', 'Closed'].includes(ticket.status) && (
-              <>
-                <button onClick={() => updateTicket(ticket.id, { status: 'In Progress' })} type="button"><Wrench size={15} /> Start work</button>
-                <button onClick={() => setWorkflowMode(workflowMode === 'pending' ? null : 'pending')} type="button"><Clock3 size={15} /> Pending</button>
-                <button className="primary" onClick={() => setWorkflowMode(workflowMode === 'resolve' ? null : 'resolve')} type="button"><CheckCircle2 size={15} /> Resolve</button>
-              </>
-            )}
-            {ticket.type === 'Incident' && ticket.status === 'Resolved' && <button className="primary" onClick={() => updateTicket(ticket.id, { status: 'Closed', nextStep: 'Incident closed.' })} type="button"><CheckCircle2 size={15} /> Close</button>}
+            <button onClick={assignToMe} type="button"><UserCheck size={15} /> Assign to me</button>
+            {ticket.type === 'Incident' && allowedTransitions.includes('In Progress') && <button onClick={() => beginTransition('In Progress')} type="button"><Wrench size={15} /> Start / resume work</button>}
+            {ticket.type === 'Incident' && allowedTransitions.includes('Pending') && <button onClick={() => beginTransition('Pending')} type="button"><Clock3 size={15} /> Pending</button>}
+            {ticket.type === 'Incident' && allowedTransitions.includes('Resolved') && <button className="primary" onClick={() => beginTransition('Resolved')} type="button"><CheckCircle2 size={15} /> Resolve</button>}
+            {ticket.type === 'Incident' && allowedTransitions.includes('Closed') && <button className="primary" onClick={() => beginTransition('Closed')} type="button"><CheckCircle2 size={15} /> Close</button>}
             <label className="unified-detail-status-control">
-              <span>Status</span>
-              <select value={ticket.status} onChange={handleStatusChange}>
-                {!meta.lifecycle.includes(ticket.status) && <option>{ticket.status}</option>}
-                {meta.lifecycle.map((status) => <option key={status}>{status}</option>)}
+              <span>Next status</span>
+              <select disabled={!allowedTransitions.length} value={transitionTarget || ''} onChange={(event) => beginTransition(event.target.value)}>
+                <option value="">{allowedTransitions.length ? 'Choose transition…' : 'No further transitions'}</option>
+                {allowedTransitions.map((status) => <option key={status} value={status}>{status}</option>)}
               </select>
             </label>
           </div>
         </header>
 
-        <div className="unified-detail-lifecycle" aria-label={`${meta.label} lifecycle`}>
-          {meta.lifecycle.map((status, index) => {
+        <div className={`unified-detail-lifecycle ${ticket.type === 'Change' && ticket.status === 'Failed' ? 'has-exception' : ''}`.trim()} aria-label={`${meta.label} lifecycle`}>
+          {lifecycle.map((status, index) => {
             const complete = index < currentLifecycleIndex
-            const current = index === currentLifecycleIndex
+            const current = index === currentLifecycleIndex && ticket.status !== 'Failed'
             return (
               <div className={current ? 'current' : complete ? 'complete' : ''} key={status}>
                 <span>{complete ? '✓' : index + 1}</span>
@@ -821,6 +860,7 @@ export function UnifiedRecordDetailView({
               </div>
             )
           })}
+          {ticket.type === 'Change' && ticket.status === 'Failed' && <div className="exception current"><span>!</span><strong>Failed</strong></div>}
         </div>
 
         {renderWorkflowPanel()}
