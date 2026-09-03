@@ -31,6 +31,10 @@ import { liveChatReplyOptions } from './data/liveChatData.js'
 import { createNotification } from './data/notificationData.js'
 import { buildLifecycleTransition } from './lib/lifecycle.js'
 import {
+  buildOrganisationAuditEntry,
+  resolveCurrentPerson,
+} from './lib/peopleRbac.js'
+import {
   countBy,
   getBreadcrumbs,
   makeTab,
@@ -52,6 +56,7 @@ import {
   loadLiveChatConversations,
   loadLiveChatPreferences,
   loadNotifications,
+  loadOrganisationAudit,
   loadOrganisationDepartments,
   loadOrganisationPeople,
   loadOrganisationTeams,
@@ -68,6 +73,7 @@ import {
   saveLiveChatConversations,
   saveLiveChatPreferences,
   saveNotifications,
+  saveOrganisationAudit,
   saveOrganisationDepartments,
   saveOrganisationPeople,
   saveOrganisationTeams,
@@ -314,6 +320,7 @@ function App() {
   const [initialLiveChatConversations] = useState(loadLiveChatConversations)
   const [initialLiveChatPreferences] = useState(loadLiveChatPreferences)
   const [initialNotifications] = useState(loadNotifications)
+  const [initialOrganisationAudit] = useState(loadOrganisationAudit)
   const [initialOrganisationPeople] = useState(loadOrganisationPeople)
   const [initialOrganisationTeams] = useState(loadOrganisationTeams)
   const [initialOrganisationDepartments] = useState(loadOrganisationDepartments)
@@ -384,6 +391,7 @@ function App() {
   )
   const [toast, setToast] = useState('')
   const [notifications, setNotifications] = useState(initialNotifications)
+  const [organisationAudit, setOrganisationAudit] = useState(initialOrganisationAudit)
   const [people, setPeople] = useState(initialOrganisationPeople)
   const [teams, setTeams] = useState(initialOrganisationTeams)
   const [departments, setDepartments] = useState(initialOrganisationDepartments)
@@ -427,6 +435,10 @@ function App() {
   useEffect(() => {
     saveLiveChatConversations(liveChatConversations)
   }, [liveChatConversations])
+
+  useEffect(() => {
+    saveOrganisationAudit(organisationAudit)
+  }, [organisationAudit])
 
   useEffect(() => {
     saveLiveChatPreferences(liveChatPreferences)
@@ -1382,17 +1394,33 @@ function App() {
     }, 1400)
   }
 
+  function pushOrganisationAudit(entry) {
+    if (!entry) return
+    if (entry.action === 'updated' && !entry.changes?.length) return
+    setOrganisationAudit((current) => [entry, ...current].slice(0, 500))
+  }
+
   function savePerson(person) {
-    const exists = people.some((item) => item.id === person.id)
+    const previous = people.find((item) => item.id === person.id)
+    const exists = Boolean(previous)
+    const actor = resolveCurrentPerson(session, people)
     setPeople((current) => exists
       ? current.map((item) => item.id === person.id ? person : item)
       : [person, ...current])
+    pushOrganisationAudit(buildOrganisationAuditEntry({
+      actor,
+      before: previous,
+      after: person,
+      entityType: 'person',
+      action: exists ? 'updated' : 'created',
+    }))
     setToast(`${person.name} ${exists ? 'updated' : 'added'}`)
   }
 
   function saveTeam(team) {
     const previous = teams.find((item) => item.id === team.id)
     const exists = Boolean(previous)
+    const actor = resolveCurrentPerson(session, people)
     setTeams((current) => exists
       ? current.map((item) => item.id === team.id ? team : item)
       : [team, ...current])
@@ -1409,14 +1437,30 @@ function App() {
       setLiveChatConversations((current) => current.map((conversation) => conversation.team === previous.name ? { ...conversation, team: team.name } : conversation))
     }
 
+    pushOrganisationAudit(buildOrganisationAuditEntry({
+      actor,
+      before: previous,
+      after: team,
+      entityType: 'team',
+      action: exists ? 'updated' : 'created',
+    }))
     setToast(`${team.name} ${exists ? 'updated' : 'created'}`)
   }
 
   function saveDepartment(department) {
-    const exists = departments.some((item) => item.id === department.id)
+    const previous = departments.find((item) => item.id === department.id)
+    const exists = Boolean(previous)
+    const actor = resolveCurrentPerson(session, people)
     setDepartments((current) => exists
       ? current.map((item) => item.id === department.id ? department : item)
       : [department, ...current])
+    pushOrganisationAudit(buildOrganisationAuditEntry({
+      actor,
+      before: previous,
+      after: department,
+      entityType: 'department',
+      action: exists ? 'updated' : 'created',
+    }))
     setToast(`${department.name} ${exists ? 'updated' : 'created'}`)
   }
 
@@ -2275,6 +2319,8 @@ function App() {
     if (activeView === 'people') {
       return (
         <PeopleView
+          auditEvents={organisationAudit}
+          currentPerson={resolveCurrentPerson(session, people)}
           departments={departments}
           onSaveDepartment={saveDepartment}
           onSavePerson={savePerson}
