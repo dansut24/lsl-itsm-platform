@@ -15,6 +15,7 @@ export function authenticateDemoUser(mode, credentials) {
       initials: profile.initials,
       username: profile.username,
       profile: mode,
+      personId: profile.personId || '',
     },
     profile,
   }

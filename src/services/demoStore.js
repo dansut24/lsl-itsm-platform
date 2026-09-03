@@ -118,6 +118,11 @@ export function loadOrganisationDepartments() {
   return stored.map((department) => ({ ...seedsById.get(department.id), ...department }))
 }
 
+export function loadOrganisationAudit() {
+  const stored = readJson('hi5central-organisation-audit-v1', [])
+  return Array.isArray(stored) ? stored : []
+}
+
 export function loadProjects() {
   const stored = readJson('hi5central-projects-v1', seedProjects)
   if (!Array.isArray(stored) || !stored.length) return seedProjects
@@ -254,6 +259,10 @@ export function saveOrganisationTeams(teams) {
 
 export function saveOrganisationDepartments(departments) {
   writeJson('hi5central-organisation-departments-v1', departments)
+}
+
+export function saveOrganisationAudit(events) {
+  writeJson('hi5central-organisation-audit-v1', Array.isArray(events) ? events.slice(0, 500) : [])
 }
 
 export function saveProjects(projects) {
