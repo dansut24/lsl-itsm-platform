@@ -1,6 +1,8 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
+  AtSign,
+  Bold,
   BookOpen,
   CalendarClock,
   CheckCircle2,
@@ -9,14 +11,21 @@ import {
   ClipboardCheck,
   Clock3,
   FileText,
+  FileUp,
+  Image,
   Inbox,
+  Italic,
+  Link2,
+  List,
   ListChecks,
+  ListOrdered,
   MessageSquarePlus,
   Paperclip,
   Plus,
   Send,
   Server,
   Share2,
+  Table2,
   Trash2,
   UserCheck,
   UserRound,
@@ -25,6 +34,7 @@ import {
 } from 'lucide-react'
 import { priorityClass, statusClass } from '../../lib/workspace.js'
 import { organisationPeople, organisationTeams } from '../../data/organisationData.js'
+import { readLocalAttachment, removeLocalAttachment, storeLocalAttachment } from '../../services/localAttachmentStore.js'
 import {
   buildLifecycleTransition,
   getAllowedTransitions,
@@ -78,6 +88,98 @@ function fileSize(bytes = 0) {
   if (!bytes) return '0 KB'
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+
+const allowedRichTags = new Set([
+  'A', 'B', 'BLOCKQUOTE', 'BR', 'CODE', 'DIV', 'EM', 'H1', 'H2', 'H3', 'HR', 'I', 'IMG',
+  'LI', 'OL', 'P', 'PRE', 'S', 'SPAN', 'STRONG', 'TABLE', 'TBODY', 'TD', 'TFOOT', 'TH',
+  'THEAD', 'TR', 'U', 'UL',
+])
+
+function sanitizeRichHtml(html = '') {
+  if (typeof document === 'undefined') return String(html || '')
+  const template = document.createElement('template')
+  template.innerHTML = String(html || '')
+
+  const sanitizeNode = (node) => {
+    Array.from(node.children || []).forEach((child) => {
+      if (!allowedRichTags.has(child.tagName)) {
+        sanitizeNode(child)
+        child.replaceWith(...Array.from(child.childNodes))
+        return
+      }
+
+      Array.from(child.attributes).forEach((attribute) => {
+        const name = attribute.name.toLowerCase()
+        const value = attribute.value || ''
+        const allowed = ['href', 'src', 'alt', 'title', 'colspan', 'rowspan', 'target'].includes(name)
+        if (!allowed || name.startsWith('on')) child.removeAttribute(attribute.name)
+        if ((name === 'href' || name === 'src') && /^javascript:/i.test(value.trim())) child.removeAttribute(attribute.name)
+      })
+
+      if (child.tagName === 'A') {
+        child.setAttribute('target', '_blank')
+        child.setAttribute('rel', 'noreferrer')
+      }
+      sanitizeNode(child)
+    })
+  }
+
+  sanitizeNode(template.content)
+  return template.innerHTML
+}
+
+function htmlToPlainText(html = '') {
+  if (typeof document === 'undefined') return String(html || '').replace(/<[^>]+>/g, ' ')
+  const template = document.createElement('template')
+  template.innerHTML = sanitizeRichHtml(html)
+  return (template.content.textContent || '').replace(/\s+/g, ' ').trim()
+}
+
+function insertHtmlAtSelection(html) {
+  if (typeof document === 'undefined') return
+  document.execCommand('insertHTML', false, sanitizeRichHtml(html))
+}
+
+function LocalAttachmentLink({ attachment, imagePreview = false }) {
+  const [url, setUrl] = useState(attachment.dataUrl || '')
+
+  useEffect(() => {
+    let active = true
+    let objectUrl = ''
+    if (attachment.dataUrl || !attachment.storageKey) return undefined
+
+    readLocalAttachment(attachment.storageKey)
+      .then((blob) => {
+        if (!active || !blob) return
+        objectUrl = URL.createObjectURL(blob)
+        setUrl(objectUrl)
+      })
+      .catch(() => {})
+
+    return () => {
+      active = false
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [attachment.dataUrl, attachment.storageKey])
+
+  const isImage = String(attachment.type || '').startsWith('image/')
+  if (imagePreview && isImage && url) {
+    return (
+      <a className="rich-activity-image" href={url} target="_blank" rel="noreferrer">
+        <img alt={attachment.name} src={url} />
+        <span>{attachment.name}</span>
+      </a>
+    )
+  }
+
+  return (
+    <a className="rich-activity-file" href={url || undefined} download={attachment.name} target={url ? '_blank' : undefined} rel="noreferrer">
+      <FileText size={16} />
+      <span><strong>{attachment.name}</strong><small>{fileSize(attachment.size)} · {attachment.type || 'File'}</small></span>
+    </a>
+  )
 }
 
 function incidentSlaTargets(priority) {
@@ -466,10 +568,13 @@ function activityActor(comment) {
 
 export function UnifiedRecordDetailView({
   addComment,
+  currentUser,
   newComment,
   openAssetByName,
   openRecordTab,
+  people,
   setNewComment,
+  teams,
   ticket,
   tickets,
   transitionTicket,
@@ -483,6 +588,13 @@ export function UnifiedRecordDetailView({
   const [assignmentGroupId, setAssignmentGroupId] = useState('')
   const [assignmentPersonId, setAssignmentPersonId] = useState('')
   const fileInputRef = useRef(null)
+  const activityFileInputRef = useRef(null)
+  const richEditorRef = useRef(null)
+  const [richEditorText, setRichEditorText] = useState('')
+  const [pendingActivityFiles, setPendingActivityFiles] = useState([])
+  const [mentionQuery, setMentionQuery] = useState('')
+  const [mentionOpen, setMentionOpen] = useState(false)
+  const [composerNotice, setComposerNotice] = useState('')
   const meta = recordTypeMeta[ticket.type] || recordTypeMeta.Incident
   const lifecycleDefinition = getLifecycleDefinition(ticket.type)
   const lifecycle = lifecycleDefinition.stages
@@ -496,6 +608,9 @@ export function UnifiedRecordDetailView({
     : []
   const tasks = useMemo(() => syntheticTasks(ticket), [ticket])
   const attachments = ticket.attachments || []
+  const directoryPeople = Array.isArray(people) && people.length ? people : organisationPeople
+  const directoryTeams = Array.isArray(teams) && teams.length ? teams : organisationTeams
+  const actorName = currentUser?.name || 'Dana Sinclair'
 
   const relatedRecords = useMemo(() => {
     const ids = relatedRecordIds(ticket, tickets)
@@ -526,14 +641,14 @@ export function UnifiedRecordDetailView({
     if (!transitionTarget) return
     const result = transitionTicket
       ? transitionTicket(ticket.id, transitionTarget, transitionValues)
-      : buildLifecycleTransition(ticket, transitionTarget, transitionValues, 'Dana Sinclair')
+      : buildLifecycleTransition(ticket, transitionTarget, transitionValues, actorName)
     if (!result?.ok) return
     if (!transitionTicket) updateTicket(ticket.id, result.updates)
     setTransitionTarget(null)
     setTransitionValues({})
   }
 
-  const activeAssignmentGroups = organisationTeams.filter((team) => team.active && team.departmentId === 'DEPT-TECH')
+  const activeAssignmentGroups = directoryTeams.filter((team) => team.active && team.departmentId === 'DEPT-TECH')
   const selectedAssignmentGroup = activeAssignmentGroups.find((team) => team.id === assignmentGroupId)
   const eligibleTechnicians = organisationPeople.filter((person) => (
     person.active
@@ -543,7 +658,7 @@ export function UnifiedRecordDetailView({
 
   function openAssignment() {
     const currentGroup = activeAssignmentGroups.find((group) => group.name === ticket.team)
-    const currentPerson = organisationPeople.find((person) => person.name === ticket.assignee)
+    const currentPerson = directoryPeople.find((person) => person.name === ticket.assignee)
     setAssignmentGroupId(currentGroup?.id || '')
     setAssignmentPersonId(currentPerson?.teamId === currentGroup?.id ? currentPerson.id : '')
     setAssignmentOpen(true)
@@ -555,38 +670,38 @@ export function UnifiedRecordDetailView({
     const nextAssignee = person?.name || 'Unassigned'
     const oldGroup = ticket.team || 'Unassigned'
     const oldAssignee = ticket.assignee || 'Unassigned'
-    const assignmentNote = `System: Assignment changed from ${oldGroup} / ${oldAssignee} to ${selectedAssignmentGroup.name} / ${nextAssignee} by Dana Sinclair.`
+    const assignmentNote = `System: Assignment changed from ${oldGroup} / ${oldAssignee} to ${selectedAssignmentGroup.name} / ${nextAssignee} by ${actorName}.`
     updateTicket(ticket.id, {
       team: selectedAssignmentGroup.name,
       assignee: nextAssignee,
       updated: 'Just now',
-      comments: [...(ticket.comments || []), assignmentNote],
+      comments: [assignmentNote, ...(ticket.comments || [])],
     })
     setAssignmentOpen(false)
   }
 
   function returnToGroup() {
-    const assignmentNote = `System: ${ticket.assignee || 'Unassigned'} returned this record to ${ticket.team || 'the assignment group'} by Dana Sinclair.`
+    const assignmentNote = `System: ${ticket.assignee || 'Unassigned'} returned this record to ${ticket.team || 'the assignment group'} by ${actorName}.`
     updateTicket(ticket.id, {
       assignee: 'Unassigned',
       updated: 'Just now',
-      comments: [...(ticket.comments || []), assignmentNote],
+      comments: [assignmentNote, ...(ticket.comments || [])],
     })
   }
 
   function assignToMe() {
-    const dana = organisationPeople.find((person) => person.name === 'Dana Sinclair')
-    const danaTeam = organisationTeams.find((team) => team.id === dana?.teamId)
-    const assignmentNote = `System: ${ticket.team || 'Unassigned'} / ${ticket.assignee || 'Unassigned'} assigned to ${danaTeam?.name || 'Service Desk'} / Dana Sinclair.`
+    const dana = directoryPeople.find((person) => person.name === actorName)
+    const danaTeam = directoryTeams.find((team) => team.id === dana?.teamId)
+    const assignmentNote = `System: ${ticket.team || 'Unassigned'} / ${ticket.assignee || 'Unassigned'} assigned to ${danaTeam?.name || 'Service Desk'} / ${actorName}.`
     const assignmentPatch = {
       team: danaTeam?.name || 'Service Desk',
-      assignee: 'Dana Sinclair',
+      assignee: actorName,
       updated: 'Just now',
-      comments: [...(ticket.comments || []), assignmentNote],
+      comments: [assignmentNote, ...(ticket.comments || [])],
     }
 
     if (ticket.type === 'Incident' && ticket.status === 'New' && allowedTransitions.includes('Assigned')) {
-      const result = buildLifecycleTransition({ ...ticket, ...assignmentPatch }, 'Assigned', {}, 'Dana Sinclair')
+      const result = buildLifecycleTransition({ ...ticket, ...assignmentPatch }, 'Assigned', {}, actorName)
       if (result.ok) {
         updateTicket(ticket.id, { ...assignmentPatch, ...result.updates })
         return
@@ -596,23 +711,194 @@ export function UnifiedRecordDetailView({
   }
 
 
-  function attachFiles(event) {
+  const mentionCandidates = useMemo(() => {
+    if (!mentionOpen) return []
+    const query = mentionQuery.trim().toLowerCase()
+    return directoryPeople
+      .filter((person) => person.active && person.name !== actorName)
+      .filter((person) => !query || `${person.name} ${person.role} ${person.team}`.toLowerCase().includes(query))
+      .slice(0, 6)
+  }, [actorName, directoryPeople, mentionOpen, mentionQuery])
+
+  function syncRichEditor() {
+    const editor = richEditorRef.current
+    if (!editor) return
+    const text = (editor.innerText || '').replace(/\u00a0/g, ' ').trim()
+    setRichEditorText(text)
+    setNewComment?.(text)
+
+    const match = (editor.innerText || '').match(/(?:^|\s)@([^@\n]{0,40})$/)
+    setMentionOpen(Boolean(match))
+    setMentionQuery(match?.[1] || '')
+  }
+
+  function runEditorCommand(command, value = null) {
+    richEditorRef.current?.focus()
+    document.execCommand(command, false, value)
+    syncRichEditor()
+  }
+
+  function addLink() {
+    const url = window.prompt('Paste the link URL')
+    if (!url) return
+    runEditorCommand('createLink', url)
+  }
+
+  function addSimpleTable() {
+    richEditorRef.current?.focus()
+    insertHtmlAtSelection('<table><tbody><tr><th>Column 1</th><th>Column 2</th></tr><tr><td>Value</td><td>Value</td></tr></tbody></table><p><br></p>')
+    syncRichEditor()
+  }
+
+  async function queueActivityFiles(files) {
+    const incoming = Array.from(files || [])
+    if (!incoming.length) return
+    setComposerNotice('')
+
+    const created = []
+    for (const file of incoming) {
+      const id = `${ticket.id}-ACTFILE-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const storageKey = `activity:${id}`
+      try {
+        await storeLocalAttachment(storageKey, file)
+        created.push({ id, storageKey, name: file.name || `Pasted ${file.type || 'file'}`, size: file.size || 0, type: file.type || 'application/octet-stream' })
+      } catch {
+        setComposerNotice('One or more files could not be stored in this browser. Try a smaller file or use the file picker again.')
+      }
+    }
+    if (created.length) setPendingActivityFiles((current) => [...current, ...created])
+  }
+
+  function removePendingActivityFile(file) {
+    setPendingActivityFiles((current) => current.filter((item) => item.id !== file.id))
+    if (file.storageKey) removeLocalAttachment(file.storageKey).catch(() => {})
+  }
+
+  async function handleRichPaste(event) {
+    const clipboard = event.clipboardData
+    if (!clipboard) return
+    const fileItems = Array.from(clipboard.items || []).filter((item) => item.kind === 'file')
+    const files = fileItems.map((item) => item.getAsFile()).filter(Boolean)
+    const html = clipboard.getData('text/html')
+    const text = clipboard.getData('text/plain')
+
+    if (files.length) {
+      event.preventDefault()
+      await queueActivityFiles(files)
+      if (text && !html) insertHtmlAtSelection(`<p>${text.replace(/[&<>]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[character])).replace(/\n/g, '<br>')}</p>`)
+      syncRichEditor()
+      return
+    }
+
+    if (html) {
+      event.preventDefault()
+      insertHtmlAtSelection(html)
+      syncRichEditor()
+    }
+  }
+
+  async function handleRichDrop(event) {
+    const files = Array.from(event.dataTransfer?.files || [])
+    if (!files.length) return
+    event.preventDefault()
+    await queueActivityFiles(files)
+  }
+
+  function insertMention(person) {
+    richEditorRef.current?.focus()
+    const selection = window.getSelection?.()
+    const anchor = selection?.anchorNode
+    const offset = selection?.anchorOffset || 0
+    if (anchor?.nodeType === Node.TEXT_NODE) {
+      const before = anchor.textContent.slice(0, offset)
+      const after = anchor.textContent.slice(offset)
+      const replaced = before.replace(/@[^@\n]{0,40}$/, `@${person.name} `)
+      anchor.textContent = `${replaced}${after}`
+      const range = document.createRange()
+      range.setStart(anchor, replaced.length)
+      range.collapse(true)
+      selection.removeAllRanges()
+      selection.addRange(range)
+    } else {
+      document.execCommand('insertText', false, `@${person.name} `)
+    }
+    setMentionOpen(false)
+    setMentionQuery('')
+    syncRichEditor()
+  }
+
+  function submitRichActivity() {
+    const editor = richEditorRef.current
+    if (!editor) return
+    const html = sanitizeRichHtml(editor.innerHTML)
+    const text = htmlToPlainText(html)
+    if (!text && !pendingActivityFiles.length) return
+
+    const mentions = directoryPeople
+      .filter((person) => text.includes(`@${person.name}`))
+      .map((person) => ({ id: person.id, name: person.name, email: person.email }))
+
+    addComment(noteMode, {
+      html,
+      text,
+      mentions,
+      attachments: pendingActivityFiles,
+    })
+    editor.innerHTML = ''
+    setRichEditorText('')
+    setNewComment?.('')
+    setPendingActivityFiles([])
+    setMentionOpen(false)
+    setMentionQuery('')
+    setComposerNotice('')
+  }
+
+
+  async function attachFiles(event) {
     const files = Array.from(event.target.files || [])
     if (!files.length) return
-    const created = files.map((file, index) => ({
-      id: `${ticket.id}-ATT-${Date.now()}-${index}`,
-      name: file.name,
-      size: file.size,
-      type: file.type || 'File',
-      uploaded: 'Just now',
-      uploadedBy: 'Dana Sinclair',
-    }))
-    updateTicket(ticket.id, { attachments: [...attachments, ...created] })
+    const created = []
+    for (const file of files) {
+      const id = `${ticket.id}-ATT-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const storageKey = `attachment:${id}`
+      try {
+        await storeLocalAttachment(storageKey, file)
+        created.push({
+          id,
+          storageKey,
+          name: file.name,
+          size: file.size,
+          type: file.type || 'application/octet-stream',
+          uploaded: 'Just now',
+          uploadedBy: actorName,
+        })
+      } catch {
+        created.push({
+          id,
+          name: file.name,
+          size: file.size,
+          type: file.type || 'application/octet-stream',
+          uploaded: 'Just now',
+          uploadedBy: actorName,
+          storageError: true,
+        })
+      }
+    }
+    updateTicket(ticket.id, { attachments: [...created, ...attachments] })
     event.target.value = ''
   }
 
   function removeAttachment(id) {
-    updateTicket(ticket.id, { attachments: attachments.filter((attachment) => attachment.id !== id) })
+    const attachment = attachments.find((item) => item.id === id)
+    if (attachment?.storageKey) removeLocalAttachment(attachment.storageKey).catch(() => {})
+    const nextActivities = (ticket.activities || []).map((activity) => ({
+      ...activity,
+      attachments: (activity.attachments || []).filter((item) => item.id !== id),
+    }))
+    updateTicket(ticket.id, {
+      attachments: attachments.filter((item) => item.id !== id),
+      activities: nextActivities,
+    })
   }
 
   function renderWorkflowPanel() {
@@ -723,6 +1009,16 @@ export function UnifiedRecordDetailView({
   }
 
   function renderActivity() {
+    const structuredActivities = (ticket.activities || []).map((activity) => ({ ...activity, structured: true }))
+    const legacyActivities = (ticket.comments || []).map((comment, index) => ({
+      id: `${ticket.id}-legacy-${index}`,
+      structured: false,
+      actor: activityActor(comment),
+      text: comment,
+      createdLabel: index === 0 ? ticket.updated : 'Earlier',
+    }))
+    const activityItems = [...structuredActivities, ...legacyActivities]
+
     return (
       <div className="unified-detail-activity-layout">
         <DetailSection eyebrow="Conversation" icon={MessageSquarePlus} title="Add activity">
@@ -730,21 +1026,88 @@ export function UnifiedRecordDetailView({
             <button className={noteMode === 'work' ? 'active' : ''} onClick={() => setNoteMode('work')} type="button">Internal work note</button>
             <button className={noteMode === 'customer' ? 'active' : ''} onClick={() => setNoteMode('customer')} type="button">Customer comment</button>
           </div>
-          <textarea className="unified-detail-comment-box" value={newComment} onChange={(event) => setNewComment(event.target.value)} placeholder={noteMode === 'work' ? 'Add troubleshooting, handover or investigation notes…' : 'Write an update visible to the requester…'} />
-          <div className="unified-detail-comment-actions">
-            <span>{noteMode === 'work' ? 'Visible to technicians only' : 'Requester-facing update'}</span>
-            <button className="primary-action compact" disabled={!newComment.trim()} onClick={() => addComment(noteMode)} type="button"><Send size={15} /> Add {noteMode === 'work' ? 'work note' : 'comment'}</button>
+
+          <div className={`rich-activity-composer ${noteMode}`} onDragOver={(event) => event.preventDefault()} onDrop={handleRichDrop}>
+            <div className="rich-activity-toolbar" aria-label="Formatting tools">
+              <button aria-label="Bold" onMouseDown={(event) => event.preventDefault()} onClick={() => runEditorCommand('bold')} type="button"><Bold size={15} /></button>
+              <button aria-label="Italic" onMouseDown={(event) => event.preventDefault()} onClick={() => runEditorCommand('italic')} type="button"><Italic size={15} /></button>
+              <button aria-label="Bulleted list" onMouseDown={(event) => event.preventDefault()} onClick={() => runEditorCommand('insertUnorderedList')} type="button"><List size={15} /></button>
+              <button aria-label="Numbered list" onMouseDown={(event) => event.preventDefault()} onClick={() => runEditorCommand('insertOrderedList')} type="button"><ListOrdered size={15} /></button>
+              <button aria-label="Insert link" onMouseDown={(event) => event.preventDefault()} onClick={addLink} type="button"><Link2 size={15} /></button>
+              <button aria-label="Insert table" onMouseDown={(event) => event.preventDefault()} onClick={addSimpleTable} type="button"><Table2 size={15} /></button>
+              <span className="rich-activity-toolbar-divider" />
+              <button aria-label="Attach any file" onClick={() => activityFileInputRef.current?.click()} type="button"><FileUp size={15} /></button>
+              <button className="rich-activity-mention-hint" aria-label="Mention a person" onMouseDown={(event) => event.preventDefault()} onClick={() => { richEditorRef.current?.focus(); document.execCommand('insertText', false, '@'); syncRichEditor() }} type="button"><AtSign size={15} /></button>
+              <input hidden multiple ref={activityFileInputRef} type="file" onChange={async (event) => { await queueActivityFiles(event.target.files); event.target.value = '' }} />
+            </div>
+
+            <div className="rich-activity-editor-wrap">
+              {!richEditorText && !richEditorRef.current?.innerText && <span className="rich-activity-placeholder">{noteMode === 'work' ? 'Add troubleshooting, handover or investigation notes… Paste screenshots, files, tables or formatted content directly here.' : 'Write an update visible to the requester… You can paste screenshots, files, tables and formatted content.'}</span>}
+              <div
+                aria-label={noteMode === 'work' ? 'Internal work note' : 'Customer comment'}
+                className="rich-activity-editor"
+                contentEditable
+                onInput={syncRichEditor}
+                onPaste={handleRichPaste}
+                ref={richEditorRef}
+                role="textbox"
+                suppressContentEditableWarning
+              />
+              {mentionOpen && (
+                <div className="rich-mention-menu">
+                  <span>Mention someone</span>
+                  {mentionCandidates.length ? mentionCandidates.map((person) => (
+                    <button key={person.id} onMouseDown={(event) => { event.preventDefault(); insertMention(person) }} type="button">
+                      <span className="unified-detail-avatar small">{initials(person.name)}</span>
+                      <span><strong>{person.name}</strong><small>{person.role} · {person.team}</small></span>
+                    </button>
+                  )) : <p>No matching people</p>}
+                </div>
+              )}
+            </div>
+
+            {pendingActivityFiles.length > 0 && (
+              <div className="rich-activity-pending-files">
+                {pendingActivityFiles.map((file) => (
+                  <div key={file.id} className={String(file.type).startsWith('image/') ? 'image-file' : ''}>
+                    {String(file.type).startsWith('image/') ? <Image size={16} /> : <FileText size={16} />}
+                    <span><strong>{file.name}</strong><small>{fileSize(file.size)}</small></span>
+                    <button aria-label={`Remove ${file.name}`} onClick={() => removePendingActivityFile(file)} type="button"><Trash2 size={14} /></button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {composerNotice && <div className="rich-activity-notice"><AlertCircle size={15} />{composerNotice}</div>}
+            <div className="unified-detail-comment-actions rich">
+              <span>{noteMode === 'work' ? 'Visible to technicians only · @mentions notify colleagues' : 'Requester-facing update · internal notes remain hidden'}</span>
+              <button className="primary-action compact" disabled={!richEditorText.trim() && !pendingActivityFiles.length} onClick={submitRichActivity} type="button"><Send size={15} /> Add {noteMode === 'work' ? 'work note' : 'comment'}</button>
+            </div>
           </div>
         </DetailSection>
 
         <DetailSection eyebrow="Timeline" icon={Clock3} title="Activity history">
-          <div className="unified-detail-timeline">
-            {(ticket.comments || []).length ? ticket.comments.map((comment, index) => (
-              <article key={`${ticket.id}-activity-${index}`}>
+          <div className="unified-detail-timeline rich-timeline">
+            {activityItems.length ? activityItems.map((activity, index) => (
+              <article className={activity.structured ? `rich-activity-item ${activity.kind || 'work'}` : ''} key={activity.id || `${ticket.id}-activity-${index}`}>
                 <span className="unified-detail-timeline-marker" />
                 <div>
-                  <header><strong>{activityActor(comment)}</strong><span>{index === 0 ? ticket.updated : 'Earlier'}</span></header>
-                  <p>{comment}</p>
+                  <header>
+                    <strong>{activity.actor || activityActor(activity.text)}</strong>
+                    <span>{activity.createdLabel || activity.createdAtLabel || (index === 0 ? ticket.updated : 'Earlier')}</span>
+                  </header>
+                  {activity.structured ? (
+                    <>
+                      <div className="rich-activity-meta"><span className={activity.kind === 'customer' ? 'customer' : 'internal'}>{activity.kind === 'customer' ? 'Customer comment' : 'Internal work note'}</span>{activity.mentions?.length > 0 && <span><AtSign size={12} /> {activity.mentions.map((mention) => mention.name).join(', ')}</span>}</div>
+                      {activity.html && <div className="rich-activity-content" dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(activity.html) }} />}
+                      {activity.attachments?.length > 0 && (
+                        <div className="rich-activity-attachments">
+                          {activity.attachments.filter((attachment) => String(attachment.type).startsWith('image/')).map((attachment) => <LocalAttachmentLink attachment={attachment} imagePreview key={attachment.id} />)}
+                          {activity.attachments.filter((attachment) => !String(attachment.type).startsWith('image/')).map((attachment) => <LocalAttachmentLink attachment={attachment} key={attachment.id} />)}
+                        </div>
+                      )}
+                    </>
+                  ) : <p>{activity.text}</p>}
                 </div>
               </article>
             )) : <p className="unified-detail-empty-copy">No activity has been recorded yet.</p>}
@@ -844,7 +1207,7 @@ export function UnifiedRecordDetailView({
             {attachments.map((attachment) => (
               <article key={attachment.id}>
                 <span className="unified-detail-file-icon"><FileText size={18} /></span>
-                <div><strong>{attachment.name}</strong><small>{fileSize(attachment.size)} · {attachment.uploadedBy || 'Service Desk'} · {attachment.uploaded || 'Previously'}</small></div>
+                <div className="unified-detail-attachment-copy"><strong>{attachment.name}</strong><small>{fileSize(attachment.size)} · {attachment.uploadedBy || 'Service Desk'} · {attachment.uploaded || 'Previously'}</small>{(attachment.storageKey || attachment.dataUrl) && <LocalAttachmentLink attachment={attachment} />}</div>
                 <button aria-label={`Remove ${attachment.name}`} onClick={() => removeAttachment(attachment.id)} type="button"><Trash2 size={15} /></button>
               </article>
             ))}

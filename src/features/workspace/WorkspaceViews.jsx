@@ -1548,11 +1548,14 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
 
 export function TicketRecordView({
   addComment,
+  currentUser,
   newComment,
   openAssetByName,
   openRecordTab,
+  people,
   selectedTicket,
   setNewComment,
+  teams,
   tickets,
   transitionTicket,
   updateTicket,
@@ -1572,11 +1575,14 @@ export function TicketRecordView({
   return (
     <UnifiedRecordDetailView
       addComment={addComment}
+      currentUser={currentUser}
       key={selectedTicket.id}
       newComment={newComment}
       openAssetByName={openAssetByName}
       openRecordTab={openRecordTab}
+      people={people}
       setNewComment={setNewComment}
+      teams={teams}
       ticket={selectedTicket}
       tickets={tickets}
       transitionTicket={transitionTicket}
