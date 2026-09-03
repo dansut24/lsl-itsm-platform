@@ -64,8 +64,11 @@ export function LoginScreen({
   setLoginMode,
   setTheme,
   theme,
+  allowedModes = Object.keys(loginProfiles),
 }) {
-  const activeProfile = loginProfiles[loginMode]
+  const availableProfiles = Object.entries(loginProfiles).filter(([mode]) => allowedModes.includes(mode))
+  const activeMode = allowedModes.includes(loginMode) ? loginMode : allowedModes[0]
+  const activeProfile = loginProfiles[activeMode]
 
   return (
     <main className="login-shell" data-accent={accent} data-theme={theme}>
@@ -89,7 +92,7 @@ export function LoginScreen({
         </div>
 
         <div className="login-mode-switch" aria-label="Choose login area">
-          {Object.entries(loginProfiles).map(([mode, profile]) => (
+          {availableProfiles.map(([mode, profile]) => (
             <button
               className={loginMode === mode ? 'active' : ''}
               key={mode}
@@ -134,7 +137,7 @@ export function LoginScreen({
 
         <div className="mobile-credential-strip">
           <span>Baked-in credentials</span>
-          {Object.entries(loginProfiles).map(([mode, profile]) => (
+          {availableProfiles.map(([mode, profile]) => (
             <button key={mode} onClick={() => fillCredentials(mode)} type="button">
               <strong>{profile.label}</strong>
               <small>{profile.username}</small>
@@ -148,7 +151,7 @@ export function LoginScreen({
         <span className="eyebrow">Baked-in credentials</span>
         <h2>No database needed for this prototype.</h2>
         <div className="credential-stack">
-          {Object.entries(loginProfiles).map(([mode, profile]) => (
+          {availableProfiles.map(([mode, profile]) => (
             <button className="credential-card" key={mode} onClick={() => fillCredentials(mode)} type="button">
               <KeyRound size={18} aria-hidden="true" />
               <span>{profile.label}</span>
