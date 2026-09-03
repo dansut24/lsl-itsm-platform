@@ -30,6 +30,7 @@ import {
 import { liveChatReplyOptions } from './data/liveChatData.js'
 import { createNotification } from './data/notificationData.js'
 import { buildLifecycleTransition } from './lib/lifecycle.js'
+import { portalHomePath, portalRequestPath, portalRouteFromLocation, resolveTenantSurface } from './lib/tenantSurface.js'
 import {
   buildOrganisationAuditEntry,
   resolveCurrentPerson,
@@ -60,6 +61,7 @@ import {
   loadOrganisationDepartments,
   loadOrganisationPeople,
   loadOrganisationTeams,
+  loadPortalSession,
   loadSession,
   loadSidebarMode,
   loadTheme,
@@ -77,6 +79,7 @@ import {
   saveOrganisationDepartments,
   saveOrganisationPeople,
   saveOrganisationTeams,
+  savePortalSession,
   saveSession,
   saveSidebarMode,
   saveTheme,
@@ -91,6 +94,7 @@ import { RotaView } from './features/rota/RotaView.jsx'
 import { LiveChatView } from './features/live-chat/LiveChatView.jsx'
 import { NotificationDrawer } from './features/notifications/NotificationDrawer.jsx'
 import { PeopleView } from './features/people/PeopleView.jsx'
+import { PortalLoginScreen, SelfServicePortalApp } from './features/portal/SelfServicePortalApp.jsx'
 import {
   ChangesView,
   CmdbRecordView,
@@ -103,8 +107,6 @@ import {
   NewTabView,
   RecordCreateMenu,
   ReportsView,
-  SelfServicePortal,
-  SelfServiceShell,
   SettingsView,
   TicketRecordView,
   TicketsView,
@@ -313,6 +315,8 @@ function addWorkspaceTab(currentTabs, tab) {
 }
 
 function App() {
+  const tenantSurface = resolveTenantSurface()
+  const isPortalSurface = tenantSurface.kind === 'portal'
   const [initialTickets] = useState(loadTickets)
   const [initialProjects] = useState(loadProjects)
   const [initialRotaEntries] = useState(loadRotaEntries)
@@ -324,9 +328,13 @@ function App() {
   const [initialOrganisationPeople] = useState(loadOrganisationPeople)
   const [initialOrganisationTeams] = useState(loadOrganisationTeams)
   const [initialOrganisationDepartments] = useState(loadOrganisationDepartments)
-  const [initialSession] = useState(loadSession)
+  const [initialSession] = useState(() => isPortalSurface ? loadPortalSession() : loadSession())
   const [initialWorkspace] = useState(loadWorkspace)
-  const [initialRoute] = useState(routeFromLocation)
+  const [initialRoute] = useState(() => {
+    if (isPortalSurface) return portalRouteFromLocation(tenantSurface)
+    const route = routeFromLocation()
+    return route.viewId === 'portal' ? defaultRouteForRole('analyst') : route
+  })
   const initialWorkspaceRoute = resolveRouteForRole(
     initialRoute,
     initialSession?.role || 'analyst',
@@ -401,7 +409,7 @@ function App() {
   const [tabContextMenu, setTabContextMenu] = useState(null)
   const [newComment, setNewComment] = useState('')
   const [portalQuery, setPortalQuery] = useState('')
-  const [loginMode, setLoginMode] = useState('analyst')
+  const [loginMode, setLoginMode] = useState(isPortalSurface ? 'requester' : 'analyst')
   const [loginForm, setLoginForm] = useState({ username: '', password: '' })
   const [loginError, setLoginError] = useState('')
   const [ticketDraft, setTicketDraft] = useState(() => emptyTicketDraft(initialRouteType || 'Incident'))
@@ -704,8 +712,9 @@ function App() {
   }, [sidebarMode])
 
   useEffect(() => {
-    saveSession(session)
-  }, [session])
+    if (isPortalSurface) savePortalSession(session)
+    else saveSession(session)
+  }, [isPortalSurface, session])
 
   useEffect(() => {
     if (session?.role !== 'analyst') return
@@ -718,10 +727,15 @@ function App() {
   }, [liveChatPreferences.enabled, session?.role])
 
   useEffect(() => {
-    const currentRoute = routeFromLocation()
+    const currentRoute = isPortalSurface ? portalRouteFromLocation(tenantSurface) : routeFromLocation()
 
     if (!session) {
-      writeRoute('/login', { replace: true })
+      if (!isPortalSurface) writeRoute('/login', { replace: true })
+      return
+    }
+
+    if (!isPortalSurface && currentRoute.viewId === 'portal') {
+      writeRoute('/dashboard', { replace: true })
       return
     }
 
@@ -732,15 +746,19 @@ function App() {
 
     const resolvedRoute = resolveRouteForRole(currentRoute, session.role)
     if (resolvedRoute.path !== currentRoute.path) {
-      writeRoute(resolvedRoute.path, { replace: true })
+      writeRoute(isPortalSurface ? portalHomePath(tenantSurface) : resolvedRoute.path, { replace: true })
     }
-  }, [liveChatPreferences.enabled, session])
+  }, [isPortalSurface, liveChatPreferences.enabled, session])
 
   useEffect(() => {
     function handlePopState() {
       if (!session) return
 
-      const currentRoute = routeFromLocation()
+      const currentRoute = isPortalSurface ? portalRouteFromLocation(tenantSurface) : routeFromLocation()
+      if (!isPortalSurface && currentRoute.viewId === 'portal') {
+        writeRoute('/dashboard', { replace: true })
+        return
+      }
       const route = resolveRouteForRole(currentRoute, session.role)
 
       if (session.role === 'analyst' && route.viewId === 'livechat' && !liveChatPreferences.enabled) {
@@ -795,7 +813,7 @@ function App() {
 
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
-  }, [activeTabKey, liveChatPreferences.enabled, session, tabs, ticketDraft, tickets])
+  }, [activeTabKey, isPortalSurface, liveChatPreferences.enabled, session, tabs, ticketDraft, tickets])
 
   useEffect(() => {
     if (!toast) return undefined
@@ -921,7 +939,10 @@ function App() {
     ? projects.find((project) => project.id === activeTab.projectId)
     : undefined
   const selectedPortalRequest = activeTab?.portalRequestId
-    ? tickets.find((ticket) => ticket.id === activeTab.portalRequestId)
+    ? tickets.find((ticket) => (
+        ticket.id === activeTab.portalRequestId
+        && (session?.role !== 'requester' || ticket.requester === session.name || (ticket.requesterEmail && ticket.requesterEmail === session.username))
+      ))
     : undefined
   const navItems = analystNavIds.map((id) => viewMeta[id])
   const navGroups = analystNavGroups.map((group) => ({
@@ -1529,7 +1550,7 @@ function App() {
         : [...currentTabs, tab],
     )
     setActiveTabKey(tab.key)
-    writeRoute(pathForTab(tab, tickets))
+    writeRoute(portalRequestPath(tenantSurface, ticket.id))
   }
 
   function openPortalHome() {
@@ -1540,7 +1561,7 @@ function App() {
         : [...currentTabs, tab],
     )
     setActiveTabKey(tab.key)
-    writeRoute('/portal')
+    writeRoute(portalHomePath(tenantSurface))
   }
 
   function openSidebarTab(viewId) {
@@ -1931,6 +1952,9 @@ function App() {
       type: portalDraft.category.includes('Issue') ? 'Incident' : 'Service Request',
       title: portalDraft.title.trim(),
       requester: requesterName,
+      requesterEmail: requestEmail,
+      requesterJobTitle: people.find((person) => person.name === requesterName)?.role || '',
+      requesterDepartment: departments.find((department) => department.id === people.find((person) => person.name === requesterName)?.departmentId)?.name || '',
       priority: portalDraft.urgency,
       status: 'New',
       team: 'Service Desk',
@@ -1944,6 +1968,7 @@ function App() {
       description: portalDraft.description.trim() || 'Submitted through the Hi5Central self-service portal.',
       nextStep: 'Service Desk triage.',
       comments: ['Submitted through the self-service portal.'],
+      activities: [],
       linkedAssets: [],
     }
 
@@ -1962,6 +1987,38 @@ function App() {
     }
   }
 
+  function addPortalComment(ticketId, text) {
+    const currentTicket = tickets.find((ticket) => ticket.id === ticketId)
+    const requesterOwnsTicket = currentTicket && session?.role === 'requester'
+      && (currentTicket.requester === session.name || (currentTicket.requesterEmail && currentTicket.requesterEmail === session.username))
+    if (!requesterOwnsTicket || !text?.trim()) return
+    const actor = session?.name || 'Requester'
+    const activity = {
+      id: `${ticketId}-PORTAL-${Date.now()}`,
+      kind: 'customer',
+      actor,
+      createdAt: new Date().toISOString(),
+      createdAtLabel: 'Just now',
+      html: '',
+      text: text.trim(),
+      mentions: [],
+      attachments: [],
+      source: 'self-service-portal',
+    }
+    updateTicket(ticketId, {
+      activities: [activity, ...(currentTicket.activities || [])],
+      updated: 'Just now',
+    })
+    pushNotification({
+      source: 'itsm',
+      title: `${actor} replied on ${ticketId}`,
+      detail: `A requester added a new customer-facing update to ${currentTicket.title}.`,
+      target: { type: 'ticket', recordId: ticketId },
+      tone: 'info',
+    })
+    setToast(`Update added to ${ticketId}`)
+  }
+
   function approveChange(ticket, approval) {
     updateTicket(ticket.id, {
       approval,
@@ -1973,7 +2030,8 @@ function App() {
 
   function handleLogin(event) {
     event.preventDefault()
-    const authenticated = authenticateDemoUser(loginMode, loginForm)
+    const authenticationMode = isPortalSurface ? 'requester' : 'analyst'
+    const authenticated = authenticateDemoUser(authenticationMode, loginForm)
     if (!authenticated) {
       setLoginError('Those demo credentials do not match this login area.')
       return
@@ -2053,7 +2111,7 @@ function App() {
 
     setSession(null)
     setLoginForm({ username: '', password: '' })
-    setLoginMode('analyst')
+    setLoginMode(isPortalSurface ? 'requester' : 'analyst')
     setTabs([makeTab('home', { title: 'Dashboard', pinned: true })])
     setActiveTabKey('home')
     setPortalDraft({
@@ -2064,7 +2122,7 @@ function App() {
       description: '',
       urgency: 'Medium',
     })
-    writeRoute('/login', { replace: true })
+    writeRoute(isPortalSurface ? portalHomePath(tenantSurface) : '/login', { replace: true })
   }
 
   function toggleNotifications() {
@@ -2437,10 +2495,26 @@ function App() {
     )
   }
 
-  if (!session) {
+  if (!session || (isPortalSurface ? session.role !== 'requester' : session.role !== 'analyst')) {
+    if (isPortalSurface) {
+      return (
+        <PortalLoginScreen
+          accent={accent}
+          fillCredentials={fillCredentials}
+          loginError={loginError}
+          loginForm={loginForm}
+          onLogin={handleLogin}
+          setLoginForm={setLoginForm}
+          setTheme={setTheme}
+          tenantName={tenantSurface.tenantName}
+          theme={resolvedTheme}
+        />
+      )
+    }
     return (
       <LoginScreen
         accent={accent}
+        allowedModes={['analyst']}
         fillCredentials={fillCredentials}
         loginError={loginError}
         loginForm={loginForm}
@@ -2454,14 +2528,15 @@ function App() {
     )
   }
 
-  if (session.role === 'requester') {
+  if (isPortalSurface) {
     return (
-      <SelfServiceShell
+      <SelfServicePortalApp
         accent={accent}
         activeRequest={selectedPortalRequest}
         currentUser={session}
         handleLogout={handleLogout}
         handlePortalSubmit={handlePortalSubmit}
+        onAddPortalComment={addPortalComment}
         openPortalHome={openPortalHome}
         openPortalRequest={openPortalRequest}
         portalDraft={portalDraft}
@@ -2471,6 +2546,7 @@ function App() {
         setPortalDraft={setPortalDraft}
         setPortalQuery={setPortalQuery}
         setTheme={setTheme}
+        tenantName={tenantSurface.tenantName}
         theme={resolvedTheme}
         tickets={tickets}
         toast={toast}
