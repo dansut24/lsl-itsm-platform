@@ -2479,6 +2479,7 @@ function UnifiedRecordQueue({
   const normalizedQuery = searchValue.trim().toLowerCase()
   const quickMatch = (ticket) => {
     if (quickView === 'mine') return ticket.assignee === 'Dana Sinclair' && !['Resolved', 'Closed', 'Cancelled'].includes(ticket.status)
+    if (quickView === 'mygroup') return ticket.team === 'Service Desk' && !['Resolved', 'Closed', 'Cancelled'].includes(ticket.status)
     if (quickView === 'unassigned') return (!ticket.assignee || ticket.assignee === 'Unassigned') && !['Resolved', 'Closed', 'Cancelled'].includes(ticket.status)
     if (quickView === 'priority') return ['Critical', 'High'].includes(unifiedPriority(ticket, recordType)) && !['Resolved', 'Closed', 'Cancelled'].includes(ticket.status)
     if (quickView === 'attention') return unifiedAttention(ticket, recordType)
@@ -2535,7 +2536,8 @@ function UnifiedRecordQueue({
   const activeFilterCount = [statusFilter, priorityFilter, teamFilter, assigneeFilter, serviceFilter].filter((value) => value !== 'All').length
   const quickViews = [
     ['all', 'All'],
-    ['mine', 'Mine'],
+    ['mine', 'Assigned to me'],
+    ['mygroup', 'My group'],
     ['unassigned', 'Unassigned'],
     ['priority', 'High priority'],
     ['attention', meta.attentionLabel],

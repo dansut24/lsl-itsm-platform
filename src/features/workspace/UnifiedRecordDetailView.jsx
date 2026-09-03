@@ -24,6 +24,7 @@ import {
   Wrench,
 } from 'lucide-react'
 import { priorityClass, statusClass } from '../../lib/workspace.js'
+import { organisationPeople, organisationTeams } from '../../data/organisationData.js'
 import {
   buildLifecycleTransition,
   getAllowedTransitions,
@@ -478,6 +479,9 @@ export function UnifiedRecordDetailView({
   const [noteMode, setNoteMode] = useState('work')
   const [transitionTarget, setTransitionTarget] = useState(null)
   const [transitionValues, setTransitionValues] = useState({})
+  const [assignmentOpen, setAssignmentOpen] = useState(false)
+  const [assignmentGroupId, setAssignmentGroupId] = useState('')
+  const [assignmentPersonId, setAssignmentPersonId] = useState('')
   const fileInputRef = useRef(null)
   const meta = recordTypeMeta[ticket.type] || recordTypeMeta.Incident
   const lifecycleDefinition = getLifecycleDefinition(ticket.type)
@@ -529,20 +533,66 @@ export function UnifiedRecordDetailView({
     setTransitionValues({})
   }
 
+  const activeAssignmentGroups = organisationTeams.filter((team) => team.active && team.departmentId === 'DEPT-TECH')
+  const selectedAssignmentGroup = activeAssignmentGroups.find((team) => team.id === assignmentGroupId)
+  const eligibleTechnicians = organisationPeople.filter((person) => (
+    person.active
+    && person.teamId === assignmentGroupId
+    && ['technician', 'team_manager', 'department_manager', 'tenant_admin'].includes(person.accessProfile)
+  ))
+
+  function openAssignment() {
+    const currentGroup = activeAssignmentGroups.find((group) => group.name === ticket.team)
+    const currentPerson = organisationPeople.find((person) => person.name === ticket.assignee)
+    setAssignmentGroupId(currentGroup?.id || '')
+    setAssignmentPersonId(currentPerson?.teamId === currentGroup?.id ? currentPerson.id : '')
+    setAssignmentOpen(true)
+  }
+
+  function saveAssignment() {
+    if (!selectedAssignmentGroup) return
+    const person = eligibleTechnicians.find((candidate) => candidate.id === assignmentPersonId)
+    const nextAssignee = person?.name || 'Unassigned'
+    const oldGroup = ticket.team || 'Unassigned'
+    const oldAssignee = ticket.assignee || 'Unassigned'
+    const assignmentNote = `System: Assignment changed from ${oldGroup} / ${oldAssignee} to ${selectedAssignmentGroup.name} / ${nextAssignee} by Dana Sinclair.`
+    updateTicket(ticket.id, {
+      team: selectedAssignmentGroup.name,
+      assignee: nextAssignee,
+      updated: 'Just now',
+      comments: [...(ticket.comments || []), assignmentNote],
+    })
+    setAssignmentOpen(false)
+  }
+
+  function returnToGroup() {
+    const assignmentNote = `System: ${ticket.assignee || 'Unassigned'} returned this record to ${ticket.team || 'the assignment group'} by Dana Sinclair.`
+    updateTicket(ticket.id, {
+      assignee: 'Unassigned',
+      updated: 'Just now',
+      comments: [...(ticket.comments || []), assignmentNote],
+    })
+  }
+
   function assignToMe() {
+    const dana = organisationPeople.find((person) => person.name === 'Dana Sinclair')
+    const danaTeam = organisationTeams.find((team) => team.id === dana?.teamId)
+    const assignmentNote = `System: ${ticket.team || 'Unassigned'} / ${ticket.assignee || 'Unassigned'} assigned to ${danaTeam?.name || 'Service Desk'} / Dana Sinclair.`
+    const assignmentPatch = {
+      team: danaTeam?.name || 'Service Desk',
+      assignee: 'Dana Sinclair',
+      updated: 'Just now',
+      comments: [...(ticket.comments || []), assignmentNote],
+    }
+
     if (ticket.type === 'Incident' && ticket.status === 'New' && allowedTransitions.includes('Assigned')) {
-      if (transitionTicket) {
-        const result = transitionTicket(ticket.id, 'Assigned', {})
-        if (result?.ok) return
-      } else {
-        const result = buildLifecycleTransition(ticket, 'Assigned', {}, 'Dana Sinclair')
-        if (result.ok) {
-          updateTicket(ticket.id, result.updates)
-          return
-        }
+      const result = buildLifecycleTransition({ ...ticket, ...assignmentPatch }, 'Assigned', {}, 'Dana Sinclair')
+      if (result.ok) {
+        updateTicket(ticket.id, { ...assignmentPatch, ...result.updates })
+        return
       }
     }
-    updateTicket(ticket.id, { assignee: 'Dana Sinclair' })
+    updateTicket(ticket.id, assignmentPatch)
   }
 
 
@@ -834,7 +884,9 @@ export function UnifiedRecordDetailView({
           </div>
 
           <div className="unified-detail-header-actions">
-            <button onClick={assignToMe} type="button"><UserCheck size={15} /> Assign to me</button>
+            <button onClick={assignToMe} type="button"><UserCheck size={15} /> Take ownership</button>
+            <button onClick={openAssignment} type="button"><Users size={15} /> Assign / transfer</button>
+            {ticket.assignee && ticket.assignee !== 'Unassigned' && <button onClick={returnToGroup} type="button"><Inbox size={15} /> Return to group</button>}
             {ticket.type === 'Incident' && allowedTransitions.includes('In Progress') && <button onClick={() => beginTransition('In Progress')} type="button"><Wrench size={15} /> Start / resume work</button>}
             {ticket.type === 'Incident' && allowedTransitions.includes('Pending') && <button onClick={() => beginTransition('Pending')} type="button"><Clock3 size={15} /> Pending</button>}
             {ticket.type === 'Incident' && allowedTransitions.includes('Resolved') && <button className="primary" onClick={() => beginTransition('Resolved')} type="button"><CheckCircle2 size={15} /> Resolve</button>}
@@ -862,6 +914,31 @@ export function UnifiedRecordDetailView({
           })}
           {ticket.type === 'Change' && ticket.status === 'Failed' && <div className="exception current"><span>!</span><strong>Failed</strong></div>}
         </div>
+
+        {assignmentOpen && (
+          <section className="unified-assignment-panel" aria-label="Assign record">
+            <div className="unified-assignment-heading">
+              <div><span className="eyebrow">Ownership</span><h3>Assign or transfer record</h3><p>Select the assignment group first. Only active technicians who belong to that group can then be selected.</p></div>
+              <button onClick={() => setAssignmentOpen(false)} type="button">Cancel</button>
+            </div>
+            <div className="unified-assignment-fields">
+              <label>Assignment group
+                <select value={assignmentGroupId} onChange={(event) => { setAssignmentGroupId(event.target.value); setAssignmentPersonId('') }}>
+                  <option value="">Select group…</option>
+                  {activeAssignmentGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+                </select>
+              </label>
+              <label>Technician
+                <select disabled={!assignmentGroupId} value={assignmentPersonId} onChange={(event) => setAssignmentPersonId(event.target.value)}>
+                  <option value="">Unassigned / group queue</option>
+                  {eligibleTechnicians.map((person) => <option key={person.id} value={person.id}>{person.name} — {person.role}</option>)}
+                </select>
+              </label>
+            </div>
+            {selectedAssignmentGroup && <div className="unified-assignment-summary"><Users size={17} /><span><strong>{selectedAssignmentGroup.name}</strong>{assignmentPersonId ? `Assigned to ${eligibleTechnicians.find((person) => person.id === assignmentPersonId)?.name}` : 'Returned to the group queue'}</span></div>}
+            <footer><button disabled={!assignmentGroupId} className="primary-action compact" onClick={saveAssignment} type="button">Save assignment</button></footer>
+          </section>
+        )}
 
         {renderWorkflowPanel()}
 
