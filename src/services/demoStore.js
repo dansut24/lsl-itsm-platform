@@ -306,6 +306,19 @@ export function saveSidebarMode(mode) {
   writeJson('hi5central-sidebar-mode', mode)
 }
 
+
+export function loadPortalSession() {
+  return readJson('hi5central-portal-session', null)
+}
+
+export function savePortalSession(session) {
+  if (session) {
+    writeJson('hi5central-portal-session', session)
+    return
+  }
+  window.localStorage.removeItem('hi5central-portal-session')
+}
+
 export function saveSession(session) {
   if (session) {
     writeJson('hi5central-session', session)
