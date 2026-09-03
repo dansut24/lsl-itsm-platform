@@ -16116,3 +16116,353 @@ textarea:focus {
   .unified-assignment-fields { grid-template-columns: 1fr; }
   .unified-assignment-panel footer .primary-action { width: 100%; justify-content: center; }
 }
+
+/* =========================================================
+   Rich comments, internal notes, paste + @mentions
+   ========================================================= */
+.rich-activity-composer {
+  overflow: visible;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+}
+.rich-activity-composer.work {
+  box-shadow: inset 3px 0 0 rgba(245, 158, 11, 0.8);
+}
+.rich-activity-composer.customer {
+  box-shadow: inset 3px 0 0 rgba(37, 99, 235, 0.75);
+}
+.rich-activity-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-soft);
+  border-radius: 16px 16px 0 0;
+}
+.rich-activity-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.rich-activity-toolbar button:hover,
+.rich-activity-toolbar button:focus-visible {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+.rich-activity-toolbar-divider {
+  width: 1px;
+  height: 22px;
+  margin: 0 4px;
+  background: var(--border);
+}
+.rich-activity-editor-wrap {
+  position: relative;
+}
+.rich-activity-editor {
+  position: relative;
+  z-index: 1;
+  min-height: 148px;
+  max-height: 420px;
+  overflow: auto;
+  padding: 15px 16px;
+  outline: none;
+  color: var(--text);
+  line-height: 1.55;
+  font-size: 14px;
+}
+.rich-activity-placeholder {
+  position: absolute;
+  z-index: 0;
+  inset: 15px 16px auto;
+  max-width: calc(100% - 32px);
+  color: var(--text-muted);
+  opacity: 0.8;
+  pointer-events: none;
+  font-size: 14px;
+  line-height: 1.55;
+}
+.rich-activity-editor p,
+.rich-activity-editor ul,
+.rich-activity-editor ol,
+.rich-activity-editor blockquote,
+.rich-activity-content p,
+.rich-activity-content ul,
+.rich-activity-content ol,
+.rich-activity-content blockquote {
+  margin: 0 0 9px;
+}
+.rich-activity-editor table,
+.rich-activity-content table {
+  width: max-content;
+  min-width: min(100%, 420px);
+  max-width: 100%;
+  border-collapse: collapse;
+  margin: 9px 0;
+  font-size: 13px;
+}
+.rich-activity-editor th,
+.rich-activity-editor td,
+.rich-activity-content th,
+.rich-activity-content td {
+  min-width: 90px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.rich-activity-editor th,
+.rich-activity-content th {
+  background: var(--surface-soft);
+  font-weight: 750;
+}
+.rich-activity-editor img,
+.rich-activity-content img {
+  display: block;
+  max-width: min(100%, 720px);
+  height: auto;
+  margin: 10px 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.rich-activity-editor a,
+.rich-activity-content a {
+  color: var(--accent, #2563eb);
+  text-decoration: underline;
+  overflow-wrap: anywhere;
+}
+.rich-activity-pending-files {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 8px;
+  padding: 0 12px 12px;
+}
+.rich-activity-pending-files > div {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+.rich-activity-pending-files span {
+  display: grid;
+  min-width: 0;
+}
+.rich-activity-pending-files strong,
+.rich-activity-pending-files small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rich-activity-pending-files small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.rich-activity-pending-files button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.rich-activity-pending-files button:hover { background: var(--surface); color: var(--text); }
+.rich-activity-notice {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 12px 10px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  background: rgba(245, 158, 11, 0.1);
+  color: #b45309;
+  font-size: 12px;
+}
+.unified-detail-comment-actions.rich {
+  margin-top: 0;
+  padding: 11px 12px 12px;
+  border-top: 1px solid var(--border);
+}
+.rich-mention-menu {
+  position: absolute;
+  z-index: 20;
+  left: 14px;
+  right: 14px;
+  bottom: 12px;
+  max-width: 460px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: var(--surface);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
+}
+.rich-mention-menu > span {
+  display: block;
+  padding: 9px 11px 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.rich-mention-menu > button {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 9px 11px;
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.rich-mention-menu > button:hover { background: var(--surface-soft); }
+.rich-mention-menu > button > span:last-child { display: grid; gap: 2px; }
+.rich-mention-menu small { color: var(--text-muted); font-size: 11px; }
+.unified-detail-avatar.small {
+  width: 30px;
+  height: 30px;
+  font-size: 10px;
+}
+.rich-mention-menu > p {
+  margin: 0;
+  padding: 11px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.rich-timeline .rich-activity-item > div {
+  overflow: hidden;
+}
+.rich-activity-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 5px 0 9px;
+}
+.rich-activity-meta > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 750;
+}
+.rich-activity-meta > span.internal {
+  background: rgba(245, 158, 11, 0.1);
+  color: #b45309;
+}
+.rich-activity-meta > span.customer {
+  background: rgba(37, 99, 235, 0.1);
+  color: #2563eb;
+}
+.rich-activity-content {
+  overflow-x: auto;
+  color: var(--text);
+  line-height: 1.55;
+  font-size: 14px;
+}
+.rich-activity-content > :last-child { margin-bottom: 0; }
+.rich-activity-attachments {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 9px;
+  margin-top: 12px;
+}
+.rich-activity-file {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  color: var(--text);
+  text-decoration: none;
+}
+.rich-activity-file > span { display: grid; min-width: 0; }
+.rich-activity-file strong,
+.rich-activity-file small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rich-activity-file small { color: var(--text-muted); font-size: 10px; }
+.rich-activity-file:not([href]) { opacity: 0.7; cursor: default; }
+.rich-activity-image {
+  display: block;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-soft);
+  color: var(--text);
+  text-decoration: none;
+}
+.rich-activity-image img {
+  display: block;
+  width: 100%;
+  max-height: 280px;
+  object-fit: contain;
+  background: var(--surface);
+}
+.rich-activity-image span {
+  display: block;
+  padding: 7px 9px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.unified-detail-attachment-copy {
+  display: grid !important;
+  gap: 3px;
+  min-width: 0;
+}
+.unified-detail-attachment-copy .rich-activity-file {
+  width: fit-content;
+  max-width: 100%;
+  margin-top: 5px;
+  padding: 6px 8px;
+  font-size: 11px;
+}
+
+@media (max-width: 760px) {
+  .rich-activity-toolbar { padding: 7px 8px; }
+  .rich-activity-toolbar button { width: 34px; height: 34px; }
+  .rich-activity-toolbar-divider { display: none; }
+  .rich-activity-editor { min-height: 165px; padding: 13px; }
+  .rich-activity-placeholder { inset: 13px 13px auto; max-width: calc(100% - 26px); }
+  .rich-activity-pending-files,
+  .rich-activity-attachments { grid-template-columns: 1fr; }
+  .unified-detail-comment-actions.rich {
+    display: grid;
+    gap: 10px;
+  }
+  .unified-detail-comment-actions.rich .primary-action { width: 100%; justify-content: center; }
+  .rich-mention-menu { left: 8px; right: 8px; max-width: none; }
+  .rich-activity-editor table,
+  .rich-activity-content table { min-width: 520px; }
+}

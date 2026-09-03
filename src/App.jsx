@@ -1735,11 +1735,61 @@ function App() {
     return result
   }
 
-  function addComment(noteMode = 'work') {
-    if (!newComment.trim() || !selectedTicket) return
+  function addComment(noteMode = 'work', richPayload = null) {
+    if (!selectedTicket) return
+
+    if (richPayload && typeof richPayload === 'object') {
+      const text = String(richPayload.text || '').trim()
+      const activityAttachments = Array.isArray(richPayload.attachments) ? richPayload.attachments : []
+      if (!text && !activityAttachments.length) return
+
+      const actor = session?.name || 'Dana Sinclair'
+      const activityId = `${selectedTicket.id}-ACT-${Date.now()}`
+      const activity = {
+        id: activityId,
+        kind: noteMode === 'customer' ? 'customer' : 'work',
+        actor,
+        createdAt: new Date().toISOString(),
+        createdAtLabel: 'Just now',
+        html: richPayload.html || '',
+        text,
+        mentions: Array.isArray(richPayload.mentions) ? richPayload.mentions : [],
+        attachments: activityAttachments.map((attachment) => ({ ...attachment, sourceActivityId: activityId })),
+      }
+      const promotedAttachments = activity.attachments.map((attachment) => ({
+        ...attachment,
+        uploaded: 'Just now',
+        uploadedBy: actor,
+        activityKind: activity.kind,
+      }))
+
+      updateTicket(selectedTicket.id, {
+        activities: [activity, ...(selectedTicket.activities || [])],
+        attachments: [...promotedAttachments, ...(selectedTicket.attachments || [])],
+        updated: 'Just now',
+      })
+
+      activity.mentions.forEach((mention) => {
+        pushNotification({
+          source: 'itsm',
+          title: `${mention.name} mentioned on ${selectedTicket.id}`,
+          detail: `${actor} mentioned ${mention.name} in an ${activity.kind === 'work' ? 'internal work note' : 'requester comment'} on ${selectedTicket.title}.`,
+          target: { type: 'ticket', recordId: selectedTicket.id },
+          tone: 'info',
+          recipientId: mention.id,
+        })
+      })
+
+      setNewComment('')
+      setToast(`${noteMode === 'customer' ? 'Customer comment' : 'Work note'} added to ${selectedTicket.id}${activityAttachments.length ? ` with ${activityAttachments.length} attachment${activityAttachments.length === 1 ? '' : 's'}` : ''}`)
+      return
+    }
+
+    if (!newComment.trim()) return
     const prefix = noteMode === 'customer' ? 'Customer comment: ' : 'Work note: '
     updateTicket(selectedTicket.id, {
-      comments: [`${prefix}${newComment.trim()} - added now`, ...selectedTicket.comments],
+      comments: [`${prefix}${newComment.trim()} - added now`, ...(selectedTicket.comments || [])],
+      updated: 'Just now',
     })
     setNewComment('')
     setToast(`${noteMode === 'customer' ? 'Customer comment' : 'Work note'} added to ${selectedTicket.id}`)
@@ -2171,10 +2221,13 @@ function App() {
       return (
         <TicketRecordView
           addComment={addComment}
+          currentUser={session}
           newComment={newComment}
           openAssetByName={openAssetByName}
+          people={people}
           selectedTicket={selectedTicket}
           setNewComment={setNewComment}
+          teams={teams}
           tickets={tickets}
           updateTicket={updateTicket}
           transitionTicket={transitionTicket}
