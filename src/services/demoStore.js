@@ -87,7 +87,7 @@ export function loadTickets() {
   // Layout/demo migrations: add only the new Problem/Change examples introduced
   // for the dedicated module designs. Existing user-created demo records and
   // edits remain untouched.
-  const supplementalIds = new Set(['PRB-0148', 'PRB-0151', 'CHG-0904', 'CHG-0906'])
+  const supplementalIds = new Set(['PRB-0148', 'PRB-0151', 'CHG-0904', 'CHG-0906', 'REQ-2231'])
   const currentIds = new Set(hydrated.map((ticket) => ticket.id))
   const supplemental = seedTickets.filter(
     (ticket) => supplementalIds.has(ticket.id) && !currentIds.has(ticket.id),
@@ -317,6 +317,19 @@ export function savePortalSession(session) {
     return
   }
   window.localStorage.removeItem('hi5central-portal-session')
+}
+
+export function loadRmmSession() {
+  const stored = readJson('hi5central-rmm-session', null)
+  return stored?.role === 'rmm' ? stored : null
+}
+
+export function saveRmmSession(session) {
+  if (session?.role === 'rmm') {
+    writeJson('hi5central-rmm-session', session)
+    return
+  }
+  window.localStorage.removeItem('hi5central-rmm-session')
 }
 
 export function saveSession(session) {
