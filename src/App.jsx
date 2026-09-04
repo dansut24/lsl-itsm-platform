@@ -30,7 +30,7 @@ import {
 import { liveChatReplyOptions } from './data/liveChatData.js'
 import { createNotification } from './data/notificationData.js'
 import { buildLifecycleTransition } from './lib/lifecycle.js'
-import { portalHomePath, portalRequestPath, portalRouteFromLocation, resolveTenantSurface } from './lib/tenantSurface.js'
+import { portalHomePath, portalRequestPath, portalRouteFromLocation, resolveTenantSurface, rmmPath } from './lib/tenantSurface.js'
 import {
   buildOrganisationAuditEntry,
   resolveCurrentPerson,
@@ -62,6 +62,7 @@ import {
   loadOrganisationPeople,
   loadOrganisationTeams,
   loadPortalSession,
+  loadRmmSession,
   loadSession,
   loadSidebarMode,
   loadTheme,
@@ -80,6 +81,7 @@ import {
   saveOrganisationPeople,
   saveOrganisationTeams,
   savePortalSession,
+  saveRmmSession,
   saveSession,
   saveSidebarMode,
   saveTheme,
@@ -95,6 +97,7 @@ import { LiveChatView } from './features/live-chat/LiveChatView.jsx'
 import { NotificationDrawer } from './features/notifications/NotificationDrawer.jsx'
 import { PeopleView } from './features/people/PeopleView.jsx'
 import { PortalLoginScreen, SelfServicePortalApp } from './features/portal/SelfServicePortalApp.jsx'
+import { RmmLoginScreen, RmmPlatformApp } from './features/rmm/RmmPlatformApp.jsx'
 import {
   ChangesView,
   CmdbRecordView,
@@ -317,6 +320,7 @@ function addWorkspaceTab(currentTabs, tab) {
 function App() {
   const tenantSurface = resolveTenantSurface()
   const isPortalSurface = tenantSurface.kind === 'portal'
+  const isRmmSurface = tenantSurface.kind === 'rmm'
   const [initialTickets] = useState(loadTickets)
   const [initialProjects] = useState(loadProjects)
   const [initialRotaEntries] = useState(loadRotaEntries)
@@ -328,10 +332,11 @@ function App() {
   const [initialOrganisationPeople] = useState(loadOrganisationPeople)
   const [initialOrganisationTeams] = useState(loadOrganisationTeams)
   const [initialOrganisationDepartments] = useState(loadOrganisationDepartments)
-  const [initialSession] = useState(() => isPortalSurface ? loadPortalSession() : loadSession())
+  const [initialSession] = useState(() => isPortalSurface ? loadPortalSession() : isRmmSurface ? loadRmmSession() : loadSession())
   const [initialWorkspace] = useState(loadWorkspace)
   const [initialRoute] = useState(() => {
     if (isPortalSurface) return portalRouteFromLocation(tenantSurface)
+    if (isRmmSurface) return defaultRouteForRole('analyst')
     const route = routeFromLocation()
     return route.viewId === 'portal' ? defaultRouteForRole('analyst') : route
   })
@@ -409,7 +414,7 @@ function App() {
   const [tabContextMenu, setTabContextMenu] = useState(null)
   const [newComment, setNewComment] = useState('')
   const [portalQuery, setPortalQuery] = useState('')
-  const [loginMode, setLoginMode] = useState(isPortalSurface ? 'requester' : 'analyst')
+  const [loginMode, setLoginMode] = useState(isPortalSurface ? 'requester' : isRmmSurface ? 'rmm' : 'analyst')
   const [loginForm, setLoginForm] = useState({ username: '', password: '' })
   const [loginError, setLoginError] = useState('')
   const [ticketDraft, setTicketDraft] = useState(() => emptyTicketDraft(initialRouteType || 'Incident'))
@@ -713,8 +718,9 @@ function App() {
 
   useEffect(() => {
     if (isPortalSurface) savePortalSession(session)
+    else if (isRmmSurface) saveRmmSession(session)
     else saveSession(session)
-  }, [isPortalSurface, session])
+  }, [isPortalSurface, isRmmSurface, session])
 
   useEffect(() => {
     if (session?.role !== 'analyst') return
@@ -727,6 +733,7 @@ function App() {
   }, [liveChatPreferences.enabled, session?.role])
 
   useEffect(() => {
+    if (isRmmSurface) return undefined
     const currentRoute = isPortalSurface ? portalRouteFromLocation(tenantSurface) : routeFromLocation()
 
     if (!session) {
@@ -748,9 +755,11 @@ function App() {
     if (resolvedRoute.path !== currentRoute.path) {
       writeRoute(isPortalSurface ? portalHomePath(tenantSurface) : resolvedRoute.path, { replace: true })
     }
-  }, [isPortalSurface, liveChatPreferences.enabled, session])
+  }, [isPortalSurface, isRmmSurface, liveChatPreferences.enabled, session])
 
   useEffect(() => {
+    if (isRmmSurface) return undefined
+
     function handlePopState() {
       if (!session) return
 
@@ -813,7 +822,7 @@ function App() {
 
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
-  }, [activeTabKey, isPortalSurface, liveChatPreferences.enabled, session, tabs, ticketDraft, tickets])
+  }, [activeTabKey, isPortalSurface, isRmmSurface, liveChatPreferences.enabled, session, tabs, ticketDraft, tickets])
 
   useEffect(() => {
     if (!toast) return undefined
@@ -1012,10 +1021,17 @@ function App() {
   }, [tickets])
 
   const portalResults = useMemo(() => {
+    const visibleArticles = knowledgeArticles.filter((article) => article.portalVisible !== false && article.status !== 'Draft')
     const normalizedQuery = portalQuery.trim().toLowerCase()
-    if (!normalizedQuery) return knowledgeArticles
-    return knowledgeArticles.filter((article) =>
-      [article.title, article.category].join(' ').toLowerCase().includes(normalizedQuery),
+    if (!normalizedQuery) return visibleArticles
+    return visibleArticles.filter((article) =>
+      [
+        article.title,
+        article.category,
+        article.summary,
+        ...(article.steps || []),
+        ...(article.body || []),
+      ].join(' ').toLowerCase().includes(normalizedQuery),
     )
   }, [portalQuery])
 
@@ -1938,60 +1954,148 @@ function App() {
     setToast(`${createdTicket.id} created`)
   }
 
-  function handlePortalSubmit(event) {
-    event.preventDefault()
-    const requestEmail = portalDraft.email.trim() || (session?.role === 'requester' ? session.username : '')
-    const requesterName = portalDraft.requester.trim() || (session?.role === 'requester' ? session.name : '')
-    if (!requesterName || !portalDraft.title.trim()) {
-      setToast('Add your name and request summary')
+  function handlePortalSubmit(input) {
+    if (input?.preventDefault) input.preventDefault()
+
+    const payload = input && !input.preventDefault
+      ? input
+      : {
+          catalogueItem: {
+            id: 'CAT-GENERAL',
+            title: portalDraft.category || 'General IT Request',
+            requestType: portalDraft.category?.includes('Issue') ? 'Incident' : 'Service Request',
+            service: portalDraft.category || 'IT Support',
+            team: 'Service Desk',
+            approval: 'none',
+          },
+          summary: portalDraft.title,
+          urgency: portalDraft.urgency,
+          fields: {},
+          requestInformation: [],
+          requestedItems: [],
+          oneOffCost: 0,
+          monthlyCost: 0,
+          details: { html: '', text: portalDraft.description, attachments: [] },
+        }
+
+    const requesterPerson = people.find((person) => person.id === session?.personId)
+      || people.find((person) => person.name === session?.name)
+    const manager = people.find((person) => person.id === requesterPerson?.managerId)
+    const catalogueItem = payload.catalogueItem || {}
+    const summary = String(payload.summary || '').trim()
+    const details = payload.details || {}
+    const requestInformation = Array.isArray(payload.requestInformation) ? payload.requestInformation : []
+    const requestedItems = Array.isArray(payload.requestedItems) ? payload.requestedItems : []
+    const oneOffCost = Number(payload.oneOffCost || 0)
+    const monthlyCost = Number(payload.monthlyCost || 0)
+
+    if (!session?.name || !summary) {
+      setToast('Add a request summary before submitting')
       return
     }
 
+    const approvalMode = catalogueItem.approval || 'none'
+    const approvalRequired = catalogueItem.requestType !== 'Incident'
+      && approvalMode !== 'none'
+      && (approvalMode !== 'manager-cost' || oneOffCost > 0 || monthlyCost > 0)
+
+    const approval = approvalRequired
+      ? [{
+          id: `APR-${Date.now()}`,
+          label: approvalMode === 'manager-cost' ? 'Manager / cost approval' : 'Manager approval',
+          approver: manager?.name || 'Line manager',
+          approverId: manager?.id || '',
+          approverEmail: manager?.email || '',
+          status: 'Pending',
+          updated: 'Requested just now',
+        }]
+      : []
+
     const createdTicket = {
-      id: newTicketId('Service Request'),
-      type: portalDraft.category.includes('Issue') ? 'Incident' : 'Service Request',
-      title: portalDraft.title.trim(),
-      requester: requesterName,
-      requesterEmail: requestEmail,
-      requesterJobTitle: people.find((person) => person.name === requesterName)?.role || '',
-      requesterDepartment: departments.find((department) => department.id === people.find((person) => person.name === requesterName)?.departmentId)?.name || '',
-      priority: portalDraft.urgency,
-      status: 'New',
-      team: 'Service Desk',
+      id: newTicketId(catalogueItem.requestType || 'Service Request'),
+      type: catalogueItem.requestType || 'Service Request',
+      title: summary,
+      requester: session.name,
+      requesterEmail: requesterPerson?.email || session.username,
+      requesterStaffNumber: requesterPerson?.staffNumber || '',
+      requesterJobTitle: requesterPerson?.role || '',
+      requesterDepartment: departments.find((department) => department.id === requesterPerson?.departmentId)?.name || '',
+      requesterManager: manager?.name || '',
+      priority: payload.urgency || catalogueItem.basePriority || 'Medium',
+      status: approvalRequired ? 'Pending Approval' : 'New',
+      team: catalogueItem.team || 'Service Desk',
       assignee: 'Unassigned',
-      service: portalDraft.category.replace('Report an ', ''),
-      location: requestEmail || 'Self-service portal',
-      sla: portalDraft.urgency === 'High' ? '4 hr' : '1 day',
-      slaPercent: portalDraft.urgency === 'High' ? 48 : 12,
+      service: catalogueItem.service || catalogueItem.title || 'IT Support',
+      location: requesterPerson?.location || 'Self-service portal',
+      sla: (payload.urgency || 'Medium') === 'High' ? '4 hr' : '1 day',
+      slaPercent: (payload.urgency || 'Medium') === 'High' ? 24 : 8,
       created: 'Just now',
       updated: 'Just now',
-      description: portalDraft.description.trim() || 'Submitted through the Hi5Central self-service portal.',
-      nextStep: 'Service Desk triage.',
+      description: details.text || `Submitted through ${tenantSurface.tenantName} Help Centre.`,
+      descriptionHtml: details.html || '',
+      nextStep: approvalRequired
+        ? `Awaiting approval from ${manager?.name || 'the assigned approver'}.`
+        : catalogueItem.requestType === 'Incident'
+          ? 'Service Desk triage and impact assessment.'
+          : 'Service Desk review and fulfilment routing.',
       comments: ['Submitted through the self-service portal.'],
-      activities: [],
+      activities: [{
+        id: `ACT-${Date.now()}`,
+        kind: 'customer',
+        actor: session.name,
+        createdAt: new Date().toISOString(),
+        createdAtLabel: 'Just now',
+        html: details.html || '',
+        text: details.text || 'Request submitted through self-service.',
+        mentions: [],
+        attachments: details.attachments || [],
+        source: 'self-service-portal',
+        visibility: 'customer',
+      }],
+      attachments: (details.attachments || []).map((attachment) => ({ ...attachment, visibility: 'customer' })),
       linkedAssets: [],
+      requestInformation,
+      requestedItems,
+      requestApprovals: approval,
+      requestTasks: [],
+      catalogueSnapshot: {
+        id: catalogueItem.id || '',
+        title: catalogueItem.title || '',
+        category: catalogueItem.category || '',
+        oneOffCost,
+        monthlyCost,
+        submittedFields: payload.fields || {},
+      },
     }
 
     setTickets((currentTickets) => [createdTicket, ...currentTickets])
     setPortalDraft({
-      requester: session?.role === 'requester' ? session.name : '',
-      email: session?.role === 'requester' ? session.username : '',
+      requester: session.name,
+      email: requesterPerson?.email || session.username,
       category: 'Report an IT Issue',
       title: '',
       description: '',
       urgency: 'Medium',
     })
     setToast(`${createdTicket.id} submitted through self-service`)
-    if (session?.role === 'requester') {
-      openPortalRequest(createdTicket)
-    }
+    openPortalRequest(createdTicket)
   }
 
-  function addPortalComment(ticketId, text) {
+  function addPortalComment(ticketId, input) {
     const currentTicket = tickets.find((ticket) => ticket.id === ticketId)
     const requesterOwnsTicket = currentTicket && session?.role === 'requester'
       && (currentTicket.requester === session.name || (currentTicket.requesterEmail && currentTicket.requesterEmail === session.username))
-    if (!requesterOwnsTicket || !text?.trim()) return
+    if (!requesterOwnsTicket) return
+
+    const payload = typeof input === 'string'
+      ? { text: input.trim(), html: '', attachments: [] }
+      : {
+          text: String(input?.text || '').trim(),
+          html: input?.html || '',
+          attachments: Array.isArray(input?.attachments) ? input.attachments : [],
+        }
+    if (!payload.text && !payload.attachments.length) return
+
     const actor = session?.name || 'Requester'
     const activity = {
       id: `${ticketId}-PORTAL-${Date.now()}`,
@@ -1999,14 +2103,19 @@ function App() {
       actor,
       createdAt: new Date().toISOString(),
       createdAtLabel: 'Just now',
-      html: '',
-      text: text.trim(),
+      html: payload.html,
+      text: payload.text,
       mentions: [],
-      attachments: [],
+      attachments: payload.attachments,
       source: 'self-service-portal',
+      visibility: 'customer',
     }
     updateTicket(ticketId, {
       activities: [activity, ...(currentTicket.activities || [])],
+      attachments: [
+        ...(currentTicket.attachments || []),
+        ...payload.attachments.map((attachment) => ({ ...attachment, visibility: 'customer' })),
+      ],
       updated: 'Just now',
     })
     pushNotification({
@@ -2017,6 +2126,125 @@ function App() {
       tone: 'info',
     })
     setToast(`Update added to ${ticketId}`)
+  }
+
+  function decidePortalApproval(ticketId, approvalId, decision, note = '') {
+    const currentTicket = tickets.find((ticket) => ticket.id === ticketId)
+    if (!currentTicket || session?.role !== 'requester') return
+    const targetApproval = (currentTicket.requestApprovals || []).find((approval) => approval.id === approvalId)
+    const ownsApproval = targetApproval
+      && (targetApproval.approver === session.name || targetApproval.approverEmail === session.username || targetApproval.approverId === session.personId)
+    if (!ownsApproval || targetApproval.status !== 'Pending') return
+
+    const nextApprovals = (currentTicket.requestApprovals || []).map((approval) => approval.id === approvalId
+      ? { ...approval, status: decision, updated: `Just now · ${session.name}`, decisionNote: note }
+      : approval)
+    const allApproved = nextApprovals.length > 0 && nextApprovals.every((approval) => approval.status === 'Approved')
+    const nextStatus = decision === 'Rejected' ? 'Pending Approval' : allApproved ? 'Approved' : currentTicket.status
+    const activityText = `${session.name} ${decision.toLowerCase()} ${targetApproval.label}${note ? ` — ${note}` : ''}.`
+
+    updateTicket(ticketId, {
+      requestApprovals: nextApprovals,
+      status: nextStatus,
+      nextStep: decision === 'Rejected'
+        ? `Approval rejected by ${session.name}. Request owner must review the decision.`
+        : allApproved
+          ? 'All required approvals are complete. Fulfilment can begin.'
+          : 'Waiting for the remaining required approvals.',
+      updated: 'Just now',
+      activities: [{
+        id: `${ticketId}-APPROVAL-${Date.now()}`,
+        kind: 'customer',
+        actor: session.name,
+        createdAt: new Date().toISOString(),
+        createdAtLabel: 'Just now',
+        html: '',
+        text: activityText,
+        mentions: [],
+        attachments: [],
+        source: 'self-service-portal',
+        visibility: 'customer',
+      }, ...(currentTicket.activities || [])],
+    })
+    pushNotification({
+      source: 'itsm',
+      title: `${ticketId} ${decision.toLowerCase()}`,
+      detail: `${session.name} ${decision.toLowerCase()} ${targetApproval.label}.`,
+      target: { type: 'ticket', recordId: ticketId },
+      tone: decision === 'Rejected' ? 'warning' : 'info',
+    })
+    setToast(`${ticketId} ${decision.toLowerCase()}`)
+  }
+
+  function startPortalLiveChat({ subject, message }) {
+    if (session?.role !== 'requester' || !subject?.trim() || !message?.trim()) return
+    const requesterPerson = people.find((person) => person.id === session.personId)
+      || people.find((person) => person.name === session.name)
+    const existing = liveChatConversations.find((conversation) =>
+      conversation.status !== 'Closed'
+      && (conversation.participant?.name === session.name || conversation.participant?.email === session.username))
+    if (existing) {
+      setToast('You already have an active live chat')
+      return
+    }
+
+    const timestamp = liveChatTimestamp()
+    const created = {
+      id: `CHAT-${Date.now()}`,
+      status: 'Waiting',
+      assignedTo: '',
+      team: 'Service Desk',
+      unread: 1,
+      updatedAt: 'Now',
+      participant: {
+        name: session.name,
+        initials: session.initials || requesterPerson?.initials || String(session.name).split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase(),
+        role: requesterPerson?.role || 'Employee',
+        email: requesterPerson?.email || session.username,
+        presence: 'Online',
+      },
+      subject: subject.trim(),
+      lastMessage: message.trim(),
+      messages: [
+        { id: `MSG-${Date.now()}-requester`, sender: 'requester', text: message.trim(), time: timestamp },
+        { id: `MSG-${Date.now()}-system`, sender: 'system', text: `${session.name} is waiting for a support agent.`, time: timestamp },
+      ],
+    }
+    setLiveChatConversations((current) => [created, ...current])
+    setToast('Live chat started — waiting for the Service Desk')
+  }
+
+  function sendPortalLiveChatMessage(conversationId, body) {
+    if (session?.role !== 'requester' || !body?.trim()) return
+    const timestamp = liveChatTimestamp()
+    setLiveChatConversations((current) => current.map((conversation) => {
+      const ownsConversation = conversation.id === conversationId
+        && (conversation.participant?.name === session.name || conversation.participant?.email === session.username)
+      if (!ownsConversation || conversation.status === 'Closed') return conversation
+      return {
+        ...conversation,
+        unread: (Number(conversation.unread) || 0) + 1,
+        updatedAt: 'Now',
+        lastMessage: body.trim(),
+        messages: [
+          ...conversation.messages,
+          { id: `MSG-${Date.now()}-portal`, sender: 'requester', text: body.trim(), time: timestamp },
+        ],
+      }
+    }))
+  }
+
+  function updatePortalProfile(updates) {
+    if (session?.role !== 'requester') return
+    const currentPerson = people.find((person) => person.id === session.personId)
+      || people.find((person) => person.name === session.name)
+    if (!currentPerson) return
+    const managedFields = new Set(currentPerson.directorySource?.managedFields || [])
+    const allowedUpdates = {}
+    if (!managedFields.has('phone') && updates.phone !== undefined) allowedUpdates.phone = updates.phone
+    if (!managedFields.has('location') && updates.location !== undefined) allowedUpdates.location = updates.location
+    savePerson({ ...currentPerson, ...allowedUpdates })
+    setToast('Profile updated')
   }
 
   function approveChange(ticket, approval) {
@@ -2030,7 +2258,7 @@ function App() {
 
   function handleLogin(event) {
     event.preventDefault()
-    const authenticationMode = isPortalSurface ? 'requester' : 'analyst'
+    const authenticationMode = isPortalSurface ? 'requester' : isRmmSurface ? 'rmm' : 'analyst'
     const authenticated = authenticateDemoUser(authenticationMode, loginForm)
     if (!authenticated) {
       setLoginError('Those demo credentials do not match this login area.')
@@ -2092,9 +2320,11 @@ function App() {
       urgency: 'Medium',
     })
 
-    const nextPath = profile.role === 'analyst'
-      ? pathForTab(resolvedLoginTab, tickets)
-      : requestedRoute.path
+    const nextPath = profile.role === 'rmm'
+      ? rmmPath(tenantSurface)
+      : profile.role === 'analyst'
+        ? pathForTab(resolvedLoginTab, tickets)
+        : requestedRoute.path
     writeRoute(nextPath, { replace: true })
     setToast(`Signed in as ${profile.label}`)
   }
@@ -2111,7 +2341,7 @@ function App() {
 
     setSession(null)
     setLoginForm({ username: '', password: '' })
-    setLoginMode(isPortalSurface ? 'requester' : 'analyst')
+    setLoginMode(isPortalSurface ? 'requester' : isRmmSurface ? 'rmm' : 'analyst')
     setTabs([makeTab('home', { title: 'Dashboard', pinned: true })])
     setActiveTabKey('home')
     setPortalDraft({
@@ -2122,7 +2352,7 @@ function App() {
       description: '',
       urgency: 'Medium',
     })
-    writeRoute(isPortalSurface ? portalHomePath(tenantSurface) : '/login', { replace: true })
+    writeRoute(isPortalSurface ? portalHomePath(tenantSurface) : isRmmSurface ? rmmPath(tenantSurface) : '/login', { replace: true })
   }
 
   function toggleNotifications() {
@@ -2495,10 +2725,26 @@ function App() {
     )
   }
 
-  if (!session || (isPortalSurface ? session.role !== 'requester' : session.role !== 'analyst')) {
+  const expectedSurfaceRole = isPortalSurface ? 'requester' : isRmmSurface ? 'rmm' : 'analyst'
+  if (!session || session.role !== expectedSurfaceRole) {
     if (isPortalSurface) {
       return (
         <PortalLoginScreen
+          accent={accent}
+          fillCredentials={fillCredentials}
+          loginError={loginError}
+          loginForm={loginForm}
+          onLogin={handleLogin}
+          setLoginForm={setLoginForm}
+          setTheme={setTheme}
+          tenantName={tenantSurface.tenantName}
+          theme={resolvedTheme}
+        />
+      )
+    }
+    if (isRmmSurface) {
+      return (
+        <RmmLoginScreen
           accent={accent}
           fillCredentials={fillCredentials}
           loginError={loginError}
@@ -2533,23 +2779,41 @@ function App() {
       <SelfServicePortalApp
         accent={accent}
         activeRequest={selectedPortalRequest}
+        currentPerson={resolveCurrentPerson(session, people)}
         currentUser={session}
+        departments={departments}
         handleLogout={handleLogout}
         handlePortalSubmit={handlePortalSubmit}
+        liveChatConversations={liveChatConversations}
         onAddPortalComment={addPortalComment}
+        onPortalApprovalDecision={decidePortalApproval}
+        onPortalChatSend={sendPortalLiveChatMessage}
+        onPortalChatStart={startPortalLiveChat}
+        onUpdatePortalProfile={updatePortalProfile}
         openPortalHome={openPortalHome}
         openPortalRequest={openPortalRequest}
-        portalDraft={portalDraft}
         portalQuery={portalQuery}
         portalResults={portalResults}
-        serviceCatalog={serviceCatalog}
-        setPortalDraft={setPortalDraft}
         setPortalQuery={setPortalQuery}
         setTheme={setTheme}
+        teams={teams}
         tenantName={tenantSurface.tenantName}
         theme={resolvedTheme}
         tickets={tickets}
         toast={toast}
+      />
+    )
+  }
+
+  if (isRmmSurface) {
+    return (
+      <RmmPlatformApp
+        accent={accent}
+        currentUser={session}
+        handleLogout={handleLogout}
+        setTheme={setTheme}
+        tenantName={tenantSurface.tenantName}
+        theme={resolvedTheme}
       />
     )
   }

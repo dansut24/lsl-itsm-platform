@@ -54,3 +54,22 @@ h2 {
 a {
   color: inherit;
 }
+
+
+/* Standalone self-service uses the document scroller. The technician/RMM
+   consoles intentionally keep the root viewport locked and scroll internally. */
+html[data-hi5-surface='portal'],
+html[data-hi5-surface='portal'] body {
+  height: auto;
+  min-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+html[data-hi5-surface='portal'] #root {
+  height: auto;
+  min-height: 100dvh;
+  overflow: visible;
+}
