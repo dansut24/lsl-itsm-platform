@@ -2792,8 +2792,11 @@ function App() {
         onUpdatePortalProfile={updatePortalProfile}
         openPortalHome={openPortalHome}
         openPortalRequest={openPortalRequest}
+        portalDraft={portalDraft}
         portalQuery={portalQuery}
-        portalResults={portalResults}
+        portalResults={Array.isArray(portalResults) ? portalResults : []}
+        serviceCatalog={serviceCatalog}
+        setPortalDraft={setPortalDraft}
         setPortalQuery={setPortalQuery}
         setTheme={setTheme}
         teams={teams}
