@@ -12,6 +12,7 @@ import {
   Clock3,
   FileText,
   FileUp,
+  ExternalLink,
   Image,
   Inbox,
   Italic,
@@ -20,6 +21,7 @@ import {
   ListChecks,
   ListOrdered,
   MessageSquarePlus,
+  Monitor,
   Paperclip,
   Plus,
   Send,
@@ -33,6 +35,7 @@ import {
   Wrench,
 } from 'lucide-react'
 import { priorityClass, statusClass } from '../../lib/workspace.js'
+import { resolveTenantSurface } from '../../lib/tenantSurface.js'
 import { organisationPeople, organisationTeams } from '../../data/organisationData.js'
 import { readLocalAttachment, removeLocalAttachment, storeLocalAttachment } from '../../services/localAttachmentStore.js'
 import {
@@ -74,6 +77,15 @@ function initials(value = '') {
 
 function valueOrFallback(value, fallback = 'Not captured') {
   return value === undefined || value === null || value === '' ? fallback : value
+}
+
+function rmmDeviceHref(deviceId) {
+  const encoded = encodeURIComponent(String(deviceId || '').toUpperCase())
+  const surface = resolveTenantSurface()
+  if (surface?.canonical && surface?.tenantSlug) {
+    return `https://${surface.tenantSlug}-rmm.hi5central.com/devices/${encoded}`
+  }
+  return `/rmm/devices/${encoded}`
 }
 
 function currency(value) {
@@ -995,6 +1007,22 @@ export function UnifiedRecordDetailView({
               <DetailProperty label="Location" value={ticket.location} />
             </div>
           </DetailSection>
+
+          {ticket.rmmDeviceId && (
+            <DetailSection eyebrow="Hi5Central RMM" icon={Monitor} title="Managed device">
+              <div className="unified-rmm-context">
+                <span className="unified-rmm-device-icon"><Monitor size={18} /></span>
+                <div>
+                  <strong>{ticket.rmmDeviceName || ticket.rmmDeviceId}</strong>
+                  <small>{ticket.rmmDeviceId}{ticket.rmmAlertId ? ` · Alert ${ticket.rmmAlertId}` : ''}</small>
+                  <span>{ticket.rmmSource || 'Linked RMM device context'}</span>
+                </div>
+              </div>
+              <a className="unified-rmm-open-link" href={rmmDeviceHref(ticket.rmmDeviceId)} target="_blank" rel="noreferrer">
+                Open managed device in RMM <ExternalLink size={14} />
+              </a>
+            </DetailSection>
+          )}
 
           <DetailSection eyebrow="Audit" icon={CalendarClock} title="Record timing">
             <div className="unified-detail-property-grid one">
