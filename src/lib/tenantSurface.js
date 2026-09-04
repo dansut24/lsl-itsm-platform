@@ -132,7 +132,6 @@ export function portalRequestPath(surface, id) {
   return surface?.canonical ? `/requests/${encoded}` : `/portal/requests/${encoded}`
 }
 
-
 export function rmmRouteFromLocation(surface = resolveTenantSurface(), location = window.location) {
   const pathname = String(location.pathname || '/')
   const prefix = surface?.canonical ? '' : '/rmm'
@@ -144,7 +143,7 @@ export function rmmRouteFromLocation(surface = resolveTenantSurface(), location 
     return { viewId: 'devices', deviceId, path: rmmPath(surface, 'devices', deviceId) }
   }
 
-  const pageMatch = normalized.match(/^\/(dashboard|devices|alerts|remote|patching|software|automation|policies|jobs|reports|settings)$/i)
+  const pageMatch = normalized.match(/^\/(dashboard|devices|sites|groups|alerts|remote|patching|software|automation|policies|jobs|reports|settings)$/i)
   if (pageMatch) {
     const viewId = pageMatch[1].toLowerCase()
     return { viewId, path: rmmPath(surface, viewId) }
