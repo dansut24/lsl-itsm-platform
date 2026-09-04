@@ -308,7 +308,8 @@ export function saveSidebarMode(mode) {
 
 
 export function loadPortalSession() {
-  return readJson('hi5central-portal-session', null)
+  const stored = readJson('hi5central-portal-session', null)
+  return stored?.role === 'requester' ? stored : null
 }
 
 export function savePortalSession(session) {
