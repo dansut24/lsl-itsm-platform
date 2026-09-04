@@ -2247,6 +2247,73 @@ function App() {
     setToast('Profile updated')
   }
 
+  function createRmmIncident({ device, alert } = {}) {
+    if (!device) return null
+    const requesterPerson = people.find((person) => person.name === device.user)
+      || people.find((person) => person.email === device.userEmail)
+    const severity = alert?.severity || (device.health === 'Critical' ? 'Critical' : device.health === 'Warning' ? 'High' : 'Medium')
+    const priority = ['Critical', 'High', 'Medium', 'Low'].includes(severity) ? severity : 'Medium'
+    const createdTicket = {
+      id: newTicketId('Incident'),
+      type: 'Incident',
+      title: alert ? `${alert.title} on ${device.name}` : `RMM device issue on ${device.name}`,
+      requester: requesterPerson?.name || device.user || 'RMM Monitoring',
+      requesterEmail: requesterPerson?.email || device.userEmail || '',
+      requesterJobTitle: requesterPerson?.role || '',
+      requesterDepartment: departments.find((department) => department.id === requesterPerson?.departmentId)?.name || '',
+      priority,
+      status: 'New',
+      team: String(device.type || '').toLowerCase().includes('server') ? 'Infrastructure' : 'Service Desk',
+      assignee: 'Unassigned',
+      service: String(device.type || '').toLowerCase().includes('server') ? 'Infrastructure' : 'Endpoint Management',
+      location: device.site || 'Managed device',
+      sla: priority === 'Critical' ? '1 hr' : priority === 'High' ? '4 hr' : '8 hr',
+      slaPercent: 0,
+      created: 'Just now',
+      updated: 'Just now',
+      description: alert
+        ? `${alert.detail}\n\nThis incident was created from Hi5Central RMM monitoring for ${device.name}.`
+        : `This incident was created from the Hi5Central RMM device record for ${device.name}.`,
+      nextStep: 'Service Desk triage with RMM device telemetry attached.',
+      comments: [
+        `System: Created from Hi5Central RMM${alert ? ` alert ${alert.id}` : ''}.`,
+        `System: Managed device ${device.name} (${device.id}) linked to this incident.`,
+      ],
+      activities: [{
+        id: `ACT-RMM-${Date.now()}`,
+        kind: 'work',
+        actor: session?.name || 'RMM Monitoring',
+        createdAt: new Date().toISOString(),
+        createdAtLabel: 'Just now',
+        html: '',
+        text: alert
+          ? `Created from RMM alert ${alert.id}: ${alert.title}.`
+          : `Created from RMM device ${device.name}.`,
+        mentions: [],
+        attachments: [],
+        source: 'rmm',
+        visibility: 'internal',
+      }],
+      attachments: [],
+      linkedAssets: [device.name],
+      rmmDeviceId: device.id,
+      rmmDeviceName: device.name,
+      rmmAlertId: alert?.id || '',
+      rmmAlertPolicy: alert?.policy || '',
+      rmmSource: 'Hi5Central RMM',
+    }
+
+    setTickets((current) => [createdTicket, ...current])
+    pushNotification({
+      source: 'itsm',
+      title: `${createdTicket.id} created from RMM`,
+      detail: `${device.name}${alert ? ` · ${alert.title}` : ''}`,
+      target: { type: 'ticket', recordId: createdTicket.id },
+      tone: priority === 'Critical' ? 'critical' : priority === 'High' ? 'warning' : 'info',
+    })
+    return createdTicket
+  }
+
   function approveChange(ticket, approval) {
     updateTicket(ticket.id, {
       approval,
@@ -2814,9 +2881,11 @@ function App() {
         accent={accent}
         currentUser={session}
         handleLogout={handleLogout}
+        onCreateItsmIncident={createRmmIncident}
         setTheme={setTheme}
         tenantName={tenantSurface.tenantName}
         theme={resolvedTheme}
+        tickets={tickets}
       />
     )
   }
