@@ -63,6 +63,11 @@ function hydrateTicketEnhancements(tickets) {
     'relatedProblems',
     'implementationNotes',
     'reviewOutcome',
+    'rmmDeviceId',
+    'rmmDeviceName',
+    'rmmAlertId',
+    'rmmAlertPolicy',
+    'rmmSource',
   ]
 
   return tickets.map((ticket) => {
