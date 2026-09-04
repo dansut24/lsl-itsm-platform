@@ -198,6 +198,9 @@ export const seedTickets = [
       'Vendor ticket raised and tagged as business critical.',
     ],
     linkedAssets: ['EXCH-HYB-02', 'M365 Tenant'],
+    rmmDeviceId: 'DEV-000184',
+    rmmDeviceName: 'LON-FIN-WS042',
+    rmmSource: 'Requester managed device',
   },
   {
     id: 'REQ-2217',
@@ -223,7 +226,10 @@ export const seedTickets = [
       'Replacement device requested for a power user with expiring warranty and performance issues.',
     nextStep: 'Awaiting cost-centre approval from Finance Operations.',
     comments: ['Quote attached by EUC. Approval routed to line manager.'],
-    linkedAssets: ['LAP-8841'],
+    linkedAssets: ['LAP-8841', 'LON-FIN-WS044'],
+    rmmDeviceId: 'DEV-000191',
+    rmmDeviceName: 'LON-FIN-WS044',
+    rmmSource: 'Requester managed device',
     requestInformation: [
       { label: 'Employee name', value: 'Marcus Lee' },
       { label: 'Staff number', value: 'HC-20418' },
