@@ -17,6 +17,7 @@ import {
   ExternalLink,
   HardDrive,
   History,
+  GitBranch,
   KeyRound,
   Laptop,
   LayoutDashboard,
@@ -53,16 +54,17 @@ import {
   rmmDevices,
   rmmJobs,
   rmmPatchGroups,
-  rmmPolicies,
   rmmScripts,
   rmmSoftware,
 } from '../../data/rmmData.js'
 import { resolveTenantSurface, rmmPath, rmmRouteFromLocation } from '../../lib/tenantSurface.js'
+import { resolveDeviceMonitoringPolicy } from '../../data/rmmMonitoringData.js'
 import {
   RmmDeviceGroupsManagement,
   RmmDeviceInventory,
   RmmSitesManagement,
 } from './RmmEstateManagement.jsx'
+import { RmmMonitoringPolicies } from './RmmMonitoringPolicies.jsx'
 import './RmmPlatformApp.css'
 
 const navigation = [
@@ -248,7 +250,7 @@ function DeviceProperty({ label, value, detail }) {
   return <div><span>{label}</span><strong>{value || 'Not reported'}</strong>{detail && <small>{detail}</small>}</div>
 }
 
-function DeviceOverview({ device, deviceAlerts, relatedTickets, navigate, onCreateIncident }) {
+function DeviceOverview({ device, deviceAlerts, monitoringResolution, relatedTickets, navigate, onCreateIncident }) {
   const security = device.security || {}
   return (
     <div className="rmm-device-overview-layout">
@@ -303,6 +305,13 @@ function DeviceOverview({ device, deviceAlerts, relatedTickets, navigate, onCrea
             ['Secure boot', security.secureBoot, 'Platform integrity'],
             ['EDR', security.edrState, security.edr],
           ].map(([label, value, detail]) => <div key={label}><span className={`rmm-security-state ${securityTone(value)}`}><ShieldCheck size={15} /></span><span><strong>{label}</strong><small>{detail}</small></span><StatusPill tone={securityTone(value)}>{value}</StatusPill></div>)}
+        </section>
+
+        <section className="rmm-card rmm-device-monitoring-card">
+          <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Monitoring</span><h2>Effective policy</h2></div><StatusPill>{monitoringResolution?.override ? 'Override' : 'Inherited'}</StatusPill></div>
+          <p>Resolved through estate, site, group and device precedence.</p>
+          <div className="rmm-device-monitoring-effective"><span><SlidersHorizontal size={16} /></span><div><strong>{monitoringResolution?.policy?.name || 'Standard endpoint monitoring'}</strong><small>{monitoringResolution?.checks?.length || 0} checks · {monitoringResolution?.policy?.evaluation || 'Every 2 minutes'}</small></div></div>
+          <button onClick={() => navigate('policies')} type="button"><GitBranch size={14} /> View policy inheritance</button>
         </section>
 
         <section className="rmm-card rmm-itsm-bridge-card">
@@ -382,6 +391,7 @@ function DeviceItsm({ relatedTickets, onCreateIncident }) {
 
 function RmmDeviceDetail({ device, onBack, navigate, onCreateIncident, tickets = [] }) {
   const [section, setSection] = useState('overview')
+  const monitoringResolution = resolveDeviceMonitoringPolicy(device)
   const deviceAlerts = rmmAlerts.filter((alert) => alert.deviceId === device.id)
   const relatedTickets = tickets.filter((ticket) => (
     ticket.rmmDeviceId === device.id
@@ -413,7 +423,7 @@ function RmmDeviceDetail({ device, onBack, navigate, onCreateIncident, tickets =
   else if (section === 'security') content = <DeviceSecurity device={device} />
   else if (section === 'activity') content = <DeviceActivity device={device} />
   else if (section === 'itsm') content = <DeviceItsm device={device} onCreateIncident={createIncident} relatedTickets={relatedTickets} />
-  else content = <DeviceOverview device={device} deviceAlerts={deviceAlerts} navigate={navigate} onCreateIncident={createIncident} relatedTickets={relatedTickets} />
+  else content = <DeviceOverview device={device} deviceAlerts={deviceAlerts} monitoringResolution={monitoringResolution} navigate={navigate} onCreateIncident={createIncident} relatedTickets={relatedTickets} />
 
   return (
     <div className="rmm-device-detail">
@@ -476,10 +486,6 @@ function RmmAutomation() {
   return <><PageHeading activeView="automation" action={<button className="rmm-primary compact" type="button"><Code2 size={16} /> New script</button>} /><div className="rmm-automation-grid">{rmmScripts.map((script) => <article className="rmm-card" key={script.id}><div className="rmm-script-icon"><Code2 size={20} /></div><span className="rmm-eyebrow">{script.id} · {script.platform}</span><h2>{script.name}</h2><p>{script.language} · {script.scope}</p><div className="rmm-script-meta"><span><strong>{script.success}%</strong><small>Success rate</small></span><span><strong>{script.lastRun}</strong><small>Last run</small></span></div><footer><button type="button">Edit</button><button className="rmm-primary compact" type="button"><Play size={14} /> Run</button></footer></article>)}</div></>
 }
 
-function RmmPolicies() {
-  return <><PageHeading activeView="policies" action={<button className="rmm-primary compact" type="button"><SlidersHorizontal size={16} /> New policy</button>} /><div className="rmm-policy-list">{rmmPolicies.map((policy) => <article className="rmm-card" key={policy.id}><span className="rmm-policy-icon"><SlidersHorizontal size={18} /></span><div><span className="rmm-eyebrow">{policy.id}</span><h2>{policy.name}</h2><p>{policy.scope} · {policy.settings} configured settings</p></div><div className="rmm-policy-state"><StatusPill>{policy.status}</StatusPill><span className={policy.drift ? 'drift' : ''}><strong>{policy.drift}</strong> drift</span></div><button type="button"><ChevronRight size={17} /></button></article>)}</div></>
-}
-
 function RmmJobs() {
   return <><PageHeading activeView="jobs" /><section className="rmm-table-card"><div className="rmm-table rmm-jobs-table"><div className="rmm-table-head"><span>Job</span><span>Target</span><span>Status</span><span>Progress</span><span>Started</span><span>Initiated by</span></div>{rmmJobs.map((job) => <div className="rmm-table-row" key={job.id}><span><strong>{job.title}</strong><small>{job.id} · {job.type}</small></span><span><strong>{job.target}</strong></span><span><StatusPill>{job.status}</StatusPill></span><span>{job.status === 'Running' ? <div className="rmm-job-progress"><div><span style={{ width: `${job.progress}%` }} /></div><b>{job.progress}%</b></div> : <strong>{job.progress}%</strong>}</span><span><strong>{job.started}</strong></span><span><strong>{job.initiatedBy}</strong></span></div>)}</div></section></>
 }
@@ -493,6 +499,7 @@ function RmmSettings({ navigate }) {
   const settings = [
     { icon: Download, title: 'Agent deployment', detail: 'Installer packages, enrollment tokens and stable/preview channels.' },
     { icon: MapPin, title: 'Sites & device groups', detail: 'Organise endpoints by location, department, role or dynamic rule.', target: 'sites' },
+    { icon: SlidersHorizontal, title: 'Monitoring policies & inheritance', detail: 'Set estate defaults, target Sites or Groups and audit per-device overrides.', target: 'policies' },
     { icon: ShieldCheck, title: 'Maintenance windows', detail: 'Control when patching, restarts and automated remediation may run.' },
     { icon: KeyRound, title: 'Credentials & secrets', detail: 'Secure credentials used by remote actions, scripts and integrations.' },
     { icon: Bell, title: 'Alerting & notifications', detail: 'Thresholds, escalation targets and integrations for monitoring events.' },
@@ -568,7 +575,7 @@ export function RmmPlatformApp({ accent, currentUser, handleLogout, onCreateItsm
     if (activeView === 'patching') return <RmmPatching />
     if (activeView === 'software') return <RmmSoftware />
     if (activeView === 'automation') return <RmmAutomation />
-    if (activeView === 'policies') return <RmmPolicies />
+    if (activeView === 'policies') return <RmmMonitoringPolicies openDevice={openDevice} />
     if (activeView === 'jobs') return <RmmJobs />
     if (activeView === 'reports') return <RmmReports />
     if (activeView === 'settings') return <RmmSettings navigate={navigate} />
