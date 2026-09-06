@@ -164,26 +164,39 @@ export function ProductionWorkspaceBootstrap() {
     return () => { active = false }
   }, [surface.tenantSlug])
 
+  useEffect(() => {
+    if (!serverSession) return
+
+    if (serverSession.onboarding?.completedAt) {
+      saveProductionSession(toWorkspaceSession(serverSession))
+      if (window.location.pathname === '/onboarding') {
+        window.history.replaceState({}, '', '/dashboard')
+      }
+      return
+    }
+
+    if (window.location.pathname !== '/onboarding') {
+      window.history.replaceState({}, '', '/onboarding')
+    }
+  }, [serverSession])
+
   function acceptSession(nextSession) {
     setServerSession(nextSession)
-    setTenantState({ managed: true, slug: nextSession.tenant.slug, companyName: nextSession.tenant.companyName, status: 'active' })
-    if (nextSession.onboarding?.completedAt) {
-      saveProductionSession(toWorkspaceSession(nextSession))
-      if (window.location.pathname === '/onboarding') window.history.replaceState({}, '', '/dashboard')
-    }
+    setTenantState({
+      managed: true,
+      slug: nextSession.tenant.slug,
+      companyName: nextSession.tenant.companyName,
+      status: 'active',
+    })
   }
 
   if (loading) return <LoadingScreen tenantName={surface.tenantName} />
 
   if (serverSession && !serverSession.onboarding?.completedAt) {
-    if (window.location.pathname !== '/onboarding') window.history.replaceState({}, '', '/onboarding')
     return <OnboardingWizard session={serverSession} onSessionChange={acceptSession} />
   }
 
-  if (serverSession?.onboarding?.completedAt) {
-    saveProductionSession(toWorkspaceSession(serverSession))
-    return <App />
-  }
+  if (serverSession?.onboarding?.completedAt) return <App />
 
   if (tenantState?.managed) {
     return <ProductionLogin tenant={tenantState} onAuthenticated={acceptSession} />
