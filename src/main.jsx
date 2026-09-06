@@ -8,6 +8,7 @@ import { KnowledgeContextEnhancer } from './features/knowledge/KnowledgeContextE
 import { ProductionWorkspaceBootstrap } from './production/ProductionWorkspaceBootstrap.jsx'
 import { resolveTenantSurface } from './lib/tenantSurface.js'
 import './features/settings/ProductionSettingsFloating.css'
+import './features/people/OrganisationContextual.css'
 import './PlatformCurves.css'
 import './ContextualSurfaces.css'
 
