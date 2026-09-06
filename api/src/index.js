@@ -147,7 +147,7 @@ async function deliverVerification({ token, email, name, companyName, tenantUrl 
 app.use('*', secureHeaders())
 app.use('/api/*', cors({
   origin: allowedOrigin,
-  allowMethods: ['GET', 'POST', 'PUT', 'OPTIONS'],
+  allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
   maxAge: 600,
