@@ -221,3 +221,128 @@ jobs:
             -v ON_ERROR_STOP=1 \
             -c "SELECT reference, title, one_off_cost, status FROM service_requests WHERE tenant_id = '00000000-0000-4000-8000-000000000101'::uuid AND reference = 'REQ-00001';" \
             | grep -q '1399.00'
+
+          curl -sS -D /tmp/patch-preflight.headers -o /dev/null \
+            -X OPTIONS \
+            -H 'Origin: https://ci-organisation.hi5central.com' \
+            -H 'Access-Control-Request-Method: PATCH' \
+            http://127.0.0.1:3001/api/v1/service-requests/REQ-00001
+
+          tr -d '\r' < /tmp/patch-preflight.headers | grep -i 'access-control-allow-methods:' | grep -q 'PATCH'
+
+          curl -fsS \
+            -X PATCH \
+            -H "Cookie: $ORG_COOKIE" \
+            -H 'Content-Type: application/json' \
+            --data '{"priority":"High","team":"Service Desk","assignee":"ci-organisation@hi5central.test"}' \
+            http://127.0.0.1:3001/api/v1/service-requests/REQ-00001 \
+            | tee /tmp/service-request-assigned.json
+
+          grep -q '"updated":true' /tmp/service-request-assigned.json
+
+          curl -fsS \
+            -X POST \
+            -H "Cookie: $ORG_COOKIE" \
+            -H 'Content-Type: application/json' \
+            --data '{"targetStatus":"Approved","values":{"approvalConfirmation":true,"approvalNote":"CI manager approval confirmed"}}' \
+            http://127.0.0.1:3001/api/v1/service-requests/REQ-00001/transition \
+            | tee /tmp/service-request-approved.json
+
+          grep -q '"status":"Approved"' /tmp/service-request-approved.json
+
+          curl -fsS \
+            -X POST \
+            -H "Cookie: $ORG_COOKIE" \
+            -H 'Content-Type: application/json' \
+            --data '{"targetStatus":"In Progress","values":{}}' \
+            http://127.0.0.1:3001/api/v1/service-requests/REQ-00001/transition \
+            | tee /tmp/service-request-in-progress.json
+
+          grep -q '"status":"In Progress"' /tmp/service-request-in-progress.json
+
+          curl -fsS \
+            -X POST \
+            -H "Cookie: $ORG_COOKIE" \
+            -H 'Content-Type: application/json' \
+            --data '{"kind":"work","text":"CI internal fulfilment note."}' \
+            http://127.0.0.1:3001/api/v1/service-requests/REQ-00001/activities \
+            | tee /tmp/service-request-work-note.json
+
+          grep -q 'CI internal fulfilment note' /tmp/service-request-work-note.json
+          grep -q '"visibility":"internal"' /tmp/service-request-work-note.json
+
+          curl -fsS \
+            -X POST \
+            -H "Cookie: $ORG_COOKIE" \
+            -H 'Content-Type: application/json' \
+            --data '{"kind":"customer","text":"CI customer-visible update."}' \
+            http://127.0.0.1:3001/api/v1/service-requests/REQ-00001/activities \
+            | tee /tmp/service-request-customer-note.json
+
+          grep -q 'CI customer-visible update' /tmp/service-request-customer-note.json
+          grep -q '"visibility":"customer"' /tmp/service-request-customer-note.json
+
+          curl -fsS \
+            -X PATCH \
+            -H "Cookie: $ORG_COOKIE" \
+            -H 'Content-Type: application/json' \
+            --data '{"status":"Completed","assignee":"ci-organisation@hi5central.test","team":"Service Desk","completionNotes":"CI fulfilment task completed."}' \
+            http://127.0.0.1:3001/api/v1/service-requests/REQ-00001/tasks/REQ-00001-FULFIL \
+            | tee /tmp/service-request-task.json
+
+          grep -q '"updated":true' /tmp/service-request-task.json
+
+          curl -fsS \
+            -X POST \
+            -H "Cookie: $ORG_COOKIE" \
+            -H 'Content-Type: application/json' \
+            --data '{"targetStatus":"Completed","values":{"completionNotes":"CI request fulfilment completed and verified."}}' \
+            http://127.0.0.1:3001/api/v1/service-requests/REQ-00001/transition \
+            | tee /tmp/service-request-completed.json
+
+          grep -q '"status":"Completed"' /tmp/service-request-completed.json
+
+          curl -fsS \
+            -X POST \
+            -H "Cookie: $ORG_COOKIE" \
+            -H 'Content-Type: application/json' \
+            --data '{"targetStatus":"Closed","values":{}}' \
+            http://127.0.0.1:3001/api/v1/service-requests/REQ-00001/transition \
+            | tee /tmp/service-request-closed.json
+
+          grep -q '"status":"Closed"' /tmp/service-request-closed.json
+
+          curl -fsS \
+            -H "Cookie: $ORG_COOKIE" \
+            http://127.0.0.1:3001/api/v1/service-request-state/REQ-00001 \
+            | tee /tmp/service-request-state.json
+
+          grep -q '"status":"Closed"' /tmp/service-request-state.json
+          grep -q '"priority":"High"' /tmp/service-request-state.json
+          grep -q '"assignee":"CI Owner"' /tmp/service-request-state.json
+          grep -q 'CI request fulfilment completed and verified' /tmp/service-request-state.json
+
+          curl -fsS \
+            -H "Cookie: $ORG_COOKIE" \
+            http://127.0.0.1:3001/api/v1/service-requests/REQ-00001 \
+            | tee /tmp/service-request-final.json
+
+          grep -q '"status":"Closed"' /tmp/service-request-final.json
+          grep -q 'CI internal fulfilment note' /tmp/service-request-final.json
+          grep -q 'CI customer-visible update' /tmp/service-request-final.json
+          grep -q 'CI fulfilment task completed' /tmp/service-request-final.json
+          grep -q '"status":"Approved"' /tmp/service-request-final.json
+
+          PGPASSWORD=hi5central-ci psql \
+            -h 127.0.0.1 \
+            -U hi5central \
+            -d hi5central \
+            -v ON_ERROR_STOP=1 \
+            -c "SELECT reference, priority, status, one_off_cost, closed_at IS NOT NULL AS closed, operational_data->>'completionNotes' AS completion_notes FROM service_requests WHERE tenant_id = '00000000-0000-4000-8000-000000000101'::uuid AND reference = 'REQ-00001';" \
+            | tee /tmp/service-request-db.txt
+
+          grep -q 'REQ-00001' /tmp/service-request-db.txt
+          grep -q 'High' /tmp/service-request-db.txt
+          grep -q 'Closed' /tmp/service-request-db.txt
+          grep -q '1399.00' /tmp/service-request-db.txt
+          grep -q 'CI request fulfilment completed and verified' /tmp/service-request-db.txt
