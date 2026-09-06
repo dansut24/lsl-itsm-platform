@@ -133,7 +133,7 @@ jobs:
             'https://ci-organisation.hi5central.com',
             'https://ci-organisation-portal.hi5central.com',
             '{"groups":{"firstDepartment":"Technology","serviceDeskTeam":"Service Desk","firstSite":"London HQ"},"company":{"timezone":"Europe/London"}}'::jsonb,
-            '{"groups":{"firstDepartment":"Technology","serviceDeskTeam":"Service Desk","firstSite":"London HQ"},"company":{"timezone":"Europe/London"}}'::jsonb
+            '{"groups":{"firstDepartment":"Technology","serviceDeskTeam":"Service Desk","firstSite":"London HQ"},"company":{"timezone":"Europe/London"},"itsm":{"managerApprovalThreshold":"500"}}'::jsonb
           );
 
           INSERT INTO auth_sessions (tenant_id, user_id, token_hash, expires_at)
@@ -173,3 +173,51 @@ jobs:
             -v ON_ERROR_STOP=1 \
             -c "SELECT external_key, name FROM organisation_sites WHERE tenant_id = '00000000-0000-4000-8000-000000000101'::uuid AND external_key = 'SITE-CI';" \
             | grep -q 'CI Test Site'
+
+          curl -fsS \
+            -X PUT \
+            -H "Cookie: $ORG_COOKIE" \
+            -H 'Content-Type: application/json' \
+            --data '{"categories":["Hardware"],"items":[{"id":"CAT-HW-LAPTOP","title":"CI Laptop","category":"Hardware","description":"CI priced laptop","kind":"product","requestType":"Service Request","service":"Hardware","team":"Service Desk","approval":"manager-cost","approvalThreshold":500,"visibility":"portal","priceMode":"fixed","oneOffPrice":1399,"monthlyPrice":0,"currency":"GBP","workflow":"hardware-fulfilment","formSchema":[],"options":[],"active":true},{"id":"CAT-EQUIPMENT","title":"Request Equipment","category":"Hardware","description":"Request a managed device","kind":"request-form","requestType":"Service Request","service":"Hardware","team":"Service Desk","approval":"manager-cost","approvalThreshold":500,"visibility":"portal","priceMode":"calculated","oneOffPrice":0,"monthlyPrice":0,"currency":"GBP","workflow":"hardware-fulfilment","formSchema":[{"id":"device","label":"Primary item","type":"product","required":true,"options":[{"value":"CI Laptop","label":"Old laptop label","cost":1,"itemId":"CAT-HW-LAPTOP","category":"Hardware"}]},{"id":"businessReason","label":"Business reason","type":"textarea","required":true}],"options":[],"active":true}]}' \
+            http://127.0.0.1:3001/api/v1/catalogue \
+            | tee /tmp/catalogue.json
+
+          grep -q 'CI Laptop' /tmp/catalogue.json
+
+          curl -fsS \
+            http://127.0.0.1:3001/api/v1/portal/catalogue/ci-organisation \
+            | tee /tmp/portal-catalogue.json
+
+          grep -q 'Request Equipment' /tmp/portal-catalogue.json
+          grep -q '1399' /tmp/portal-catalogue.json
+          if grep -q 'Old laptop label' /tmp/portal-catalogue.json; then
+            echo 'Portal catalogue did not resolve the live product title.' >&2
+            exit 1
+          fi
+
+          curl -fsS \
+            -X POST \
+            -H "Cookie: $ORG_COOKIE" \
+            -H 'Content-Type: application/json' \
+            --data '{"catalogueItemId":"CAT-EQUIPMENT","summary":"CI equipment request","urgency":"Medium","fields":{"device":"CI Laptop","businessReason":"Required for CI validation"},"details":{"text":"Created by the CI service-request smoke test."}}' \
+            http://127.0.0.1:3001/api/v1/service-requests \
+            | tee /tmp/service-request.json
+
+          grep -q 'REQ-00001' /tmp/service-request.json
+          grep -q 'CI equipment request' /tmp/service-request.json
+          grep -q '"oneOffCost":1399' /tmp/service-request.json
+          grep -q 'Pending Approval' /tmp/service-request.json
+          grep -q 'CI Laptop' /tmp/service-request.json
+
+          curl -fsS \
+            -H "Cookie: $ORG_COOKIE" \
+            http://127.0.0.1:3001/api/v1/service-requests/REQ-00001 \
+            | grep -q 'CI equipment request'
+
+          PGPASSWORD=hi5central-ci psql \
+            -h 127.0.0.1 \
+            -U hi5central \
+            -d hi5central \
+            -v ON_ERROR_STOP=1 \
+            -c "SELECT reference, title, one_off_cost, status FROM service_requests WHERE tenant_id = '00000000-0000-4000-8000-000000000101'::uuid AND reference = 'REQ-00001';" \
+            | grep -q '1399.00'
