@@ -13,6 +13,7 @@ import {
   saveSidebarMode,
   saveTheme,
 } from '../services/demoStore.js'
+import { hydrateProductionServiceRequests } from '../services/productionServiceRequests.js'
 import './ProductionWorkspaceBootstrap.css'
 
 const API_BASE = 'https://api.hi5central.com'
@@ -116,6 +117,26 @@ async function hydrateOrganisationWithFallback() {
     }))
     return null
   }
+}
+
+async function hydrateServiceRequestsWithFallback() {
+  try {
+    return await hydrateProductionServiceRequests()
+  } catch (error) {
+    console.error('Production Service Request hydration failed; using the last local cache.', error)
+    window.dispatchEvent(new CustomEvent('hi5-service-requests-sync-error', {
+      detail: { message: error.message },
+    }))
+    return null
+  }
+}
+
+async function hydrateWorkspaceData() {
+  const [organisation, serviceRequests] = await Promise.all([
+    hydrateOrganisationWithFallback(),
+    hydrateServiceRequestsWithFallback(),
+  ])
+  return { organisation, serviceRequests }
 }
 
 function LoadingScreen({ tenantName }) {
@@ -375,7 +396,7 @@ export function ProductionWorkspaceBootstrap() {
           } else {
             applyTenantPreferences(payload)
             if (payload.onboarding?.completedAt) {
-              await hydrateOrganisationWithFallback()
+              await hydrateWorkspaceData()
               if (!active) return
               saveProductionSession(toWorkspaceSession(payload))
             }
@@ -457,7 +478,7 @@ export function ProductionWorkspaceBootstrap() {
   async function acceptSession(nextSession) {
     applyTenantPreferences(nextSession)
     if (nextSession.onboarding?.completedAt) {
-      await hydrateOrganisationWithFallback()
+      await hydrateWorkspaceData()
       saveProductionSession(toWorkspaceSession(nextSession))
     }
     setServerSession(nextSession)
