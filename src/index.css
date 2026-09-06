@@ -56,11 +56,15 @@ a {
 }
 
 
-/* Standalone self-service uses the document scroller. The technician/RMM
-   consoles intentionally keep the root viewport locked and scroll internally. */
+/* Standalone self-service and the public marketing site use the document
+   scroller. Technician/RMM consoles intentionally keep the root viewport
+   locked and scroll internally. */
 html[data-hi5-surface='portal'],
 html[data-hi5-surface='portal'] body,
-body[data-hi5-surface='portal'] {
+body[data-hi5-surface='portal'],
+html[data-hi5-surface='marketing'],
+html[data-hi5-surface='marketing'] body,
+body[data-hi5-surface='marketing'] {
   height: auto !important;
   min-height: 100% !important;
   overflow-x: hidden !important;
@@ -72,7 +76,10 @@ body[data-hi5-surface='portal'] {
 
 html[data-hi5-surface='portal'] #root,
 body[data-hi5-surface='portal'] #root,
-#root[data-hi5-surface='portal'] {
+#root[data-hi5-surface='portal'],
+html[data-hi5-surface='marketing'] #root,
+body[data-hi5-surface='marketing'] #root,
+#root[data-hi5-surface='marketing'] {
   height: auto !important;
   min-height: 100dvh !important;
   overflow: visible !important;
