@@ -1,0 +1,34 @@
+:root {
+  --hi5-radius-sm: 12px;
+  --hi5-radius-md: 16px;
+  --hi5-radius-lg: 20px;
+}
+
+.app-shell .brand,
+.app-shell .sidebar-toggle,
+.app-shell .icon-button,
+.app-shell .tab-add,
+.app-shell .nav-item,
+.app-shell .sidebar-status,
+.app-shell .workspace-tab,
+.app-shell .user-pill,
+.app-shell .new-ticket-button,
+.app-shell .primary-action,
+.app-shell .segmented-control,
+.app-shell .segmented-control button,
+.app-shell .ticket-card,
+.app-shell .catalog-card,
+.portal-shell .icon-button,
+.portal-shell .user-pill,
+.login-shell .credential-card {
+  border-radius: var(--hi5-radius-sm) !important;
+}
+
+.app-shell .record-primary,
+.app-shell .record-secondary,
+.app-shell .workload-panel,
+.app-shell .operational-band,
+.login-shell .login-panel,
+.login-shell .credential-panel {
+  border-radius: var(--hi5-radius-md) !important;
+}
