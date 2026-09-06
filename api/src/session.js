@@ -65,6 +65,7 @@ export async function resolveSession(c) {
        ts.onboarding_step,
        ts.onboarding_completed_at,
        ts.onboarding_data,
+       ts.configuration,
        ts.tenant_url,
        ts.portal_url,
        ts.rmm_url
@@ -108,6 +109,10 @@ export async function revokeCurrentSession(c) {
 }
 
 export function sessionPayload(session) {
+  const configuration = session.configuration && Object.keys(session.configuration).length
+    ? session.configuration
+    : session.onboarding_data || {}
+
   return {
     authenticated: true,
     user: {
@@ -130,5 +135,6 @@ export function sessionPayload(session) {
       completedAt: session.onboarding_completed_at,
       data: session.onboarding_data || {},
     },
+    settings: configuration,
   }
 }
