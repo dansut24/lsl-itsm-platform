@@ -8,6 +8,7 @@ import { pool, withTransaction } from './db.js'
 import { sendVerificationEmail, verifySmtpConnection } from './mailer.js'
 import { verifyPassword } from './password.js'
 import { ensureRedisConnected, redis } from './redis.js'
+import { registerSettingsRoutes } from './settings.js'
 import {
   createSession,
   resolveSession,
@@ -248,6 +249,7 @@ app.post('/api/v1/auth/login', async (c) => {
        ts.onboarding_step,
        ts.onboarding_completed_at,
        ts.onboarding_data,
+       ts.configuration,
        ts.tenant_url,
        ts.portal_url,
        ts.rmm_url
@@ -557,7 +559,13 @@ app.post('/api/v1/onboarding/complete', async (c) => {
 
   await pool.query(
     `UPDATE tenant_settings
-     SET onboarding_step = 'complete', onboarding_completed_at = now(), updated_at = now()
+     SET onboarding_step = 'complete',
+         onboarding_completed_at = now(),
+         configuration = CASE
+           WHEN configuration = '{}'::jsonb THEN onboarding_data
+           ELSE configuration
+         END,
+         updated_at = now()
      WHERE tenant_id = $1`,
     [session.tenant_id],
   )
@@ -565,6 +573,8 @@ app.post('/api/v1/onboarding/complete', async (c) => {
   const refreshed = await resolveSession(c)
   return c.json(sessionPayload(refreshed))
 })
+
+registerSettingsRoutes(app)
 
 app.notFound((c) => c.json({ error: 'Not found' }, 404))
 app.onError((error, c) => {
