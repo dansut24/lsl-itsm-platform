@@ -5,6 +5,7 @@ import App from './App.jsx'
 import { MarketingApp } from './features/marketing/MarketingApp.jsx'
 import { SignupPage } from './features/marketing/SignupPage.jsx'
 import { KnowledgeContextEnhancer } from './features/knowledge/KnowledgeContextEnhancer.jsx'
+import { OrganisationSitesEnhancer } from './features/people/OrganisationSitesEnhancer.jsx'
 import { ProductionWorkspaceBootstrap } from './production/ProductionWorkspaceBootstrap.jsx'
 import { resolveTenantSurface } from './lib/tenantSurface.js'
 import './features/settings/ProductionSettingsFloating.css'
@@ -30,5 +31,6 @@ createRoot(rootElement).render(
   <StrictMode>
     <RootApp />
     {initialSurface.kind === 'workspace' ? <KnowledgeContextEnhancer /> : null}
+    {initialSurface.kind === 'workspace' ? <OrganisationSitesEnhancer /> : null}
   </StrictMode>,
 )
