@@ -14,11 +14,13 @@ import {
   saveTheme,
 } from '../services/demoStore.js'
 import { hydrateProductionServiceRequests } from '../services/productionServiceRequests.js'
+import { takeProductionAuthHandoff } from './productionSessionBridge.js'
 import './ProductionWorkspaceBootstrap.css'
 
 const API_BASE = 'https://api.hi5central.com'
 const PRODUCTION_SESSION_KEY = 'hi5central-production-session-v1'
 const TENANT_RUNTIME_CONFIG_KEY = 'hi5central-tenant-runtime-config-v1'
+const SESSION_BOOTSTRAP_TIMEOUT_MS = 8000
 const ORGANISATION_CACHE_KEYS = {
   people: 'hi5central-organisation-people-v1',
   teams: 'hi5central-organisation-teams-v1',
@@ -137,6 +139,22 @@ async function hydrateWorkspaceData() {
     hydrateServiceRequestsWithFallback(),
   ])
   return { organisation, serviceRequests }
+}
+
+async function fetchJsonWithTimeout(url, options = {}, timeoutMs = SESSION_BOOTSTRAP_TIMEOUT_MS) {
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    })
+    const payload = await response.json().catch(() => ({}))
+    return { response, payload }
+  } finally {
+    window.clearTimeout(timer)
+  }
 }
 
 function LoadingScreen({ tenantName }) {
@@ -383,36 +401,52 @@ export function ProductionWorkspaceBootstrap() {
   useEffect(() => {
     let active = true
 
+    function acceptBootstrapPayload(payload) {
+      if (!active || payload?.tenant?.slug !== surface.tenantSlug) return false
+
+      applyTenantPreferences(payload)
+      if (payload.onboarding?.completedAt) {
+        saveProductionSession(toWorkspaceSession(payload))
+        void hydrateWorkspaceData()
+      }
+      setServerSession(payload)
+      setTenantState({
+        managed: true,
+        slug: payload.tenant.slug,
+        companyName: payload.tenant.companyName,
+        status: 'active',
+      })
+      return true
+    }
+
     async function bootstrap() {
       try {
-        const response = await fetch(`${API_BASE}/api/v1/auth/session`, {
+        const handoff = takeProductionAuthHandoff()
+        if (handoff && acceptBootstrapPayload(handoff)) return
+
+        const { response, payload } = await fetchJsonWithTimeout(`${API_BASE}/api/v1/auth/session`, {
           credentials: 'include',
         })
-        if (response.ok) {
-          const payload = await response.json()
-          if (!active) return
-          if (payload.tenant?.slug !== surface.tenantSlug) {
-            clearProductionSession()
-          } else {
-            applyTenantPreferences(payload)
-            if (payload.onboarding?.completedAt) {
-              await hydrateWorkspaceData()
-              if (!active) return
-              saveProductionSession(toWorkspaceSession(payload))
-            }
-            setServerSession(payload)
-            setTenantState({ managed: true, slug: payload.tenant.slug, companyName: payload.tenant.companyName, status: 'active' })
-            return
-          }
-        }
+
+        if (response.ok && acceptBootstrapPayload(payload)) return
 
         clearProductionSession()
-        const stateResponse = await fetch(`${API_BASE}/api/v1/auth/tenant-state/${encodeURIComponent(surface.tenantSlug)}`)
-        const statePayload = await stateResponse.json().catch(() => ({ managed: false }))
+        const { payload: statePayload } = await fetchJsonWithTimeout(
+          `${API_BASE}/api/v1/auth/tenant-state/${encodeURIComponent(surface.tenantSlug)}`,
+        )
         if (active) setTenantState(statePayload)
-      } catch {
+      } catch (error) {
+        console.error('Production session bootstrap failed.', error)
         clearProductionSession()
-        if (active) setTenantState({ managed: false, unavailable: true })
+        if (active) {
+          setTenantState({
+            managed: true,
+            slug: surface.tenantSlug,
+            companyName: surface.tenantName,
+            status: 'active',
+            unavailable: true,
+          })
+        }
       } finally {
         if (active) setLoading(false)
       }
@@ -420,7 +454,7 @@ export function ProductionWorkspaceBootstrap() {
 
     bootstrap()
     return () => { active = false }
-  }, [surface.tenantSlug])
+  }, [surface.tenantName, surface.tenantSlug])
 
   useEffect(() => {
     if (!serverSession) return
@@ -478,8 +512,8 @@ export function ProductionWorkspaceBootstrap() {
   async function acceptSession(nextSession) {
     applyTenantPreferences(nextSession)
     if (nextSession.onboarding?.completedAt) {
-      await hydrateWorkspaceData()
       saveProductionSession(toWorkspaceSession(nextSession))
+      void hydrateWorkspaceData()
     }
     setServerSession(nextSession)
     setTenantState({
