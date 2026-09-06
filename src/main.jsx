@@ -12,6 +12,7 @@ import { ProductionMfaLoginEnhancer } from './features/security/ProductionMfaLog
 import { ProductionMfaSettingsEnhancer } from './features/security/ProductionMfaSettingsEnhancer.jsx'
 import { ProductionPasswordRecoveryEnhancer } from './features/security/ProductionPasswordRecoveryEnhancer.jsx'
 import { ProductionSecurityCenterEnhancer } from './features/security/ProductionSecurityCenterEnhancer.jsx'
+import { ProductionOnboardingBootstrap } from './production/ProductionOnboardingBootstrap.jsx'
 import { ProductionPortalBootstrap } from './production/ProductionPortalBootstrap.jsx'
 import { ProductionWorkspaceBootstrap } from './production/ProductionWorkspaceBootstrap.jsx'
 import { resolveTenantSurface } from './lib/tenantSurface.js'
@@ -27,27 +28,29 @@ document.documentElement.dataset.hi5Surface = initialSurface.kind
 document.body.dataset.hi5Surface = initialSurface.kind
 if (rootElement) rootElement.dataset.hi5Surface = initialSurface.kind
 
+const productionWorkspace = initialSurface.kind === 'workspace' && initialSurface.canonical
+const productionOnboarding = productionWorkspace
+  && (window.location.pathname === '/onboarding' || window.location.pathname.startsWith('/onboarding/'))
+
 let RootApp = App
 if (initialSurface.kind === 'marketing') {
   RootApp = window.location.pathname === '/signup' || window.location.pathname.startsWith('/signup/')
     ? SignupPage
     : MarketingApp
 }
-if (initialSurface.kind === 'workspace' && initialSurface.canonical) RootApp = ProductionWorkspaceBootstrap
+if (productionWorkspace) RootApp = productionOnboarding ? ProductionOnboardingBootstrap : ProductionWorkspaceBootstrap
 if (initialSurface.kind === 'portal' && initialSurface.canonical) RootApp = ProductionPortalBootstrap
-
-const productionWorkspace = initialSurface.kind === 'workspace' && initialSurface.canonical
 
 createRoot(rootElement).render(
   <StrictMode>
     <RootApp />
-    {initialSurface.kind === 'workspace' ? <KnowledgeContextEnhancer /> : null}
-    {initialSurface.kind === 'workspace' ? <OrganisationSitesEnhancer /> : null}
-    {initialSurface.kind === 'workspace' ? <ServiceCatalogueSettingsEnhancer /> : null}
-    {productionWorkspace ? <ProductionMfaLoginEnhancer /> : null}
-    {productionWorkspace ? <ProductionMfaSettingsEnhancer /> : null}
-    {productionWorkspace ? <OnboardingMfaEnhancer /> : null}
-    {productionWorkspace ? <ProductionSecurityCenterEnhancer /> : null}
-    {productionWorkspace ? <ProductionPasswordRecoveryEnhancer /> : null}
+    {initialSurface.kind === 'workspace' && !productionOnboarding ? <KnowledgeContextEnhancer /> : null}
+    {initialSurface.kind === 'workspace' && !productionOnboarding ? <OrganisationSitesEnhancer /> : null}
+    {initialSurface.kind === 'workspace' && !productionOnboarding ? <ServiceCatalogueSettingsEnhancer /> : null}
+    {productionWorkspace && !productionOnboarding ? <ProductionMfaLoginEnhancer /> : null}
+    {productionWorkspace && !productionOnboarding ? <ProductionMfaSettingsEnhancer /> : null}
+    {productionWorkspace && productionOnboarding ? <OnboardingMfaEnhancer /> : null}
+    {productionWorkspace && !productionOnboarding ? <ProductionSecurityCenterEnhancer /> : null}
+    {productionWorkspace && !productionOnboarding ? <ProductionPasswordRecoveryEnhancer /> : null}
   </StrictMode>,
 )
