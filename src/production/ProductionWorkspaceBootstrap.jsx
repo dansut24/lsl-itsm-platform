@@ -7,8 +7,10 @@ import { ProductionSettingsWorkspace } from '../features/settings/ProductionSett
 import { resolveTenantSurface } from '../lib/tenantSurface.js'
 import {
   clearProductionSession,
+  loadSidebarMode,
   saveAccent,
   saveProductionSession,
+  saveSidebarMode,
   saveTheme,
 } from '../services/demoStore.js'
 import './ProductionWorkspaceBootstrap.css'
@@ -170,6 +172,72 @@ function ProductionLogin({ tenant, onAuthenticated }) {
   )
 }
 
+function WorkspaceSidebarPreferenceCard() {
+  const [sidebarMode, setSidebarMode] = useState(loadSidebarMode)
+
+  function changeSidebarMode(event) {
+    const nextMode = event.target.value
+    if (!['expanded', 'collapsed', 'hidden'].includes(nextMode)) return
+    setSidebarMode(nextMode)
+    saveSidebarMode(nextMode)
+    window.location.reload()
+  }
+
+  return (
+    <section className="production-settings-panel">
+      <header>
+        <div>
+          <h2>Workspace navigation</h2>
+          <p>This is your personal workspace preference and does not change the tenant default for other users.</p>
+        </div>
+      </header>
+      <div className="production-settings-panel-body">
+        <div className="production-settings-grid">
+          <label className="production-settings-field">
+            <span>Primary sidebar</span>
+            <select value={sidebarMode} onChange={changeSidebarMode}>
+              <option value="expanded">Expanded</option>
+              <option value="collapsed">Collapsed</option>
+              <option value="hidden">Hidden</option>
+            </select>
+            <small>Choosing Hidden reloads the workspace without a vertical primary sidebar so you can test the in-content Settings navigation.</small>
+          </label>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function WorkspaceSidebarPreferenceLayer({ currentPath }) {
+  const [target, setTarget] = useState(null)
+  const appearanceOpen = currentPath === '/settings/appearance'
+
+  useEffect(() => {
+    if (!appearanceOpen) {
+      setTarget(null)
+      return undefined
+    }
+
+    const attach = () => {
+      const nextTarget = document.querySelector('.production-settings-content')
+      if (!(nextTarget instanceof HTMLElement)) return false
+      setTarget(nextTarget)
+      return true
+    }
+
+    if (attach()) return undefined
+
+    const observer = new MutationObserver(() => {
+      if (attach()) observer.disconnect()
+    })
+    observer.observe(document.body, { childList: true, subtree: true })
+    return () => observer.disconnect()
+  }, [appearanceOpen])
+
+  if (!appearanceOpen || !target) return null
+  return createPortal(<WorkspaceSidebarPreferenceCard />, target)
+}
+
 function ProductionSettingsLayer({ currentPath, session, onSessionChange }) {
   const [target, setTarget] = useState(null)
 
@@ -208,11 +276,14 @@ function ProductionSettingsLayer({ currentPath, session, onSessionChange }) {
   if (!target) return null
 
   return createPortal(
-    <ProductionSettingsWorkspace
-      currentPath={currentPath}
-      onSessionChange={onSessionChange}
-      session={session}
-    />,
+    <>
+      <ProductionSettingsWorkspace
+        currentPath={currentPath}
+        onSessionChange={onSessionChange}
+        session={session}
+      />
+      <WorkspaceSidebarPreferenceLayer currentPath={currentPath} />
+    </>,
     target,
   )
 }
