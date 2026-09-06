@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { ArrowRight, CheckCircle2, LockKeyhole, ShieldCheck } from 'lucide-react'
 import App from '../App.jsx'
 import { OnboardingWizard } from '../features/onboarding/OnboardingWizard.jsx'
+import { ProductionSettingsWorkspace } from '../features/settings/ProductionSettingsWorkspace.jsx'
 import { resolveTenantSurface } from '../lib/tenantSurface.js'
 import {
   clearProductionSession,
@@ -24,6 +25,12 @@ function initials(name = '') {
     .join('') || 'HC'
 }
 
+function effectiveSettings(apiSession) {
+  return apiSession?.settings && Object.keys(apiSession.settings).length
+    ? apiSession.settings
+    : apiSession?.onboarding?.data || {}
+}
+
 function toWorkspaceSession(apiSession) {
   return {
     role: 'analyst',
@@ -35,13 +42,14 @@ function toWorkspaceSession(apiSession) {
     name: apiSession.user.name,
     initials: initials(apiSession.user.name),
     username: apiSession.user.email,
+    settings: effectiveSettings(apiSession),
   }
 }
 
 function applyTenantPreferences(apiSession) {
-  const onboardingData = apiSession?.onboarding?.data || {}
-  const theme = onboardingData.theme || {}
-  const itsm = onboardingData.itsm || {}
+  const configuration = effectiveSettings(apiSession)
+  const theme = configuration.theme || {}
+  const itsm = configuration.itsm || {}
 
   if (['system', 'light', 'dark'].includes(theme.mode)) saveTheme(theme.mode)
   if (['amber', 'cyan', 'blue', 'violet', 'emerald', 'rose'].includes(theme.accent)) saveAccent(theme.accent)
@@ -58,12 +66,12 @@ function applyTenantPreferences(apiSession) {
         prefixes: itsm.recordPrefixes || {},
         digits: itsm.recordDigits || '5',
       },
-      microsoft365: onboardingData.users?.microsoft365 || {},
+      microsoft365: configuration.users?.microsoft365 || {},
       itsm,
-      rmm: onboardingData.rmm || {},
+      rmm: configuration.rmm || {},
     }))
   } catch {
-    // Local runtime preferences are a convenience bridge for the current demo UI.
+    // Local runtime preferences are a bridge for the current demo UI.
   }
 }
 
@@ -163,6 +171,34 @@ export function ProductionWorkspaceBootstrap() {
   const [serverSession, setServerSession] = useState(null)
   const [tenantState, setTenantState] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [currentPath, setCurrentPath] = useState(() => window.location.pathname)
+
+  useEffect(() => {
+    const notify = () => setCurrentPath(window.location.pathname)
+    const originalPushState = window.history.pushState
+    const originalReplaceState = window.history.replaceState
+
+    window.history.pushState = function patchedPushState(...args) {
+      const result = originalPushState.apply(this, args)
+      notify()
+      return result
+    }
+    window.history.replaceState = function patchedReplaceState(...args) {
+      const result = originalReplaceState.apply(this, args)
+      notify()
+      return result
+    }
+
+    window.addEventListener('popstate', notify)
+    window.addEventListener('hi5-routechange', notify)
+
+    return () => {
+      window.history.pushState = originalPushState
+      window.history.replaceState = originalReplaceState
+      window.removeEventListener('popstate', notify)
+      window.removeEventListener('hi5-routechange', notify)
+    }
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -267,10 +303,26 @@ export function ProductionWorkspaceBootstrap() {
     })
   }
 
+  function closeSettings() {
+    window.history.pushState({}, '', '/dashboard')
+    setCurrentPath('/dashboard')
+  }
+
   if (loading) return <LoadingScreen tenantName={surface.tenantName} />
 
   if (serverSession && !serverSession.onboarding?.completedAt) {
     return <OnboardingWizard session={serverSession} onSessionChange={acceptSession} />
+  }
+
+  if (serverSession?.onboarding?.completedAt && currentPath.startsWith('/settings')) {
+    return (
+      <ProductionSettingsWorkspace
+        currentPath={currentPath}
+        onClose={closeSettings}
+        onSessionChange={acceptSession}
+        session={serverSession}
+      />
+    )
   }
 
   if (serverSession?.onboarding?.completedAt) return <App />
