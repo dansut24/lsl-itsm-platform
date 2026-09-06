@@ -1,4 +1,5 @@
 import { pool, withTransaction } from './db.js'
+import { registerMfaRoutes } from './mfa.js'
 import { resolveSession, sessionPayload } from './session.js'
 
 const writableAreas = new Set([
@@ -35,6 +36,42 @@ async function requireTenantAdmin(c) {
   return { session }
 }
 
+function asObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+}
+
+function effectiveConfiguration(row) {
+  if (row?.configuration && Object.keys(row.configuration).length) return row.configuration
+  return row?.onboarding_data || {}
+}
+
+function normaliseSecurity(input, current) {
+  const data = asObject(input)
+  const previous = asObject(current)
+  const sessionHours = ['8', '12', '24'].includes(String(data.sessionHours || '12'))
+    ? String(data.sessionHours || '12')
+    : '12'
+  const auditRetention = ['90', '365', '730'].includes(String(data.auditRetention || '365'))
+    ? String(data.auditRetention || '365')
+    : '365'
+  const requireMfa = Boolean(data.requireMfa)
+  const wasRequired = Boolean(previous.requireMfa)
+
+  return {
+    data: {
+      ...data,
+      requireMfa,
+      sessionHours,
+      passwordPolicy: data.passwordPolicy === 'standard' ? 'standard' : 'strong',
+      auditRetention,
+      mfaEnforcedAt: requireMfa
+        ? (wasRequired && previous.mfaEnforcedAt ? previous.mfaEnforcedAt : new Date().toISOString())
+        : null,
+    },
+    newlyEnforced: requireMfa && !wasRequired,
+  }
+}
+
 export function registerSettingsRoutes(app) {
   app.get('/api/v1/settings', async (c) => {
     const auth = await requireTenantAdmin(c)
@@ -56,7 +93,7 @@ export function registerSettingsRoutes(app) {
       return c.json({ error: 'A valid JSON request body is required.' }, 400)
     }
 
-    const data = body?.data
+    let data = body?.data
     if (!data || typeof data !== 'object' || Array.isArray(data)) {
       return c.json({ error: 'Settings data must be an object.' }, 400)
     }
@@ -65,6 +102,22 @@ export function registerSettingsRoutes(app) {
     }
 
     await withTransaction(async (client) => {
+      let newlyEnforcedMfa = false
+      if (area === 'security') {
+        const currentResult = await client.query(
+          `SELECT onboarding_data, configuration
+           FROM tenant_settings
+           WHERE tenant_id = $1
+           LIMIT 1
+           FOR UPDATE`,
+          [auth.session.tenant_id],
+        )
+        const currentSecurity = asObject(effectiveConfiguration(currentResult.rows[0] || {}).security)
+        const normalised = normaliseSecurity(data, currentSecurity)
+        data = normalised.data
+        newlyEnforcedMfa = normalised.newlyEnforced
+      }
+
       await client.query(
         `UPDATE tenant_settings
          SET configuration = jsonb_set(
@@ -92,9 +145,30 @@ export function registerSettingsRoutes(app) {
           )
         }
       }
+
+      if (area === 'security' && newlyEnforcedMfa) {
+        await client.query(
+          `UPDATE auth_sessions s
+           SET revoked_at = COALESCE(s.revoked_at, now())
+           WHERE s.tenant_id = $1
+             AND s.id <> $2
+             AND s.revoked_at IS NULL
+             AND s.user_id IN (
+               SELECT m.user_id
+               FROM tenant_memberships m
+               WHERE m.tenant_id = $1
+                 AND m.role IN ('owner', 'admin')
+                 AND m.status = 'active'
+             )`,
+          [auth.session.tenant_id, auth.session.session_id],
+        )
+      }
     })
 
     const refreshed = await resolveSession(c)
+    if (!refreshed) return c.json({ error: 'Your security policy changed. Sign in again to continue.' }, 401)
     return c.json(sessionPayload(refreshed))
   })
+
+  registerMfaRoutes(app)
 }
