@@ -18,6 +18,12 @@ import './ProductionWorkspaceBootstrap.css'
 const API_BASE = 'https://api.hi5central.com'
 const PRODUCTION_SESSION_KEY = 'hi5central-production-session-v1'
 const TENANT_RUNTIME_CONFIG_KEY = 'hi5central-tenant-runtime-config-v1'
+const ORGANISATION_CACHE_KEYS = {
+  people: 'hi5central-organisation-people-v1',
+  teams: 'hi5central-organisation-teams-v1',
+  departments: 'hi5central-organisation-departments-v1',
+  sites: 'hi5central-organisation-sites-v1',
+}
 
 function initials(name = '') {
   return String(name)
@@ -81,6 +87,37 @@ function applyTenantPreferences(apiSession) {
   }
 }
 
+function cacheOrganisationSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return
+  for (const [collection, storageKey] of Object.entries(ORGANISATION_CACHE_KEYS)) {
+    const items = snapshot[collection]
+    if (Array.isArray(items)) window.localStorage.setItem(storageKey, JSON.stringify(items))
+  }
+  window.dispatchEvent(new CustomEvent('hi5-organisation-hydrated', { detail: snapshot }))
+}
+
+async function hydrateProductionOrganisation() {
+  const response = await fetch(`${API_BASE}/api/v1/organisation`, {
+    credentials: 'include',
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(payload.error || 'Could not load Organisation data.')
+  cacheOrganisationSnapshot(payload)
+  return payload
+}
+
+async function hydrateOrganisationWithFallback() {
+  try {
+    return await hydrateProductionOrganisation()
+  } catch (error) {
+    console.error('Production Organisation hydration failed; using the last local cache.', error)
+    window.dispatchEvent(new CustomEvent('hi5-organisation-sync-error', {
+      detail: { collection: 'all', message: error.message },
+    }))
+    return null
+  }
+}
+
 function LoadingScreen({ tenantName }) {
   return (
     <div className="production-auth-shell">
@@ -115,7 +152,7 @@ function ProductionLogin({ tenant, onAuthenticated }) {
       })
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(payload.error || 'Sign in failed.')
-      onAuthenticated(payload)
+      await onAuthenticated(payload)
     } catch (loginError) {
       setError(loginError.message)
     } finally {
@@ -337,7 +374,11 @@ export function ProductionWorkspaceBootstrap() {
             clearProductionSession()
           } else {
             applyTenantPreferences(payload)
-            if (payload.onboarding?.completedAt) saveProductionSession(toWorkspaceSession(payload))
+            if (payload.onboarding?.completedAt) {
+              await hydrateOrganisationWithFallback()
+              if (!active) return
+              saveProductionSession(toWorkspaceSession(payload))
+            }
             setServerSession(payload)
             setTenantState({ managed: true, slug: payload.tenant.slug, companyName: payload.tenant.companyName, status: 'active' })
             return
@@ -413,9 +454,12 @@ export function ProductionWorkspaceBootstrap() {
     return () => window.clearInterval(timer)
   }, [serverSession, surface.tenantName, surface.tenantSlug])
 
-  function acceptSession(nextSession) {
+  async function acceptSession(nextSession) {
     applyTenantPreferences(nextSession)
-    if (nextSession.onboarding?.completedAt) saveProductionSession(toWorkspaceSession(nextSession))
+    if (nextSession.onboarding?.completedAt) {
+      await hydrateOrganisationWithFallback()
+      saveProductionSession(toWorkspaceSession(nextSession))
+    }
     setServerSession(nextSession)
     setTenantState({
       managed: true,
