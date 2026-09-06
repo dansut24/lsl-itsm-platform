@@ -7,6 +7,7 @@ import { SignupPage } from './features/marketing/SignupPage.jsx'
 import { ServiceCatalogueSettingsEnhancer } from './features/catalogue/ServiceCatalogueSettingsEnhancer.jsx'
 import { KnowledgeContextEnhancer } from './features/knowledge/KnowledgeContextEnhancer.jsx'
 import { OrganisationSitesEnhancer } from './features/people/OrganisationSitesEnhancer.jsx'
+import { ProductionPortalBootstrap } from './production/ProductionPortalBootstrap.jsx'
 import { ProductionWorkspaceBootstrap } from './production/ProductionWorkspaceBootstrap.jsx'
 import { resolveTenantSurface } from './lib/tenantSurface.js'
 import './features/settings/ProductionSettingsFloating.css'
@@ -27,6 +28,7 @@ if (initialSurface.kind === 'marketing') {
     : MarketingApp
 }
 if (initialSurface.kind === 'workspace' && initialSurface.canonical) RootApp = ProductionWorkspaceBootstrap
+if (initialSurface.kind === 'portal' && initialSurface.canonical) RootApp = ProductionPortalBootstrap
 
 createRoot(rootElement).render(
   <StrictMode>
