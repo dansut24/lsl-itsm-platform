@@ -91,3 +91,85 @@ jobs:
           echo
           curl -fsS http://127.0.0.1:3001/health
           echo
+
+          ORG_TOKEN='hi5central-ci-organisation-session'
+          ORG_TOKEN_HASH="$(printf '%s' "$ORG_TOKEN" | sha256sum | awk '{print $1}')"
+
+          PGPASSWORD=hi5central-ci psql \
+            -h 127.0.0.1 \
+            -U hi5central \
+            -d hi5central \
+            -v ON_ERROR_STOP=1 \
+            -v token_hash="$ORG_TOKEN_HASH" <<'SQL'
+          INSERT INTO tenants (id, slug, company_name, status)
+          VALUES ('00000000-0000-4000-8000-000000000101', 'ci-organisation', 'CI Organisation', 'active');
+
+          INSERT INTO users (id, email, name, password_hash, email_verified_at)
+          VALUES ('00000000-0000-4000-8000-000000000102', 'ci-organisation@hi5central.test', 'CI Owner', 'unused-ci-hash', now());
+
+          INSERT INTO tenant_memberships (tenant_id, user_id, role, status)
+          VALUES (
+            '00000000-0000-4000-8000-000000000101',
+            '00000000-0000-4000-8000-000000000102',
+            'owner',
+            'active'
+          );
+
+          INSERT INTO tenant_settings (
+            tenant_id,
+            modules,
+            onboarding_step,
+            onboarding_completed_at,
+            tenant_url,
+            portal_url,
+            onboarding_data,
+            configuration
+          )
+          VALUES (
+            '00000000-0000-4000-8000-000000000101',
+            '{"itsm":true,"rmm":false}'::jsonb,
+            'complete',
+            now(),
+            'https://ci-organisation.hi5central.com',
+            'https://ci-organisation-portal.hi5central.com',
+            '{"groups":{"firstDepartment":"Technology","serviceDeskTeam":"Service Desk","firstSite":"London HQ"},"company":{"timezone":"Europe/London"}}'::jsonb,
+            '{"groups":{"firstDepartment":"Technology","serviceDeskTeam":"Service Desk","firstSite":"London HQ"},"company":{"timezone":"Europe/London"}}'::jsonb
+          );
+
+          INSERT INTO auth_sessions (tenant_id, user_id, token_hash, expires_at)
+          VALUES (
+            '00000000-0000-4000-8000-000000000101',
+            '00000000-0000-4000-8000-000000000102',
+            :'token_hash',
+            now() + interval '1 hour'
+          );
+          SQL
+
+          ORG_COOKIE="hi5central_session=$ORG_TOKEN"
+
+          curl -fsS \
+            -H "Cookie: $ORG_COOKIE" \
+            http://127.0.0.1:3001/api/v1/organisation \
+            | tee /tmp/organisation.json
+
+          grep -q '"people"' /tmp/organisation.json
+          grep -q 'CI Owner' /tmp/organisation.json
+          grep -q 'London HQ' /tmp/organisation.json
+
+          curl -fsS \
+            -X PUT \
+            -H "Cookie: $ORG_COOKIE" \
+            -H 'Content-Type: application/json' \
+            --data '{"items":[{"id":"SITE-CI","code":"CI","name":"CI Test Site","type":"Office","city":"London","country":"United Kingdom","timezone":"Europe/London","active":true}]}' \
+            http://127.0.0.1:3001/api/v1/organisation/sites \
+            | tee /tmp/organisation-put.json
+
+          grep -q 'CI Test Site' /tmp/organisation-put.json
+
+          PGPASSWORD=hi5central-ci psql \
+            -h 127.0.0.1 \
+            -U hi5central \
+            -d hi5central \
+            -v ON_ERROR_STOP=1 \
+            -c "SELECT external_key, name FROM organisation_sites WHERE tenant_id = '00000000-0000-4000-8000-000000000101'::uuid AND external_key = 'SITE-CI';" \
+            | grep -q 'CI Test Site'
