@@ -1,0 +1,156 @@
+:root {
+  --hi5-context-gap: 14px;
+  --hi5-context-edge: 14px;
+  --hi5-context-rail-width: 258px;
+  --hi5-context-radius: var(--hi5-radius-lg, 20px);
+}
+
+/*
+ * Hi5Central secondary-navigation pattern.
+ * Use this for page-local navigation such as Settings sections, Knowledge
+ * categories, CMDB groups, report folders, project filters and similar
+ * context that should not be promoted into the primary product sidebar.
+ */
+.hi5-context-layout {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: var(--hi5-context-rail-width) minmax(0, 1fr);
+  gap: var(--hi5-context-gap);
+  padding: var(--hi5-context-edge);
+  overflow: hidden;
+  background: var(--page);
+}
+
+.hi5-context-rail,
+.hi5-context-surface {
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--hi5-context-radius);
+  background: var(--surface);
+  box-shadow: 0 16px 42px rgba(16, 33, 63, .09);
+}
+
+.app-shell[data-theme='dark'] .hi5-context-rail,
+.app-shell[data-theme='dark'] .hi5-context-surface {
+  box-shadow: 0 16px 42px rgba(0, 0, 0, .22);
+}
+
+.hi5-context-rail {
+  overflow: hidden;
+}
+
+.hi5-context-surface {
+  overflow: hidden;
+}
+
+.hi5-context-layout.is-rail-hidden {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.hi5-context-layout.is-rail-hidden .hi5-context-rail {
+  display: none;
+}
+
+/*
+ * Knowledge currently has search + article cards. This gives it the same
+ * floating-surface language now; the category rail can use the generic
+ * hi5-context-* classes when category filtering is added.
+ */
+.knowledge-view {
+  gap: var(--hi5-context-gap);
+  padding: var(--hi5-context-edge);
+  background: var(--page);
+  box-sizing: border-box;
+}
+
+.knowledge-view > .portal-hero.slim,
+.knowledge-view > .knowledge-grid {
+  border: 1px solid var(--line);
+  border-radius: var(--hi5-context-radius);
+  box-shadow: 0 14px 36px rgba(16, 33, 63, .07);
+}
+
+.app-shell[data-theme='dark'] .knowledge-view > .portal-hero.slim,
+.app-shell[data-theme='dark'] .knowledge-view > .knowledge-grid {
+  box-shadow: 0 14px 36px rgba(0, 0, 0, .18);
+}
+
+.knowledge-view > .portal-hero.slim {
+  overflow: hidden;
+}
+
+.knowledge-view > .knowledge-grid {
+  padding: 14px;
+  background: var(--surface);
+}
+
+.knowledge-card {
+  border-radius: var(--hi5-radius-md, 16px) !important;
+}
+
+/* Category rail contract for the Knowledge Base feature pass. */
+.knowledge-context-layout {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: var(--hi5-context-rail-width) minmax(0, 1fr);
+  gap: var(--hi5-context-gap);
+  padding: var(--hi5-context-edge);
+  overflow: hidden;
+  background: var(--page);
+}
+
+.knowledge-category-rail {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--hi5-context-radius);
+  background: var(--surface);
+  box-shadow: 0 16px 42px rgba(16, 33, 63, .09);
+}
+
+.knowledge-content-surface {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--hi5-context-radius);
+  background: var(--surface);
+}
+
+@media (max-width: 720px) {
+  .hi5-context-layout,
+  .knowledge-context-layout {
+    display: block;
+    padding: 0;
+  }
+
+  .hi5-context-rail,
+  .knowledge-category-rail {
+    display: none;
+  }
+
+  .hi5-context-surface,
+  .knowledge-content-surface {
+    border-inline: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .knowledge-view {
+    gap: 12px;
+    padding: 12px;
+  }
+
+  .knowledge-view > .portal-hero.slim,
+  .knowledge-view > .knowledge-grid {
+    border-radius: var(--hi5-radius-md, 16px);
+  }
+
+  .knowledge-view > .knowledge-grid {
+    padding: 10px;
+  }
+}
