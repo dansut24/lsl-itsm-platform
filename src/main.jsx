@@ -13,10 +13,11 @@ import { ProductionMfaSettingsEnhancer } from './features/security/ProductionMfa
 import { ProductionPasswordRecoveryEnhancer } from './features/security/ProductionPasswordRecoveryEnhancer.jsx'
 import { ProductionSecurityCenterEnhancer } from './features/security/ProductionSecurityCenterEnhancer.jsx'
 import { ProductionPortalBootstrap } from './production/ProductionPortalBootstrap.jsx'
-import { ProductionWorkspaceBootstrap } from './production/ProductionWorkspaceBootstrap.jsx'
+import { ProductionWorkspaceEntry } from './production/ProductionWorkspaceEntry.jsx'
 import { resolveTenantSurface } from './lib/tenantSurface.js'
 import './features/settings/ProductionSettingsFloating.css'
 import './features/people/OrganisationContextual.css'
+import './features/onboarding/OnboardingViewportFix.css'
 import './PlatformCurves.css'
 import './ContextualSurfaces.css'
 
@@ -32,7 +33,7 @@ if (initialSurface.kind === 'marketing') {
     ? SignupPage
     : MarketingApp
 }
-if (initialSurface.kind === 'workspace' && initialSurface.canonical) RootApp = ProductionWorkspaceBootstrap
+if (initialSurface.kind === 'workspace' && initialSurface.canonical) RootApp = ProductionWorkspaceEntry
 if (initialSurface.kind === 'portal' && initialSurface.canonical) RootApp = ProductionPortalBootstrap
 
 const productionWorkspace = initialSurface.kind === 'workspace' && initialSurface.canonical
