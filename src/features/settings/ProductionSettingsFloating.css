@@ -1,7 +1,32 @@
 .production-settings-shell {
-  --settings-radius-sm: 12px;
-  --settings-radius-md: 16px;
-  --settings-radius-lg: 20px;
+  --settings-radius-sm: var(--hi5-radius-sm, 12px);
+  --settings-radius-md: var(--hi5-radius-md, 16px);
+  --settings-radius-lg: var(--hi5-radius-lg, 20px);
+}
+
+/*
+ * Settings content is intentionally full-width inside the available workspace.
+ * The shell/sidebar provide structure; the individual Settings panels should
+ * not sit in a narrow centred column on desktop.
+ */
+.production-settings-content {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 20px;
+  box-sizing: border-box;
+}
+
+.production-settings-content > *,
+.production-settings-panel,
+.production-settings-grid,
+.production-settings-toggle-list,
+.production-role-cards,
+.production-integrations-grid,
+.production-product-summary {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 /*
@@ -78,6 +103,10 @@
 
 /* Keep mobile Settings navigation intentionally horizontal and space-efficient. */
 @media (max-width: 720px) {
+  .production-settings-content {
+    padding: 12px;
+  }
+
   .app-shell.sidebar-hidden .production-settings-shell {
     display: block;
     padding: 0;
