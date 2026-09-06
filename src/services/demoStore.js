@@ -5,9 +5,11 @@ import { defaultLiveChatPreferences, seedLiveChatConversations } from '../data/l
 import { seedProjects } from '../data/workPlanningData.js'
 import { organisationDepartments, organisationPeople, organisationTeams } from '../data/organisationData.js'
 import { createSeedNotifications } from '../data/notificationData.js'
+import { synchroniseProductionServiceRequestSnapshot } from './productionServiceRequests.js'
 
 const PRODUCTION_SESSION_KEY = 'hi5central-production-session-v1'
 const API_BASE = 'https://api.hi5central.com'
+const serviceRequestSyncQueues = new Map()
 
 function readJson(key, fallback) {
   try {
@@ -32,6 +34,74 @@ function writeJson(key, value) {
 function productionOrganisationEnabled() {
   const session = readJson(PRODUCTION_SESSION_KEY, null)
   return Boolean(session?.source === 'production' && session?.tenantSlug)
+}
+
+function productionServiceRequestsEnabled() {
+  const session = readJson(PRODUCTION_SESSION_KEY, null)
+  return Boolean(session?.source === 'production' && session?.role === 'analyst' && session?.tenantSlug)
+}
+
+function serviceRequestMutableFingerprint(ticket) {
+  if (!ticket) return ''
+  return JSON.stringify({
+    status: ticket.status || '',
+    priority: ticket.priority || '',
+    team: ticket.team || '',
+    assignee: ticket.assignee || '',
+    approvalNote: ticket.approvalNote || '',
+    completionNotes: ticket.completionNotes || '',
+    reopenReason: ticket.reopenReason || '',
+    requestApprovals: (ticket.requestApprovals || []).map((approval) => ({ id: approval.id, status: approval.status, decisionNote: approval.decisionNote || '' })),
+    requestTasks: (ticket.requestTasks || []).map((task) => ({
+      id: task.id,
+      status: task.status,
+      team: task.team || '',
+      assignee: task.assignee || '',
+      completionNotes: task.completionNotes || '',
+    })),
+    activities: (ticket.activities || []).map((activity) => ({
+      id: activity.id,
+      kind: activity.kind,
+      text: activity.text || '',
+      html: activity.html || '',
+      attachments: (activity.attachments || []).map((attachment) => ({
+        id: attachment.id,
+        name: attachment.name,
+        size: attachment.size,
+        type: attachment.type,
+      })),
+    })),
+  })
+}
+
+function queueServiceRequestSync(previous, next) {
+  if (!productionServiceRequestsEnabled()) return
+  if (!previous || !next || previous.id !== next.id) return
+  if (previous.type !== 'Service Request' || previous.persistence !== 'api') return
+  if (serviceRequestMutableFingerprint(previous) === serviceRequestMutableFingerprint(next)) return
+
+  const priorQueue = serviceRequestSyncQueues.get(next.id) || Promise.resolve()
+  const job = priorQueue
+    .catch(() => {})
+    .then(() => synchroniseProductionServiceRequestSnapshot(previous, next))
+    .then((reconciled) => {
+      if (!reconciled) return
+      if (serviceRequestMutableFingerprint(reconciled) !== serviceRequestMutableFingerprint(next)) {
+        window.setTimeout(() => window.location.reload(), 80)
+      }
+    })
+    .catch((error) => {
+      console.error(`Service Request ${next.id} synchronisation failed`, error)
+      window.dispatchEvent(new CustomEvent('hi5-service-requests-sync-error', {
+        detail: { reference: next.id, message: error.message },
+      }))
+      window.setTimeout(() => window.location.reload(), 120)
+    })
+    .finally(() => {
+      if (serviceRequestSyncQueues.get(next.id) === job) serviceRequestSyncQueues.delete(next.id)
+    })
+
+  serviceRequestSyncQueues.set(next.id, job)
 }
 
 export async function syncOrganisationCollection(collection, items) {
@@ -229,7 +299,18 @@ export function saveWorkspace(workspace) {
   if (workspace && Array.isArray(workspace.tabs)) writeJson('hi5central-workspace-analyst', workspace)
 }
 
-export function saveTickets(value) { writeJson('hi5central-tickets', value) }
+export function saveTickets(value) {
+  const next = Array.isArray(value) ? value : []
+  const previous = readJson('hi5central-tickets', [])
+  writeJson('hi5central-tickets', next)
+
+  if (!productionServiceRequestsEnabled() || !Array.isArray(previous)) return
+  const previousById = new Map(previous.map((ticket) => [ticket.id, ticket]))
+  next.forEach((ticket) => {
+    const before = previousById.get(ticket.id)
+    if (before) queueServiceRequestSync(before, ticket)
+  })
+}
 export function saveOrganisationPeople(value) { writeJson('hi5central-organisation-people-v1', value); mirrorOrganisationCollection('people', value) }
 export function saveOrganisationTeams(value) { writeJson('hi5central-organisation-teams-v1', value); mirrorOrganisationCollection('teams', value) }
 export function saveOrganisationDepartments(value) { writeJson('hi5central-organisation-departments-v1', value); mirrorOrganisationCollection('departments', value) }
