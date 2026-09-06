@@ -16,7 +16,7 @@ export async function createSession(client, { tenantId, userId }) {
 
   await client.query(
     `INSERT INTO auth_sessions (tenant_id, user_id, token_hash, expires_at)
-     VALUES ($1, $2, $3, now() + ($4 || ' seconds')::interval)`,
+     VALUES ($1, $2, $3, now() + make_interval(secs => $4::int))`,
     [tenantId, userId, tokenHash, SESSION_TTL_SECONDS],
   )
 
@@ -84,9 +84,7 @@ export async function resolveSession(c) {
   if (!result.rowCount) return null
 
   const session = result.rows[0]
-  if (session.tenant_status !== 'active' || session.membership_status !== 'active') {
-    return null
-  }
+  if (session.tenant_status !== 'active' || session.membership_status !== 'active') return null
 
   pool.query(
     'UPDATE auth_sessions SET last_seen_at = now() WHERE id = $1',
