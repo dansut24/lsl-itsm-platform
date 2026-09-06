@@ -5,11 +5,20 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { secureHeaders } from 'hono/secure-headers'
 import { pool, withTransaction } from './db.js'
+import { sendVerificationEmail, verifySmtpConnection } from './mailer.js'
 import { ensureRedisConnected, redis } from './redis.js'
+import {
+  createSession,
+  resolveSession,
+  revokeCurrentSession,
+  sessionPayload,
+  setSessionCookie,
+} from './session.js'
 
 const scryptAsync = promisify(scrypt)
 const app = new Hono()
 const port = Number(process.env.PORT || 3001)
+const marketingUrl = process.env.MARKETING_URL || 'https://hi5central.com'
 
 const reservedSlugs = new Set([
   'admin',
@@ -82,6 +91,72 @@ function allowedOrigin(origin) {
   return ''
 }
 
+function originMatchesSession(c, session) {
+  const origin = c.req.header('origin')
+  if (!origin) return true
+  const escaped = session.slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`^https://${escaped}(?:-portal|-rmm)?\\.hi5central\\.com$`, 'i').test(origin)
+}
+
+function onboardingSequence(modules = {}) {
+  return [
+    'company',
+    'theme',
+    'users',
+    'groups',
+    'permissions',
+    'security',
+    modules?.itsm ? 'itsm' : null,
+    modules?.rmm ? 'rmm' : null,
+    'billing',
+    'finish',
+  ].filter(Boolean)
+}
+
+async function rateLimit(redisClient, key, max, seconds) {
+  const attempts = await redisClient.incr(key)
+  if (attempts === 1) await redisClient.expire(key, seconds)
+  return attempts <= max
+}
+
+async function recordVerificationDelivery(tokenHash, result) {
+  if (result.ok) {
+    await pool.query(
+      `UPDATE user_email_verifications
+       SET sent_at = now(), send_attempts = send_attempts + 1, last_send_error = NULL
+       WHERE token_hash = $1`,
+      [tokenHash],
+    )
+    return
+  }
+
+  await pool.query(
+    `UPDATE user_email_verifications
+     SET send_attempts = send_attempts + 1, last_send_error = $2
+     WHERE token_hash = $1`,
+    [tokenHash, String(result.error?.message || result.error || 'Unknown SMTP error').slice(0, 1000)],
+  )
+}
+
+async function deliverVerification({ token, email, name, companyName, tenantUrl }) {
+  const tokenHash = hashToken(token)
+  try {
+    const info = await sendVerificationEmail({
+      to: email,
+      name,
+      companyName,
+      token,
+      tenantUrl,
+    })
+    await recordVerificationDelivery(tokenHash, { ok: true })
+    return { status: 'sent', messageId: info?.messageId || null }
+  } catch (error) {
+    console.error('Verification email delivery failed', error)
+    await recordVerificationDelivery(tokenHash, { ok: false, error })
+    return { status: 'failed' }
+  }
+}
+
 app.use('*', secureHeaders())
 app.use('/api/*', cors({
   origin: allowedOrigin,
@@ -105,6 +180,16 @@ app.get('/health', async (c) => {
   }
 })
 
+app.get('/api/v1/system/smtp-health', async (c) => {
+  try {
+    await verifySmtpConnection()
+    return c.json({ status: 'ok', smtp: 'ok' })
+  } catch (error) {
+    console.error('SMTP health check failed', error)
+    return c.json({ status: 'error', smtp: 'error' }, 503)
+  }
+})
+
 app.get('/api/v1/auth/tenant-slug/:slug', async (c) => {
   const slug = normaliseSlug(c.req.param('slug'))
   if (!validSlug(slug)) {
@@ -117,10 +202,13 @@ app.get('/api/v1/auth/tenant-slug/:slug', async (c) => {
 
 app.post('/api/v1/auth/signup', async (c) => {
   const redisClient = await ensureRedisConnected()
-  const rateKey = `signup:${requestIp(c)}:${Math.floor(Date.now() / 60000)}`
-  const attempts = await redisClient.incr(rateKey)
-  if (attempts === 1) await redisClient.expire(rateKey, 60)
-  if (attempts > 5) {
+  const allowed = await rateLimit(
+    redisClient,
+    `signup:${requestIp(c)}:${Math.floor(Date.now() / 60000)}`,
+    5,
+    60,
+  )
+  if (!allowed) {
     return c.json({ error: 'Too many signup attempts. Please try again shortly.' }, 429)
   }
 
@@ -224,9 +312,18 @@ app.post('/api/v1/auth/signup', async (c) => {
       return { tenant, user }
     })
 
+    const delivery = await deliverVerification({
+      token: verificationToken,
+      email: result.user.email,
+      name: result.user.name,
+      companyName: result.tenant.company_name,
+      tenantUrl,
+    })
+
     return c.json({
       status: 'pending_verification',
       verificationRequired: true,
+      verificationDelivery: delivery.status,
       onboardingStep: 'verify_email',
       tenant: {
         slug: result.tenant.slug,
@@ -246,6 +343,232 @@ app.post('/api/v1/auth/signup', async (c) => {
     }
     throw error
   }
+})
+
+app.post('/api/v1/auth/resend-verification', async (c) => {
+  const redisClient = await ensureRedisConnected()
+  const allowed = await rateLimit(redisClient, `verify-resend:${requestIp(c)}`, 3, 900)
+  if (!allowed) {
+    return c.json({ error: 'Too many verification requests. Please try again later.' }, 429)
+  }
+
+  let body
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ error: 'A valid JSON request body is required.' }, 400)
+  }
+
+  const email = normaliseEmail(body?.email)
+  const tenantSlug = normaliseSlug(body?.tenantSlug)
+  if (!validEmail(email) || !validSlug(tenantSlug)) {
+    return c.json({ status: 'accepted' }, 202)
+  }
+
+  const lookup = await pool.query(
+    `SELECT
+       t.id AS tenant_id,
+       t.slug,
+       t.company_name,
+       t.status,
+       u.id AS user_id,
+       u.email,
+       u.name,
+       ts.tenant_url
+     FROM tenants t
+     JOIN tenant_memberships m ON m.tenant_id = t.id AND m.role = 'owner'
+     JOIN users u ON u.id = m.user_id
+     JOIN tenant_settings ts ON ts.tenant_id = t.id
+     WHERE t.slug = $1 AND u.email = $2
+     LIMIT 1`,
+    [tenantSlug, email],
+  )
+
+  if (!lookup.rowCount || lookup.rows[0].status !== 'pending_verification') {
+    return c.json({ status: 'accepted' }, 202)
+  }
+
+  const account = lookup.rows[0]
+  const token = randomBytes(32).toString('base64url')
+  const tokenHash = hashToken(token)
+
+  await withTransaction(async (client) => {
+    await client.query(
+      `UPDATE user_email_verifications
+       SET used_at = COALESCE(used_at, now())
+       WHERE tenant_id = $1 AND user_id = $2 AND used_at IS NULL`,
+      [account.tenant_id, account.user_id],
+    )
+    await client.query(
+      `INSERT INTO user_email_verifications
+         (tenant_id, user_id, token_hash, redirect_url, expires_at)
+       VALUES ($1, $2, $3, $4, now() + interval '24 hours')`,
+      [account.tenant_id, account.user_id, tokenHash, account.tenant_url],
+    )
+  })
+
+  const delivery = await deliverVerification({
+    token,
+    email: account.email,
+    name: account.name,
+    companyName: account.company_name,
+    tenantUrl: account.tenant_url,
+  })
+
+  return c.json({ status: delivery.status === 'sent' ? 'sent' : 'accepted' }, 202)
+})
+
+app.get('/api/v1/auth/verify-email', async (c) => {
+  const token = String(c.req.query('token') || '')
+  if (token.length < 32 || token.length > 256) {
+    return c.redirect(`${marketingUrl}/signup?verification=invalid`, 302)
+  }
+
+  const tokenHash = hashToken(token)
+  const sessionToken = await withTransaction(async (client) => {
+    const verificationResult = await client.query(
+      `SELECT
+         v.id,
+         v.tenant_id,
+         v.user_id,
+         v.expires_at,
+         v.used_at,
+         t.slug,
+         ts.tenant_url
+       FROM user_email_verifications v
+       JOIN tenants t ON t.id = v.tenant_id
+       JOIN tenant_settings ts ON ts.tenant_id = v.tenant_id
+       WHERE v.token_hash = $1
+       FOR UPDATE`,
+      [tokenHash],
+    )
+
+    if (!verificationResult.rowCount) return null
+    const verification = verificationResult.rows[0]
+    if (verification.used_at || new Date(verification.expires_at).getTime() <= Date.now()) return null
+
+    await client.query(
+      'UPDATE user_email_verifications SET used_at = now() WHERE id = $1',
+      [verification.id],
+    )
+    await client.query(
+      'UPDATE users SET email_verified_at = COALESCE(email_verified_at, now()), updated_at = now() WHERE id = $1',
+      [verification.user_id],
+    )
+    await client.query(
+      `UPDATE tenants
+       SET status = 'active', updated_at = now()
+       WHERE id = $1 AND status = 'pending_verification'`,
+      [verification.tenant_id],
+    )
+    await client.query(
+      `UPDATE tenant_memberships
+       SET status = 'active'
+       WHERE tenant_id = $1 AND user_id = $2`,
+      [verification.tenant_id, verification.user_id],
+    )
+    await client.query(
+      `UPDATE tenant_settings
+       SET onboarding_step = CASE
+             WHEN onboarding_completed_at IS NULL THEN 'company'
+             ELSE onboarding_step
+           END,
+           updated_at = now()
+       WHERE tenant_id = $1`,
+      [verification.tenant_id],
+    )
+
+    const rawSessionToken = await createSession(client, {
+      tenantId: verification.tenant_id,
+      userId: verification.user_id,
+    })
+
+    return {
+      token: rawSessionToken,
+      tenantUrl: verification.tenant_url,
+    }
+  })
+
+  if (!sessionToken) {
+    return c.redirect(`${marketingUrl}/signup?verification=invalid`, 302)
+  }
+
+  setSessionCookie(c, sessionToken.token)
+  return c.redirect(`${sessionToken.tenantUrl}/onboarding`, 302)
+})
+
+app.get('/api/v1/auth/session', async (c) => {
+  const session = await resolveSession(c)
+  if (!session) return c.json({ authenticated: false }, 401)
+  if (!originMatchesSession(c, session)) return c.json({ error: 'Tenant session mismatch.' }, 403)
+  return c.json(sessionPayload(session))
+})
+
+app.post('/api/v1/auth/logout', async (c) => {
+  await revokeCurrentSession(c)
+  return c.json({ status: 'signed_out' })
+})
+
+app.post('/api/v1/onboarding/step', async (c) => {
+  const session = await resolveSession(c)
+  if (!session) return c.json({ error: 'Authentication required.' }, 401)
+  if (!originMatchesSession(c, session)) return c.json({ error: 'Tenant session mismatch.' }, 403)
+  if (session.onboarding_completed_at) return c.json(sessionPayload(session))
+
+  let body
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ error: 'A valid JSON request body is required.' }, 400)
+  }
+
+  const step = String(body?.step || '')
+  const data = body?.data && typeof body.data === 'object' && !Array.isArray(body.data)
+    ? body.data
+    : {}
+  const sequence = onboardingSequence(session.modules || {})
+  const currentIndex = sequence.indexOf(session.onboarding_step)
+
+  if (currentIndex < 0 || step !== session.onboarding_step) {
+    return c.json({ error: 'This onboarding step is no longer current. Refresh and continue from the active step.' }, 409)
+  }
+
+  const nextStep = sequence[Math.min(currentIndex + 1, sequence.length - 1)]
+  if (JSON.stringify(data).length > 20_000) {
+    return c.json({ error: 'Onboarding data is too large.' }, 413)
+  }
+
+  await pool.query(
+    `UPDATE tenant_settings
+     SET onboarding_data = COALESCE(onboarding_data, '{}'::jsonb) || jsonb_build_object($2::text, $3::jsonb),
+         onboarding_step = $4,
+         updated_at = now()
+     WHERE tenant_id = $1`,
+    [session.tenant_id, step, JSON.stringify(data), nextStep],
+  )
+
+  const refreshed = await resolveSession(c)
+  return c.json(sessionPayload(refreshed))
+})
+
+app.post('/api/v1/onboarding/complete', async (c) => {
+  const session = await resolveSession(c)
+  if (!session) return c.json({ error: 'Authentication required.' }, 401)
+  if (!originMatchesSession(c, session)) return c.json({ error: 'Tenant session mismatch.' }, 403)
+  if (session.onboarding_completed_at) return c.json(sessionPayload(session))
+  if (session.onboarding_step !== 'finish') {
+    return c.json({ error: 'Complete the remaining onboarding steps first.' }, 409)
+  }
+
+  await pool.query(
+    `UPDATE tenant_settings
+     SET onboarding_step = 'complete', onboarding_completed_at = now(), updated_at = now()
+     WHERE tenant_id = $1`,
+    [session.tenant_id],
+  )
+
+  const refreshed = await resolveSession(c)
+  return c.json(sessionPayload(refreshed))
 })
 
 app.notFound((c) => c.json({ error: 'Not found' }, 404))
