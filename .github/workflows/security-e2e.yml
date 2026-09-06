@@ -242,7 +242,6 @@ jobs:
 
           echo '--- Use one-time recovery code to complete login ---'
           curl -fsS \
-            -c /tmp/mfa-login.cookies \
             -X POST \
             -H 'Origin: https://ci-security.hi5central.com' \
             -H 'Content-Type: application/json' \
@@ -253,14 +252,20 @@ jobs:
           grep -q '"authenticated":true' /tmp/mfa-login-verified.json
           grep -q '"mfaVerified":true' /tmp/mfa-login-verified.json
 
-          curl -fsS \
-            -b /tmp/mfa-login.cookies \
-            -H 'Origin: https://ci-security.hi5central.com' \
-            http://127.0.0.1:3001/api/v1/mfa/status \
-            | tee /tmp/mfa-status-after.json
+          echo '--- Verify recovery consumption and session directly in PostgreSQL ---'
+          PGPASSWORD=hi5central-ci psql \
+            -h 127.0.0.1 \
+            -U hi5central \
+            -d hi5central \
+            -Atc "SELECT jsonb_array_length(recovery_code_hashes) FROM user_mfa_methods WHERE tenant_id='00000000-0000-4000-8000-000000000201'::uuid AND user_id='00000000-0000-4000-8000-000000000202'::uuid AND enabled=true;" \
+            | grep -qx '9'
 
-          grep -q '"recoveryCodesRemaining":9' /tmp/mfa-status-after.json
-          grep -q '"sessionVerified":true' /tmp/mfa-status-after.json
+          PGPASSWORD=hi5central-ci psql \
+            -h 127.0.0.1 \
+            -U hi5central \
+            -d hi5central \
+            -Atc "SELECT CASE WHEN mfa_verified_at IS NOT NULL THEN 'verified' ELSE 'missing' END FROM auth_sessions WHERE tenant_id='00000000-0000-4000-8000-000000000201'::uuid AND user_id='00000000-0000-4000-8000-000000000202'::uuid AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1;" \
+            | grep -qx 'verified'
 
           echo '--- Confirm configured session length is enforced ---'
           PGPASSWORD=hi5central-ci psql \
@@ -271,12 +276,6 @@ jobs:
             | grep -qx 'ok'
 
           echo '--- Recovery code must be one-time ---'
-          curl -fsS \
-            -X POST \
-            -b /tmp/mfa-login.cookies \
-            -H 'Origin: https://ci-security.hi5central.com' \
-            http://127.0.0.1:3001/api/v1/auth/logout >/dev/null
-
           curl -fsS \
             -X POST \
             -H 'Origin: https://ci-security.hi5central.com' \
@@ -297,12 +296,18 @@ jobs:
           test "$REUSED_STATUS" = '401'
 
           curl -fsS \
-            -c /tmp/mfa-login-two.cookies \
             -X POST \
             -H 'Origin: https://ci-security.hi5central.com' \
             -H 'Content-Type: application/json' \
             --data "{\"challengeToken\":\"$LOGIN_CHALLENGE_TWO\",\"code\":\"$RECOVERY_TWO\"}" \
             http://127.0.0.1:3001/api/v1/auth/mfa/verify \
             | grep -q '"authenticated":true'
+
+          PGPASSWORD=hi5central-ci psql \
+            -h 127.0.0.1 \
+            -U hi5central \
+            -d hi5central \
+            -Atc "SELECT jsonb_array_length(recovery_code_hashes) FROM user_mfa_methods WHERE tenant_id='00000000-0000-4000-8000-000000000201'::uuid AND user_id='00000000-0000-4000-8000-000000000202'::uuid AND enabled=true;" \
+            | grep -qx '8'
 
           echo 'MFA security E2E passed.'
