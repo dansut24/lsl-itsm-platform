@@ -29,6 +29,35 @@ function writeJson(key, value) {
   window.localStorage.setItem(key, JSON.stringify(value))
 }
 
+function productionOrganisationEnabled() {
+  const session = readJson(PRODUCTION_SESSION_KEY, null)
+  return Boolean(session?.source === 'production' && session?.tenantSlug)
+}
+
+export async function syncOrganisationCollection(collection, items) {
+  if (!productionOrganisationEnabled()) return null
+  try {
+    const response = await fetch(`${API_BASE}/api/v1/organisation/${encodeURIComponent(collection)}`, {
+      method: 'PUT',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: Array.isArray(items) ? items : [] }),
+    })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(payload.error || `Could not save Organisation ${collection}.`)
+    window.dispatchEvent(new CustomEvent('hi5-organisation-synchronised', { detail: { collection, snapshot: payload } }))
+    return payload
+  } catch (error) {
+    console.error(`Organisation ${collection} synchronisation failed`, error)
+    window.dispatchEvent(new CustomEvent('hi5-organisation-sync-error', { detail: { collection, message: error.message } }))
+    return null
+  }
+}
+
+function mirrorOrganisationCollection(collection, items) {
+  syncOrganisationCollection(collection, items).catch(() => {})
+}
+
 function hydrateTicketEnhancements(tickets) {
   const seedsById = new Map(seedTickets.map((ticket) => [ticket.id, ticket]))
   const enhancementFields = [
@@ -201,9 +230,9 @@ export function saveWorkspace(workspace) {
 }
 
 export function saveTickets(value) { writeJson('hi5central-tickets', value) }
-export function saveOrganisationPeople(value) { writeJson('hi5central-organisation-people-v1', value) }
-export function saveOrganisationTeams(value) { writeJson('hi5central-organisation-teams-v1', value) }
-export function saveOrganisationDepartments(value) { writeJson('hi5central-organisation-departments-v1', value) }
+export function saveOrganisationPeople(value) { writeJson('hi5central-organisation-people-v1', value); mirrorOrganisationCollection('people', value) }
+export function saveOrganisationTeams(value) { writeJson('hi5central-organisation-teams-v1', value); mirrorOrganisationCollection('teams', value) }
+export function saveOrganisationDepartments(value) { writeJson('hi5central-organisation-departments-v1', value); mirrorOrganisationCollection('departments', value) }
 export function saveOrganisationAudit(value) { writeJson('hi5central-organisation-audit-v1', Array.isArray(value) ? value.slice(0, 500) : []) }
 export function saveProjects(value) { writeJson('hi5central-projects-v1', value) }
 export function saveRotaEntries(value) { writeJson('hi5central-rota-v1', value) }
