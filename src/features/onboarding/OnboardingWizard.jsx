@@ -1,6 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
-  ArrowLeft,
   ArrowRight,
   Building2,
   Check,
@@ -72,14 +71,13 @@ export function OnboardingWizard({ session, onSessionChange }) {
   const step = sequence.includes(session?.onboarding?.step) ? session.onboarding.step : sequence[0]
   const index = Math.max(0, sequence.indexOf(step))
   const [data, setData] = useState(() => defaultData(step, session))
-  const [activeStep, setActiveStep] = useState(step)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
-  if (activeStep !== step) {
-    setActiveStep(step)
+  useEffect(() => {
     setData(defaultData(step, session))
-  }
+    setError('')
+  }, [step, session])
 
   const meta = stepMeta[step]
   const Icon = meta?.icon || Sparkles
@@ -140,11 +138,11 @@ export function OnboardingWizard({ session, onSessionChange }) {
         <nav className="onboarding-steps" aria-label="Onboarding progress">
           {sequence.map((item, itemIndex) => {
             const ItemIcon = stepMeta[item]?.icon || Check
-            const complete = itemIndex < index
+            const completeStep = itemIndex < index
             const current = item === step
             return (
-              <div className={`onboarding-step ${complete ? 'is-complete' : ''} ${current ? 'is-current' : ''}`} key={item}>
-                <span className="onboarding-step-icon">{complete ? <Check size={15} /> : <ItemIcon size={15} />}</span>
+              <div className={`onboarding-step ${completeStep ? 'is-complete' : ''} ${current ? 'is-current' : ''}`} key={item}>
+                <span className="onboarding-step-icon">{completeStep ? <Check size={15} /> : <ItemIcon size={15} />}</span>
                 <span>{stepMeta[item]?.label}</span>
               </div>
             )
