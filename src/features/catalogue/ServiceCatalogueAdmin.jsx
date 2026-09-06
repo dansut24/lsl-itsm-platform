@@ -1,7 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Check,
-  ChevronLeft,
   CreditCard,
   FileText,
   PackageOpen,
@@ -16,11 +15,22 @@ import {
 import { portalServiceCatalog } from '../../data/portalData.js'
 import './ServiceCatalogueAdmin.css'
 
+const API_BASE = 'https://api.hi5central.com'
 const STORAGE_KEY = 'hi5central-service-catalogue-admin-v1'
+const PRODUCTION_SESSION_KEY = 'hi5central-production-session-v1'
 const ALL_ITEMS = 'All items'
 
 function money(value) {
   return new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP', maximumFractionDigits: 2 }).format(Number(value || 0))
+}
+
+function productionCatalogueEnabled() {
+  try {
+    const session = JSON.parse(window.localStorage.getItem(PRODUCTION_SESSION_KEY) || 'null')
+    return Boolean(session?.source === 'production' && session?.tenantSlug)
+  } catch {
+    return false
+  }
 }
 
 function seedItemsFromPortal() {
@@ -34,13 +44,17 @@ function seedItemsFromPortal() {
     service: item.service,
     team: item.team,
     approval: item.approval || 'none',
+    approvalThreshold: item.approval === 'manager-cost' ? 500 : null,
     visibility: 'portal',
     vendor: '',
     sku: '',
     priceMode: item.fields?.some((field) => ['product', 'checkbox-products'].includes(field.type)) ? 'calculated' : 'none',
     oneOffPrice: 0,
     monthlyPrice: 0,
+    currency: 'GBP',
     workflow: `${item.service || 'Service'} fulfilment`,
+    formSchema: item.fields || [],
+    options: [],
     optionsCount: item.fields?.length || 0,
     source: 'portal-seed',
     active: true,
@@ -63,13 +77,17 @@ function seedItemsFromPortal() {
           service: form.service || 'Service Catalogue',
           team: form.team || 'Service Desk',
           approval: form.approval || 'manager-cost',
+          approvalThreshold: form.approval === 'manager-cost' ? 500 : null,
           visibility: 'portal',
           vendor: option.label.includes('Microsoft') || option.label.includes('Visio') || option.label.includes('Project') || option.label.includes('Power BI') ? 'Microsoft' : option.label.includes('Lenovo') ? 'Lenovo' : '',
           sku: '',
           priceMode: 'fixed',
           oneOffPrice: monthly ? 0 : Number(option.cost || 0),
           monthlyPrice: monthly ? Number(option.cost || 0) : 0,
+          currency: 'GBP',
           workflow: `${form.service || 'Catalogue'} fulfilment`,
+          formSchema: [],
+          options: [],
           optionsCount: 0,
           source: 'portal-seed',
           active: true,
@@ -89,6 +107,15 @@ function defaultState() {
   }
 }
 
+function mergeCatalogueWithDefaults(value) {
+  const defaults = defaultState()
+  if (!value || !Array.isArray(value.items)) return defaults
+  const byId = new Map(defaults.items.map((item) => [item.id, item]))
+  const items = value.items.map((item) => ({ ...byId.get(item.id), ...item }))
+  const categories = [...new Set([...(value.categories || []), ...items.map((item) => item.category).filter(Boolean)])].sort((a, b) => a.localeCompare(b))
+  return { items, categories }
+}
+
 function loadCatalogue() {
   try {
     const stored = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || 'null')
@@ -96,7 +123,9 @@ function loadCatalogue() {
     const defaults = defaultState()
     const byId = new Map(defaults.items.map((item) => [item.id, item]))
     const items = stored.items.map((item) => ({ ...byId.get(item.id), ...item }))
-    defaults.items.forEach((item) => { if (!items.some((candidate) => candidate.id === item.id)) items.push(item) })
+    if (!productionCatalogueEnabled()) {
+      defaults.items.forEach((item) => { if (!items.some((candidate) => candidate.id === item.id)) items.push(item) })
+    }
     const categories = [...new Set([...(stored.categories || []), ...items.map((item) => item.category).filter(Boolean)])].sort((a, b) => a.localeCompare(b))
     return { items, categories }
   } catch {
@@ -109,6 +138,25 @@ function saveCatalogue(value) {
   window.dispatchEvent(new CustomEvent('hi5-service-catalogue-changed', { detail: value }))
 }
 
+async function fetchRemoteCatalogue() {
+  const response = await fetch(`${API_BASE}/api/v1/catalogue`, { credentials: 'include' })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(payload.error || 'Could not load the Service Catalogue.')
+  return payload
+}
+
+async function syncRemoteCatalogue(value) {
+  const response = await fetch(`${API_BASE}/api/v1/catalogue`, {
+    method: 'PUT',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ categories: value.categories, items: value.items }),
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(payload.error || 'Could not save the Service Catalogue.')
+  return payload
+}
+
 function itemPrice(item) {
   if (item.priceMode === 'calculated') return 'Calculated from selections'
   const oneOff = Number(item.oneOffPrice || 0)
@@ -117,6 +165,15 @@ function itemPrice(item) {
   if (monthly) return `${money(monthly)}/mo`
   if (oneOff) return money(oneOff)
   return 'No charge'
+}
+
+function approvalLabel(item) {
+  if (item.approval === 'manager-cost' && item.approvalThreshold !== null && item.approvalThreshold !== undefined) {
+    return `Manager / ${money(item.approvalThreshold)}+`
+  }
+  if (item.approval === 'manager') return 'Manager'
+  if (item.approval === 'custom') return 'Custom workflow'
+  return 'No approval'
 }
 
 function kindLabel(kind) {
@@ -135,13 +192,17 @@ function ItemEditor({ categories, item, onClose, onSave }) {
     service: 'Service Catalogue',
     team: 'Service Desk',
     approval: 'manager-cost',
+    approvalThreshold: 500,
     visibility: 'portal',
     vendor: '',
     sku: '',
     priceMode: 'fixed',
     oneOffPrice: 0,
     monthlyPrice: 0,
+    currency: 'GBP',
     workflow: 'Default fulfilment',
+    formSchema: [],
+    options: [],
     optionsCount: 0,
     source: 'local-demo',
     active: true,
@@ -159,6 +220,7 @@ function ItemEditor({ categories, item, onClose, onSave }) {
       id: draft.id || generatedId,
       oneOffPrice: Number(draft.oneOffPrice || 0),
       monthlyPrice: Number(draft.monthlyPrice || 0),
+      approvalThreshold: draft.approval === 'manager-cost' ? Number(draft.approvalThreshold || 0) : null,
     })
   }
 
@@ -200,6 +262,7 @@ function ItemEditor({ categories, item, onClose, onSave }) {
               <label>Fulfilment team<input value={draft.team || ''} onChange={(event) => update('team', event.target.value)} /></label>
               <label>Approval<select value={draft.approval || 'none'} onChange={(event) => update('approval', event.target.value)}><option value="none">No approval</option><option value="manager">Manager</option><option value="manager-cost">Manager / cost policy</option><option value="custom">Custom workflow</option></select></label>
             </div>
+            {draft.approval === 'manager-cost' ? <label>Approval threshold (£)<input min="0" step="0.01" type="number" value={draft.approvalThreshold ?? 500} onChange={(event) => update('approvalThreshold', event.target.value)} /><small>Requests at or above this total can require manager/cost approval.</small></label> : null}
             <label>Fulfilment workflow<input value={draft.workflow || ''} onChange={(event) => update('workflow', event.target.value)} /></label>
           </section>
 
@@ -225,6 +288,33 @@ export function ServiceCatalogueAdmin() {
   const [editorItem, setEditorItem] = useState(undefined)
   const [categoryDraftOpen, setCategoryDraftOpen] = useState(false)
   const [categoryDraft, setCategoryDraft] = useState('')
+  const [syncState, setSyncState] = useState(productionCatalogueEnabled() ? 'loading' : 'demo')
+
+  useEffect(() => {
+    if (!productionCatalogueEnabled()) return undefined
+    let active = true
+
+    async function hydrate() {
+      setSyncState('loading')
+      try {
+        const remote = await fetchRemoteCatalogue()
+        if (!active) return
+        const next = remote.initialized
+          ? mergeCatalogueWithDefaults(remote)
+          : mergeCatalogueWithDefaults(await syncRemoteCatalogue(catalogue))
+        if (!active) return
+        setCatalogue(next)
+        saveCatalogue(next)
+        setSyncState('saved')
+      } catch (error) {
+        console.error('Service Catalogue hydration failed', error)
+        if (active) setSyncState('error')
+      }
+    }
+
+    hydrate()
+    return () => { active = false }
+  }, [])
 
   const categoryRows = useMemo(() => [
     { id: ALL_ITEMS, label: ALL_ITEMS, count: catalogue.items.length },
@@ -245,6 +335,14 @@ export function ServiceCatalogueAdmin() {
   function persist(next) {
     setCatalogue(next)
     saveCatalogue(next)
+    if (!productionCatalogueEnabled()) return
+    setSyncState('saving')
+    syncRemoteCatalogue(next)
+      .then(() => setSyncState('saved'))
+      .catch((error) => {
+        console.error('Service Catalogue synchronisation failed', error)
+        setSyncState('error')
+      })
   }
 
   function saveItem(item) {
@@ -283,7 +381,7 @@ export function ServiceCatalogueAdmin() {
 
       <section className="catalogue-content-surface">
         <header className="catalogue-page-heading">
-          <div><span className="eyebrow">ITSM administration</span><h2>Service catalogue</h2><p>Define request experiences, products, pricing, approvals and fulfilment metadata before the catalogue moves to PostgreSQL.</p></div>
+          <div><span className="eyebrow">ITSM administration</span><h2>Service catalogue</h2><p>One tenant-scoped catalogue for request experiences, products, pricing, approvals and fulfilment.</p>{syncState !== 'demo' ? <small className={`catalogue-sync-state is-${syncState}`}>{syncState === 'loading' ? 'Loading PostgreSQL catalogue…' : syncState === 'saving' ? 'Saving to PostgreSQL…' : syncState === 'error' ? 'Catalogue sync needs attention' : 'PostgreSQL catalogue synced'}</small> : null}</div>
           <button className="primary-action" onClick={() => setEditorItem(null)} type="button"><Plus size={18} /> New item</button>
         </header>
 
@@ -309,7 +407,7 @@ export function ServiceCatalogueAdmin() {
               <dl>
                 <div><dt>Service</dt><dd>{item.service || 'Not set'}</dd></div>
                 <div><dt>Team</dt><dd>{item.team || 'Not set'}</dd></div>
-                <div><dt>Approval</dt><dd>{item.approval || 'none'}</dd></div>
+                <div><dt>Approval</dt><dd>{approvalLabel(item)}</dd></div>
                 <div><dt>Visibility</dt><dd>{item.visibility === 'portal' ? 'Portal + technicians' : item.visibility === 'technicians' ? 'Technicians only' : 'Hidden'}</dd></div>
                 {item.vendor ? <div><dt>Vendor</dt><dd>{item.vendor}</dd></div> : null}
                 {item.sku ? <div><dt>SKU</dt><dd>{item.sku}</dd></div> : null}
