@@ -115,32 +115,32 @@ const LIST_ROUTES = {
     kind: 'workspace',
     path: '/settings/appearance',
     viewId: 'settings',
-    key: 'settings-appearance',
-    title: 'Appearance',
+    key: 'settings',
+    title: 'Settings',
     settingsSection: 'appearance',
   },
   '/settings/appearance': {
     kind: 'workspace',
     path: '/settings/appearance',
     viewId: 'settings',
-    key: 'settings-appearance',
-    title: 'Appearance',
+    key: 'settings',
+    title: 'Settings',
     settingsSection: 'appearance',
   },
   '/settings/workspace': {
     kind: 'workspace',
     path: '/settings/workspace',
     viewId: 'settings',
-    key: 'settings-workspace',
-    title: 'Workspace',
+    key: 'settings',
+    title: 'Settings',
     settingsSection: 'workspace',
   },
   '/settings/profile': {
     kind: 'workspace',
     path: '/settings/profile',
     viewId: 'settings',
-    key: 'settings-profile',
-    title: 'Profile',
+    key: 'settings',
+    title: 'Settings',
     settingsSection: 'profile',
   },
   '/portal': {
@@ -203,6 +203,19 @@ export function routeFromLocation(location = window.location) {
 
   if (LIST_ROUTES[pathname]) {
     return { ...LIST_ROUTES[pathname] }
+  }
+
+  const settingsMatch = pathname.match(/^\/settings\/(.+)$/i)
+  if (settingsMatch) {
+    const settingsSection = settingsMatch[1].toLowerCase()
+    return {
+      kind: 'workspace',
+      path: `/settings/${settingsSection}`,
+      viewId: 'settings',
+      key: 'settings',
+      title: 'Settings',
+      settingsSection,
+    }
   }
 
   const newRecordMatch = pathname.match(/^\/(incidents|requests|problems|changes)\/new$/i)
