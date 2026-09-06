@@ -14,7 +14,6 @@ import { ProductionPasswordRecoveryEnhancer } from './features/security/Producti
 import { ProductionSecurityCenterEnhancer } from './features/security/ProductionSecurityCenterEnhancer.jsx'
 import { ProductionPortalBootstrap } from './production/ProductionPortalBootstrap.jsx'
 import { ProductionWorkspaceBootstrap } from './production/ProductionWorkspaceBootstrap.jsx'
-import { installProductionSessionBridge } from './production/productionSessionBridge.js'
 import { resolveTenantSurface } from './lib/tenantSurface.js'
 import './features/settings/ProductionSettingsFloating.css'
 import './features/people/OrganisationContextual.css'
@@ -38,7 +37,6 @@ if (initialSurface.kind === 'workspace' && initialSurface.canonical) RootApp = P
 if (initialSurface.kind === 'portal' && initialSurface.canonical) RootApp = ProductionPortalBootstrap
 
 const productionWorkspace = initialSurface.kind === 'workspace' && initialSurface.canonical
-if (productionWorkspace) installProductionSessionBridge()
 
 createRoot(rootElement).render(
   <StrictMode>
