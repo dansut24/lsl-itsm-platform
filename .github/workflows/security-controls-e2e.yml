@@ -1,0 +1,328 @@
+name: Hi5Central Security Controls E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  security-controls-e2e:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: hi5central
+          POSTGRES_USER: hi5central
+          POSTGRES_PASSWORD: hi5central-ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hi5central -d hi5central"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install API dependencies
+        working-directory: api
+        run: npm install --omit=dev
+
+      - name: Parse API source
+        working-directory: api
+        run: |
+          for file in src/*.js; do
+            node --check "$file"
+          done
+
+      - name: Run database migrations
+        working-directory: api
+        env:
+          DATABASE_URL: postgresql://hi5central:hi5central-ci@127.0.0.1:5432/hi5central
+        run: npm run migrate
+
+      - name: Exercise onboarding and Security controls
+        working-directory: api
+        env:
+          NODE_ENV: test
+          PORT: 3001
+          DATABASE_URL: postgresql://hi5central:hi5central-ci@127.0.0.1:5432/hi5central
+          REDIS_URL: redis://127.0.0.1:6379/0
+          MFA_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+        run: |
+          npm start > /tmp/hi5central-controls-api.log 2>&1 &
+          API_PID=$!
+          trap 'kill $API_PID 2>/dev/null || true; cat /tmp/hi5central-controls-api.log' EXIT
+
+          for attempt in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:3001/live >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          curl -fsS http://127.0.0.1:3001/health >/dev/null
+
+          TENANT_ID='00000000-0000-4000-8000-000000000301'
+          USER_ID='00000000-0000-4000-8000-000000000302'
+          SESSION_TOKEN='hi5central-ci-controls-session'
+          SESSION_HASH="$(printf '%s' "$SESSION_TOKEN" | sha256sum | awk '{print $1}')"
+          COOKIE="hi5central_session=$SESSION_TOKEN"
+          ORIGIN='https://ci-controls.hi5central.com'
+
+          PGPASSWORD=hi5central-ci psql \
+            -h 127.0.0.1 -U hi5central -d hi5central \
+            -v ON_ERROR_STOP=1 \
+            -v token_hash="$SESSION_HASH" <<'SQL'
+          INSERT INTO tenants (id, slug, company_name, status)
+          VALUES ('00000000-0000-4000-8000-000000000301', 'ci-controls', 'CI Controls', 'active');
+
+          INSERT INTO users (id, email, name, password_hash, email_verified_at)
+          VALUES (
+            '00000000-0000-4000-8000-000000000302',
+            'owner@ci-controls.test',
+            'CI Controls Owner',
+            'scrypt$16384$8$1$MDEyMzQ1Njc4OWFiY2RlZg$dACohGst8r6CCFBtJQAkvtSHQrE9sdlBrljvuPphZKiaDx25txm7PMG80BvqBY_frW7SqxilYU-IsOldpY4ilg',
+            now()
+          );
+
+          INSERT INTO tenant_memberships (tenant_id, user_id, role, status)
+          VALUES (
+            '00000000-0000-4000-8000-000000000301',
+            '00000000-0000-4000-8000-000000000302',
+            'owner',
+            'active'
+          );
+
+          INSERT INTO tenant_settings (
+            tenant_id, modules, onboarding_step, tenant_url, portal_url,
+            onboarding_data, configuration
+          ) VALUES (
+            '00000000-0000-4000-8000-000000000301',
+            '{"itsm":true,"rmm":false}'::jsonb,
+            'security',
+            'https://ci-controls.hi5central.com',
+            'https://ci-controls-portal.hi5central.com',
+            '{"company":{"displayName":"CI Controls"}}'::jsonb,
+            '{}'::jsonb
+          );
+
+          INSERT INTO auth_sessions (tenant_id, user_id, token_hash, expires_at)
+          VALUES (
+            '00000000-0000-4000-8000-000000000301',
+            '00000000-0000-4000-8000-000000000302',
+            :'token_hash',
+            now() + interval '12 hours'
+          );
+          SQL
+
+          echo '--- Onboarding must reject required MFA before enrollment ---'
+          BLOCKED_STATUS="$(curl -sS -o /tmp/onboarding-blocked.json -w '%{http_code}' \
+            -X POST \
+            -H "Cookie: $COOKIE" \
+            -H "Origin: $ORIGIN" \
+            -H 'Content-Type: application/json' \
+            --data '{"step":"security","data":{"requireMfa":true,"sessionHours":"8","passwordPolicy":"strong","auditRetention":"90"}}' \
+            http://127.0.0.1:3001/api/v1/onboarding/step)"
+
+          test "$BLOCKED_STATUS" != '200'
+          PGPASSWORD=hi5central-ci psql -h 127.0.0.1 -U hi5central -d hi5central -Atc \
+            "SELECT onboarding_step FROM tenant_settings WHERE tenant_id='$TENANT_ID'::uuid;" \
+            | grep -qx 'security'
+
+          echo '--- Enroll authenticator during onboarding ---'
+          curl -fsS \
+            -X POST -H "Cookie: $COOKIE" -H "Origin: $ORIGIN" \
+            -H 'Content-Type: application/json' --data '{}' \
+            http://127.0.0.1:3001/api/v1/mfa/setup \
+            | tee /tmp/controls-mfa-setup.json
+
+          SECRET="$(node -e "const p=require('/tmp/controls-mfa-setup.json'); process.stdout.write(p.secret)")"
+          SETUP_TOKEN="$(node -e "const p=require('/tmp/controls-mfa-setup.json'); process.stdout.write(p.setupToken)")"
+
+          MFA_CODE="$(SECRET="$SECRET" node <<'NODE'
+          const crypto = require('crypto')
+          const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
+          const secret = process.env.SECRET
+          let bits = 0, value = 0
+          const bytes = []
+          for (const ch of secret) {
+            value = (value << 5) | alphabet.indexOf(ch)
+            bits += 5
+            if (bits >= 8) {
+              bytes.push((value >>> (bits - 8)) & 255)
+              bits -= 8
+            }
+          }
+          const step = Math.floor(Date.now() / 1000 / 30)
+          const counter = Buffer.alloc(8)
+          counter.writeBigUInt64BE(BigInt(step))
+          const digest = crypto.createHmac('sha1', Buffer.from(bytes)).update(counter).digest()
+          const offset = digest[digest.length - 1] & 15
+          const binary = (((digest[offset] & 127) << 24) | (digest[offset + 1] << 16) | (digest[offset + 2] << 8) | digest[offset + 3]) >>> 0
+          process.stdout.write(String(binary % 1000000).padStart(6, '0'))
+          NODE
+          )"
+
+          curl -fsS \
+            -X POST -H "Cookie: $COOKIE" -H "Origin: $ORIGIN" \
+            -H 'Content-Type: application/json' \
+            --data "{\"setupToken\":\"$SETUP_TOKEN\",\"code\":\"$MFA_CODE\"}" \
+            http://127.0.0.1:3001/api/v1/mfa/confirm \
+            | tee /tmp/controls-mfa-confirm.json
+
+          grep -q '"enrolled":true' /tmp/controls-mfa-confirm.json
+          RECOVERY_ONE="$(node -e "const p=require('/tmp/controls-mfa-confirm.json'); process.stdout.write(p.recoveryCodes[0])")"
+
+          echo '--- Required MFA onboarding can now advance ---'
+          curl -fsS \
+            -X POST -H "Cookie: $COOKIE" -H "Origin: $ORIGIN" \
+            -H 'Content-Type: application/json' \
+            --data '{"step":"security","data":{"requireMfa":true,"sessionHours":"8","passwordPolicy":"strong","auditRetention":"90"}}' \
+            http://127.0.0.1:3001/api/v1/onboarding/step \
+            | tee /tmp/onboarding-security-saved.json
+
+          grep -q '"step":"itsm"' /tmp/onboarding-security-saved.json
+
+          PGPASSWORD=hi5central-ci psql -h 127.0.0.1 -U hi5central -d hi5central -v ON_ERROR_STOP=1 -c \
+            "UPDATE tenant_settings SET onboarding_step='finish' WHERE tenant_id='$TENANT_ID'::uuid;"
+
+          curl -fsS \
+            -X POST -H "Cookie: $COOKIE" -H "Origin: $ORIGIN" \
+            http://127.0.0.1:3001/api/v1/onboarding/complete \
+            | tee /tmp/onboarding-complete.json
+
+          grep -q '"step":"complete"' /tmp/onboarding-complete.json
+
+          echo '--- Secure sign-in creates MFA challenge and device evidence ---'
+          curl -fsS \
+            -X POST \
+            -H "Origin: $ORIGIN" \
+            -H 'User-Agent: Hi5Central-CI-SecurityControls/1.0' \
+            -H 'X-Forwarded-For: 203.0.113.55' \
+            -H 'Content-Type: application/json' \
+            --data '{"tenantSlug":"ci-controls","email":"owner@ci-controls.test","password":"CorrectHorseBatteryStaple!"}' \
+            http://127.0.0.1:3001/api/v1/auth/login-secure \
+            | tee /tmp/controls-login.json
+
+          grep -q '"mfaRequired":true' /tmp/controls-login.json
+          LOGIN_CHALLENGE="$(node -e "const p=require('/tmp/controls-login.json'); process.stdout.write(p.challengeToken)")"
+
+          curl -fsS \
+            -X POST \
+            -H "Origin: $ORIGIN" \
+            -H 'User-Agent: Hi5Central-CI-SecurityControls/1.0' \
+            -H 'X-Forwarded-For: 203.0.113.55' \
+            -H 'Content-Type: application/json' \
+            --data "{\"challengeToken\":\"$LOGIN_CHALLENGE\",\"code\":\"$RECOVERY_ONE\"}" \
+            http://127.0.0.1:3001/api/v1/auth/mfa/verify \
+            | grep -q '"authenticated":true'
+
+          PGPASSWORD=hi5central-ci psql -h 127.0.0.1 -U hi5central -d hi5central -Atc \
+            "SELECT count(*) FROM auth_sessions WHERE tenant_id='$TENANT_ID'::uuid AND user_id='$USER_ID'::uuid AND revoked_at IS NULL AND ip_address='203.0.113.55' AND user_agent='Hi5Central-CI-SecurityControls/1.0';" \
+            | grep -qx '1'
+
+          echo '--- Session API sees both active sessions ---'
+          curl -fsS -H "Cookie: $COOKIE" -H "Origin: $ORIGIN" \
+            http://127.0.0.1:3001/api/v1/security/sessions \
+            | tee /tmp/controls-sessions.json
+          node -e "const p=require('/tmp/controls-sessions.json'); if(!p.items || p.items.filter(x=>!x.revokedAt).length < 2) process.exit(1)"
+
+          echo '--- Strong password policy rejects weak password ---'
+          WEAK_STATUS="$(curl -sS -o /tmp/weak-password.json -w '%{http_code}' \
+            -X POST -H "Cookie: $COOKIE" -H "Origin: $ORIGIN" \
+            -H 'Content-Type: application/json' \
+            --data '{"currentPassword":"CorrectHorseBatteryStaple!","newPassword":"weakpassword"}' \
+            http://127.0.0.1:3001/api/v1/security/password/change)"
+          test "$WEAK_STATUS" = '400'
+
+          echo '--- Valid password change revokes every other session ---'
+          curl -fsS \
+            -X POST -H "Cookie: $COOKIE" -H "Origin: $ORIGIN" \
+            -H 'Content-Type: application/json' \
+            --data '{"currentPassword":"CorrectHorseBatteryStaple!","newPassword":"NewStrongPassword123!"}' \
+            http://127.0.0.1:3001/api/v1/security/password/change \
+            | tee /tmp/password-changed.json
+          grep -q '"changed":true' /tmp/password-changed.json
+          grep -q '"otherSessionsRevoked":true' /tmp/password-changed.json
+
+          PGPASSWORD=hi5central-ci psql -h 127.0.0.1 -U hi5central -d hi5central -Atc \
+            "SELECT count(*) FROM auth_sessions WHERE tenant_id='$TENANT_ID'::uuid AND user_id='$USER_ID'::uuid AND id <> (SELECT id FROM auth_sessions WHERE token_hash='$SESSION_HASH') AND revoked_at IS NULL;" \
+            | grep -qx '0'
+
+          PGPASSWORD=hi5central-ci psql -h 127.0.0.1 -U hi5central -d hi5central -Atc \
+            "SELECT CASE WHEN password_changed_at IS NOT NULL THEN 'changed' ELSE 'missing' END FROM users WHERE id='$USER_ID'::uuid;" \
+            | grep -qx 'changed'
+
+          echo '--- Required MFA blocks authenticator removal ---'
+          REMOVE_STATUS="$(curl -sS -o /tmp/remove-mfa.json -w '%{http_code}' \
+            -X POST -H "Cookie: $COOKIE" -H "Origin: $ORIGIN" \
+            -H 'Content-Type: application/json' \
+            --data '{"password":"NewStrongPassword123!"}' \
+            http://127.0.0.1:3001/api/v1/security/mfa/remove)"
+          test "$REMOVE_STATUS" = '409'
+
+          echo '--- Audit retention removes old tenant security events ---'
+          PGPASSWORD=hi5central-ci psql -h 127.0.0.1 -U hi5central -d hi5central -v ON_ERROR_STOP=1 -c \
+            "INSERT INTO security_audit_events (tenant_id, actor_user_id, event_type, created_at) VALUES ('$TENANT_ID'::uuid, '$USER_ID'::uuid, 'ci.old_event', now() - interval '100 days');"
+
+          curl -fsS -H "Cookie: $COOKIE" -H "Origin: $ORIGIN" \
+            http://127.0.0.1:3001/api/v1/security/audit?limit=200 \
+            | tee /tmp/controls-audit.json
+
+          grep -q 'password.changed' /tmp/controls-audit.json
+          grep -q 'login.success' /tmp/controls-audit.json
+          grep -q 'mfa.recovery_code_used' /tmp/controls-audit.json
+          if grep -q 'ci.old_event' /tmp/controls-audit.json; then
+            echo 'Expired audit event was not pruned.' >&2
+            exit 1
+          fi
+
+          PGPASSWORD=hi5central-ci psql -h 127.0.0.1 -U hi5central -d hi5central -Atc \
+            "SELECT count(*) FROM security_audit_events WHERE tenant_id='$TENANT_ID'::uuid AND event_type='ci.old_event';" \
+            | grep -qx '0'
+
+          echo '--- One-time password reset enforces policy and revokes all sessions ---'
+          RESET_TOKEN='hi5central-ci-reset-token-01234567890123456789'
+          RESET_HASH="$(printf '%s' "$RESET_TOKEN" | sha256sum | awk '{print $1}')"
+
+          PGPASSWORD=hi5central-ci psql -h 127.0.0.1 -U hi5central -d hi5central -v ON_ERROR_STOP=1 -v reset_hash="$RESET_HASH" -c \
+            "INSERT INTO password_reset_tokens (tenant_id,user_id,token_hash,expires_at) VALUES ('$TENANT_ID'::uuid,'$USER_ID'::uuid,:'reset_hash',now()+interval '1 hour');"
+
+          curl -fsS \
+            -X POST -H "Origin: $ORIGIN" -H 'Content-Type: application/json' \
+            --data "{\"tenantSlug\":\"ci-controls\",\"token\":\"$RESET_TOKEN\",\"newPassword\":\"ResetStrongPassword456!\"}" \
+            http://127.0.0.1:3001/api/v1/auth/password/reset \
+            | tee /tmp/reset-password.json
+          grep -q '"changed":true' /tmp/reset-password.json
+
+          PGPASSWORD=hi5central-ci psql -h 127.0.0.1 -U hi5central -d hi5central -Atc \
+            "SELECT count(*) FROM auth_sessions WHERE tenant_id='$TENANT_ID'::uuid AND user_id='$USER_ID'::uuid AND revoked_at IS NULL;" \
+            | grep -qx '0'
+
+          REUSE_STATUS="$(curl -sS -o /tmp/reset-reuse.json -w '%{http_code}' \
+            -X POST -H "Origin: $ORIGIN" -H 'Content-Type: application/json' \
+            --data "{\"tenantSlug\":\"ci-controls\",\"token\":\"$RESET_TOKEN\",\"newPassword\":\"AnotherStrongPassword789!\"}" \
+            http://127.0.0.1:3001/api/v1/auth/password/reset)"
+          test "$REUSE_STATUS" = '400'
+
+          echo 'Security Controls E2E passed.'
