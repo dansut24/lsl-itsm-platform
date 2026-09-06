@@ -1,4 +1,5 @@
 import { pool, withTransaction } from './db.js'
+import { registerServiceRequestRoutes } from './serviceRequests.js'
 import { resolveSession } from './session.js'
 
 const maxItems = 5000
@@ -378,4 +379,6 @@ export function registerCatalogueRoutes(app) {
 
     return c.json(await catalogueSnapshot(auth.session.tenant_id))
   })
+
+  registerServiceRequestRoutes(app)
 }
