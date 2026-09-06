@@ -8,8 +8,16 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
+
+FROM caddy:2-builder-alpine AS caddy-builder
+
+RUN xcaddy build \
+    --with github.com/caddy-dns/ionos@v1.2.0
+
+
 FROM caddy:2-alpine
 
+COPY --from=caddy-builder /usr/bin/caddy /usr/bin/caddy
 COPY --from=build /app/dist /srv
 
 EXPOSE 80 443
