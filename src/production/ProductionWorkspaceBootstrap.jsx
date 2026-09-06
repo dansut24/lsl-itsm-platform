@@ -370,6 +370,7 @@ export function ProductionWorkspaceBootstrap() {
         <App key={workspaceKey} />
         {settingsOpen ? (
           <ProductionSettingsLayer
+            key={workspaceKey}
             currentPath={currentPath}
             onSessionChange={acceptSession}
             session={serverSession}
