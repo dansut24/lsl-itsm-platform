@@ -4,6 +4,7 @@ import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { secureHeaders } from 'hono/secure-headers'
+import { registerCatalogueRoutes } from './catalogue.js'
 import { pool, withTransaction } from './db.js'
 import { sendVerificationEmail, verifySmtpConnection } from './mailer.js'
 import { registerOrganisationRoutes } from './organisation.js'
@@ -575,6 +576,7 @@ app.post('/api/v1/onboarding/complete', async (c) => {
   return c.json(sessionPayload(refreshed))
 })
 
+registerCatalogueRoutes(app)
 registerOrganisationRoutes(app)
 registerSettingsRoutes(app)
 
