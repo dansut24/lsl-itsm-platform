@@ -6,6 +6,7 @@ import { cors } from 'hono/cors'
 import { secureHeaders } from 'hono/secure-headers'
 import { pool, withTransaction } from './db.js'
 import { sendVerificationEmail, verifySmtpConnection } from './mailer.js'
+import { registerOrganisationRoutes } from './organisation.js'
 import { verifyPassword } from './password.js'
 import { ensureRedisConnected, redis } from './redis.js'
 import { registerSettingsRoutes } from './settings.js'
@@ -145,7 +146,7 @@ async function deliverVerification({ token, email, name, companyName, tenantUrl 
 app.use('*', secureHeaders())
 app.use('/api/*', cors({
   origin: allowedOrigin,
-  allowMethods: ['GET', 'POST', 'OPTIONS'],
+  allowMethods: ['GET', 'POST', 'PUT', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
   maxAge: 600,
@@ -574,6 +575,7 @@ app.post('/api/v1/onboarding/complete', async (c) => {
   return c.json(sessionPayload(refreshed))
 })
 
+registerOrganisationRoutes(app)
 registerSettingsRoutes(app)
 
 app.notFound((c) => c.json({ error: 'Not found' }, 404))
