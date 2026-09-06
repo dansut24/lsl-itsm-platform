@@ -27,6 +27,7 @@ function formatDate(value) {
 
 function nextStepFor(status) {
   if (status === 'Pending Approval') return 'Waiting for approval'
+  if (status === 'Approved') return 'Approval complete. Fulfilment can begin.'
   if (status === 'Rejected') return 'Approval was rejected'
   if (status === 'Completed' || status === 'Closed') return 'Request completed'
   if (status === 'In Progress') return 'Fulfilment is in progress'
@@ -56,7 +57,7 @@ export function serviceRequestForWorkspace(request) {
     requesterSite: request.requesterSite || '',
     service: request.service || 'Service Catalogue',
     team: request.team || 'Service Desk',
-    assignee: 'Unassigned',
+    assignee: request.assignee || 'Unassigned',
     priority: request.priority || 'Medium',
     status: request.status || 'New',
     created: formatDate(request.createdAt),
@@ -82,18 +83,35 @@ export function serviceRequestForWorkspace(request) {
     approvalMode: request.approvalMode || 'none',
     approvalThreshold: request.approvalThreshold,
     workflow: request.workflow || '',
+    completionNotes: request.operationalData?.completionNotes || '',
+    reopenReason: request.operationalData?.reopenReason || '',
+    approvalNote: request.operationalData?.approvalNote || '',
     source: 'production-api',
     persistence: 'api',
   }
 }
 
-export async function fetchProductionServiceRequests() {
-  const response = await fetch(`${API_BASE}/api/v1/service-requests?limit=200`, {
+async function apiJson(path, options = {}) {
+  const response = await fetch(`${API_BASE}${path}`, {
     credentials: 'include',
+    ...options,
+    headers: {
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(options.headers || {}),
+    },
   })
   const payload = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(payload.error || 'Could not load Service Requests.')
+  if (!response.ok) throw new Error(payload.error || 'The Service Request operation failed.')
+  return payload
+}
+
+export async function fetchProductionServiceRequests() {
+  const payload = await apiJson('/api/v1/service-requests?limit=200')
   return Array.isArray(payload.items) ? payload.items : []
+}
+
+export async function fetchProductionServiceRequest(reference) {
+  return apiJson(`/api/v1/service-requests/${encodeURIComponent(reference)}`)
 }
 
 export function cacheProductionServiceRequests(requests) {
@@ -107,6 +125,23 @@ export function cacheProductionServiceRequests(requests) {
   return next
 }
 
+export function cacheProductionServiceRequest(request) {
+  const ticket = serviceRequestForWorkspace(request)
+  const stored = readJson(TICKETS_KEY, seedTickets)
+  const base = Array.isArray(stored) ? stored : seedTickets
+  const next = base.some((item) => item.id === ticket.id)
+    ? base.map((item) => item.id === ticket.id ? ticket : item)
+    : [ticket, ...base]
+  window.localStorage.setItem(TICKETS_KEY, JSON.stringify(next))
+  window.dispatchEvent(new CustomEvent('hi5-service-request-reconciled', { detail: { ticket } }))
+  return ticket
+}
+
+export async function reconcileProductionServiceRequest(reference) {
+  const request = await fetchProductionServiceRequest(reference)
+  return cacheProductionServiceRequest(request)
+}
+
 export async function hydrateProductionServiceRequests() {
   const requests = await fetchProductionServiceRequests()
   cacheProductionServiceRequests(requests)
@@ -114,25 +149,101 @@ export async function hydrateProductionServiceRequests() {
 }
 
 export async function createProductionServiceRequest(payload) {
-  const response = await fetch(`${API_BASE}/api/v1/service-requests`, {
+  return apiJson('/api/v1/service-requests', {
     method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   })
-  const result = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(result.error || 'Could not create the Service Request.')
-  return result
+}
+
+export async function patchProductionServiceRequest(reference, updates) {
+  return apiJson(`/api/v1/service-requests/${encodeURIComponent(reference)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(updates),
+  })
+}
+
+export async function transitionProductionServiceRequest(reference, targetStatus, values = {}) {
+  await apiJson(`/api/v1/service-requests/${encodeURIComponent(reference)}/transition`, {
+    method: 'POST',
+    body: JSON.stringify({ targetStatus, values }),
+  })
+  return reconcileProductionServiceRequest(reference)
+}
+
+export async function addProductionServiceRequestActivity(reference, activity) {
+  await apiJson(`/api/v1/service-requests/${encodeURIComponent(reference)}/activities`, {
+    method: 'POST',
+    body: JSON.stringify({
+      kind: activity.kind === 'work' ? 'work' : 'customer',
+      text: activity.text || '',
+      html: activity.html || '',
+      attachments: Array.isArray(activity.attachments) ? activity.attachments : [],
+    }),
+  })
+}
+
+export async function patchProductionServiceRequestTask(reference, taskKey, updates) {
+  await apiJson(`/api/v1/service-requests/${encodeURIComponent(reference)}/tasks/${encodeURIComponent(taskKey)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(updates),
+  })
 }
 
 export async function decideProductionServiceRequestApproval(reference, approvalId, decision, note = '') {
-  const response = await fetch(`${API_BASE}/api/v1/service-requests/${encodeURIComponent(reference)}/approvals/${encodeURIComponent(approvalId)}/decision`, {
+  await apiJson(`/api/v1/service-requests/${encodeURIComponent(reference)}/approvals/${encodeURIComponent(approvalId)}/decision`, {
     method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ decision, note }),
   })
-  const result = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(result.error || 'Could not save the approval decision.')
-  return result
+  return reconcileProductionServiceRequest(reference)
+}
+
+function taskDelta(before, after) {
+  const updates = {}
+  if (before?.status !== after?.status) updates.status = after?.status
+  if (before?.team !== after?.team) updates.team = after?.team || ''
+  if (before?.assignee !== after?.assignee) updates.assignee = after?.assignee || ''
+  if ((before?.completionNotes || '') !== (after?.completionNotes || '')) updates.completionNotes = after?.completionNotes || ''
+  return updates
+}
+
+export async function synchroniseProductionServiceRequestDelta(previous, updates) {
+  if (!previous || previous.type !== 'Service Request' || previous.persistence !== 'api') return null
+
+  const operations = []
+  const fieldUpdates = {}
+  if (Object.prototype.hasOwnProperty.call(updates, 'priority') && updates.priority !== previous.priority) fieldUpdates.priority = updates.priority
+  if (Object.prototype.hasOwnProperty.call(updates, 'team') && updates.team !== previous.team) fieldUpdates.team = updates.team || ''
+  if (Object.prototype.hasOwnProperty.call(updates, 'assignee') && updates.assignee !== previous.assignee) fieldUpdates.assignee = updates.assignee || ''
+  if (Object.keys(fieldUpdates).length) operations.push(patchProductionServiceRequest(previous.id, fieldUpdates))
+
+  if (Array.isArray(updates.activities)) {
+    const priorIds = new Set((previous.activities || []).map((activity) => activity.id))
+    const additions = updates.activities.filter((activity) => activity?.id && !priorIds.has(activity.id))
+    for (const activity of additions) operations.push(addProductionServiceRequestActivity(previous.id, activity))
+  }
+
+  if (Array.isArray(updates.requestTasks)) {
+    const priorTasks = new Map((previous.requestTasks || []).map((task) => [task.id, task]))
+    for (const task of updates.requestTasks) {
+      const before = priorTasks.get(task.id)
+      if (!before) continue
+      const delta = taskDelta(before, task)
+      if (Object.keys(delta).length) operations.push(patchProductionServiceRequestTask(previous.id, task.id, delta))
+    }
+  }
+
+  if (!operations.length) return null
+  try {
+    await Promise.all(operations)
+    return await reconcileProductionServiceRequest(previous.id)
+  } catch (error) {
+    window.dispatchEvent(new CustomEvent('hi5-service-requests-sync-error', {
+      detail: { reference: previous.id, message: error.message },
+    }))
+    try {
+      return await reconcileProductionServiceRequest(previous.id)
+    } catch {
+      throw error
+    }
+  }
 }
