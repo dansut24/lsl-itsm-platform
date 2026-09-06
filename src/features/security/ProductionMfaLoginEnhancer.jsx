@@ -4,6 +4,11 @@ import './ProductionMfaLoginEnhancer.css'
 
 const API_BASE = 'https://api.hi5central.com'
 
+function continueAfterAuthentication(payload = {}) {
+  const target = payload?.onboarding?.completedAt ? '/dashboard' : '/onboarding'
+  window.location.replace(target)
+}
+
 function RecoveryCodes({ codes, onContinue }) {
   return (
     <div className="production-mfa-modal-card">
@@ -27,6 +32,7 @@ export function ProductionMfaLoginEnhancer() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [recoveryCodes, setRecoveryCodes] = useState(null)
+  const [authenticatedPayload, setAuthenticatedPayload] = useState(null)
 
   useEffect(() => {
     async function intercept(event) {
@@ -51,6 +57,7 @@ export function ProductionMfaLoginEnhancer() {
       setFlow(null)
       setSetup(null)
       setRecoveryCodes(null)
+      setAuthenticatedPayload(null)
       try {
         const response = await fetch(`${API_BASE}/api/v1/auth/login-secure`, {
           method: 'POST',
@@ -89,7 +96,7 @@ export function ProductionMfaLoginEnhancer() {
         }
 
         if (payload.authenticated) {
-          window.location.reload()
+          continueAfterAuthentication(payload)
           return
         }
         throw new Error('Hi5Central could not complete sign in.')
@@ -120,10 +127,11 @@ export function ProductionMfaLoginEnhancer() {
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(payload.error || 'MFA verification failed.')
       if (Array.isArray(payload.recoveryCodes) && payload.recoveryCodes.length) {
+        setAuthenticatedPayload(payload)
         setRecoveryCodes(payload.recoveryCodes)
         return
       }
-      window.location.reload()
+      continueAfterAuthentication(payload)
     } catch (verifyError) {
       setError(verifyError.message)
     } finally {
@@ -138,6 +146,7 @@ export function ProductionMfaLoginEnhancer() {
     setCode('')
     setError('')
     setRecoveryCodes(null)
+    setAuthenticatedPayload(null)
   }
 
   if (!flow && !error && !busy) return null
@@ -154,7 +163,7 @@ export function ProductionMfaLoginEnhancer() {
   return (
     <div className="production-mfa-modal" role="dialog" aria-modal="true" aria-label="Multi-factor authentication">
       {recoveryCodes ? (
-        <RecoveryCodes codes={recoveryCodes} onContinue={() => window.location.reload()} />
+        <RecoveryCodes codes={recoveryCodes} onContinue={() => continueAfterAuthentication(authenticatedPayload || {})} />
       ) : (
         <div className="production-mfa-modal-card">
           <button className="production-mfa-close" disabled={busy} onClick={close} type="button" aria-label="Cancel MFA"><X size={18} /></button>
