@@ -272,3 +272,35 @@ export async function synchroniseProductionServiceRequestDelta(previous, updates
     }
   }
 }
+
+export async function synchroniseProductionServiceRequestSnapshot(previous, next) {
+  if (!previous || !next || previous.id !== next.id || previous.persistence !== 'api' || next.type !== 'Service Request') return null
+
+  let reconciled = null
+  try {
+    if (previous.status !== next.status) {
+      const values = {
+        approvalConfirmation: next.status === 'Approved'
+          ? (next.requestApprovals || []).every((approval) => approval.status !== 'Pending')
+          : undefined,
+        approvalNote: next.approvalNote || '',
+        completionNotes: next.completionNotes || '',
+        reopenReason: next.reopenReason || '',
+      }
+      reconciled = await transitionProductionServiceRequest(previous.id, next.status, values)
+    }
+
+    const deltaResult = await synchroniseProductionServiceRequestDelta(previous, next)
+    if (deltaResult) reconciled = deltaResult
+    return reconciled
+  } catch (error) {
+    window.dispatchEvent(new CustomEvent('hi5-service-requests-sync-error', {
+      detail: { reference: previous.id, message: error.message },
+    }))
+    try {
+      return await reconcileProductionServiceRequest(previous.id)
+    } catch {
+      throw error
+    }
+  }
+}
