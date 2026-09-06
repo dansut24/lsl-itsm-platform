@@ -3,10 +3,17 @@ import { ArrowRight, CheckCircle2, LockKeyhole, ShieldCheck } from 'lucide-react
 import App from '../App.jsx'
 import { OnboardingWizard } from '../features/onboarding/OnboardingWizard.jsx'
 import { resolveTenantSurface } from '../lib/tenantSurface.js'
-import { clearProductionSession, saveProductionSession } from '../services/demoStore.js'
+import {
+  clearProductionSession,
+  saveAccent,
+  saveProductionSession,
+  saveTheme,
+} from '../services/demoStore.js'
 import './ProductionWorkspaceBootstrap.css'
 
 const API_BASE = 'https://api.hi5central.com'
+const PRODUCTION_SESSION_KEY = 'hi5central-production-session-v1'
+const TENANT_RUNTIME_CONFIG_KEY = 'hi5central-tenant-runtime-config-v1'
 
 function initials(name = '') {
   return String(name)
@@ -28,6 +35,35 @@ function toWorkspaceSession(apiSession) {
     name: apiSession.user.name,
     initials: initials(apiSession.user.name),
     username: apiSession.user.email,
+  }
+}
+
+function applyTenantPreferences(apiSession) {
+  const onboardingData = apiSession?.onboarding?.data || {}
+  const theme = onboardingData.theme || {}
+  const itsm = onboardingData.itsm || {}
+
+  if (['system', 'light', 'dark'].includes(theme.mode)) saveTheme(theme.mode)
+  if (['amber', 'cyan', 'blue', 'violet', 'emerald', 'rose'].includes(theme.accent)) saveAccent(theme.accent)
+
+  try {
+    window.localStorage.setItem(TENANT_RUNTIME_CONFIG_KEY, JSON.stringify({
+      tenantSlug: apiSession?.tenant?.slug || '',
+      theme: {
+        mode: theme.mode || 'system',
+        accent: theme.accent || 'amber',
+      },
+      recordNumbering: {
+        mode: itsm.numberingMode || 'default',
+        prefixes: itsm.recordPrefixes || {},
+        digits: itsm.recordDigits || '5',
+      },
+      microsoft365: onboardingData.users?.microsoft365 || {},
+      itsm,
+      rmm: onboardingData.rmm || {},
+    }))
+  } catch {
+    // Local runtime preferences are a convenience bridge for the current demo UI.
   }
 }
 
@@ -142,6 +178,8 @@ export function ProductionWorkspaceBootstrap() {
           if (payload.tenant?.slug !== surface.tenantSlug) {
             clearProductionSession()
           } else {
+            applyTenantPreferences(payload)
+            if (payload.onboarding?.completedAt) saveProductionSession(toWorkspaceSession(payload))
             setServerSession(payload)
             setTenantState({ managed: true, slug: payload.tenant.slug, companyName: payload.tenant.companyName, status: 'active' })
             return
@@ -167,6 +205,8 @@ export function ProductionWorkspaceBootstrap() {
   useEffect(() => {
     if (!serverSession) return
 
+    applyTenantPreferences(serverSession)
+
     if (serverSession.onboarding?.completedAt) {
       saveProductionSession(toWorkspaceSession(serverSession))
       if (window.location.pathname === '/onboarding') {
@@ -180,7 +220,44 @@ export function ProductionWorkspaceBootstrap() {
     }
   }, [serverSession])
 
+  useEffect(() => {
+    if (!serverSession?.onboarding?.completedAt) return undefined
+
+    let closing = false
+    const timer = window.setInterval(async () => {
+      if (closing) return
+      const localProductionSession = window.localStorage.getItem(PRODUCTION_SESSION_KEY)
+      if (localProductionSession) return
+
+      closing = true
+      try {
+        await fetch(`${API_BASE}/api/v1/auth/logout`, {
+          method: 'POST',
+          credentials: 'include',
+        })
+      } catch {
+        // The local session is already gone; continue to the production login screen.
+      }
+
+      clearProductionSession()
+      setTenantState((current) => ({
+        managed: true,
+        slug: current?.slug || surface.tenantSlug,
+        companyName: current?.companyName || serverSession.tenant?.companyName || surface.tenantName,
+        status: 'active',
+      }))
+      setServerSession(null)
+      if (window.location.pathname !== '/login') {
+        window.history.replaceState({}, '', '/login')
+      }
+    }, 300)
+
+    return () => window.clearInterval(timer)
+  }, [serverSession, surface.tenantName, surface.tenantSlug])
+
   function acceptSession(nextSession) {
+    applyTenantPreferences(nextSession)
+    if (nextSession.onboarding?.completedAt) saveProductionSession(toWorkspaceSession(nextSession))
     setServerSession(nextSession)
     setTenantState({
       managed: true,
