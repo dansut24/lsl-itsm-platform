@@ -16,21 +16,13 @@ export function OnboardingMfaEnhancer() {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    let active = true
-    let select = null
-    let continueButton = null
+    let currentSelect = null
+    let selectHandler = null
 
-    const syncButton = () => {
-      if (!continueButton) return
-      const blocked = required && !status?.enrolled
-      continueButton.dataset.mfaBlocked = blocked ? 'true' : 'false'
-      if (blocked) {
-        continueButton.disabled = true
-        continueButton.title = 'Set up administrator MFA before continuing.'
-      } else if (continueButton.dataset.mfaBlocked === 'false' && !continueButton.textContent?.includes('Saving')) {
-        continueButton.disabled = false
-        continueButton.removeAttribute('title')
-      }
+    const detachSelect = () => {
+      if (currentSelect && selectHandler) currentSelect.removeEventListener('change', selectHandler)
+      currentSelect = null
+      selectHandler = null
     }
 
     const attach = () => {
@@ -44,8 +36,9 @@ export function OnboardingMfaEnhancer() {
       }
 
       if (!securityOpen || !card) {
+        detachSelect()
         setTarget(null)
-        return false
+        return
       }
 
       const section = [...card.querySelectorAll('.onboarding-section')]
@@ -55,11 +48,15 @@ export function OnboardingMfaEnhancer() {
         description.textContent = 'These authentication, password, session and audit controls are enforced by the production security service.'
       }
 
-      select = section?.querySelector('select') || null
-      const readRequired = () => setRequired(select?.value !== 'optional')
-      if (select) {
-        readRequired()
-        select.addEventListener('change', readRequired)
+      const nextSelect = section?.querySelector('select') || null
+      if (nextSelect !== currentSelect) {
+        detachSelect()
+        currentSelect = nextSelect
+        if (currentSelect) {
+          selectHandler = () => setRequired(currentSelect?.value !== 'optional')
+          selectHandler()
+          currentSelect.addEventListener('change', selectHandler)
+        }
       }
 
       let mount = card.querySelector('[data-hi5-onboarding-mfa]')
@@ -70,40 +67,46 @@ export function OnboardingMfaEnhancer() {
         if (actions) card.insertBefore(mount, actions)
         else card.appendChild(mount)
       }
-      continueButton = card.querySelector('.onboarding-actions .onboarding-primary')
-      setTarget(mount)
-      return true
+      setTarget((current) => current === mount ? current : mount)
     }
 
-    const observer = new MutationObserver(() => {
-      attach()
-      syncButton()
-    })
-    observer.observe(document.body, { childList: true, subtree: true, attributes: true })
+    const observer = new MutationObserver(attach)
+    observer.observe(document.body, { childList: true, subtree: true })
     attach()
 
-    async function load() {
-      try {
-        const response = await fetch(`${API_BASE}/api/v1/mfa/status`, { credentials: 'include' })
-        const payload = await response.json().catch(() => ({}))
-        if (!response.ok) throw new Error(payload.error || 'Could not check MFA enrollment.')
-        if (active) setStatus(payload)
-      } catch (loadError) {
-        if (active) setError(loadError.message)
-      }
-    }
-    if (target || document.querySelector('.onboarding-heading h1')?.textContent?.trim() === 'Security') load()
-
     return () => {
-      active = false
       observer.disconnect()
-      if (select) select.removeEventListener('change', () => {})
+      detachSelect()
     }
-  }, [required, status?.enrolled])
+  }, [])
+
+  async function loadStatus() {
+    const response = await fetch(`${API_BASE}/api/v1/mfa/status`, { credentials: 'include' })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(payload.error || 'Could not check MFA enrollment.')
+    setStatus(payload)
+    return payload
+  }
 
   useEffect(() => {
+    if (!target) {
+      setStatus(null)
+      setSetup(null)
+      setRecoveryCodes([])
+      setError('')
+      return
+    }
+    let active = true
+    loadStatus().catch((loadError) => {
+      if (active) setError(loadError.message)
+    })
+    return () => { active = false }
+  }, [target])
+
+  useEffect(() => {
+    if (!target) return
     const button = document.querySelector('.onboarding-card .onboarding-actions .onboarding-primary')
-    if (!button || !target) return
+    if (!button) return
     const blocked = required && !status?.enrolled
     button.dataset.mfaBlocked = blocked ? 'true' : 'false'
     if (blocked) {
@@ -114,14 +117,6 @@ export function OnboardingMfaEnhancer() {
       button.removeAttribute('title')
     }
   }, [required, status?.enrolled, target])
-
-  async function loadStatus() {
-    const response = await fetch(`${API_BASE}/api/v1/mfa/status`, { credentials: 'include' })
-    const payload = await response.json().catch(() => ({}))
-    if (!response.ok) throw new Error(payload.error || 'Could not check MFA enrollment.')
-    setStatus(payload)
-    return payload
-  }
 
   async function beginSetup() {
     setBusy(true)
