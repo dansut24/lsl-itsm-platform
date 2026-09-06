@@ -53,8 +53,9 @@ async function ensureOrganisationSeed(session) {
   if (existing.rowCount) return
 
   await withTransaction(async (client) => {
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1::text))', [session.tenant_id])
     const locked = await client.query(
-      'SELECT 1 FROM organisation_people WHERE tenant_id = $1 LIMIT 1 FOR UPDATE',
+      'SELECT 1 FROM organisation_people WHERE tenant_id = $1 LIMIT 1',
       [session.tenant_id],
     )
     if (locked.rowCount) return
@@ -244,19 +245,21 @@ async function externalIdMaps(client, tenantId) {
 }
 
 async function syncDepartments(client, tenantId, items) {
+  const maps = await externalIdMaps(client, tenantId)
   for (const item of items) {
     const externalKey = key(item.id, `DEPT-${Date.now()}`)
     await client.query(
       `INSERT INTO organisation_departments
-         (tenant_id, external_key, name, description, source, active, updated_at)
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6, now())
+         (tenant_id, external_key, name, description, lead_person_id, source, active, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, now())
        ON CONFLICT (tenant_id, external_key) DO UPDATE SET
          name = EXCLUDED.name,
          description = EXCLUDED.description,
+         lead_person_id = EXCLUDED.lead_person_id,
          source = EXCLUDED.source,
          active = EXCLUDED.active,
          updated_at = now()`,
-      [tenantId, externalKey, text(item.name, 120), text(item.description, 2000), JSON.stringify(asObject(item.source)), bool(item.active)],
+      [tenantId, externalKey, text(item.name, 120), text(item.description, 2000), maps.people.get(item.leadId) || null, JSON.stringify(asObject(item.source)), bool(item.active)],
     )
   }
   if (items.length) {
@@ -274,17 +277,18 @@ async function syncTeams(client, tenantId, items) {
     const externalKey = key(item.id, `TEAM-${Date.now()}`)
     await client.query(
       `INSERT INTO organisation_teams
-         (tenant_id, external_key, department_id, name, description, colour, source, active, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, now())
+         (tenant_id, external_key, department_id, name, description, colour, lead_person_id, source, active, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, now())
        ON CONFLICT (tenant_id, external_key) DO UPDATE SET
          department_id = EXCLUDED.department_id,
          name = EXCLUDED.name,
          description = EXCLUDED.description,
          colour = EXCLUDED.colour,
+         lead_person_id = EXCLUDED.lead_person_id,
          source = EXCLUDED.source,
          active = EXCLUDED.active,
          updated_at = now()`,
-      [tenantId, externalKey, maps.departments.get(item.departmentId) || null, text(item.name, 120), text(item.description, 2000), text(item.colour || 'blue', 30), JSON.stringify(asObject(item.source)), bool(item.active)],
+      [tenantId, externalKey, maps.departments.get(item.departmentId) || null, text(item.name, 120), text(item.description, 2000), text(item.colour || 'blue', 30), maps.people.get(item.leadId) || null, JSON.stringify(asObject(item.source)), bool(item.active)],
     )
   }
   if (items.length) {
@@ -297,7 +301,7 @@ async function syncTeams(client, tenantId, items) {
 }
 
 async function syncSites(client, tenantId, items) {
-  let maps = await externalIdMaps(client, tenantId)
+  const maps = await externalIdMaps(client, tenantId)
   for (const item of items) {
     const externalKey = key(item.id, `SITE-${Date.now()}`)
     const rmm = asObject(item.rmmSite)
@@ -431,39 +435,6 @@ async function syncPeople(client, tenantId, items) {
       [tenantId, items.map((item) => key(item.id))],
     )
   }
-
-  maps = await externalIdMaps(client, tenantId)
-  for (const item of items) {
-    const personId = maps.people.get(key(item.id))
-    if (!personId) continue
-    if (item.leadOfDepartmentId) {
-      await client.query('UPDATE organisation_departments SET lead_person_id = $1 WHERE tenant_id = $2 AND external_key = $3', [personId, tenantId, item.leadOfDepartmentId])
-    }
-  }
-}
-
-async function syncLeadershipReferences(client, tenantId, snapshot) {
-  const maps = await externalIdMaps(client, tenantId)
-  for (const department of snapshot.departments || []) {
-    await client.query(
-      'UPDATE organisation_departments SET lead_person_id = $1 WHERE tenant_id = $2 AND external_key = $3',
-      [maps.people.get(department.leadId) || null, tenantId, key(department.id)],
-    )
-  }
-  for (const team of snapshot.teams || []) {
-    await client.query(
-      'UPDATE organisation_teams SET lead_person_id = $1 WHERE tenant_id = $2 AND external_key = $3',
-      [maps.people.get(team.leadId) || null, tenantId, key(team.id)],
-    )
-  }
-  for (const site of snapshot.sites || []) {
-    await client.query(
-      `UPDATE organisation_sites
-       SET primary_contact_id = $1, support_team_id = $2
-       WHERE tenant_id = $3 AND external_key = $4`,
-      [maps.people.get(site.primaryContactId) || null, maps.teams.get(site.supportTeamId) || null, tenantId, key(site.id)],
-    )
-  }
 }
 
 export function registerOrganisationRoutes(app) {
@@ -497,8 +468,6 @@ export function registerOrganisationRoutes(app) {
       if (collection === 'teams') await syncTeams(client, auth.session.tenant_id, items)
       if (collection === 'sites') await syncSites(client, auth.session.tenant_id, items)
       if (collection === 'people') await syncPeople(client, auth.session.tenant_id, items)
-      const snapshot = await organisationSnapshot(auth.session.tenant_id)
-      await syncLeadershipReferences(client, auth.session.tenant_id, snapshot)
     })
 
     return c.json(await organisationSnapshot(auth.session.tenant_id))
