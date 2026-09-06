@@ -1,0 +1,110 @@
+.hi5-ui-state {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--hi5-radius-md, 16px);
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 10px 28px rgba(16, 33, 63, .06);
+  box-sizing: border-box;
+}
+
+.hi5-ui-state.is-compact {
+  padding: 12px 14px;
+}
+
+.hi5-ui-state-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: var(--hi5-radius-sm, 12px);
+  background: var(--surface-soft);
+  color: var(--brand);
+}
+
+.hi5-ui-state.is-error .hi5-ui-state-icon {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+}
+
+.hi5-ui-state.is-permission .hi5-ui-state-icon,
+.hi5-ui-state.is-offline .hi5-ui-state-icon {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 10%, var(--surface));
+}
+
+.hi5-ui-state.is-saved .hi5-ui-state-icon {
+  color: #25865e;
+  background: color-mix(in srgb, #25865e 10%, var(--surface));
+}
+
+.hi5-ui-state strong,
+.hi5-ui-state p {
+  display: block;
+  margin: 0;
+}
+
+.hi5-ui-state p {
+  margin-top: 4px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.hi5-ui-state button {
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--hi5-radius-sm, 12px);
+  background: var(--surface-soft);
+  color: var(--ink);
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.hi5-ui-skeleton {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+}
+
+.hi5-ui-skeleton span {
+  display: block;
+  height: 14px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--surface-soft), var(--surface-strong), var(--surface-soft));
+  background-size: 200% 100%;
+  animation: hi5-skeleton 1.2s linear infinite;
+}
+
+.hi5-ui-skeleton span:nth-child(2n) { width: 84%; }
+.hi5-ui-skeleton span:nth-child(3n) { width: 66%; }
+
+.is-spinning {
+  animation: hi5-spin .9s linear infinite;
+}
+
+@keyframes hi5-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes hi5-skeleton {
+  to { background-position: -200% 0; }
+}
+
+@media (max-width: 720px) {
+  .hi5-ui-state {
+    grid-template-columns: auto minmax(0, 1fr);
+    padding: 14px;
+  }
+
+  .hi5-ui-state button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+}
