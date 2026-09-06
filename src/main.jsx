@@ -4,6 +4,7 @@ import './index.css'
 import App from './App.jsx'
 import { MarketingApp } from './features/marketing/MarketingApp.jsx'
 import { SignupPage } from './features/marketing/SignupPage.jsx'
+import { KnowledgeContextEnhancer } from './features/knowledge/KnowledgeContextEnhancer.jsx'
 import { ProductionWorkspaceBootstrap } from './production/ProductionWorkspaceBootstrap.jsx'
 import { resolveTenantSurface } from './lib/tenantSurface.js'
 import './features/settings/ProductionSettingsFloating.css'
@@ -27,5 +28,6 @@ if (initialSurface.kind === 'workspace' && initialSurface.canonical) RootApp = P
 createRoot(rootElement).render(
   <StrictMode>
     <RootApp />
+    {initialSurface.kind === 'workspace' ? <KnowledgeContextEnhancer /> : null}
   </StrictMode>,
 )
