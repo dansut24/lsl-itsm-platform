@@ -17,6 +17,28 @@ export function resolveTenantSurface(location = window.location) {
   const pathname = String(location.pathname || '/')
   const params = new URLSearchParams(location.search || '')
 
+  if (hostname === 'hi5central.com' || hostname === 'www.hi5central.com') {
+    return {
+      kind: 'marketing',
+      tenantSlug: '',
+      tenantName: 'Hi5Central',
+      canonical: true,
+      preview: false,
+    }
+  }
+
+  // Keep /signup testable on localhost/Vercel without changing the default
+  // prototype surface for those hosts.
+  if (pathname === '/signup' && !hostname.endsWith('.hi5central.com')) {
+    return {
+      kind: 'marketing',
+      tenantSlug: '',
+      tenantName: 'Hi5Central',
+      canonical: false,
+      preview: true,
+    }
+  }
+
   const rmmHost = hostname.match(/^([a-z0-9-]+)-rmm\.hi5central\.com$/i)
   if (rmmHost) {
     const tenantSlug = normaliseSlug(rmmHost[1])
