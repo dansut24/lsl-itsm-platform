@@ -8,6 +8,7 @@ import { ProductionWorkspaceBootstrap } from './production/ProductionWorkspaceBo
 import { resolveTenantSurface } from './lib/tenantSurface.js'
 import './features/settings/ProductionSettingsFloating.css'
 import './PlatformCurves.css'
+import './ContextualSurfaces.css'
 
 const rootElement = document.getElementById('root')
 const initialSurface = resolveTenantSurface()
