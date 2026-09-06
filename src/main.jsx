@@ -6,6 +6,7 @@ import { MarketingApp } from './features/marketing/MarketingApp.jsx'
 import { SignupPage } from './features/marketing/SignupPage.jsx'
 import { ProductionWorkspaceBootstrap } from './production/ProductionWorkspaceBootstrap.jsx'
 import { resolveTenantSurface } from './lib/tenantSurface.js'
+import './features/settings/ProductionSettingsFloating.css'
 
 const rootElement = document.getElementById('root')
 const initialSurface = resolveTenantSurface()
