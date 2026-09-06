@@ -1,5 +1,12 @@
 import { pool, withTransaction } from './db.js'
 import { registerMfaRoutes } from './mfa.js'
+import { registerSecurityRoutes } from './security.js'
+import {
+  pruneSecurityAuditForTenant,
+  recordSecurityEvent,
+  requestIp,
+  requestUserAgent,
+} from './securityAudit.js'
 import { resolveSession, sessionPayload } from './session.js'
 
 const writableAreas = new Set([
@@ -103,6 +110,7 @@ export function registerSettingsRoutes(app) {
 
     await withTransaction(async (client) => {
       let newlyEnforcedMfa = false
+      let previousSecurity = null
       if (area === 'security') {
         const currentResult = await client.query(
           `SELECT onboarding_data, configuration
@@ -112,8 +120,8 @@ export function registerSettingsRoutes(app) {
            FOR UPDATE`,
           [auth.session.tenant_id],
         )
-        const currentSecurity = asObject(effectiveConfiguration(currentResult.rows[0] || {}).security)
-        const normalised = normaliseSecurity(data, currentSecurity)
+        previousSecurity = asObject(effectiveConfiguration(currentResult.rows[0] || {}).security)
+        const normalised = normaliseSecurity(data, previousSecurity)
         data = normalised.data
         newlyEnforcedMfa = normalised.newlyEnforced
       }
@@ -149,7 +157,8 @@ export function registerSettingsRoutes(app) {
       if (area === 'security' && newlyEnforcedMfa) {
         await client.query(
           `UPDATE auth_sessions s
-           SET revoked_at = COALESCE(s.revoked_at, now())
+           SET revoked_at = COALESCE(s.revoked_at, now()),
+               revoked_reason = COALESCE(s.revoked_reason, 'mfa_policy_enabled')
            WHERE s.tenant_id = $1
              AND s.id <> $2
              AND s.revoked_at IS NULL
@@ -163,7 +172,37 @@ export function registerSettingsRoutes(app) {
           [auth.session.tenant_id, auth.session.session_id],
         )
       }
+
+      if (area === 'security') {
+        await recordSecurityEvent({
+          db: client,
+          tenantId: auth.session.tenant_id,
+          actorUserId: auth.session.user_id,
+          sessionId: auth.session.session_id,
+          eventType: 'security.policy_changed',
+          ipAddress: requestIp(c),
+          userAgent: requestUserAgent(c),
+          metadata: {
+            previous: {
+              requireMfa: Boolean(previousSecurity?.requireMfa),
+              sessionHours: String(previousSecurity?.sessionHours || '12'),
+              passwordPolicy: previousSecurity?.passwordPolicy === 'standard' ? 'standard' : 'strong',
+              auditRetention: String(previousSecurity?.auditRetention || '365'),
+            },
+            current: {
+              requireMfa: data.requireMfa,
+              sessionHours: data.sessionHours,
+              passwordPolicy: data.passwordPolicy,
+              auditRetention: data.auditRetention,
+            },
+          },
+        })
+      }
     })
+
+    if (area === 'security') {
+      await pruneSecurityAuditForTenant(auth.session.tenant_id, Number(data.auditRetention)).catch(() => {})
+    }
 
     const refreshed = await resolveSession(c)
     if (!refreshed) return c.json({ error: 'Your security policy changed. Sign in again to continue.' }, 401)
@@ -171,4 +210,5 @@ export function registerSettingsRoutes(app) {
   })
 
   registerMfaRoutes(app)
+  registerSecurityRoutes(app)
 }
