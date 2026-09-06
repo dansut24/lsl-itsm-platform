@@ -1,5 +1,7 @@
 import { viewMeta } from '../data/demoData.jsx'
 
+const TENANT_RUNTIME_CONFIG_KEY = 'hi5central-tenant-runtime-config-v1'
+
 export function ticketPrefix(type) {
   return {
     Incident: 'INC',
@@ -9,9 +11,49 @@ export function ticketPrefix(type) {
   }[type] || 'TKT'
 }
 
+function configuredPrefix(type) {
+  const fallback = `${ticketPrefix(type)}-`
+
+  try {
+    const stored = window.localStorage.getItem(TENANT_RUNTIME_CONFIG_KEY)
+    if (!stored) return fallback
+
+    const config = JSON.parse(stored)
+    const key = {
+      Incident: 'incident',
+      'Service Request': 'serviceRequest',
+      Problem: 'problem',
+      Change: 'change',
+    }[type]
+    const candidate = key ? config?.recordNumbering?.prefixes?.[key] : ''
+    const cleaned = String(candidate || '')
+      .toUpperCase()
+      .replace(/[^A-Z0-9-]/g, '')
+      .slice(0, 9)
+
+    if (!cleaned) return fallback
+    return cleaned.endsWith('-') ? cleaned : `${cleaned}-`
+  } catch {
+    return fallback
+  }
+}
+
+function configuredDigits() {
+  try {
+    const stored = window.localStorage.getItem(TENANT_RUNTIME_CONFIG_KEY)
+    if (!stored) return 5
+    const config = JSON.parse(stored)
+    const digits = Number(config?.recordNumbering?.digits)
+    return Number.isInteger(digits) && digits >= 4 && digits <= 8 ? digits : 5
+  } catch {
+    return 5
+  }
+}
+
 export function newTicketId(type) {
-  const idNumber = String(Date.now()).slice(-5)
-  return `${ticketPrefix(type)}-${idNumber}`
+  const digits = configuredDigits()
+  const idNumber = String(Date.now()).slice(-digits).padStart(digits, '0')
+  return `${configuredPrefix(type)}${idNumber}`
 }
 
 export function priorityClass(priority) {
