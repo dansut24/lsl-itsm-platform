@@ -4,6 +4,7 @@ import './index.css'
 import App from './App.jsx'
 import { MarketingApp } from './features/marketing/MarketingApp.jsx'
 import { SignupPage } from './features/marketing/SignupPage.jsx'
+import { ServiceCatalogueSettingsEnhancer } from './features/catalogue/ServiceCatalogueSettingsEnhancer.jsx'
 import { KnowledgeContextEnhancer } from './features/knowledge/KnowledgeContextEnhancer.jsx'
 import { OrganisationSitesEnhancer } from './features/people/OrganisationSitesEnhancer.jsx'
 import { ProductionWorkspaceBootstrap } from './production/ProductionWorkspaceBootstrap.jsx'
@@ -32,5 +33,6 @@ createRoot(rootElement).render(
     <RootApp />
     {initialSurface.kind === 'workspace' ? <KnowledgeContextEnhancer /> : null}
     {initialSurface.kind === 'workspace' ? <OrganisationSitesEnhancer /> : null}
+    {initialSurface.kind === 'workspace' ? <ServiceCatalogueSettingsEnhancer /> : null}
   </StrictMode>,
 )
