@@ -42,6 +42,20 @@ function activityForUi(activity) {
   }
 }
 
+function mergeOperationalState(request, state) {
+  if (!state) return request
+  return {
+    ...request,
+    status: state.status || request.status,
+    priority: state.priority || request.priority,
+    assignee: state.assignee || 'Unassigned',
+    assigneeId: state.assigneeId || '',
+    assigneeEmail: state.assigneeEmail || '',
+    operationalData: state.operationalData || {},
+    updatedAt: state.updatedAt || request.updatedAt,
+  }
+}
+
 export function serviceRequestForWorkspace(request) {
   return {
     id: request.id,
@@ -58,6 +72,8 @@ export function serviceRequestForWorkspace(request) {
     service: request.service || 'Service Catalogue',
     team: request.team || 'Service Desk',
     assignee: request.assignee || 'Unassigned',
+    assigneeId: request.assigneeId || '',
+    assigneeEmail: request.assigneeEmail || '',
     priority: request.priority || 'Medium',
     status: request.status || 'New',
     created: formatDate(request.createdAt),
@@ -106,12 +122,21 @@ async function apiJson(path, options = {}) {
 }
 
 export async function fetchProductionServiceRequests() {
-  const payload = await apiJson('/api/v1/service-requests?limit=200')
-  return Array.isArray(payload.items) ? payload.items : []
+  const [payload, statePayload] = await Promise.all([
+    apiJson('/api/v1/service-requests?limit=200'),
+    apiJson('/api/v1/service-request-state'),
+  ])
+  const states = new Map((statePayload.items || []).map((state) => [state.reference, state]))
+  return (Array.isArray(payload.items) ? payload.items : []).map((request) => mergeOperationalState(request, states.get(request.id)))
 }
 
 export async function fetchProductionServiceRequest(reference) {
-  return apiJson(`/api/v1/service-requests/${encodeURIComponent(reference)}`)
+  const encoded = encodeURIComponent(reference)
+  const [request, state] = await Promise.all([
+    apiJson(`/api/v1/service-requests/${encoded}`),
+    apiJson(`/api/v1/service-request-state/${encoded}`),
+  ])
+  return mergeOperationalState(request, state)
 }
 
 export function cacheProductionServiceRequests(requests) {
