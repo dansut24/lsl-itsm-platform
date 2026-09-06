@@ -7,7 +7,7 @@ function smtpConfig() {
   const host = process.env.SMTP_HOST || 'smtp.ionos.co.uk'
 
   if (!user || !pass) {
-    throw new Error('SMTP_USER and SMTP_PASSWORD must be configured before verification email can be sent.')
+    throw new Error('SMTP_USER and SMTP_PASSWORD must be configured before email can be sent.')
   }
 
   return {
@@ -28,7 +28,7 @@ function escapeHtml(value = '') {
     .replaceAll("'", '&#039;')
 }
 
-function verificationEmailHtml({ name, companyName, verificationUrl, tenantUrl }) {
+function emailShell({ kicker, title, body, actionLabel, actionUrl, footer }) {
   return `<!doctype html>
 <html>
   <body style="margin:0;background:#f3f6fb;font-family:Arial,sans-serif;color:#10213f">
@@ -39,12 +39,11 @@ function verificationEmailHtml({ name, companyName, verificationUrl, tenantUrl }
             <tr><td style="padding:28px 32px;background:#10213f;color:#ffffff;font-size:20px;font-weight:700">Hi5Central</td></tr>
             <tr>
               <td style="padding:32px">
-                <div style="font-size:14px;color:#5d6b82;margin-bottom:12px">Verify your workspace</div>
-                <h1 style="margin:0 0 16px;font-size:28px;line-height:1.2">Welcome to Hi5Central, ${escapeHtml(name)}.</h1>
-                <p style="font-size:16px;line-height:1.6;margin:0 0 18px">Your workspace for <strong>${escapeHtml(companyName)}</strong> has been reserved. Verify this email address to activate the tenant and continue setup.</p>
-                <p style="margin:26px 0"><a href="${verificationUrl}" style="display:inline-block;background:#f59e0b;color:#10213f;text-decoration:none;font-weight:700;padding:14px 20px;border-radius:10px">Verify email and continue</a></p>
-                <p style="font-size:14px;line-height:1.6;color:#5d6b82;margin:0 0 12px">This link expires in 24 hours and can only be used once.</p>
-                <p style="font-size:14px;line-height:1.6;color:#5d6b82;margin:0">Your workspace: ${escapeHtml(tenantUrl)}</p>
+                <div style="font-size:14px;color:#5d6b82;margin-bottom:12px">${escapeHtml(kicker)}</div>
+                <h1 style="margin:0 0 16px;font-size:28px;line-height:1.2">${escapeHtml(title)}</h1>
+                <p style="font-size:16px;line-height:1.6;margin:0 0 18px">${body}</p>
+                <p style="margin:26px 0"><a href="${actionUrl}" style="display:inline-block;background:#f59e0b;color:#10213f;text-decoration:none;font-weight:700;padding:14px 20px;border-radius:10px">${escapeHtml(actionLabel)}</a></p>
+                <p style="font-size:14px;line-height:1.6;color:#5d6b82;margin:0">${footer}</p>
               </td>
             </tr>
           </table>
@@ -71,10 +70,46 @@ export async function sendVerificationEmail({ to, name, companyName, token, tena
       `Your Hi5Central workspace for ${companyName} has been reserved.`,
       `Verify your email and continue setup: ${verificationUrl}`,
       '',
-      `This link expires in 24 hours and can only be used once.`,
+      'This link expires in 24 hours and can only be used once.',
       `Workspace: ${tenantUrl}`,
     ].join('\n'),
-    html: verificationEmailHtml({ name, companyName, verificationUrl, tenantUrl }),
+    html: emailShell({
+      kicker: 'Verify your workspace',
+      title: `Welcome to Hi5Central, ${name}.`,
+      body: `Your workspace for <strong>${escapeHtml(companyName)}</strong> has been reserved. Verify this email address to activate the tenant and continue setup.`,
+      actionLabel: 'Verify email and continue',
+      actionUrl: verificationUrl,
+      footer: `This link expires in 24 hours and can only be used once.<br>Workspace: ${escapeHtml(tenantUrl)}`,
+    }),
+  })
+}
+
+export async function sendPasswordResetEmail({ to, name, companyName, token, tenantUrl }) {
+  const transporter = nodemailer.createTransport(smtpConfig())
+  const resetUrl = `${tenantUrl}/reset-password?token=${encodeURIComponent(token)}`
+  const from = process.env.SMTP_FROM || process.env.SMTP_USER
+
+  return transporter.sendMail({
+    from,
+    to,
+    subject: `Reset your ${companyName} Hi5Central password`,
+    text: [
+      `Hi ${name},`,
+      '',
+      `A password reset was requested for your ${companyName} Hi5Central account.`,
+      `Reset your password: ${resetUrl}`,
+      '',
+      'This link expires in 60 minutes and can only be used once.',
+      'If you did not request this reset, you can ignore this email.',
+    ].join('\n'),
+    html: emailShell({
+      kicker: 'Password reset',
+      title: `Reset your Hi5Central password`,
+      body: `A password reset was requested for your <strong>${escapeHtml(companyName)}</strong> account. If this was you, choose a new password using the secure link below.`,
+      actionLabel: 'Reset password',
+      actionUrl: resetUrl,
+      footer: 'This link expires in 60 minutes and can only be used once. If you did not request it, no action is required.',
+    }),
   })
 }
 
