@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronRight, PackageOpen } from 'lucide-react'
 import { ServiceCatalogueAdmin } from './ServiceCatalogueAdmin.jsx'
+import './ServiceCatalogueSettingsEnhancer.css'
 
 const CATALOGUE_PATH = '/settings/itsm/service-catalogue'
 
