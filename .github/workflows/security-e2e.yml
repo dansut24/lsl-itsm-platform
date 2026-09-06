@@ -1,0 +1,308 @@
+name: Hi5Central Security E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  mfa-security-e2e:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: hi5central
+          POSTGRES_USER: hi5central
+          POSTGRES_PASSWORD: hi5central-ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hi5central -d hi5central"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install API dependencies
+        working-directory: api
+        run: npm install --omit=dev
+
+      - name: Parse API source
+        working-directory: api
+        run: |
+          for file in src/*.js; do
+            node --check "$file"
+          done
+
+      - name: Run database migrations
+        working-directory: api
+        env:
+          DATABASE_URL: postgresql://hi5central:hi5central-ci@127.0.0.1:5432/hi5central
+        run: npm run migrate
+
+      - name: Exercise MFA policy, enrollment and login
+        working-directory: api
+        env:
+          NODE_ENV: test
+          PORT: 3001
+          DATABASE_URL: postgresql://hi5central:hi5central-ci@127.0.0.1:5432/hi5central
+          REDIS_URL: redis://127.0.0.1:6379/0
+          MFA_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+        run: |
+          npm start > /tmp/hi5central-security-api.log 2>&1 &
+          API_PID=$!
+          trap 'kill $API_PID 2>/dev/null || true; cat /tmp/hi5central-security-api.log' EXIT
+
+          for attempt in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:3001/live >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          curl -fsS http://127.0.0.1:3001/health
+          echo
+
+          SESSION_TOKEN='hi5central-ci-security-session'
+          SESSION_HASH="$(printf '%s' "$SESSION_TOKEN" | sha256sum | awk '{print $1}')"
+
+          PGPASSWORD=hi5central-ci psql \
+            -h 127.0.0.1 \
+            -U hi5central \
+            -d hi5central \
+            -v ON_ERROR_STOP=1 \
+            -v token_hash="$SESSION_HASH" <<'SQL'
+          INSERT INTO tenants (id, slug, company_name, status)
+          VALUES ('00000000-0000-4000-8000-000000000201', 'ci-security', 'CI Security', 'active');
+
+          INSERT INTO users (id, email, name, password_hash, email_verified_at)
+          VALUES (
+            '00000000-0000-4000-8000-000000000202',
+            'owner@ci-security.test',
+            'CI Security Owner',
+            'scrypt$16384$8$1$MDEyMzQ1Njc4OWFiY2RlZg$dACohGst8r6CCFBtJQAkvtSHQrE9sdlBrljvuPphZKiaDx25txm7PMG80BvqBY_frW7SqxilYU-IsOldpY4ilg',
+            now()
+          );
+
+          INSERT INTO tenant_memberships (tenant_id, user_id, role, status)
+          VALUES (
+            '00000000-0000-4000-8000-000000000201',
+            '00000000-0000-4000-8000-000000000202',
+            'owner',
+            'active'
+          );
+
+          INSERT INTO tenant_settings (
+            tenant_id,
+            modules,
+            onboarding_step,
+            onboarding_completed_at,
+            tenant_url,
+            portal_url,
+            onboarding_data,
+            configuration
+          ) VALUES (
+            '00000000-0000-4000-8000-000000000201',
+            '{"itsm":true,"rmm":false}'::jsonb,
+            'complete',
+            now() - interval '1 day',
+            'https://ci-security.hi5central.com',
+            'https://ci-security-portal.hi5central.com',
+            '{}'::jsonb,
+            '{"security":{"requireMfa":false,"sessionHours":"12","passwordPolicy":"strong","auditRetention":"365"}}'::jsonb
+          );
+
+          INSERT INTO auth_sessions (tenant_id, user_id, token_hash, expires_at)
+          VALUES (
+            '00000000-0000-4000-8000-000000000201',
+            '00000000-0000-4000-8000-000000000202',
+            :'token_hash',
+            now() + interval '1 hour'
+          );
+          SQL
+
+          COOKIE="hi5central_session=$SESSION_TOKEN"
+
+          echo '--- Enable MFA through tenant Settings ---'
+          curl -fsS \
+            -X POST \
+            -H "Cookie: $COOKIE" \
+            -H 'Origin: https://ci-security.hi5central.com' \
+            -H 'Content-Type: application/json' \
+            --data '{"data":{"requireMfa":true,"sessionHours":"8","passwordPolicy":"strong","auditRetention":"365"}}' \
+            http://127.0.0.1:3001/api/v1/settings/security \
+            | tee /tmp/security-settings.json
+
+          grep -q '"requireMfa":true' /tmp/security-settings.json
+          grep -q '"sessionHours":"8"' /tmp/security-settings.json
+
+          echo '--- Check setup grace and account state ---'
+          curl -fsS \
+            -H "Cookie: $COOKIE" \
+            -H 'Origin: https://ci-security.hi5central.com' \
+            http://127.0.0.1:3001/api/v1/mfa/status \
+            | tee /tmp/mfa-status-before.json
+
+          grep -q '"requiredForCurrentUser":true' /tmp/mfa-status-before.json
+          grep -q '"enrolled":false' /tmp/mfa-status-before.json
+          grep -q '"sessionHours":8' /tmp/mfa-status-before.json
+
+          echo '--- Start authenticator enrollment ---'
+          curl -fsS \
+            -X POST \
+            -H "Cookie: $COOKIE" \
+            -H 'Origin: https://ci-security.hi5central.com' \
+            -H 'Content-Type: application/json' \
+            --data '{}' \
+            http://127.0.0.1:3001/api/v1/mfa/setup \
+            | tee /tmp/mfa-setup.json
+
+          SECRET="$(node -e "const p=require('/tmp/mfa-setup.json'); process.stdout.write(p.secret)")"
+          SETUP_TOKEN="$(node -e "const p=require('/tmp/mfa-setup.json'); process.stdout.write(p.setupToken)")"
+
+          MFA_CODE="$(SECRET="$SECRET" node <<'NODE'
+          const crypto = require('crypto')
+          const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
+          const secret = process.env.SECRET
+          let bits = 0, value = 0
+          const bytes = []
+          for (const ch of secret) {
+            value = (value << 5) | alphabet.indexOf(ch)
+            bits += 5
+            if (bits >= 8) {
+              bytes.push((value >>> (bits - 8)) & 255)
+              bits -= 8
+            }
+          }
+          const step = Math.floor(Date.now() / 1000 / 30)
+          const counter = Buffer.alloc(8)
+          counter.writeBigUInt64BE(BigInt(step))
+          const digest = crypto.createHmac('sha1', Buffer.from(bytes)).update(counter).digest()
+          const offset = digest[digest.length - 1] & 15
+          const binary = (((digest[offset] & 127) << 24) | (digest[offset + 1] << 16) | (digest[offset + 2] << 8) | digest[offset + 3]) >>> 0
+          process.stdout.write(String(binary % 1000000).padStart(6, '0'))
+          NODE
+          )"
+
+          echo '--- Confirm authenticator and create recovery codes ---'
+          curl -fsS \
+            -X POST \
+            -H "Cookie: $COOKIE" \
+            -H 'Origin: https://ci-security.hi5central.com' \
+            -H 'Content-Type: application/json' \
+            --data "{\"setupToken\":\"$SETUP_TOKEN\",\"code\":\"$MFA_CODE\"}" \
+            http://127.0.0.1:3001/api/v1/mfa/confirm \
+            | tee /tmp/mfa-confirm.json
+
+          grep -q '"enrolled":true' /tmp/mfa-confirm.json
+          grep -q '"sessionVerified":true' /tmp/mfa-confirm.json
+
+          RECOVERY_ONE="$(node -e "const p=require('/tmp/mfa-confirm.json'); if(!p.recoveryCodes||p.recoveryCodes.length!==10) process.exit(2); process.stdout.write(p.recoveryCodes[0])")"
+          RECOVERY_TWO="$(node -e "const p=require('/tmp/mfa-confirm.json'); process.stdout.write(p.recoveryCodes[1])")"
+
+          echo '--- Log out setup session ---'
+          curl -fsS \
+            -X POST \
+            -H "Cookie: $COOKIE" \
+            -H 'Origin: https://ci-security.hi5central.com' \
+            http://127.0.0.1:3001/api/v1/auth/logout >/dev/null
+
+          echo '--- Password login must now stop at MFA ---'
+          curl -fsS \
+            -X POST \
+            -H 'Origin: https://ci-security.hi5central.com' \
+            -H 'Content-Type: application/json' \
+            --data '{"tenantSlug":"ci-security","email":"owner@ci-security.test","password":"CorrectHorseBatteryStaple!"}' \
+            http://127.0.0.1:3001/api/v1/auth/login-secure \
+            | tee /tmp/mfa-login.json
+
+          grep -q '"mfaRequired":true' /tmp/mfa-login.json
+          grep -q '"setupRequired":false' /tmp/mfa-login.json
+          LOGIN_CHALLENGE="$(node -e "const p=require('/tmp/mfa-login.json'); process.stdout.write(p.challengeToken)")"
+
+          echo '--- Use one-time recovery code to complete login ---'
+          curl -fsS \
+            -c /tmp/mfa-login.cookies \
+            -X POST \
+            -H 'Origin: https://ci-security.hi5central.com' \
+            -H 'Content-Type: application/json' \
+            --data "{\"challengeToken\":\"$LOGIN_CHALLENGE\",\"code\":\"$RECOVERY_ONE\"}" \
+            http://127.0.0.1:3001/api/v1/auth/mfa/verify \
+            | tee /tmp/mfa-login-verified.json
+
+          grep -q '"authenticated":true' /tmp/mfa-login-verified.json
+          grep -q '"mfaVerified":true' /tmp/mfa-login-verified.json
+
+          curl -fsS \
+            -b /tmp/mfa-login.cookies \
+            -H 'Origin: https://ci-security.hi5central.com' \
+            http://127.0.0.1:3001/api/v1/mfa/status \
+            | tee /tmp/mfa-status-after.json
+
+          grep -q '"recoveryCodesRemaining":9' /tmp/mfa-status-after.json
+          grep -q '"sessionVerified":true' /tmp/mfa-status-after.json
+
+          echo '--- Confirm configured session length is enforced ---'
+          PGPASSWORD=hi5central-ci psql \
+            -h 127.0.0.1 \
+            -U hi5central \
+            -d hi5central \
+            -Atc "SELECT CASE WHEN abs(extract(epoch FROM ((expires_at - created_at) - interval '8 hours'))) < 5 THEN 'ok' ELSE 'bad' END FROM auth_sessions WHERE tenant_id='00000000-0000-4000-8000-000000000201'::uuid AND mfa_verified_at IS NOT NULL ORDER BY created_at DESC LIMIT 1;" \
+            | grep -qx 'ok'
+
+          echo '--- Recovery code must be one-time ---'
+          curl -fsS \
+            -X POST \
+            -b /tmp/mfa-login.cookies \
+            -H 'Origin: https://ci-security.hi5central.com' \
+            http://127.0.0.1:3001/api/v1/auth/logout >/dev/null
+
+          curl -fsS \
+            -X POST \
+            -H 'Origin: https://ci-security.hi5central.com' \
+            -H 'Content-Type: application/json' \
+            --data '{"tenantSlug":"ci-security","email":"owner@ci-security.test","password":"CorrectHorseBatteryStaple!"}' \
+            http://127.0.0.1:3001/api/v1/auth/login-secure \
+            > /tmp/mfa-login-two.json
+
+          LOGIN_CHALLENGE_TWO="$(node -e "const p=require('/tmp/mfa-login-two.json'); process.stdout.write(p.challengeToken)")"
+
+          REUSED_STATUS="$(curl -sS -o /tmp/reused-recovery.json -w '%{http_code}' \
+            -X POST \
+            -H 'Origin: https://ci-security.hi5central.com' \
+            -H 'Content-Type: application/json' \
+            --data "{\"challengeToken\":\"$LOGIN_CHALLENGE_TWO\",\"code\":\"$RECOVERY_ONE\"}" \
+            http://127.0.0.1:3001/api/v1/auth/mfa/verify)"
+
+          test "$REUSED_STATUS" = '401'
+
+          curl -fsS \
+            -c /tmp/mfa-login-two.cookies \
+            -X POST \
+            -H 'Origin: https://ci-security.hi5central.com' \
+            -H 'Content-Type: application/json' \
+            --data "{\"challengeToken\":\"$LOGIN_CHALLENGE_TWO\",\"code\":\"$RECOVERY_TWO\"}" \
+            http://127.0.0.1:3001/api/v1/auth/mfa/verify \
+            | grep -q '"authenticated":true'
+
+          echo 'MFA security E2E passed.'
