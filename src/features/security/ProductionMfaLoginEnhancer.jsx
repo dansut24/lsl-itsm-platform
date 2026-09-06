@@ -1,21 +1,12 @@
 import { useEffect, useState } from 'react'
 import { KeyRound, ShieldCheck, X } from 'lucide-react'
+import { storeProductionAuthHandoff } from '../../production/productionSessionBridge.js'
 import './ProductionMfaLoginEnhancer.css'
 
 const API_BASE = 'https://api.hi5central.com'
-const AUTH_HANDOFF_KEY = 'hi5central-auth-handoff-v1'
 
 function continueAfterAuthentication(payload = {}) {
-  try {
-    if (payload?.authenticated && payload?.tenant?.slug) {
-      window.sessionStorage.setItem(AUTH_HANDOFF_KEY, JSON.stringify({
-        createdAt: Date.now(),
-        payload,
-      }))
-    }
-  } catch {
-    // The secure HttpOnly cookie remains authoritative if sessionStorage is unavailable.
-  }
+  storeProductionAuthHandoff(payload)
 
   const target = payload?.onboarding?.completedAt ? '/dashboard' : '/onboarding'
   window.location.replace(target)
