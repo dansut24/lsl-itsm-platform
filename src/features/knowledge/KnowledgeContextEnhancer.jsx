@@ -5,6 +5,7 @@ import { knowledgeArticles } from '../../data/demoData.jsx'
 
 const KNOWLEDGE_RAIL_VISIBLE_KEY = 'hi5central-knowledge-category-rail-visible-v1'
 const ALL_ARTICLES = 'All articles'
+const PORTAL_THEME_VARS = ['--line', '--surface', '--surface-soft', '--ink', '--muted', '--accent-rgb', '--page']
 
 function loadRailVisible() {
   try {
@@ -30,6 +31,13 @@ function categorySummary() {
   ]
 }
 
+function readPortalTheme() {
+  const shell = document.querySelector('.app-shell')
+  if (!shell) return {}
+  const computed = window.getComputedStyle(shell)
+  return Object.fromEntries(PORTAL_THEME_VARS.map((name) => [name, computed.getPropertyValue(name).trim()]))
+}
+
 export function KnowledgeContextEnhancer() {
   const categories = useMemo(categorySummary, [])
   const [activeCategory, setActiveCategory] = useState(ALL_ARTICLES)
@@ -53,8 +61,7 @@ export function KnowledgeContextEnhancer() {
         if (resizeObserver) resizeObserver.disconnect()
         if (nextView && typeof ResizeObserver !== 'undefined') {
           resizeObserver = new ResizeObserver(() => {
-            const rect = nextView.getBoundingClientRect()
-            setViewRect(rect)
+            setViewRect(nextView.getBoundingClientRect())
           })
           resizeObserver.observe(nextView)
         }
@@ -63,7 +70,12 @@ export function KnowledgeContextEnhancer() {
 
     measure()
     const observer = new MutationObserver(measure)
-    observer.observe(document.body, { childList: true, subtree: true })
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['data-theme', 'data-accent'],
+    })
     window.addEventListener('resize', measure)
     window.addEventListener('scroll', measure, true)
     window.addEventListener('hi5-routechange', measure)
@@ -131,6 +143,7 @@ export function KnowledgeContextEnhancer() {
   const horizontalInset = 14
   const topInset = mobile ? 10 : 14
   const bottomInset = Math.max(10, window.innerHeight - viewRect.bottom + topInset)
+  const portalTheme = readPortalTheme()
 
   if (mobile) {
     return createPortal(
@@ -138,6 +151,7 @@ export function KnowledgeContextEnhancer() {
         className="knowledge-category-mobile-bar"
         aria-label="Knowledge categories"
         style={{
+          ...portalTheme,
           left: Math.max(horizontalInset, viewRect.left + 12),
           top: Math.max(10, viewRect.top + 10),
           width: Math.max(0, viewRect.width - 24),
@@ -165,7 +179,7 @@ export function KnowledgeContextEnhancer() {
       <button
         className="knowledge-category-rail-reveal"
         onClick={() => setRailVisible(true)}
-        style={{ left: viewRect.left + 14, top: viewRect.top + 14 }}
+        style={{ ...portalTheme, left: viewRect.left + 14, top: viewRect.top + 14 }}
         title="Show Knowledge categories"
         type="button"
       >
@@ -182,6 +196,7 @@ export function KnowledgeContextEnhancer() {
       className="knowledge-category-floating-rail"
       aria-label="Knowledge categories"
       style={{
+        ...portalTheme,
         left: viewRect.left + 14,
         top: viewRect.top + 14,
         bottom: bottomInset,
