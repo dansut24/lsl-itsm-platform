@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { ArrowRight, CheckCircle2, LockKeyhole, ShieldCheck } from 'lucide-react'
 import App from '../App.jsx'
 import { OnboardingWizard } from '../features/onboarding/OnboardingWizard.jsx'
@@ -42,6 +43,9 @@ function toWorkspaceSession(apiSession) {
     name: apiSession.user.name,
     initials: initials(apiSession.user.name),
     username: apiSession.user.email,
+    tenant: apiSession.tenant,
+    user: apiSession.user,
+    onboarding: apiSession.onboarding,
     settings: effectiveSettings(apiSession),
   }
 }
@@ -163,6 +167,53 @@ function ProductionLogin({ tenant, onAuthenticated }) {
         </form>
       </div>
     </div>
+  )
+}
+
+function ProductionSettingsLayer({ currentPath, session, onSessionChange }) {
+  const [target, setTarget] = useState(null)
+
+  useEffect(() => {
+    let mountedTarget = null
+
+    const attach = () => {
+      const nextTarget = document.querySelector('.content-frame')
+      if (!(nextTarget instanceof HTMLElement)) return false
+
+      if (mountedTarget && mountedTarget !== nextTarget) {
+        mountedTarget.classList.remove('production-settings-mounted')
+      }
+
+      mountedTarget = nextTarget
+      mountedTarget.classList.add('production-settings-mounted')
+      setTarget(nextTarget)
+      return true
+    }
+
+    if (attach()) {
+      return () => mountedTarget?.classList.remove('production-settings-mounted')
+    }
+
+    const observer = new MutationObserver(() => {
+      if (attach()) observer.disconnect()
+    })
+    observer.observe(document.body, { childList: true, subtree: true })
+
+    return () => {
+      observer.disconnect()
+      mountedTarget?.classList.remove('production-settings-mounted')
+    }
+  }, [])
+
+  if (!target) return null
+
+  return createPortal(
+    <ProductionSettingsWorkspace
+      currentPath={currentPath}
+      onSessionChange={onSessionChange}
+      session={session}
+    />,
+    target,
   )
 }
 
@@ -303,29 +354,30 @@ export function ProductionWorkspaceBootstrap() {
     })
   }
 
-  function closeSettings() {
-    window.history.pushState({}, '', '/dashboard')
-    setCurrentPath('/dashboard')
-  }
-
   if (loading) return <LoadingScreen tenantName={surface.tenantName} />
 
   if (serverSession && !serverSession.onboarding?.completedAt) {
     return <OnboardingWizard session={serverSession} onSessionChange={acceptSession} />
   }
 
-  if (serverSession?.onboarding?.completedAt && currentPath.startsWith('/settings')) {
+  if (serverSession?.onboarding?.completedAt) {
+    const settingsOpen = currentPath === '/settings' || currentPath.startsWith('/settings/')
+    const themeKey = effectiveSettings(serverSession)?.theme || {}
+    const workspaceKey = `${themeKey.mode || 'system'}:${themeKey.accent || 'amber'}`
+
     return (
-      <ProductionSettingsWorkspace
-        currentPath={currentPath}
-        onClose={closeSettings}
-        onSessionChange={acceptSession}
-        session={serverSession}
-      />
+      <>
+        <App key={workspaceKey} />
+        {settingsOpen ? (
+          <ProductionSettingsLayer
+            currentPath={currentPath}
+            onSessionChange={acceptSession}
+            session={serverSession}
+          />
+        ) : null}
+      </>
     )
   }
-
-  if (serverSession?.onboarding?.completedAt) return <App />
 
   if (tenantState?.managed) {
     return <ProductionLogin tenant={tenantState} onAuthenticated={acceptSession} />
