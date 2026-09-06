@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import { organisationDepartments, organisationPeople, organisationTeams } from '../../data/organisationData.js'
 import { organisationSites, siteTimezones, siteTypes } from '../../data/organisationSites.js'
+import { syncOrganisationCollection } from '../../services/demoStore.js'
 import './OrganisationSitesEnhancer.css'
 
 const SITES_STORAGE_KEY = 'hi5central-organisation-sites-v1'
@@ -46,6 +47,7 @@ function loadOrganisationSnapshot() {
 function saveSites(sites) {
   window.localStorage.setItem(SITES_STORAGE_KEY, JSON.stringify(sites))
   window.dispatchEvent(new CustomEvent('hi5-organisation-sites-changed', { detail: { sites } }))
+  syncOrganisationCollection('sites', sites).catch(() => {})
 }
 
 function siteCounts(site, organisation) {
@@ -220,9 +222,11 @@ export function OrganisationSitesEnhancer() {
     const onChanged = () => setSites(loadSites())
     window.addEventListener('storage', onChanged)
     window.addEventListener('hi5-organisation-sites-changed', onChanged)
+    window.addEventListener('hi5-organisation-hydrated', onChanged)
     return () => {
       window.removeEventListener('storage', onChanged)
       window.removeEventListener('hi5-organisation-sites-changed', onChanged)
+      window.removeEventListener('hi5-organisation-hydrated', onChanged)
     }
   }, [])
 
