@@ -1,7 +1,34 @@
-import { scrypt, timingSafeEqual } from 'node:crypto'
+import { randomBytes, scrypt, timingSafeEqual } from 'node:crypto'
 import { promisify } from 'node:util'
 
 const scryptAsync = promisify(scrypt)
+
+export async function hashPassword(password) {
+  const salt = randomBytes(16)
+  const derived = await scryptAsync(String(password || ''), salt, 64, {
+    N: 16384,
+    r: 8,
+    p: 1,
+    maxmem: 64 * 1024 * 1024,
+  })
+  return `scrypt$16384$8$1$${salt.toString('base64url')}$${Buffer.from(derived).toString('base64url')}`
+}
+
+export function passwordPolicyResult(password, policy = 'strong') {
+  const value = String(password || '')
+  if (value.length > 256) return { ok: false, message: 'Password must be 256 characters or fewer.' }
+
+  if (policy === 'standard') {
+    if (value.length < 10) return { ok: false, message: 'Use a password or passphrase of at least 10 characters.' }
+    return { ok: true }
+  }
+
+  if (value.length < 12) return { ok: false, message: 'Use a password or passphrase of at least 12 characters.' }
+  if (!/[a-z]/.test(value) || !/[A-Z]/.test(value) || !/\d/.test(value)) {
+    return { ok: false, message: 'Strong passwords must include upper-case, lower-case and numeric characters.' }
+  }
+  return { ok: true }
+}
 
 export async function verifyPassword(password, encodedHash) {
   const [scheme, nText, rText, pText, saltText, hashText] = String(encodedHash || '').split('$')
