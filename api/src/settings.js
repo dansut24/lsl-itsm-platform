@@ -1,6 +1,7 @@
 import { pool, withTransaction } from './db.js'
 import { registerMfaRoutes } from './mfa.js'
 import { registerSecurityRoutes } from './security.js'
+import { registerSecurityInstrumentation } from './securityInstrumentation.js'
 import {
   pruneSecurityAuditForTenant,
   recordSecurityEvent,
@@ -209,6 +210,7 @@ export function registerSettingsRoutes(app) {
     return c.json(sessionPayload(refreshed))
   })
 
+  registerSecurityInstrumentation(app)
   registerMfaRoutes(app)
   registerSecurityRoutes(app)
 }
