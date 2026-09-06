@@ -41,8 +41,17 @@ function categoryKey(name) {
   return `CATEGORY-${externalKey(name, 'GENERAL').slice(0, 70)}`
 }
 
+function validTenantSlug(value) {
+  const slug = String(value || '').trim().toLowerCase()
+  return /^[a-z0-9][a-z0-9-]{1,46}[a-z0-9]$/.test(slug) && !slug.includes('--') ? slug : ''
+}
+
 function asArray(value) {
   return Array.isArray(value) ? value : []
+}
+
+function asObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
 }
 
 function asSource(value) {
@@ -66,6 +75,21 @@ function nullablePrice(value) {
   return price(value)
 }
 
+async function catalogueRows(tenantId, db = pool) {
+  return db.query(
+    `SELECT
+       i.*,
+       c.name AS category_name,
+       t.name AS resolved_team_name
+     FROM service_catalogue_items i
+     LEFT JOIN service_catalogue_categories c ON c.id = i.category_id
+     LEFT JOIN organisation_teams t ON t.id = i.fulfilment_team_id
+     WHERE i.tenant_id = $1
+     ORDER BY c.name NULLS LAST, i.title`,
+    [tenantId],
+  )
+}
+
 async function catalogueSnapshot(tenantId, db = pool) {
   const [categoryResult, itemResult] = await Promise.all([
     db.query(
@@ -75,18 +99,7 @@ async function catalogueSnapshot(tenantId, db = pool) {
        ORDER BY sort_order, name`,
       [tenantId],
     ),
-    db.query(
-      `SELECT
-         i.*,
-         c.name AS category_name,
-         t.name AS resolved_team_name
-       FROM service_catalogue_items i
-       LEFT JOIN service_catalogue_categories c ON c.id = i.category_id
-       LEFT JOIN organisation_teams t ON t.id = i.fulfilment_team_id
-       WHERE i.tenant_id = $1
-       ORDER BY c.name NULLS LAST, i.title`,
-      [tenantId],
-    ),
+    catalogueRows(tenantId, db),
   ])
 
   return {
@@ -124,6 +137,86 @@ async function catalogueSnapshot(tenantId, db = pool) {
       source: row.source || {},
       active: row.active,
     })),
+  }
+}
+
+function portalProductOption(option, productRows) {
+  const itemId = externalKey(option?.itemId || '', '')
+  if (!itemId) return option
+  const product = productRows.get(itemId)
+  if (!product || !product.active || product.visibility !== 'portal') return null
+
+  const monthly = Number(product.monthly_price || 0)
+  const oneOff = Number(product.one_off_price || 0)
+  return {
+    ...option,
+    itemId: product.external_key,
+    value: option?.value || product.title,
+    label: product.title,
+    category: product.category_name || option?.category || 'Uncategorised',
+    cost: monthly > 0 ? monthly : oneOff,
+    recurring: monthly > 0 ? 'monthly' : '',
+  }
+}
+
+function portalFields(row, productRows) {
+  return asArray(row.form_schema).map((rawField) => {
+    const field = asObject(rawField)
+    if (!['product', 'checkbox-products'].includes(field.type)) return field
+    return {
+      ...field,
+      options: asArray(field.options)
+        .map((option) => portalProductOption(asObject(option), productRows))
+        .filter(Boolean),
+    }
+  })
+}
+
+async function publicPortalCatalogue(slug) {
+  const tenantSlug = validTenantSlug(slug)
+  if (!tenantSlug) return null
+
+  const tenantResult = await pool.query(
+    `SELECT t.id, t.slug, t.company_name, ts.modules
+     FROM tenants t
+     JOIN tenant_settings ts ON ts.tenant_id = t.id
+     WHERE t.slug = $1 AND t.status = 'active'
+     LIMIT 1`,
+    [tenantSlug],
+  )
+  if (!tenantResult.rowCount) return null
+
+  const tenant = tenantResult.rows[0]
+  if (!asObject(tenant.modules).itsm) return null
+
+  const itemResult = await catalogueRows(tenant.id)
+  const publicRows = itemResult.rows.filter((row) => row.active && row.visibility === 'portal')
+  const productRows = new Map(
+    publicRows
+      .filter((row) => row.kind === 'product')
+      .map((row) => [row.external_key, row]),
+  )
+  const requestRows = publicRows.filter((row) => row.kind === 'request-form')
+
+  const items = requestRows.map((row) => ({
+    id: row.external_key,
+    title: row.title,
+    category: row.category_name || 'Uncategorised',
+    description: row.description,
+    requestType: row.request_type || 'Service Request',
+    service: row.service || 'Service Catalogue',
+    team: row.resolved_team_name || row.fulfilment_team_name || 'Service Desk',
+    basePriority: 'Medium',
+    approval: row.approval_mode || 'none',
+    approvalThreshold: row.approval_threshold === null ? null : Number(row.approval_threshold),
+    fields: portalFields(row, productRows),
+  }))
+
+  return {
+    managed: true,
+    tenant: { slug: tenant.slug, companyName: tenant.company_name },
+    categories: [...new Set(items.map((item) => item.category))],
+    items,
   }
 }
 
@@ -246,6 +339,12 @@ async function upsertCatalogue(client, tenantId, categories, items) {
 }
 
 export function registerCatalogueRoutes(app) {
+  app.get('/api/v1/portal/catalogue/:slug', async (c) => {
+    const payload = await publicPortalCatalogue(c.req.param('slug'))
+    if (!payload) return c.json({ managed: false, items: [] }, 404)
+    return c.json(payload)
+  })
+
   app.get('/api/v1/catalogue', async (c) => {
     const auth = await requireSession(c)
     if (auth.error) return auth.error
