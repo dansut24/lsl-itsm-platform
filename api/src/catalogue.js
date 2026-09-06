@@ -1,6 +1,7 @@
 import { pool, withTransaction } from './db.js'
 import { registerServiceRequestOperationRoutes } from './serviceRequestOperations.js'
 import { registerServiceRequestRoutes } from './serviceRequests.js'
+import { registerServiceRequestStateRoutes } from './serviceRequestState.js'
 import { resolveSession } from './session.js'
 
 const maxItems = 5000
@@ -383,4 +384,5 @@ export function registerCatalogueRoutes(app) {
 
   registerServiceRequestRoutes(app)
   registerServiceRequestOperationRoutes(app)
+  registerServiceRequestStateRoutes(app)
 }
