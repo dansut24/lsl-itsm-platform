@@ -7,8 +7,11 @@ import { SignupPage } from './features/marketing/SignupPage.jsx'
 import { ServiceCatalogueSettingsEnhancer } from './features/catalogue/ServiceCatalogueSettingsEnhancer.jsx'
 import { KnowledgeContextEnhancer } from './features/knowledge/KnowledgeContextEnhancer.jsx'
 import { OrganisationSitesEnhancer } from './features/people/OrganisationSitesEnhancer.jsx'
+import { OnboardingMfaEnhancer } from './features/security/OnboardingMfaEnhancer.jsx'
 import { ProductionMfaLoginEnhancer } from './features/security/ProductionMfaLoginEnhancer.jsx'
 import { ProductionMfaSettingsEnhancer } from './features/security/ProductionMfaSettingsEnhancer.jsx'
+import { ProductionPasswordRecoveryEnhancer } from './features/security/ProductionPasswordRecoveryEnhancer.jsx'
+import { ProductionSecurityCenterEnhancer } from './features/security/ProductionSecurityCenterEnhancer.jsx'
 import { ProductionPortalBootstrap } from './production/ProductionPortalBootstrap.jsx'
 import { ProductionWorkspaceBootstrap } from './production/ProductionWorkspaceBootstrap.jsx'
 import { resolveTenantSurface } from './lib/tenantSurface.js'
@@ -42,5 +45,8 @@ createRoot(rootElement).render(
     {initialSurface.kind === 'workspace' ? <ServiceCatalogueSettingsEnhancer /> : null}
     {productionWorkspace ? <ProductionMfaLoginEnhancer /> : null}
     {productionWorkspace ? <ProductionMfaSettingsEnhancer /> : null}
+    {productionWorkspace ? <OnboardingMfaEnhancer /> : null}
+    {productionWorkspace ? <ProductionSecurityCenterEnhancer /> : null}
+    {productionWorkspace ? <ProductionPasswordRecoveryEnhancer /> : null}
   </StrictMode>,
 )
