@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  ArrowLeft,
   Bell,
   BookOpen,
   Building2,
   Check,
+  ChevronLeft,
   ChevronRight,
   Cloud,
   CreditCard,
@@ -12,7 +12,6 @@ import {
   Gauge,
   GitBranch,
   Globe2,
-  KeyRound,
   Link2,
   ListChecks,
   Mail,
@@ -21,7 +20,6 @@ import {
   Save,
   Server,
   ShieldCheck,
-  SlidersHorizontal,
   Users,
   Wrench,
 } from 'lucide-react'
@@ -29,6 +27,7 @@ import './ProductionSettingsWorkspace.css'
 
 const API_BASE = 'https://api.hi5central.com'
 const TENANT_RUNTIME_CONFIG_KEY = 'hi5central-tenant-runtime-config-v1'
+const SETTINGS_NAV_VISIBLE_KEY = 'hi5central-settings-nav-visible-v1'
 
 const accentColours = {
   amber: '#f59e0b',
@@ -208,12 +207,59 @@ function writeRuntimeConfig(session, config) {
   }
 }
 
-export function ProductionSettingsWorkspace({ currentPath, session, onClose, onSessionChange }) {
+function loadSettingsNavVisible() {
+  try {
+    const stored = window.localStorage.getItem(SETTINGS_NAV_VISIBLE_KEY)
+    return stored === null ? true : JSON.parse(stored) !== false
+  } catch {
+    return true
+  }
+}
+
+function SettingsNavigation({ activeId, modules, onNavigate, inline = false }) {
+  const navGroups = ['General', 'ITSM', 'RMM', 'Platform']
+  return (
+    <nav className={inline ? 'production-settings-inline-nav' : 'production-settings-nav'} aria-label="Settings navigation">
+      {navGroups.map((group) => {
+        const items = Object.entries(sections).filter(([, meta]) => (
+          meta.group === group
+          && (group !== 'ITSM' || modules.itsm)
+          && (group !== 'RMM' || modules.rmm)
+        ))
+        if (!items.length) return null
+        return (
+          <section key={group}>
+            <span>{group}</span>
+            {items.map(([id, meta]) => {
+              const Icon = meta.icon
+              return (
+                <button
+                  aria-current={id === activeId ? 'page' : undefined}
+                  className={id === activeId ? 'is-active' : ''}
+                  key={id}
+                  onClick={() => onNavigate(meta)}
+                  type="button"
+                >
+                  <Icon size={16} />
+                  <span>{meta.label}</span>
+                  {!inline ? <ChevronRight size={14} /> : null}
+                </button>
+              )
+            })}
+          </section>
+        )
+      })}
+    </nav>
+  )
+}
+
+export function ProductionSettingsWorkspace({ currentPath, session, onSessionChange }) {
   const initialConfig = useMemo(() => mergeConfig(defaults(session), effectiveSettings(session)), [session])
   const [config, setConfig] = useState(initialConfig)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState('')
   const [error, setError] = useState('')
+  const [settingsNavVisible, setSettingsNavVisible] = useState(loadSettingsNavVisible)
   const activeId = sectionFromPath(currentPath)
   const active = sections[activeId]
   const modules = session?.tenant?.modules || {}
@@ -222,6 +268,14 @@ export function ProductionSettingsWorkspace({ currentPath, session, onClose, onS
   useEffect(() => {
     setConfig(mergeConfig(defaults(session), effectiveSettings(session)))
   }, [session])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SETTINGS_NAV_VISIBLE_KEY, JSON.stringify(settingsNavVisible))
+    } catch {
+      // Per-browser Settings navigation preference only.
+    }
+  }, [settingsNavVisible])
 
   function navigate(meta) {
     window.history.pushState({}, '', meta.path)
@@ -293,40 +347,43 @@ export function ProductionSettingsWorkspace({ currentPath, session, onClose, onS
     }
   }
 
-  const navGroups = ['General', 'ITSM', 'RMM', 'Platform']
-
   return (
-    <div className="production-settings-shell" style={{ '--settings-accent': accentColours[accent] || accentColours.amber }}>
+    <div
+      className={`production-settings-shell ${settingsNavVisible ? '' : 'settings-nav-hidden'}`}
+      style={{ '--settings-accent': accentColours[accent] || accentColours.amber }}
+    >
       <aside className="production-settings-sidebar">
-        <div className="production-settings-brand">
-          <img src="/hi5central-logo.png" alt="" />
-          <div><strong>Hi5Central</strong><span>{session?.tenant?.companyName}</span></div>
+        <div className="production-settings-sidebar-heading">
+          <div>
+            <span>Administration</span>
+            <strong>Settings</strong>
+          </div>
+          <button
+            aria-label="Hide Settings navigation"
+            onClick={() => setSettingsNavVisible(false)}
+            title="Hide Settings navigation"
+            type="button"
+          >
+            <ChevronLeft size={18} />
+          </button>
         </div>
-        <button className="production-settings-back" onClick={onClose} type="button"><ArrowLeft size={16} /> Back to workspace</button>
-        <nav aria-label="Settings navigation">
-          {navGroups.map((group) => {
-            const items = Object.entries(sections).filter(([, meta]) => meta.group === group && (group !== 'ITSM' || modules.itsm) && (group !== 'RMM' || modules.rmm))
-            if (!items.length) return null
-            return (
-              <section key={group}>
-                <span>{group}</span>
-                {items.map(([id, meta]) => {
-                  const Icon = meta.icon
-                  return (
-                    <button className={id === activeId ? 'is-active' : ''} key={id} onClick={() => navigate(meta)} type="button">
-                      <Icon size={16} /><span>{meta.label}</span><ChevronRight size={14} />
-                    </button>
-                  )
-                })}
-              </section>
-            )
-          })}
-        </nav>
+        <SettingsNavigation activeId={activeId} modules={modules} onNavigate={navigate} />
       </aside>
 
       <main className="production-settings-main">
         <header className="production-settings-topbar">
-          <div><span>Tenant settings</span><h1>{active.label}</h1></div>
+          <div className="production-settings-title-row">
+            <button
+              className="production-settings-nav-reveal"
+              onClick={() => setSettingsNavVisible(true)}
+              title="Show Settings navigation"
+              type="button"
+            >
+              <ChevronRight size={17} />
+              <span>Settings</span>
+            </button>
+            <div><span>Tenant settings</span><h1>{active.label}</h1></div>
+          </div>
           <div className="production-settings-save-state">
             {saved ? <span className="is-saved"><Check size={14} /> {saved}</span> : null}
             {error ? <span className="is-error">{error}</span> : null}
@@ -334,30 +391,34 @@ export function ProductionSettingsWorkspace({ currentPath, session, onClose, onS
           </div>
         </header>
 
-        <div className="production-settings-content">
-          {activeId === 'organisation' ? <Organisation config={config.company} update={(f, v) => updateArea('company', f, v)} /> : null}
-          {activeId === 'appearance' ? <Appearance config={config.theme} update={(f, v) => updateArea('theme', f, v)} /> : null}
-          {activeId === 'directory' ? <Directory config={config.users} update={(f, v) => updateArea('users', f, v)} updateNested={(p, f, v) => updateNested('users', p, f, v)} /> : null}
-          {activeId === 'teams' ? <TeamsDepartments config={config.groups} update={(f, v) => updateArea('groups', f, v)} /> : null}
-          {activeId === 'roles' ? <RolesPermissions config={config.permissions} update={(f, v) => updateArea('permissions', f, v)} /> : null}
-          {activeId === 'security' ? <Security config={config.security} update={(f, v) => updateArea('security', f, v)} /> : null}
+        <SettingsNavigation activeId={activeId} inline modules={modules} onNavigate={navigate} />
 
-          {activeId === 'itsm-numbering' ? <ItsmNumbering config={config.itsm} update={(f, v) => updateArea('itsm', f, v)} updateNested={(p, f, v) => updateNested('itsm', p, f, v)} /> : null}
-          {activeId === 'itsm-slas' ? <ItsmSlas config={config.itsm} update={(f, v) => updateArea('itsm', f, v)} /> : null}
-          {activeId === 'itsm-service-desk' ? <ItsmServiceDesk config={config.itsm} update={(f, v) => updateArea('itsm', f, v)} tenant={session?.tenant} /> : null}
-          {activeId === 'itsm-portal' ? <ItsmPortal config={config.itsm} update={(f, v) => updateArea('itsm', f, v)} /> : null}
-          {activeId === 'itsm-knowledge' ? <ItsmKnowledge config={config.itsm} update={(f, v) => updateArea('itsm', f, v)} /> : null}
-          {activeId === 'itsm-changes' ? <ItsmChanges config={config.itsm} update={(f, v) => updateArea('itsm', f, v)} /> : null}
-          {activeId === 'itsm-notifications' ? <ItsmNotifications config={config.itsm} update={(f, v) => updateArea('itsm', f, v)} /> : null}
+        <div className="production-settings-scroll-region">
+          <div className="production-settings-content">
+            {activeId === 'organisation' ? <Organisation config={config.company} update={(f, v) => updateArea('company', f, v)} /> : null}
+            {activeId === 'appearance' ? <Appearance config={config.theme} update={(f, v) => updateArea('theme', f, v)} /> : null}
+            {activeId === 'directory' ? <Directory config={config.users} update={(f, v) => updateArea('users', f, v)} updateNested={(p, f, v) => updateNested('users', p, f, v)} /> : null}
+            {activeId === 'teams' ? <TeamsDepartments config={config.groups} update={(f, v) => updateArea('groups', f, v)} /> : null}
+            {activeId === 'roles' ? <RolesPermissions config={config.permissions} update={(f, v) => updateArea('permissions', f, v)} /> : null}
+            {activeId === 'security' ? <Security config={config.security} update={(f, v) => updateArea('security', f, v)} /> : null}
 
-          {activeId === 'rmm-sites' ? <RmmSites config={config.rmm} update={(f, v) => updateArea('rmm', f, v)} /> : null}
-          {activeId === 'rmm-agent' ? <RmmAgent config={config.rmm} update={(f, v) => updateArea('rmm', f, v)} /> : null}
-          {activeId === 'rmm-monitoring' ? <RmmMonitoring config={config.rmm} update={(f, v) => updateArea('rmm', f, v)} /> : null}
-          {activeId === 'rmm-patching' ? <RmmPatching config={config.rmm} update={(f, v) => updateArea('rmm', f, v)} /> : null}
-          {activeId === 'rmm-remote' ? <RmmRemote config={config.rmm} update={(f, v) => updateArea('rmm', f, v)} /> : null}
+            {activeId === 'itsm-numbering' ? <ItsmNumbering config={config.itsm} update={(f, v) => updateArea('itsm', f, v)} updateNested={(p, f, v) => updateNested('itsm', p, f, v)} /> : null}
+            {activeId === 'itsm-slas' ? <ItsmSlas config={config.itsm} update={(f, v) => updateArea('itsm', f, v)} /> : null}
+            {activeId === 'itsm-service-desk' ? <ItsmServiceDesk config={config.itsm} update={(f, v) => updateArea('itsm', f, v)} tenant={session?.tenant} /> : null}
+            {activeId === 'itsm-portal' ? <ItsmPortal config={config.itsm} update={(f, v) => updateArea('itsm', f, v)} /> : null}
+            {activeId === 'itsm-knowledge' ? <ItsmKnowledge config={config.itsm} update={(f, v) => updateArea('itsm', f, v)} /> : null}
+            {activeId === 'itsm-changes' ? <ItsmChanges config={config.itsm} update={(f, v) => updateArea('itsm', f, v)} /> : null}
+            {activeId === 'itsm-notifications' ? <ItsmNotifications config={config.itsm} update={(f, v) => updateArea('itsm', f, v)} /> : null}
 
-          {activeId === 'integrations' ? <Integrations config={config.integrations} users={config.users} toggle={(key) => toggleDemoIntegration('integrations', key)} update={(f, v) => updateArea('integrations', f, v)} /> : null}
-          {activeId === 'subscription' ? <Subscription config={config.billing} update={(f, v) => updateArea('billing', f, v)} modules={modules} /> : null}
+            {activeId === 'rmm-sites' ? <RmmSites config={config.rmm} update={(f, v) => updateArea('rmm', f, v)} /> : null}
+            {activeId === 'rmm-agent' ? <RmmAgent config={config.rmm} update={(f, v) => updateArea('rmm', f, v)} /> : null}
+            {activeId === 'rmm-monitoring' ? <RmmMonitoring config={config.rmm} update={(f, v) => updateArea('rmm', f, v)} /> : null}
+            {activeId === 'rmm-patching' ? <RmmPatching config={config.rmm} update={(f, v) => updateArea('rmm', f, v)} /> : null}
+            {activeId === 'rmm-remote' ? <RmmRemote config={config.rmm} update={(f, v) => updateArea('rmm', f, v)} /> : null}
+
+            {activeId === 'integrations' ? <Integrations config={config.integrations} users={config.users} toggle={(key) => toggleDemoIntegration('integrations', key)} update={(f, v) => updateArea('integrations', f, v)} /> : null}
+            {activeId === 'subscription' ? <Subscription config={config.billing} update={(f, v) => updateArea('billing', f, v)} modules={modules} /> : null}
+          </div>
         </div>
       </main>
     </div>
