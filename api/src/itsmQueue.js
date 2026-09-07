@@ -1,4 +1,5 @@
 import { pool } from './db.js'
+import { registerItsmActionRoutes } from './itsmActions.js'
 import { resolveSession } from './session.js'
 
 const allowedTypes = new Set(['Incident', 'Service Request', 'Problem', 'Change'])
@@ -157,4 +158,6 @@ export function registerItsmQueueRoutes(app) {
       },
     })
   })
+
+  registerItsmActionRoutes(app)
 }

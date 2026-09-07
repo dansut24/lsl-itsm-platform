@@ -12,22 +12,26 @@ import { ProductionMfaLoginEnhancer } from './features/security/ProductionMfaLog
 import { ProductionMfaSettingsEnhancer } from './features/security/ProductionMfaSettingsEnhancer.jsx'
 import { ProductionPasswordRecoveryEnhancer } from './features/security/ProductionPasswordRecoveryEnhancer.jsx'
 import { ProductionSecurityCenterEnhancer } from './features/security/ProductionSecurityCenterEnhancer.jsx'
-import { ProductionItsmRecordDetail } from './production/ProductionItsmRecordDetail.jsx'
 import { ProductionItsmWorkspace } from './production/ProductionItsmWorkspace.jsx'
 import { ProductionOnboardingBootstrap } from './production/ProductionOnboardingBootstrap.jsx'
 import { ProductionOrganisationWriteThrough } from './production/ProductionOrganisationWriteThrough.jsx'
 import { ProductionPortalBootstrap } from './production/ProductionPortalBootstrap.jsx'
+import { ProductionRecordDetailRouter } from './production/ProductionRecordDetailRouter.jsx'
 import { ProductionServiceRequestIntake } from './production/ProductionServiceRequestIntake.jsx'
 import { ProductionWorkspaceBootstrap } from './production/ProductionWorkspaceBootstrap.jsx'
+import { ProductionWorkspaceRefinement } from './production/ProductionWorkspaceRefinement.jsx'
 import { resolveTenantSurface } from './lib/tenantSurface.js'
 import './features/settings/ProductionSettingsFloating.css'
 import './features/people/OrganisationContextual.css'
 import './features/onboarding/OnboardingViewportFix.css'
 import './production/ProductionItsmMobileViewFix.css'
 import './production/ProductionItsmSurfacePolish.css'
-import './production/ProductionWorkspaceRefinement.css'
+import './production/ProductionWorkspaceFinalPolish.css'
 import './PlatformCurves.css'
 import './ContextualSurfaces.css'
+import './production/ProductionWorkspaceVisualSystem.css'
+import './production/ProductionActivityFirstRecord.css'
+import './production/ProductionWorkspaceDensity.css'
 
 const rootElement = document.getElementById('root')
 const initialSurface = resolveTenantSurface()
@@ -56,8 +60,9 @@ createRoot(rootElement).render(
     {initialSurface.kind === 'workspace' && !productionOnboarding ? <ServiceCatalogueSettingsEnhancer /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionOrganisationWriteThrough /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionItsmWorkspace /> : null}
-    {productionWorkspace && !productionOnboarding ? <ProductionItsmRecordDetail /> : null}
+    {productionWorkspace && !productionOnboarding ? <ProductionRecordDetailRouter /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionServiceRequestIntake /> : null}
+    {productionWorkspace && !productionOnboarding ? <ProductionWorkspaceRefinement /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionMfaLoginEnhancer /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionMfaSettingsEnhancer /> : null}
     {productionWorkspace && productionOnboarding ? <OnboardingMfaEnhancer /> : null}
