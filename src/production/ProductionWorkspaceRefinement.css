@@ -161,3 +161,14 @@
     min-height: 44px !important;
   }
 }
+
+/* Preserve the authenticated phone shell's off-canvas navigation contract.
+   This stylesheet is loaded after App.css, so its desktop .sidebar positioning
+   must not override the phone-class fixed drawer. */
+@media (max-width: 680px) and (any-pointer: coarse),
+       (max-height: 600px) and (any-pointer: coarse) {
+  .sidebar,
+  .sidebar-collapsed .sidebar {
+    position: fixed;
+  }
+}
