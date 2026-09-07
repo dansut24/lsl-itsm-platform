@@ -5,7 +5,6 @@ import { knowledgeArticles } from '../../data/demoData.jsx'
 
 const KNOWLEDGE_RAIL_VISIBLE_KEY = 'hi5central-knowledge-category-rail-visible-v1'
 const ALL_ARTICLES = 'All articles'
-const WORKSPACE_EDGE_INSET = 2
 const PORTAL_THEME_VARS = ['--line', '--surface', '--surface-soft', '--ink', '--muted', '--accent-rgb', '--page']
 
 function loadRailVisible() {
@@ -37,6 +36,11 @@ function readPortalTheme() {
   if (!shell) return {}
   const computed = window.getComputedStyle(shell)
   return Object.fromEntries(PORTAL_THEME_VARS.map((name) => [name, computed.getPropertyValue(name).trim()]))
+}
+
+function workspaceEdgeInset() {
+  const value = Number.parseFloat(window.getComputedStyle(document.documentElement).getPropertyValue('--hi5-workspace-edge'))
+  return Number.isFinite(value) ? value : 2
 }
 
 export function KnowledgeContextEnhancer() {
@@ -141,9 +145,10 @@ export function KnowledgeContextEnhancer() {
 
   if (!knowledgeView || !viewRect) return null
 
-  const horizontalInset = WORKSPACE_EDGE_INSET
-  const topInset = WORKSPACE_EDGE_INSET
-  const bottomInset = Math.max(WORKSPACE_EDGE_INSET, window.innerHeight - viewRect.bottom + topInset)
+  const edgeInset = workspaceEdgeInset()
+  const horizontalInset = edgeInset
+  const topInset = edgeInset
+  const bottomInset = Math.max(edgeInset, window.innerHeight - viewRect.bottom + topInset)
   const portalTheme = readPortalTheme()
 
   if (mobile) {
@@ -153,9 +158,9 @@ export function KnowledgeContextEnhancer() {
         aria-label="Knowledge categories"
         style={{
           ...portalTheme,
-          left: Math.max(horizontalInset, viewRect.left + WORKSPACE_EDGE_INSET),
-          top: Math.max(WORKSPACE_EDGE_INSET, viewRect.top + WORKSPACE_EDGE_INSET),
-          width: Math.max(0, viewRect.width - (WORKSPACE_EDGE_INSET * 2)),
+          left: Math.max(horizontalInset, viewRect.left + edgeInset),
+          top: Math.max(edgeInset, viewRect.top + edgeInset),
+          width: Math.max(0, viewRect.width - (edgeInset * 2)),
         }}
       >
         {categories.map((category) => (
@@ -180,7 +185,7 @@ export function KnowledgeContextEnhancer() {
       <button
         className="knowledge-category-rail-reveal"
         onClick={() => setRailVisible(true)}
-        style={{ ...portalTheme, left: viewRect.left + WORKSPACE_EDGE_INSET, top: viewRect.top + WORKSPACE_EDGE_INSET }}
+        style={{ ...portalTheme, left: viewRect.left + edgeInset, top: viewRect.top + edgeInset }}
         title="Show Knowledge categories"
         type="button"
       >
@@ -198,8 +203,8 @@ export function KnowledgeContextEnhancer() {
       aria-label="Knowledge categories"
       style={{
         ...portalTheme,
-        left: viewRect.left + WORKSPACE_EDGE_INSET,
-        top: viewRect.top + WORKSPACE_EDGE_INSET,
+        left: viewRect.left + edgeInset,
+        top: viewRect.top + edgeInset,
         bottom: bottomInset,
         width: '258px',
       }}
