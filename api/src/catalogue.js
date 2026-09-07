@@ -1,4 +1,5 @@
 import { pool, withTransaction } from './db.js'
+import { registerItsmRecordRoutes } from './itsmRecords.js'
 import { registerPortalAuthRoutes } from './portalAuth.js'
 import { registerServiceRequestOperationRoutes } from './serviceRequestOperations.js'
 import { registerServiceRequestRoutes } from './serviceRequests.js'
@@ -387,4 +388,5 @@ export function registerCatalogueRoutes(app) {
   registerServiceRequestRoutes(app)
   registerServiceRequestOperationRoutes(app)
   registerServiceRequestStateRoutes(app)
+  registerItsmRecordRoutes(app)
 }
