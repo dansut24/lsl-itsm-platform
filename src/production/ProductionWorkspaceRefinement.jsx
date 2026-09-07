@@ -5,6 +5,7 @@ import './ProductionWorkspaceRefinement.css'
 
 const ACCENTS = new Set(['amber', 'cyan', 'blue', 'violet', 'emerald', 'rose'])
 const THEMES = new Set(['system', 'light', 'dark'])
+const PHONE_CLASS_QUERY = '(max-width: 680px) and (any-pointer: coarse), (max-height: 600px) and (any-pointer: coarse)'
 const SCROLL_TARGETS = [
   { selector: '.production-settings-nav', kind: 'settings' },
   { selector: '.nav-stack', kind: 'primary' },
@@ -51,6 +52,30 @@ function hostFor(target, kind) {
   if (kind === 'primary') return target.closest('.sidebar')
   if (kind === 'record') return target.closest('.production-unified-rail')
   return target.parentElement
+}
+
+function usePhoneClassWorkspace() {
+  const [phoneClass, setPhoneClass] = useState(() => {
+    if (typeof window.matchMedia !== 'function') return false
+    return window.matchMedia(PHONE_CLASS_QUERY).matches
+  })
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return undefined
+    const media = window.matchMedia(PHONE_CLASS_QUERY)
+    const update = () => setPhoneClass(media.matches)
+
+    update()
+    media.addEventListener?.('change', update)
+    window.addEventListener('resize', update)
+
+    return () => {
+      media.removeEventListener?.('change', update)
+      window.removeEventListener('resize', update)
+    }
+  }, [])
+
+  return phoneClass
 }
 
 function ScrollAssist({ target, kind }) {
@@ -112,10 +137,17 @@ function ScrollAssist({ target, kind }) {
 }
 
 export function ProductionWorkspaceRefinement() {
+  const phoneClass = usePhoneClassWorkspace()
   const [targets, setTargets] = useState([])
   const targetSignatureRef = useRef('')
 
   useEffect(() => {
+    if (phoneClass) {
+      targetSignatureRef.current = ''
+      setTargets([])
+      return undefined
+    }
+
     const scan = () => {
       const next = []
       for (const definition of SCROLL_TARGETS) {
@@ -148,7 +180,7 @@ export function ProductionWorkspaceRefinement() {
       window.removeEventListener('resize', scan)
       window.clearInterval(timer)
     }
-  }, [])
+  }, [phoneClass])
 
   useEffect(() => {
     let last = ''
@@ -180,5 +212,6 @@ export function ProductionWorkspaceRefinement() {
     }
   }, [])
 
+  if (phoneClass) return null
   return targets.map((item) => <ScrollAssist key={item.key} kind={item.kind} target={item.target} />)
 }
