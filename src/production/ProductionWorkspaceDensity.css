@@ -33,8 +33,16 @@ html[data-hi5-surface='workspace'] .unified-new-record-shell {
   padding: var(--hi5-workspace-edge) !important;
 }
 
-/* Production ITSM list/table views: keep toolbars dense, but remove the large
-   empty frame around the actual record result surface. */
+/* Production ITSM list/table views use a separate routed shell. Surface polish
+   previously applied 14px desktop / 12px tablet / 9px mobile padding directly
+   to that shell, so reducing only the results area left the old outer frame
+   visible. The shell itself now follows the same 2px workspace edge contract.
+   The rail-to-list gap remains component-owned internal spacing. */
+html[data-hi5-surface='workspace'] .production-record-shell {
+  box-sizing: border-box;
+  padding: var(--hi5-workspace-edge) !important;
+}
+
 html[data-hi5-surface='workspace'] .production-record-content {
   padding: var(--hi5-workspace-edge) !important;
 }
