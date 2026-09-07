@@ -6,7 +6,6 @@ import {
   randomBytes,
   timingSafeEqual,
 } from 'node:crypto'
-import { originMatchesTenant as deploymentOriginMatchesTenant } from './deploymentConfig.js'
 import { pool, withTransaction } from './db.js'
 import { verifyPassword } from './password.js'
 import { ensureRedisConnected } from './redis.js'
@@ -16,6 +15,7 @@ import {
   sessionPayload,
   setSessionCookie,
 } from './session.js'
+import { originMatchesTenant as deploymentOriginMatchesTenant } from './deploymentConfig.js'
 import {
   mfaGraceEndsAt,
   mfaRequiredFor,
@@ -424,144 +424,94 @@ export function registerMfaRoutes(app) {
     if (!validSlug(tenantSlug) || !validEmail(email) || !password) {
       return c.json({ error: 'Enter a valid email address and password.' }, 400)
     }
-
     if (!originMatchesTenant(c, tenantSlug)) return c.json({ error: 'Tenant sign-in origin mismatch.' }, 403)
 
-    const allowed = await rateLimit(`secure-login:${requestIp(c)}:${tenantSlug}:${email}`, 10, 900)
+    const allowed = await rateLimit(`login-secure:${requestIp(c)}:${tenantSlug}:${email}`, 10, 900)
     if (!allowed) return c.json({ error: 'Too many sign-in attempts. Please try again later.' }, 429)
 
     const account = await accountByCredentials(tenantSlug, email)
     if (!account) return c.json({ error: 'Email address or password is incorrect.' }, 401)
+    if (account.tenant_status === 'pending_verification' || account.membership_status === 'pending_verification') {
+      return c.json({ error: 'Verify your email address before signing in.' }, 403)
+    }
     if (account.tenant_status !== 'active' || account.membership_status !== 'active') {
       return c.json({ error: 'This Hi5Central account is not currently active.' }, 403)
     }
 
-    const validPassword = await verifyPassword(password, account.password_hash)
-    if (!validPassword) return c.json({ error: 'Email address or password is incorrect.' }, 401)
+    const valid = await verifyPassword(password, account.password_hash)
+    if (!valid) return c.json({ error: 'Email address or password is incorrect.' }, 401)
 
-    const policyRequiresMfa = mfaRequiredFor(account)
-    const method = await enabledMethod(pool, account.tenant_id, account.user_id)
-    if (!policyRequiresMfa) {
+    const ttl = sessionTtlSeconds(account)
+    if (!mfaRequiredFor(account)) {
       const token = await withTransaction((client) => createSession(client, {
         tenantId: account.tenant_id,
         userId: account.user_id,
-        mfaVerified: Boolean(method?.enabled),
+        ttlSeconds: ttl,
       }))
-      setSessionCookie(c, token, sessionTtlSeconds(account))
+      setSessionCookie(c, token, ttl)
       return c.json(sessionPayload(account))
     }
 
-    if (!method?.enabled) {
-      const challenge = await withTransaction((client) => createChallenge(
-        client,
-        account.tenant_id,
-        account.user_id,
-        'enrolment',
-      ))
-      return c.json({
-        status: 'mfa_enrolment_required',
-        challenge,
-        tenant: {
-          slug: account.slug,
-          companyName: account.company_name,
-        },
-        user: {
-          email: account.email,
-          name: account.name,
-        },
-      }, 428)
-    }
+    const result = await withTransaction(async (client) => {
+      const method = await enabledMethod(client, account.tenant_id, account.user_id)
+      const challengeToken = await createChallenge(client, account.tenant_id, account.user_id, 'login')
+      return {
+        challengeToken,
+        setupRequired: !method?.enabled,
+      }
+    })
 
-    const challenge = await withTransaction((client) => createChallenge(
-      client,
-      account.tenant_id,
-      account.user_id,
-      'login',
-    ))
     return c.json({
-      status: 'mfa_required',
-      challenge,
+      authenticated: false,
+      mfaRequired: true,
+      setupRequired: result.setupRequired,
+      challengeToken: result.challengeToken,
+      expiresInSeconds: CHALLENGE_SECONDS,
       tenant: { slug: account.slug, companyName: account.company_name },
-      user: { email: account.email, name: account.name },
-    }, 202)
+      user: { email: account.email, name: account.name, tenantRole: account.tenant_role },
+    })
   })
 
-  app.post('/api/v1/auth/mfa/enrol', async (c) => {
+  app.post('/api/v1/auth/mfa/setup', async (c) => {
     let body
     try {
       body = await c.req.json()
     } catch {
       return c.json({ error: 'A valid JSON request body is required.' }, 400)
     }
+    const challengeToken = String(body?.challengeToken || '')
+    if (!challengeToken) return c.json({ error: 'MFA challenge is required.' }, 400)
 
-    const challenge = text(body?.challenge, 256)
-    const code = String(body?.code || '').trim()
-    if (!challenge) return c.json({ error: 'An MFA enrolment challenge is required.' }, 400)
-
-    const preview = await challengeAccount(pool, challenge, 'enrolment')
-    if (!preview) return c.json({ error: 'The MFA enrolment challenge has expired. Sign in again.' }, 401)
-    if (!originMatchesTenant(c, preview.slug)) return c.json({ error: 'Tenant sign-in origin mismatch.' }, 403)
-
-    if (!code) {
-      const secret = await withTransaction((client) => provisionSecret(
-        client,
-        preview.tenant_id,
-        preview.user_id,
-      ))
-      return c.json({
-        status: 'mfa_setup_required',
-        secret,
-        otpauthUri: otpauthUri({
+    try {
+      const material = await withTransaction(async (client) => {
+        const account = await challengeAccount(client, challengeToken, 'login', true)
+        if (!account) {
+          const error = new Error('This MFA challenge has expired. Sign in again.')
+          error.status = 401
+          throw error
+        }
+        if (!originMatchesTenant(c, account.slug)) {
+          const error = new Error('Tenant sign-in origin mismatch.')
+          error.status = 403
+          throw error
+        }
+        const secret = await provisionSecret(client, account.tenant_id, account.user_id)
+        return {
           secret,
-          companyName: preview.company_name,
-          email: preview.email,
-        }),
+          account,
+          uri: otpauthUri({ secret, companyName: account.company_name, email: account.email }),
+        }
       })
+      return c.json({
+        secret: material.secret,
+        otpauthUri: material.uri,
+        issuer: 'Hi5Central',
+        account: `${material.account.company_name}:${material.account.email}`,
+      })
+    } catch (error) {
+      if (error?.status) return c.json({ error: error.message }, error.status)
+      throw error
     }
-
-    const completed = await withTransaction(async (client) => {
-      const account = await challengeAccount(client, challenge, 'enrolment', true)
-      if (!account) return null
-      const method = await enabledMethod(client, account.tenant_id, account.user_id)
-      if (!method) return { error: 'Start MFA setup again before entering the verification code.' }
-      const result = verifyMethodCode(method, code, { allowRecovery: false })
-      if (!result.ok || result.type !== 'totp') {
-        await client.query(
-          'UPDATE auth_mfa_challenges SET attempts = attempts + 1 WHERE id = $1',
-          [account.challenge_id],
-        )
-        return { error: 'The verification code was not accepted. Check the current authenticator code.' }
-      }
-
-      const recovery = createRecoveryCodes()
-      await client.query(
-        `UPDATE user_mfa_methods
-         SET enabled = true,
-             verified_at = now(),
-             recovery_code_hashes = $4::jsonb,
-             last_used_step = $5,
-             updated_at = now()
-         WHERE tenant_id = $1 AND user_id = $2 AND method = $3`,
-        [account.tenant_id, account.user_id, 'totp', JSON.stringify(recovery.hashes), result.step],
-      )
-      await client.query('UPDATE auth_mfa_challenges SET used_at = now() WHERE id = $1', [account.challenge_id])
-      const token = await createSession(client, {
-        tenantId: account.tenant_id,
-        userId: account.user_id,
-        mfaVerified: true,
-        ttlSeconds: sessionTtlSeconds(account),
-      })
-      return { account, token, recoveryCodes: recovery.codes }
-    })
-
-    if (!completed) return c.json({ error: 'The MFA enrolment challenge has expired. Sign in again.' }, 401)
-    if (completed.error) return c.json({ error: completed.error }, 400)
-    setSessionCookie(c, completed.token, sessionTtlSeconds(completed.account))
-    return c.json({
-      status: 'mfa_enrolled',
-      recoveryCodes: completed.recoveryCodes,
-      session: sessionPayload(completed.account),
-    })
   })
 
   app.post('/api/v1/auth/mfa/verify', async (c) => {
@@ -571,89 +521,170 @@ export function registerMfaRoutes(app) {
     } catch {
       return c.json({ error: 'A valid JSON request body is required.' }, 400)
     }
+    const challengeToken = String(body?.challengeToken || '')
+    const code = text(body?.code, 64)
+    if (!challengeToken || !code) return c.json({ error: 'Enter your authenticator or recovery code.' }, 400)
 
-    const challenge = text(body?.challenge, 256)
-    const code = String(body?.code || '').trim()
-    if (!challenge || !code) return c.json({ error: 'Enter your authentication or recovery code.' }, 400)
-
-    const preview = await challengeAccount(pool, challenge, 'login')
-    if (!preview) return c.json({ error: 'The MFA sign-in challenge has expired. Sign in again.' }, 401)
-    if (!originMatchesTenant(c, preview.slug)) return c.json({ error: 'Tenant sign-in origin mismatch.' }, 403)
-
-    const completed = await withTransaction(async (client) => {
-      const account = await challengeAccount(client, challenge, 'login', true)
-      if (!account) return null
+    const result = await withTransaction(async (client) => {
+      const account = await challengeAccount(client, challengeToken, 'login', true)
+      if (!account || !originMatchesTenant(c, account?.slug)) {
+        return { ok: false, status: 401, error: 'This MFA challenge has expired. Sign in again.' }
+      }
       const method = await enabledMethod(client, account.tenant_id, account.user_id)
-      if (!method?.enabled) return { error: 'MFA is not currently available for this account.' }
-      const result = verifyMethodCode(method, code)
-      if (!result.ok) {
+      if (!method) return { ok: false, status: 409, error: 'Set up your authenticator before verifying.' }
+
+      const verification = verifyMethodCode(method, code, { allowRecovery: Boolean(method.enabled) })
+      if (!verification.ok) {
         await client.query(
           'UPDATE auth_mfa_challenges SET attempts = attempts + 1 WHERE id = $1',
           [account.challenge_id],
         )
-        return { error: 'The authentication code was not accepted.' }
+        return { ok: false, status: 401, error: 'That MFA code is not valid.' }
       }
 
-      if (result.type === 'totp') {
-        await client.query(
-          `UPDATE user_mfa_methods
-           SET last_used_step = $4, updated_at = now()
-           WHERE tenant_id = $1 AND user_id = $2 AND method = $3`,
-          [account.tenant_id, account.user_id, 'totp', result.step],
-        )
-      } else {
-        await client.query(
-          `UPDATE user_mfa_methods
-           SET recovery_code_hashes = $4::jsonb, updated_at = now()
-           WHERE tenant_id = $1 AND user_id = $2 AND method = $3`,
-          [account.tenant_id, account.user_id, 'totp', JSON.stringify(result.remainingHashes)],
-        )
+      let recoveryCodes = null
+      let recoveryHashes = Array.isArray(method.recovery_code_hashes) ? method.recovery_code_hashes : []
+      if (!method.enabled) {
+        const generated = createRecoveryCodes()
+        recoveryCodes = generated.codes
+        recoveryHashes = generated.hashes
+      } else if (verification.type === 'recovery') {
+        recoveryHashes = verification.remainingHashes
       }
+
+      await client.query(
+        `UPDATE user_mfa_methods
+         SET enabled = true,
+             verified_at = COALESCE(verified_at, now()),
+             recovery_code_hashes = $3::jsonb,
+             last_used_step = CASE WHEN $4::bigint IS NULL THEN last_used_step ELSE $4::bigint END,
+             updated_at = now()
+         WHERE tenant_id = $1 AND user_id = $2 AND method = 'totp'`,
+        [
+          account.tenant_id,
+          account.user_id,
+          JSON.stringify(recoveryHashes),
+          verification.type === 'totp' ? verification.step : null,
+        ],
+      )
       await client.query('UPDATE auth_mfa_challenges SET used_at = now() WHERE id = $1', [account.challenge_id])
+
+      const ttl = sessionTtlSeconds(account)
       const token = await createSession(client, {
         tenantId: account.tenant_id,
         userId: account.user_id,
         mfaVerified: true,
-        ttlSeconds: sessionTtlSeconds(account),
+        ttlSeconds: ttl,
       })
-      return { account, token }
+      return {
+        ok: true,
+        token,
+        ttl,
+        payload: sessionPayload({ ...account, mfa_verified_at: new Date().toISOString() }),
+        recoveryCodes,
+      }
     })
 
-    if (!completed) return c.json({ error: 'The MFA sign-in challenge has expired. Sign in again.' }, 401)
-    if (completed.error) return c.json({ error: completed.error }, 400)
-    setSessionCookie(c, completed.token, sessionTtlSeconds(completed.account))
-    return c.json(sessionPayload(completed.account))
+    if (!result.ok) return c.json({ error: result.error }, result.status)
+    setSessionCookie(c, result.token, result.ttl)
+    return c.json({ ...result.payload, recoveryCodes: result.recoveryCodes })
   })
 
-  app.get('/api/v1/security/mfa/status', async (c) => {
+  app.get('/api/v1/mfa/status', async (c) => {
     const auth = await requireSession(c)
     if (auth.error) return auth.error
     const method = await enabledMethod(pool, auth.session.tenant_id, auth.session.user_id)
     return c.json(methodStatus(auth.session, method))
   })
 
-  app.post('/api/v1/security/mfa/enrol', async (c) => {
+  app.post('/api/v1/mfa/setup', async (c) => {
     const auth = await requireSession(c)
     if (auth.error) return auth.error
-    const existing = await enabledMethod(pool, auth.session.tenant_id, auth.session.user_id)
-    if (existing?.enabled) return c.json({ error: 'MFA is already enrolled for this account.' }, 409)
-    const secret = await withTransaction((client) => provisionSecret(
-      client,
-      auth.session.tenant_id,
-      auth.session.user_id,
-    ))
+
+    try {
+      const result = await withTransaction(async (client) => {
+        const method = await enabledMethod(client, auth.session.tenant_id, auth.session.user_id)
+        if (method?.enabled) {
+          const error = new Error('MFA is already enrolled for this account.')
+          error.status = 409
+          throw error
+        }
+        const secret = await provisionSecret(client, auth.session.tenant_id, auth.session.user_id)
+        const setupToken = await createChallenge(client, auth.session.tenant_id, auth.session.user_id, 'setup')
+        return {
+          secret,
+          setupToken,
+          uri: otpauthUri({ secret, companyName: auth.session.company_name, email: auth.session.email }),
+        }
+      })
+      return c.json({
+        secret: result.secret,
+        setupToken: result.setupToken,
+        otpauthUri: result.uri,
+        issuer: 'Hi5Central',
+        account: `${auth.session.company_name}:${auth.session.email}`,
+      })
+    } catch (error) {
+      if (error?.status) return c.json({ error: error.message }, error.status)
+      throw error
+    }
+  })
+
+  app.post('/api/v1/mfa/confirm', async (c) => {
+    const auth = await requireSession(c)
+    if (auth.error) return auth.error
+
+    let body
+    try {
+      body = await c.req.json()
+    } catch {
+      return c.json({ error: 'A valid JSON request body is required.' }, 400)
+    }
+    const setupToken = String(body?.setupToken || '')
+    const code = text(body?.code, 32)
+    if (!setupToken || !code) return c.json({ error: 'Enter the six-digit authenticator code.' }, 400)
+
+    const result = await withTransaction(async (client) => {
+      const challenge = await challengeAccount(client, setupToken, 'setup', true)
+      if (!challenge
+        || challenge.tenant_id !== auth.session.tenant_id
+        || challenge.user_id !== auth.session.user_id) {
+        return { ok: false, status: 401, error: 'This MFA setup has expired. Start setup again.' }
+      }
+      const method = await enabledMethod(client, auth.session.tenant_id, auth.session.user_id)
+      if (!method) return { ok: false, status: 409, error: 'Start MFA setup again.' }
+
+      const verification = verifyMethodCode(method, code, { allowRecovery: false })
+      if (!verification.ok || verification.type !== 'totp') {
+        await client.query('UPDATE auth_mfa_challenges SET attempts = attempts + 1 WHERE id = $1', [challenge.challenge_id])
+        return { ok: false, status: 401, error: 'That authenticator code is not valid.' }
+      }
+
+      const generated = createRecoveryCodes()
+      await client.query(
+        `UPDATE user_mfa_methods
+         SET enabled = true,
+             verified_at = now(),
+             recovery_code_hashes = $3::jsonb,
+             last_used_step = $4,
+             updated_at = now()
+         WHERE tenant_id = $1 AND user_id = $2 AND method = 'totp'`,
+        [auth.session.tenant_id, auth.session.user_id, JSON.stringify(generated.hashes), verification.step],
+      )
+      await client.query('UPDATE auth_mfa_challenges SET used_at = now() WHERE id = $1', [challenge.challenge_id])
+      await client.query('UPDATE auth_sessions SET mfa_verified_at = now() WHERE id = $1', [auth.session.session_id])
+      return { ok: true, recoveryCodes: generated.codes }
+    })
+
+    if (!result.ok) return c.json({ error: result.error }, result.status)
+    const refreshedMethod = await enabledMethod(pool, auth.session.tenant_id, auth.session.user_id)
     return c.json({
-      status: 'mfa_setup_required',
-      secret,
-      otpauthUri: otpauthUri({
-        secret,
-        companyName: auth.session.company_name,
-        email: auth.session.email,
-      }),
+      ...methodStatus({ ...auth.session, mfa_verified_at: new Date().toISOString() }, refreshedMethod),
+      recoveryCodes: result.recoveryCodes,
     })
   })
 
-  app.post('/api/v1/security/mfa/confirm', async (c) => {
+  app.post('/api/v1/mfa/recovery-codes', async (c) => {
     const auth = await requireSession(c)
     if (auth.error) return auth.error
     let body
@@ -662,100 +693,59 @@ export function registerMfaRoutes(app) {
     } catch {
       return c.json({ error: 'A valid JSON request body is required.' }, 400)
     }
+    const code = text(body?.code, 64)
+    if (!code) return c.json({ error: 'Enter your current authenticator code.' }, 400)
 
-    const method = await enabledMethod(pool, auth.session.tenant_id, auth.session.user_id)
-    if (!method) return c.json({ error: 'Start MFA setup before entering a verification code.' }, 409)
-    const result = verifyMethodCode(method, body?.code, { allowRecovery: false })
-    if (!result.ok || result.type !== 'totp') return c.json({ error: 'The verification code was not accepted.' }, 400)
-
-    const recovery = createRecoveryCodes()
-    await pool.query(
-      `UPDATE user_mfa_methods
-       SET enabled = true,
-           verified_at = now(),
-           recovery_code_hashes = $4::jsonb,
-           last_used_step = $5,
-           updated_at = now()
-       WHERE tenant_id = $1 AND user_id = $2 AND method = $3`,
-      [auth.session.tenant_id, auth.session.user_id, 'totp', JSON.stringify(recovery.hashes), result.step],
-    )
-    return c.json({ status: 'mfa_enrolled', recoveryCodes: recovery.codes })
-  })
-
-  app.post('/api/v1/security/mfa/recovery-codes', async (c) => {
-    const auth = await requireSession(c)
-    if (auth.error) return auth.error
-    let body
-    try {
-      body = await c.req.json()
-    } catch {
-      return c.json({ error: 'A valid JSON request body is required.' }, 400)
-    }
-
-    const password = String(body?.password || '')
-    const code = String(body?.code || '').trim()
-    if (!password || !code) return c.json({ error: 'Enter your password and current authenticator code.' }, 400)
-
-    const account = await accountByIds(pool, auth.session.tenant_id, auth.session.user_id)
-    const validPassword = await verifyPassword(password, account?.password_hash)
-    if (!validPassword) return c.json({ error: 'Your password was not accepted.' }, 401)
-    const method = await enabledMethod(pool, auth.session.tenant_id, auth.session.user_id)
-    if (!method?.enabled) return c.json({ error: 'MFA is not enrolled for this account.' }, 409)
-    const result = verifyMethodCode(method, code, { allowRecovery: false })
-    if (!result.ok || result.type !== 'totp') return c.json({ error: 'The authentication code was not accepted.' }, 400)
-
-    const recovery = createRecoveryCodes()
-    await pool.query(
-      `UPDATE user_mfa_methods
-       SET recovery_code_hashes = $4::jsonb,
-           last_used_step = $5,
-           updated_at = now()
-       WHERE tenant_id = $1 AND user_id = $2 AND method = $3`,
-      [auth.session.tenant_id, auth.session.user_id, 'totp', JSON.stringify(recovery.hashes), result.step],
-    )
-    return c.json({ recoveryCodes: recovery.codes })
-  })
-
-  app.post('/api/v1/security/mfa/disable', async (c) => {
-    const auth = await requireSession(c)
-    if (auth.error) return auth.error
-    let body
-    try {
-      body = await c.req.json()
-    } catch {
-      return c.json({ error: 'A valid JSON request body is required.' }, 400)
-    }
-
-    const password = String(body?.password || '')
-    const code = String(body?.code || '').trim()
-    if (!password || !code) return c.json({ error: 'Enter your password and current authentication code.' }, 400)
-
-    const account = await accountByIds(pool, auth.session.tenant_id, auth.session.user_id)
-    const validPassword = await verifyPassword(password, account?.password_hash)
-    if (!validPassword) return c.json({ error: 'Your password was not accepted.' }, 401)
-    const method = await enabledMethod(pool, auth.session.tenant_id, auth.session.user_id)
-    if (!method?.enabled) return c.json({ error: 'MFA is not enrolled for this account.' }, 409)
-    const result = verifyMethodCode(method, code)
-    if (!result.ok) return c.json({ error: 'The authentication code was not accepted.' }, 400)
-
-    await withTransaction(async (client) => {
+    const result = await withTransaction(async (client) => {
+      const method = await enabledMethod(client, auth.session.tenant_id, auth.session.user_id)
+      if (!method?.enabled) return { ok: false, status: 409, error: 'MFA is not enrolled.' }
+      const verification = verifyMethodCode(method, code, { allowRecovery: false })
+      if (!verification.ok) return { ok: false, status: 401, error: 'That authenticator code is not valid.' }
+      const generated = createRecoveryCodes()
       await client.query(
         `UPDATE user_mfa_methods
-         SET enabled = false,
-             verified_at = NULL,
-             recovery_code_hashes = '[]'::jsonb,
-             last_used_step = NULL,
+         SET recovery_code_hashes = $3::jsonb,
+             last_used_step = $4,
              updated_at = now()
+         WHERE tenant_id = $1 AND user_id = $2 AND method = 'totp'`,
+        [auth.session.tenant_id, auth.session.user_id, JSON.stringify(generated.hashes), verification.step],
+      )
+      return { ok: true, recoveryCodes: generated.codes }
+    })
+    if (!result.ok) return c.json({ error: result.error }, result.status)
+    return c.json({ recoveryCodes: result.recoveryCodes })
+  })
+
+  app.post('/api/v1/mfa/disable', async (c) => {
+    const auth = await requireSession(c)
+    if (auth.error) return auth.error
+    if (mfaRequiredFor(auth.session)) {
+      return c.json({ error: 'This tenant requires MFA for your role. Disable the tenant policy before removing your authenticator.' }, 409)
+    }
+
+    let body
+    try {
+      body = await c.req.json()
+    } catch {
+      return c.json({ error: 'A valid JSON request body is required.' }, 400)
+    }
+    const code = text(body?.code, 64)
+    if (!code) return c.json({ error: 'Enter your authenticator or recovery code.' }, 400)
+
+    const result = await withTransaction(async (client) => {
+      const method = await enabledMethod(client, auth.session.tenant_id, auth.session.user_id)
+      if (!method?.enabled) return { ok: false, status: 409, error: 'MFA is not enrolled.' }
+      const verification = verifyMethodCode(method, code)
+      if (!verification.ok) return { ok: false, status: 401, error: 'That MFA code is not valid.' }
+      await client.query(
+        `DELETE FROM user_mfa_methods
          WHERE tenant_id = $1 AND user_id = $2 AND method = 'totp'`,
         [auth.session.tenant_id, auth.session.user_id],
       )
-      await client.query(
-        `UPDATE auth_sessions
-         SET revoked_at = COALESCE(revoked_at, now())
-         WHERE tenant_id = $1 AND user_id = $2 AND id <> $3`,
-        [auth.session.tenant_id, auth.session.user_id, auth.session.session_id],
-      )
+      await client.query('UPDATE auth_sessions SET mfa_verified_at = NULL WHERE id = $1', [auth.session.session_id])
+      return { ok: true }
     })
-    return c.json({ status: 'mfa_disabled' })
+    if (!result.ok) return c.json({ error: result.error }, result.status)
+    return c.json({ disabled: true })
   })
 }
