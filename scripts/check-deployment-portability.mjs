@@ -11,6 +11,17 @@ const allowedDomainFiles = new Set([
 const sourceExtensions = new Set(['.js', '.jsx', '.mjs', '.ts', '.tsx'])
 const failures = []
 
+function hasDeploymentDomainDependency(content) {
+  // Demo/user email addresses are portable data and should not fail this check.
+  // We care about routing, API, cookie and public URL dependencies.
+  const withoutEmails = content.replace(/[a-z0-9._%+-]+@(?:[a-z0-9-]+\.)*hi5central\.com/gi, '')
+  return (
+    /https?:\/\/[^\s'"`]*hi5central\.com/i.test(withoutEmails)
+    || /['"`](?:[a-z0-9-]+\.)?hi5central\.com['"`]/i.test(withoutEmails)
+    || /(?:endsWith|includes|startsWith|match|test)\([^\n)]*hi5central\.com/i.test(withoutEmails)
+  )
+}
+
 function walk(directory) {
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     const full = path.join(directory, entry.name)
@@ -23,7 +34,7 @@ function walk(directory) {
     const relative = path.relative(repoRoot, full).replaceAll(path.sep, '/')
     const content = fs.readFileSync(full, 'utf8')
 
-    if (!allowedDomainFiles.has(relative) && /(?:https?:\/\/)?(?:[a-z0-9-]+\.)?hi5central\.com/i.test(content)) {
+    if (!allowedDomainFiles.has(relative) && hasDeploymentDomainDependency(content)) {
       failures.push(`${relative}: contains a hard-coded hi5central.com deployment dependency`)
     }
   }
