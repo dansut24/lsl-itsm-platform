@@ -1,0 +1,41 @@
+name: Self-hosted reference deployment
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'deployment/self-hosted/**'
+      - 'Dockerfile.production'
+      - 'api/Dockerfile'
+      - 'api/migrations/**'
+      - 'api/src/deploymentConfig.js'
+      - 'api/src/licensing.js'
+      - '.github/workflows/self-hosted-reference.yml'
+  pull_request:
+    paths:
+      - 'deployment/self-hosted/**'
+      - 'Dockerfile.production'
+      - 'api/Dockerfile'
+      - 'api/migrations/**'
+      - 'api/src/deploymentConfig.js'
+      - 'api/src/licensing.js'
+      - '.github/workflows/self-hosted-reference.yml'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare reference environment
+        run: cp deployment/self-hosted/.env.example deployment/self-hosted/.env
+
+      - name: Validate Compose model
+        run: docker compose --env-file deployment/self-hosted/.env -f deployment/self-hosted/compose.yml config >/dev/null
+
+      - name: Build self-hosted API image
+        run: docker compose --env-file deployment/self-hosted/.env -f deployment/self-hosted/compose.yml build api
+
+      - name: Build self-hosted web image
+        run: docker compose --env-file deployment/self-hosted/.env -f deployment/self-hosted/compose.yml build web
