@@ -5,6 +5,7 @@ import { knowledgeArticles } from '../../data/demoData.jsx'
 
 const KNOWLEDGE_RAIL_VISIBLE_KEY = 'hi5central-knowledge-category-rail-visible-v1'
 const ALL_ARTICLES = 'All articles'
+const WORKSPACE_EDGE_INSET = 2
 const PORTAL_THEME_VARS = ['--line', '--surface', '--surface-soft', '--ink', '--muted', '--accent-rgb', '--page']
 
 function loadRailVisible() {
@@ -140,9 +141,9 @@ export function KnowledgeContextEnhancer() {
 
   if (!knowledgeView || !viewRect) return null
 
-  const horizontalInset = 14
-  const topInset = mobile ? 10 : 14
-  const bottomInset = Math.max(10, window.innerHeight - viewRect.bottom + topInset)
+  const horizontalInset = WORKSPACE_EDGE_INSET
+  const topInset = WORKSPACE_EDGE_INSET
+  const bottomInset = Math.max(WORKSPACE_EDGE_INSET, window.innerHeight - viewRect.bottom + topInset)
   const portalTheme = readPortalTheme()
 
   if (mobile) {
@@ -152,9 +153,9 @@ export function KnowledgeContextEnhancer() {
         aria-label="Knowledge categories"
         style={{
           ...portalTheme,
-          left: Math.max(horizontalInset, viewRect.left + 12),
-          top: Math.max(10, viewRect.top + 10),
-          width: Math.max(0, viewRect.width - 24),
+          left: Math.max(horizontalInset, viewRect.left + WORKSPACE_EDGE_INSET),
+          top: Math.max(WORKSPACE_EDGE_INSET, viewRect.top + WORKSPACE_EDGE_INSET),
+          width: Math.max(0, viewRect.width - (WORKSPACE_EDGE_INSET * 2)),
         }}
       >
         {categories.map((category) => (
@@ -179,7 +180,7 @@ export function KnowledgeContextEnhancer() {
       <button
         className="knowledge-category-rail-reveal"
         onClick={() => setRailVisible(true)}
-        style={{ ...portalTheme, left: viewRect.left + 14, top: viewRect.top + 14 }}
+        style={{ ...portalTheme, left: viewRect.left + WORKSPACE_EDGE_INSET, top: viewRect.top + WORKSPACE_EDGE_INSET }}
         title="Show Knowledge categories"
         type="button"
       >
@@ -197,8 +198,8 @@ export function KnowledgeContextEnhancer() {
       aria-label="Knowledge categories"
       style={{
         ...portalTheme,
-        left: viewRect.left + 14,
-        top: viewRect.top + 14,
+        left: viewRect.left + WORKSPACE_EDGE_INSET,
+        top: viewRect.top + WORKSPACE_EDGE_INSET,
         bottom: bottomInset,
         width: '258px',
       }}
