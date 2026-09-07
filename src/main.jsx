@@ -32,6 +32,20 @@ import './ContextualSurfaces.css'
 import './production/ProductionWorkspaceVisualSystem.css'
 import './production/ProductionActivityFirstRecord.css'
 import './production/ProductionWorkspaceDensity.css'
+import './production/ProductionMobileRuntimeGuard.css'
+
+const STATIC_ASSET_RECOVERY_KEY = 'hi5central-static-asset-recovery-v1'
+
+try {
+  window.sessionStorage.removeItem(STATIC_ASSET_RECOVERY_KEY)
+  const currentUrl = new URL(window.location.href)
+  if (currentUrl.searchParams.has('_hi5_reload')) {
+    currentUrl.searchParams.delete('_hi5_reload')
+    window.history.replaceState({}, '', `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`)
+  }
+} catch {
+  // Browser storage can be unavailable in privacy-restricted mobile sessions.
+}
 
 const rootElement = document.getElementById('root')
 const initialSurface = resolveTenantSurface()
