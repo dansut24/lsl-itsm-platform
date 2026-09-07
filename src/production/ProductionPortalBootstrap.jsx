@@ -11,6 +11,28 @@ function replaceCatalogue(items) {
   portalServiceCatalog.splice(0, portalServiceCatalog.length, ...items)
 }
 
+function normalizeFieldOption(option) {
+  if (option && typeof option === 'object' && !Array.isArray(option)) return option
+  const value = String(option ?? '').trim()
+  return value ? { value, label: value } : null
+}
+
+function normalizeCatalogue(payload) {
+  return {
+    ...payload,
+    items: payload.items.map((item) => ({
+      ...item,
+      fields: (Array.isArray(item.fields) ? item.fields : []).map((field) => {
+        if (!Array.isArray(field?.options)) return field
+        return {
+          ...field,
+          options: field.options.map(normalizeFieldOption).filter(Boolean),
+        }
+      }),
+    })),
+  }
+}
+
 function PortalBootstrapState({ error, onRetry, tenantName }) {
   return (
     <main className="production-portal-bootstrap">
@@ -57,8 +79,13 @@ export function ProductionPortalBootstrap() {
         if (!response.ok) throw new Error(payload.error || 'The service catalogue is temporarily unavailable.')
         if (!Array.isArray(payload.items)) throw new Error('The service catalogue response was invalid.')
 
-        replaceCatalogue(payload.items)
-        if (active) setState((current) => ({ ...current, status: 'ready', managed: true, catalogue: payload, error: '' }))
+        // Older catalogue schemas legitimately store ordinary select choices as
+        // strings, while the production Portal renderer consumes option objects.
+        // Normalise both shapes at the production boundary so required selects
+        // such as Access Request always expose their published choices.
+        const catalogue = normalizeCatalogue(payload)
+        replaceCatalogue(catalogue.items)
+        if (active) setState((current) => ({ ...current, status: 'ready', managed: true, catalogue, error: '' }))
       } catch (error) {
         if (active) setState((current) => ({ ...current, status: 'error', error: error.message || 'The service catalogue is temporarily unavailable.' }))
       }
