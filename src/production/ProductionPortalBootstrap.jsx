@@ -2,35 +2,12 @@ import { useEffect, useMemo, useState } from 'react'
 import App from '../App.jsx'
 import { portalServiceCatalog } from '../data/portalData.js'
 import { resolveTenantSurface } from '../lib/tenantSurface.js'
-import { ProductionRequesterPortal } from './ProductionRequesterPortal.jsx'
 import './ProductionPortalBootstrap.css'
 
 const API_BASE = 'https://api.hi5central.com'
 
 function replaceCatalogue(items) {
   portalServiceCatalog.splice(0, portalServiceCatalog.length, ...items)
-}
-
-function normalizeFieldOption(option) {
-  if (option && typeof option === 'object' && !Array.isArray(option)) return option
-  const value = String(option ?? '').trim()
-  return value ? { value, label: value } : null
-}
-
-function normalizeCatalogue(payload) {
-  return {
-    ...payload,
-    items: payload.items.map((item) => ({
-      ...item,
-      fields: (Array.isArray(item.fields) ? item.fields : []).map((field) => {
-        if (!Array.isArray(field?.options)) return field
-        return {
-          ...field,
-          options: field.options.map(normalizeFieldOption).filter(Boolean),
-        }
-      }),
-    })),
-  }
 }
 
 function PortalBootstrapState({ error, onRetry, tenantName }) {
@@ -58,7 +35,7 @@ function PortalBootstrapState({ error, onRetry, tenantName }) {
 
 export function ProductionPortalBootstrap() {
   const surface = useMemo(() => resolveTenantSurface(), [])
-  const [state, setState] = useState({ status: 'loading', attempt: 0, error: '', managed: true, catalogue: null })
+  const [state, setState] = useState({ status: 'loading', attempt: 0, error: '' })
 
   useEffect(() => {
     let active = true
@@ -70,22 +47,18 @@ export function ProductionPortalBootstrap() {
         const payload = await response.json().catch(() => ({}))
 
         if (response.status === 404 || payload.managed === false) {
-          // Keep the permanent demo surface available without ever treating its
-          // bundled data as a managed production tenant.
-          if (active) setState((current) => ({ ...current, status: 'ready', managed: false, catalogue: null, error: '' }))
+          // Unmanaged canonical hosts such as the permanent beta demo retain the
+          // bundled Portal catalogue. Real tenant hosts never receive another
+          // tenant's data because the API resolves solely from the host slug.
+          if (active) setState((current) => ({ ...current, status: 'ready', error: '' }))
           return
         }
 
         if (!response.ok) throw new Error(payload.error || 'The service catalogue is temporarily unavailable.')
         if (!Array.isArray(payload.items)) throw new Error('The service catalogue response was invalid.')
 
-        // Older catalogue schemas legitimately store ordinary select choices as
-        // strings, while the production Portal renderer consumes option objects.
-        // Normalise both shapes at the production boundary so required selects
-        // such as Access Request always expose their published choices.
-        const catalogue = normalizeCatalogue(payload)
-        replaceCatalogue(catalogue.items)
-        if (active) setState((current) => ({ ...current, status: 'ready', managed: true, catalogue, error: '' }))
+        replaceCatalogue(payload.items)
+        if (active) setState((current) => ({ ...current, status: 'ready', error: '' }))
       } catch (error) {
         if (active) setState((current) => ({ ...current, status: 'error', error: error.message || 'The service catalogue is temporarily unavailable.' }))
       }
@@ -105,12 +78,5 @@ export function ProductionPortalBootstrap() {
     )
   }
 
-  if (!state.managed) return <App />
-
-  return (
-    <ProductionRequesterPortal
-      catalogue={state.catalogue || { items: [], categories: [] }}
-      tenant={state.catalogue?.tenant || { slug: surface.tenantSlug, companyName: surface.tenantName || surface.tenantSlug }}
-    />
-  )
+  return <App />
 }

@@ -113,35 +113,6 @@ export async function sendPasswordResetEmail({ to, name, companyName, token, ten
   })
 }
 
-export async function sendPortalActivationEmail({ to, name, companyName, token, portalUrl }) {
-  const transporter = nodemailer.createTransport(smtpConfig())
-  const activationUrl = `${portalUrl}/activate?token=${encodeURIComponent(token)}`
-  const from = process.env.SMTP_FROM || process.env.SMTP_USER
-
-  return transporter.sendMail({
-    from,
-    to,
-    subject: `Activate your ${companyName} Help Centre access`,
-    text: [
-      `Hi ${name},`,
-      '',
-      `${companyName} uses Hi5Central for IT help and service requests.`,
-      `Activate your Help Centre access: ${activationUrl}`,
-      '',
-      'This link expires in 60 minutes and can only be used once.',
-      `Help Centre: ${portalUrl}`,
-    ].join('\n'),
-    html: emailShell({
-      kicker: 'Activate your Help Centre',
-      title: `Welcome, ${name}.`,
-      body: `<strong>${escapeHtml(companyName)}</strong> uses Hi5Central for IT help and service requests. Create your Portal access to submit requests and follow their progress.`,
-      actionLabel: 'Activate Help Centre access',
-      actionUrl: activationUrl,
-      footer: `This link expires in 60 minutes and can only be used once.<br>Help Centre: ${escapeHtml(portalUrl)}`,
-    }),
-  })
-}
-
 export async function verifySmtpConnection() {
   const transporter = nodemailer.createTransport(smtpConfig())
   await transporter.verify()

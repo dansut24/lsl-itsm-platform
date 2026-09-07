@@ -105,17 +105,11 @@ async function nextReference(client, tenantId) {
   return `${prefix}${String(counter.rows[0].next_value).padStart(digits, '0')}`
 }
 
-async function requesterContext(client, session, requestedPersonKey = '') {
-  const externalKey = session.tenant_role === 'requester' ? '' : text(requestedPersonKey, 120)
-  const where = externalKey
-    ? 'p.tenant_id = $1 AND p.external_key = $2 AND p.active = true'
-    : 'p.tenant_id = $1 AND p.user_id = $2'
-  const lookupValue = externalKey || session.user_id
+async function requesterContext(client, session) {
   const result = await client.query(
     `SELECT
        p.id,
        p.external_key,
-       p.user_id,
        p.name,
        p.email,
        p.phone,
@@ -134,16 +128,16 @@ async function requesterContext(client, session, requestedPersonKey = '') {
      LEFT JOIN organisation_sites s ON s.id = p.site_id
      LEFT JOIN organisation_teams team ON team.id = p.primary_team_id
      LEFT JOIN organisation_people manager ON manager.id = p.manager_id
-     WHERE ${where}
+     WHERE p.tenant_id = $1 AND p.user_id = $2
      LIMIT 1`,
-    [session.tenant_id, lookupValue],
+    [session.tenant_id, session.user_id],
   )
 
   const person = result.rows[0] || null
   return {
     person,
     snapshot: {
-      userId: person?.user_id || (externalKey ? '' : session.user_id),
+      userId: session.user_id,
       personId: person?.external_key || '',
       name: person?.name || session.name,
       email: person?.email || session.email,
@@ -458,7 +452,6 @@ export function registerServiceRequestRoutes(app) {
     const fields = asObject(body?.fields)
     const details = asObject(body?.details)
     const priority = allowedPriorities.has(body?.urgency) ? body.urgency : 'Medium'
-    const requestedPersonKey = auth.session.tenant_role === 'requester' ? '' : text(body?.requesterPersonId, 120)
 
     if (!catalogueItemId) return c.json({ error: 'Select a Service Catalogue item.' }, 400)
     if (summary.length < 3) return c.json({ error: 'Add a summary of at least 3 characters.' }, 400)
@@ -491,12 +484,7 @@ export function registerServiceRequestRoutes(app) {
         const origin = c.req.header('origin') || ''
         const portalSource = origin.toLowerCase().includes('-portal.hi5central.com') || auth.session.tenant_role === 'requester'
         const priced = itemSnapshots(schema, fields, products, portalSource)
-        const requester = await requesterContext(client, auth.session, requestedPersonKey)
-        if (requestedPersonKey && !requester.person) {
-          const error = new Error('Select an active Person from this tenant.')
-          error.status = 400
-          throw error
-        }
+        const requester = await requesterContext(client, auth.session)
         const { config } = await numberingSettings(client, auth.session.tenant_id)
         const approval = approvalPlan(form, priced.oneOff + priced.monthly, config, requester)
         const reference = await nextReference(client, auth.session.tenant_id)
@@ -533,7 +521,7 @@ export function registerServiceRequestRoutes(app) {
             form.id,
             form.external_key,
             form.title,
-            requester.person?.user_id || (requestedPersonKey ? null : auth.session.user_id),
+            auth.session.user_id,
             requester.person?.id || null,
             JSON.stringify(requester.snapshot),
             summary,
@@ -629,10 +617,10 @@ export function registerServiceRequestRoutes(app) {
             request.id,
             auth.session.user_id,
             requester.person?.id || null,
-            JSON.stringify({ name: auth.session.name, email: auth.session.email }),
+            JSON.stringify({ name: requester.snapshot.name, email: requester.snapshot.email }),
             text(details.text || `Submitted ${form.title}.`, 20_000),
             JSON.stringify(safeAttachments(details.attachments)),
-            JSON.stringify({ event: 'request.submitted', catalogueItemId: form.external_key, onBehalfOf: requester.snapshot.personId || null }),
+            JSON.stringify({ event: 'request.submitted', catalogueItemId: form.external_key }),
           ],
         )
 
