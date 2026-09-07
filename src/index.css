@@ -84,3 +84,15 @@ body[data-hi5-surface='marketing'] #root,
   min-height: 100dvh !important;
   overflow: visible !important;
 }
+
+/* iOS Safari automatically zooms focused controls whose computed text size is
+   below 16px. Keep mobile/coarse-pointer form controls at the threshold so the
+   platform never enters the sticky focus-zoom state, while leaving normal
+   pinch-to-zoom accessibility enabled. */
+@media (max-width: 820px), (hover: none) and (pointer: coarse) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
