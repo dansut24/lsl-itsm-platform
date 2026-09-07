@@ -5,6 +5,7 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { secureHeaders } from 'hono/secure-headers'
 import { registerCatalogueRoutes } from './catalogue.js'
+import { registerLicensingRoutes } from './licensing.js'
 import {
   allowedRequestOrigin,
   deployment,
@@ -599,6 +600,7 @@ app.post('/api/v1/onboarding/complete', async (c) => {
   return c.json(sessionPayload(refreshed))
 })
 
+registerLicensingRoutes(app)
 registerCatalogueRoutes(app)
 registerOrganisationRoutes(app)
 registerSettingsRoutes(app)
