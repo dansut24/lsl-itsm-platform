@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ProductionActivityActionRecord } from './ProductionActivityActionRecord.jsx'
-import { ProductionUnifiedRecordDetail } from './ProductionUnifiedRecordDetail.jsx'
+import { ProductionServiceRequestActivityRecord } from './ProductionServiceRequestActivityRecord.jsx'
 
 function detailRoute(pathname = window.location.pathname) {
   const parts = String(pathname || '').split('/').filter(Boolean)
@@ -39,7 +39,7 @@ export function ProductionRecordDetailRouter() {
     }
   }, [])
 
-  if (route === 'service-request') return <ProductionUnifiedRecordDetail />
+  if (route === 'service-request') return <ProductionServiceRequestActivityRecord />
   if (route === 'generic') return <ProductionActivityActionRecord />
   return null
 }
