@@ -144,3 +144,20 @@ export function portalRequestFromHeaders(origin = '', referer = '') {
     return false
   }
 }
+
+export function originMatchesPortalTenant(origin, referer, slug) {
+  if (!origin) return true
+
+  const normalizedOrigin = String(origin).toLowerCase()
+  const urls = tenantUrls(slug, { rmm: true })
+
+  if (deployment.tenancyMode === 'single') {
+    if (!originMatchesTenant(origin, slug)) return false
+    const appOrigin = originOf(urls.tenantUrl)
+    const portalOrigin = originOf(urls.portalUrl)
+    if (portalOrigin && portalOrigin !== appOrigin) return normalizedOrigin === portalOrigin
+    return portalRequestFromHeaders(origin, referer)
+  }
+
+  return normalizedOrigin === originOf(urls.portalUrl)
+}
