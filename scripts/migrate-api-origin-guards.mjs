@@ -6,6 +6,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const apiRoot = path.join(repoRoot, 'api/src')
 let changed = 0
 let genericGuards = 0
+let wrapperGuards = 0
 let portalGuards = 0
 
 function ensureImport(content, names) {
@@ -28,6 +29,10 @@ const genericPattern = /function originMatchesSession\(c, session\) \{\n\s*const
 
 const genericReplacement = `function originMatchesSession(c, session) {\n  return originMatchesTenant(c.req.header('origin'), session.slug)\n}`
 
+const wrapperPattern = /function originMatchesTenant\(c, slug\) \{\n\s*const origin = c\.req\.header\('origin'\)\n\s*if \(!origin\) return true\n\s*return new Set\(\[\n\s*`https:\/\/\$\{slug\}\.hi5central\.com`,\n\s*`https:\/\/\$\{slug\}-portal\.hi5central\.com`,\n\s*`https:\/\/\$\{slug\}-rmm\.hi5central\.com`,\n\s*\]\)\.has\(origin\.toLowerCase\(\)\)\n\}/g
+
+const wrapperReplacement = `function originMatchesTenant(c, slug) {\n  return deploymentOriginMatchesTenant(c.req.header('origin'), slug)\n}`
+
 const portalPattern = /function portalOrigin\(c, slug\) \{\n\s*const origin = String\(c\.req\.header\('origin'\) \|\| ''\)\.toLowerCase\(\)\n\s*if \(!origin\) return true\n\s*return origin === `https:\/\/\$\{slug\}-portal\.hi5central\.com`\n\}/g
 
 const portalReplacement = `function portalOrigin(c, slug) {\n  return originMatchesPortalTenant(\n    c.req.header('origin'),\n    c.req.header('referer'),\n    slug,\n  )\n}`
@@ -46,6 +51,14 @@ for (const entry of fs.readdirSync(apiRoot, { withFileTypes: true })) {
   })
   if (genericCount) content = ensureImport(content, ['originMatchesTenant'])
 
+  let wrapperCount = 0
+  content = content.replace(wrapperPattern, () => {
+    wrapperCount += 1
+    wrapperGuards += 1
+    return wrapperReplacement
+  })
+  if (wrapperCount) content = ensureImport(content, ['originMatchesTenant as deploymentOriginMatchesTenant'])
+
   let portalCount = 0
   content = content.replace(portalPattern, () => {
     portalCount += 1
@@ -57,12 +70,12 @@ for (const entry of fs.readdirSync(apiRoot, { withFileTypes: true })) {
   if (content !== original) {
     fs.writeFileSync(full, content)
     changed += 1
-    console.log(`migrated ${path.relative(repoRoot, full)} (${genericCount} generic, ${portalCount} portal)`)
+    console.log(`migrated ${path.relative(repoRoot, full)} (${genericCount} generic, ${wrapperCount} wrappers, ${portalCount} portal)`)
   }
 }
 
-console.log(`API origin migration complete: ${genericGuards} generic guards and ${portalGuards} Portal guards across ${changed} files.`)
+console.log(`API origin migration complete: ${genericGuards} generic guards, ${wrapperGuards} wrappers and ${portalGuards} Portal guards across ${changed} files.`)
 
-if (!genericGuards && !portalGuards) {
+if (!genericGuards && !wrapperGuards && !portalGuards) {
   console.log('No legacy API origin guards remained.')
 }
