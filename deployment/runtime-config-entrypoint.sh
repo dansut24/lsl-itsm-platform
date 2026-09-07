@@ -31,6 +31,7 @@ window.__HI5_CONFIG__ = Object.freeze({
   downloadsUrl: "${DOWNLOADS_URL_VALUE}",
   turnUrl: "${TURN_URL_VALUE}"
 })
+window.__HI5_API_BASE__ = window.__HI5_CONFIG__.apiUrl || window.location.origin
 EOF
 
 exec "$@"
