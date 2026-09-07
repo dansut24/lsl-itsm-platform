@@ -32,20 +32,6 @@ import './ContextualSurfaces.css'
 import './production/ProductionWorkspaceVisualSystem.css'
 import './production/ProductionActivityFirstRecord.css'
 import './production/ProductionWorkspaceDensity.css'
-import './production/ProductionMobileRuntimeGuard.css'
-
-const STATIC_ASSET_RECOVERY_KEY = 'hi5central-static-asset-recovery-v1'
-
-try {
-  window.sessionStorage.removeItem(STATIC_ASSET_RECOVERY_KEY)
-  const currentUrl = new URL(window.location.href)
-  if (currentUrl.searchParams.has('_hi5_reload')) {
-    currentUrl.searchParams.delete('_hi5_reload')
-    window.history.replaceState({}, '', `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`)
-  }
-} catch {
-  // Browser storage can be unavailable in privacy-restricted mobile sessions.
-}
 
 const rootElement = document.getElementById('root')
 const initialSurface = resolveTenantSurface()
@@ -56,6 +42,10 @@ if (rootElement) rootElement.dataset.hi5Surface = initialSurface.kind
 const productionWorkspace = initialSurface.kind === 'workspace' && initialSurface.canonical
 const productionOnboarding = productionWorkspace
   && (window.location.pathname === '/onboarding' || window.location.pathname.startsWith('/onboarding/'))
+const mobileWorkspaceMedia = typeof window.matchMedia === 'function'
+  ? window.matchMedia('(max-width: 680px) and (any-pointer: coarse), (max-height: 600px) and (any-pointer: coarse)')
+  : null
+const phoneClassWorkspace = Boolean(mobileWorkspaceMedia && mobileWorkspaceMedia.matches)
 
 let RootApp = App
 if (initialSurface.kind === 'marketing') {
@@ -76,7 +66,7 @@ createRoot(rootElement).render(
     {productionWorkspace && !productionOnboarding ? <ProductionItsmWorkspace /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionRecordDetailRouter /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionServiceRequestIntake /> : null}
-    {productionWorkspace && !productionOnboarding ? <ProductionWorkspaceRefinement /> : null}
+    {productionWorkspace && !productionOnboarding && !phoneClassWorkspace ? <ProductionWorkspaceRefinement /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionMfaLoginEnhancer /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionMfaSettingsEnhancer /> : null}
     {productionWorkspace && productionOnboarding ? <OnboardingMfaEnhancer /> : null}
