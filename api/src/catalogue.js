@@ -1,4 +1,5 @@
 import { pool, withTransaction } from './db.js'
+import { registerPortalAuthRoutes } from './portalAuth.js'
 import { registerServiceRequestOperationRoutes } from './serviceRequestOperations.js'
 import { registerServiceRequestRoutes } from './serviceRequests.js'
 import { registerServiceRequestStateRoutes } from './serviceRequestState.js'
@@ -382,6 +383,7 @@ export function registerCatalogueRoutes(app) {
     return c.json(await catalogueSnapshot(auth.session.tenant_id))
   })
 
+  registerPortalAuthRoutes(app)
   registerServiceRequestRoutes(app)
   registerServiceRequestOperationRoutes(app)
   registerServiceRequestStateRoutes(app)
