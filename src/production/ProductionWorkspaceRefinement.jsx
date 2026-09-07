@@ -72,18 +72,24 @@ function ScrollAssist({ target, kind }) {
     target.addEventListener('scroll', update, { passive: true })
     window.addEventListener('resize', update)
 
-    const resizeObserver = new ResizeObserver(update)
-    resizeObserver.observe(target)
-    Array.from(target.children).slice(0, 12).forEach((child) => resizeObserver.observe(child))
+    let resizeObserver = null
+    if (typeof window.ResizeObserver === 'function') {
+      resizeObserver = new window.ResizeObserver(update)
+      resizeObserver.observe(target)
+      Array.from(target.children).slice(0, 12).forEach((child) => resizeObserver.observe(child))
+    }
 
-    const mutationObserver = new MutationObserver(update)
-    mutationObserver.observe(target, { childList: true, subtree: true, attributes: true })
+    let mutationObserver = null
+    if (typeof window.MutationObserver === 'function') {
+      mutationObserver = new window.MutationObserver(update)
+      mutationObserver.observe(target, { childList: true, subtree: true, attributes: true })
+    }
 
     return () => {
       target.removeEventListener('scroll', update)
       window.removeEventListener('resize', update)
-      resizeObserver.disconnect()
-      mutationObserver.disconnect()
+      resizeObserver?.disconnect()
+      mutationObserver?.disconnect()
     }
   }, [target])
 
@@ -125,14 +131,19 @@ export function ProductionWorkspaceRefinement() {
     }
 
     scan()
-    const observer = new MutationObserver(scan)
-    observer.observe(document.body, { childList: true, subtree: true })
+
+    let observer = null
+    if (typeof window.MutationObserver === 'function') {
+      observer = new window.MutationObserver(scan)
+      observer.observe(document.body, { childList: true, subtree: true })
+    }
+
     window.addEventListener('hi5-routechange', scan)
     window.addEventListener('resize', scan)
     const timer = window.setInterval(scan, 900)
 
     return () => {
-      observer.disconnect()
+      observer?.disconnect()
       window.removeEventListener('hi5-routechange', scan)
       window.removeEventListener('resize', scan)
       window.clearInterval(timer)
