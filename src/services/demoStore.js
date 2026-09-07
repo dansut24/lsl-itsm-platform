@@ -6,10 +6,12 @@ import { seedProjects } from '../data/workPlanningData.js'
 import { organisationDepartments, organisationPeople, organisationTeams } from '../data/organisationData.js'
 import { createSeedNotifications } from '../data/notificationData.js'
 import { synchroniseProductionServiceRequestSnapshot } from './productionServiceRequests.js'
+import { synchroniseProductionItsmRecordSnapshot } from './productionItsmRecords.js'
 
 const PRODUCTION_SESSION_KEY = 'hi5central-production-session-v1'
 const API_BASE = 'https://api.hi5central.com'
 const serviceRequestSyncQueues = new Map()
+const itsmRecordSyncQueues = new Map()
 
 function readJson(key, fallback) {
   try {
@@ -39,6 +41,10 @@ function productionOrganisationEnabled() {
 function productionServiceRequestsEnabled() {
   const session = readJson(PRODUCTION_SESSION_KEY, null)
   return Boolean(session?.source === 'production' && session?.role === 'analyst' && session?.tenantSlug)
+}
+
+function productionItsmEnabled() {
+  return productionServiceRequestsEnabled()
 }
 
 function serviceRequestMutableFingerprint(ticket) {
@@ -104,6 +110,41 @@ function queueServiceRequestSync(previous, next) {
   serviceRequestSyncQueues.set(next.id, job)
 }
 
+function genericRecordFingerprint(ticket) {
+  if (!ticket) return ''
+  const clone = { ...ticket }
+  for (const key of ['created','updated','createdAt','updatedAt','databaseId']) delete clone[key]
+  return JSON.stringify(clone)
+}
+
+function queueItsmRecordSync(previous, next) {
+  if (!productionItsmEnabled()) return
+  if (!next || !['Incident', 'Problem', 'Change'].includes(next.type)) return
+  if (previous && previous.id !== next.id) return
+  if (previous && genericRecordFingerprint(previous) === genericRecordFingerprint(next)) return
+
+  const queueKey = previous?.id || next.id
+  const priorQueue = itsmRecordSyncQueues.get(queueKey) || Promise.resolve()
+  const job = priorQueue
+    .catch(() => {})
+    .then(() => synchroniseProductionItsmRecordSnapshot(previous, next))
+    .then((reconciled) => {
+      if (!reconciled) return
+      window.setTimeout(() => window.location.reload(), 90)
+    })
+    .catch((error) => {
+      console.error(`${next.type} ${next.id} synchronisation failed`, error)
+      window.dispatchEvent(new CustomEvent('hi5-itsm-record-sync-error', {
+        detail: { reference: next.id, message: error.message },
+      }))
+      window.setTimeout(() => window.location.reload(), 140)
+    })
+    .finally(() => {
+      if (itsmRecordSyncQueues.get(queueKey) === job) itsmRecordSyncQueues.delete(queueKey)
+    })
+  itsmRecordSyncQueues.set(queueKey, job)
+}
+
 export async function syncOrganisationCollection(collection, items) {
   if (!productionOrganisationEnabled()) return null
   try {
@@ -154,6 +195,11 @@ function hydrateTicketEnhancements(tickets) {
 }
 
 export function loadTickets() {
+  if (productionItsmEnabled()) {
+    const stored = readJson('hi5central-tickets', [])
+    return Array.isArray(stored) ? stored.filter((ticket) => ticket?.persistence === 'api') : []
+  }
+
   const tickets = readMigratedJson('hi5central-tickets', 'lsl-itsm-tickets', seedTickets)
   const hydrated = hydrateTicketEnhancements(Array.isArray(tickets) ? tickets : seedTickets)
   const supplementalIds = new Set(['PRB-0148', 'PRB-0151', 'CHG-0904', 'CHG-0906', 'REQ-2231'])
@@ -304,11 +350,15 @@ export function saveTickets(value) {
   const previous = readJson('hi5central-tickets', [])
   writeJson('hi5central-tickets', next)
 
-  if (!productionServiceRequestsEnabled() || !Array.isArray(previous)) return
+  if (!productionItsmEnabled() || !Array.isArray(previous)) return
   const previousById = new Map(previous.map((ticket) => [ticket.id, ticket]))
   next.forEach((ticket) => {
     const before = previousById.get(ticket.id)
-    if (before) queueServiceRequestSync(before, ticket)
+    if (ticket.type === 'Service Request') {
+      if (before) queueServiceRequestSync(before, ticket)
+      return
+    }
+    if (['Incident', 'Problem', 'Change'].includes(ticket.type)) queueItsmRecordSync(before || null, ticket)
   })
 }
 export function saveOrganisationPeople(value) { writeJson('hi5central-organisation-people-v1', value); mirrorOrganisationCollection('people', value) }
