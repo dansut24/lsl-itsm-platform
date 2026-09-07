@@ -7,6 +7,7 @@ import { ensureRedisConnected } from './redis.js'
 import { recordSecurityEvent, requestIp, requestUserAgent } from './securityAudit.js'
 import { securitySettings, sessionTtlSeconds } from './securityPolicy.js'
 import {
+import { originMatchesPortalTenant } from './deploymentConfig.js'
   createSession,
   resolveSession,
   revokeCurrentSession,
@@ -35,9 +36,11 @@ function hashToken(value) {
 }
 
 function portalOrigin(c, slug) {
-  const origin = String(c.req.header('origin') || '').toLowerCase()
-  if (!origin) return true
-  return origin === `https://${slug}-portal.hi5central.com`
+  return originMatchesPortalTenant(
+    c.req.header('origin'),
+    c.req.header('referer'),
+    slug,
+  )
 }
 
 async function rateLimit(key, max, seconds) {

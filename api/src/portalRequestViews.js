@@ -1,5 +1,6 @@
 import { pool } from './db.js'
 import { resolveSession } from './session.js'
+import { originMatchesPortalTenant } from './deploymentConfig.js'
 
 function text(value, max = 255) {
   return String(value ?? '').trim().slice(0, max)
@@ -14,9 +15,11 @@ function asArray(value) {
 }
 
 function portalOrigin(c, slug) {
-  const origin = String(c.req.header('origin') || '').toLowerCase()
-  if (!origin) return true
-  return origin === `https://${slug}-portal.hi5central.com`
+  return originMatchesPortalTenant(
+    c.req.header('origin'),
+    c.req.header('referer'),
+    slug,
+  )
 }
 
 async function requireRequester(c) {

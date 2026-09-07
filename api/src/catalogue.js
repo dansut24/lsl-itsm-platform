@@ -7,18 +7,13 @@ import { registerServiceRequestOperationRoutes } from './serviceRequestOperation
 import { registerServiceRequestRoutes } from './serviceRequests.js'
 import { registerServiceRequestStateRoutes } from './serviceRequestState.js'
 import { resolveSession } from './session.js'
+import { originMatchesTenant } from './deploymentConfig.js'
 
 const maxItems = 5000
 const maxPayloadBytes = 4_000_000
 
 function originMatchesSession(c, session) {
-  const origin = c.req.header('origin')
-  if (!origin) return true
-  return new Set([
-    `https://${session.slug}.hi5central.com`,
-    `https://${session.slug}-portal.hi5central.com`,
-    `https://${session.slug}-rmm.hi5central.com`,
-  ]).has(origin.toLowerCase())
+  return originMatchesTenant(c.req.header('origin'), session.slug)
 }
 
 async function requireSession(c, write = false) {

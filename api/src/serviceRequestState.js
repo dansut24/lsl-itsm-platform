@@ -1,14 +1,9 @@
 import { pool } from './db.js'
 import { resolveSession } from './session.js'
+import { originMatchesTenant } from './deploymentConfig.js'
 
 function originMatchesSession(c, session) {
-  const origin = c.req.header('origin')
-  if (!origin) return true
-  return new Set([
-    `https://${session.slug}.hi5central.com`,
-    `https://${session.slug}-portal.hi5central.com`,
-    `https://${session.slug}-rmm.hi5central.com`,
-  ]).has(origin.toLowerCase())
+  return originMatchesTenant(c.req.header('origin'), session.slug)
 }
 
 async function requireSession(c) {

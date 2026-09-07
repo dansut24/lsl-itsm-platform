@@ -1,6 +1,7 @@
 import { pool } from './db.js'
 import { registerItsmActionRoutes } from './itsmActions.js'
 import { resolveSession } from './session.js'
+import { originMatchesTenant } from './deploymentConfig.js'
 
 const allowedTypes = new Set(['Incident', 'Service Request', 'Problem', 'Change'])
 
@@ -9,13 +10,7 @@ function text(value, max = 255) {
 }
 
 function originMatchesSession(c, session) {
-  const origin = c.req.header('origin')
-  if (!origin) return true
-  return new Set([
-    `https://${session.slug}.hi5central.com`,
-    `https://${session.slug}-portal.hi5central.com`,
-    `https://${session.slug}-rmm.hi5central.com`,
-  ]).has(origin.toLowerCase())
+  return originMatchesTenant(c.req.header('origin'), session.slug)
 }
 
 async function requireTechnician(c) {
