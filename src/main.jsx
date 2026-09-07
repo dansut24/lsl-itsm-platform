@@ -23,6 +23,7 @@ import './features/settings/ProductionSettingsFloating.css'
 import './features/people/OrganisationContextual.css'
 import './features/onboarding/OnboardingViewportFix.css'
 import './production/ProductionItsmMobileViewFix.css'
+import './production/ProductionItsmSurfacePolish.css'
 import './PlatformCurves.css'
 import './ContextualSurfaces.css'
 
