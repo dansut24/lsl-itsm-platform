@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { pool, withTransaction } from './db.js'
 import { sendPortalActivationEmail } from './mailer.js'
 import { hashPassword, passwordPolicyResult, verifyPassword } from './password.js'
+import { registerPortalRequestViewRoutes } from './portalRequestViews.js'
 import { ensureRedisConnected } from './redis.js'
 import { recordSecurityEvent, requestIp, requestUserAgent } from './securityAudit.js'
 import { securitySettings, sessionTtlSeconds } from './securityPolicy.js'
@@ -12,10 +13,6 @@ import {
   sessionPayload,
   setSessionCookie,
 } from './session.js'
-
-function text(value, max = 255) {
-  return String(value ?? '').trim().slice(0, max)
-}
 
 function normaliseEmail(value = '') {
   return String(value).trim().toLowerCase()
@@ -134,6 +131,8 @@ async function requirePortalSession(c) {
 }
 
 export function registerPortalAuthRoutes(app) {
+  registerPortalRequestViewRoutes(app)
+
   app.get('/api/v1/portal/auth/session', async (c) => {
     const auth = await requirePortalSession(c)
     if (auth.error) return auth.error
