@@ -57,6 +57,7 @@ import {
   rmmScripts,
   rmmSoftware,
 } from '../../data/rmmData.js'
+import { deploymentConfig } from '../../lib/deploymentConfig.js'
 import { resolveTenantSurface, rmmPath, rmmRouteFromLocation } from '../../lib/tenantSurface.js'
 import { resolveDeviceMonitoringPolicy } from '../../data/rmmMonitoringData.js'
 import {
@@ -142,8 +143,10 @@ function recordPrefix(ticket) {
 function itsmRecordHref(ticket) {
   const path = `/${recordPrefix(ticket)}/${encodeURIComponent(ticket.id)}`
   const surface = resolveTenantSurface()
+  const deployment = deploymentConfig()
+  if (deployment.tenancyMode === 'single') return path
   if (surface?.canonical && surface?.tenantSlug) {
-    return `https://${surface.tenantSlug}.hi5central.com${path}`
+    return `https://${surface.tenantSlug}.${deployment.rootDomain}${path}`
   }
   return path
 }

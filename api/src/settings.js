@@ -1,3 +1,4 @@
+import { originMatchesTenant } from './deploymentConfig.js'
 import { pool, withTransaction } from './db.js'
 import { registerMfaRoutes } from './mfa.js'
 import { registerSecurityRoutes } from './security.js'
@@ -24,14 +25,7 @@ const writableAreas = new Set([
 ])
 
 function originMatchesSession(c, session) {
-  const origin = c.req.header('origin')
-  if (!origin) return true
-  const expected = new Set([
-    `https://${session.slug}.hi5central.com`,
-    `https://${session.slug}-portal.hi5central.com`,
-    `https://${session.slug}-rmm.hi5central.com`,
-  ])
-  return expected.has(origin.toLowerCase())
+  return originMatchesTenant(c.req.header('origin'), session.slug)
 }
 
 async function requireTenantAdmin(c) {

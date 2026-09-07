@@ -9,9 +9,11 @@ import {
   Sparkles,
   Wrench,
 } from 'lucide-react'
+import { deploymentConfig } from '../../lib/deploymentConfig.js'
 import './MarketingApp.css'
 
 const API_BASE = window.__HI5_API_BASE__
+const DEPLOYMENT = deploymentConfig()
 
 function slugFromCompany(value = '') {
   return String(value)
@@ -238,8 +240,9 @@ function SignupPage() {
   }, [])
 
   const tenantPreview = useMemo(() => {
+    if (DEPLOYMENT.tenancyMode === 'single') return DEPLOYMENT.rootDomain
     const slug = form.tenantSlug || 'your-company'
-    return `${slug}.hi5central.com`
+    return `${slug}.${DEPLOYMENT.rootDomain}`
   }, [form.tenantSlug])
 
   function updateField(field, value) {

@@ -6,8 +6,8 @@ import { registerPortalRequestViewRoutes } from './portalRequestViews.js'
 import { ensureRedisConnected } from './redis.js'
 import { recordSecurityEvent, requestIp, requestUserAgent } from './securityAudit.js'
 import { securitySettings, sessionTtlSeconds } from './securityPolicy.js'
-import {
 import { originMatchesPortalTenant } from './deploymentConfig.js'
+import {
   createSession,
   resolveSession,
   revokeCurrentSession,

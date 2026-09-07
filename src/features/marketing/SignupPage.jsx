@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ArrowRight, CheckCircle2, MonitorCog, Wrench } from 'lucide-react'
+import { deploymentConfig } from '../../lib/deploymentConfig.js'
 import './MarketingApp.css'
 
 const API_BASE = window.__HI5_API_BASE__
+const DEPLOYMENT = deploymentConfig()
 
 function slugFromCompany(value = '') {
   return String(value)
@@ -46,7 +48,7 @@ export function SignupPage() {
     }
   }, [])
 
-  const tenantPreview = useMemo(() => `${form.tenantSlug || 'your-company'}.hi5central.com`, [form.tenantSlug])
+  const tenantPreview = useMemo(() => DEPLOYMENT.tenancyMode === 'single' ? DEPLOYMENT.rootDomain : `${form.tenantSlug || 'your-company'}.${DEPLOYMENT.rootDomain}`, [form.tenantSlug])
 
   function updateField(field, value) {
     setForm((current) => {
@@ -138,7 +140,7 @@ export function SignupPage() {
             <span className="marketing-eyebrow">Workspace created</span>
             <h1>Check your email to activate Hi5Central.</h1>
             <p>
-              We created <strong>{created.tenant?.companyName}</strong> and reserved <strong>{created.tenant?.slug}.hi5central.com</strong> for you.
+              We created <strong>{created.tenant?.companyName}</strong> and reserved <strong>{created.tenant?.tenantUrl || tenantPreview}</strong> for you.
             </p>
             <div className="marketing-created-urls">
               <div><span>ITSM workspace</span><strong>{created.tenant?.tenantUrl}</strong></div>

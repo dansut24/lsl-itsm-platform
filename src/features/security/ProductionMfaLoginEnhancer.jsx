@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { KeyRound, ShieldCheck, X } from 'lucide-react'
+import { resolveTenantSurface } from '../../lib/tenantSurface.js'
 import { storeProductionAuthHandoff } from '../../production/productionSessionBridge.js'
 import './ProductionMfaLoginEnhancer.css'
 
@@ -51,9 +52,9 @@ export function ProductionMfaLoginEnhancer() {
       event.stopPropagation()
       event.stopImmediatePropagation?.()
 
-      const host = window.location.hostname.toLowerCase()
-      const tenantSlug = host.endsWith('.hi5central.com') ? host.slice(0, -'.hi5central.com'.length) : ''
-      if (!tenantSlug || tenantSlug.endsWith('-portal') || tenantSlug.endsWith('-rmm')) return
+      const surface = resolveTenantSurface()
+      const tenantSlug = surface?.kind === 'workspace' ? surface.tenantSlug : ''
+      if (!tenantSlug) return
 
       setBusy(true)
       setError('')

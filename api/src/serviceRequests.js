@@ -1,6 +1,6 @@
 import { pool, withTransaction } from './db.js'
 import { resolveSession } from './session.js'
-import { originMatchesTenant } from './deploymentConfig.js'
+import { originMatchesTenant, portalRequestFromHeaders } from './deploymentConfig.js'
 
 const allowedPriorities = new Set(['Low', 'Medium', 'High', 'Critical'])
 const allowedDecisions = new Set(['Approved', 'Rejected'])
@@ -484,7 +484,7 @@ export function registerServiceRequestRoutes(app) {
 
         const products = await catalogueProducts(client, auth.session.tenant_id, schema)
         const origin = c.req.header('origin') || ''
-        const portalSource = origin.toLowerCase().includes('-portal.hi5central.com') || auth.session.tenant_role === 'requester'
+        const portalSource = portalRequestFromHeaders(origin, c.req.header('referer')) || auth.session.tenant_role === 'requester'
         const priced = itemSnapshots(schema, fields, products, portalSource)
         const requester = await requesterContext(client, auth.session, requestedPersonKey)
         if (requestedPersonKey && !requester.person) {

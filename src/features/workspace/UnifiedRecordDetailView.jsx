@@ -34,6 +34,7 @@ import {
   Users,
   Wrench,
 } from 'lucide-react'
+import { deploymentConfig } from '../../lib/deploymentConfig.js'
 import { priorityClass, statusClass } from '../../lib/workspace.js'
 import { resolveTenantSurface } from '../../lib/tenantSurface.js'
 import { organisationPeople, organisationTeams } from '../../data/organisationData.js'
@@ -82,8 +83,10 @@ function valueOrFallback(value, fallback = 'Not captured') {
 function rmmDeviceHref(deviceId) {
   const encoded = encodeURIComponent(String(deviceId || '').toUpperCase())
   const surface = resolveTenantSurface()
+  const deployment = deploymentConfig()
+  if (deployment.tenancyMode === 'single') return `/rmm/devices/${encoded}`
   if (surface?.canonical && surface?.tenantSlug) {
-    return `https://${surface.tenantSlug}-rmm.hi5central.com/devices/${encoded}`
+    return `https://${surface.tenantSlug}-rmm.${deployment.rootDomain}/devices/${encoded}`
   }
   return `/rmm/devices/${encoded}`
 }
