@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import App from '../App.jsx'
 import { portalServiceCatalog } from '../data/portalData.js'
 import { resolveTenantSurface } from '../lib/tenantSurface.js'
+import { ProductionRequesterPortal } from './ProductionRequesterPortal.jsx'
 import './ProductionPortalBootstrap.css'
 
 const API_BASE = 'https://api.hi5central.com'
@@ -35,7 +36,7 @@ function PortalBootstrapState({ error, onRetry, tenantName }) {
 
 export function ProductionPortalBootstrap() {
   const surface = useMemo(() => resolveTenantSurface(), [])
-  const [state, setState] = useState({ status: 'loading', attempt: 0, error: '' })
+  const [state, setState] = useState({ status: 'loading', attempt: 0, error: '', managed: true, catalogue: null })
 
   useEffect(() => {
     let active = true
@@ -47,10 +48,9 @@ export function ProductionPortalBootstrap() {
         const payload = await response.json().catch(() => ({}))
 
         if (response.status === 404 || payload.managed === false) {
-          // Unmanaged canonical hosts such as the permanent beta demo retain the
-          // bundled Portal catalogue. Real tenant hosts never receive another
-          // tenant's data because the API resolves solely from the host slug.
-          if (active) setState((current) => ({ ...current, status: 'ready', error: '' }))
+          // Keep the permanent demo surface available without ever treating its
+          // bundled data as a managed production tenant.
+          if (active) setState((current) => ({ ...current, status: 'ready', managed: false, catalogue: null, error: '' }))
           return
         }
 
@@ -58,7 +58,7 @@ export function ProductionPortalBootstrap() {
         if (!Array.isArray(payload.items)) throw new Error('The service catalogue response was invalid.')
 
         replaceCatalogue(payload.items)
-        if (active) setState((current) => ({ ...current, status: 'ready', error: '' }))
+        if (active) setState((current) => ({ ...current, status: 'ready', managed: true, catalogue: payload, error: '' }))
       } catch (error) {
         if (active) setState((current) => ({ ...current, status: 'error', error: error.message || 'The service catalogue is temporarily unavailable.' }))
       }
@@ -78,5 +78,12 @@ export function ProductionPortalBootstrap() {
     )
   }
 
-  return <App />
+  if (!state.managed) return <App />
+
+  return (
+    <ProductionRequesterPortal
+      catalogue={state.catalogue || { items: [], categories: [] }}
+      tenant={state.catalogue?.tenant || { slug: surface.tenantSlug, companyName: surface.tenantName || surface.tenantSlug }}
+    />
+  )
 }
