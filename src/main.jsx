@@ -32,6 +32,7 @@ import './ContextualSurfaces.css'
 import './production/ProductionWorkspaceVisualSystem.css'
 import './production/ProductionActivityFirstRecord.css'
 import './production/ProductionWorkspaceDensity.css'
+import './production/ProductionResponsiveViewport.css'
 
 const rootElement = document.getElementById('root')
 const initialSurface = resolveTenantSurface()
