@@ -1,0 +1,38 @@
+name: Migrate runtime API base
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/migrate-runtime-api-base.mjs'
+      - '.github/workflows/migrate-runtime-api-base.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Use Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Migrate hard-coded API bases
+        run: node scripts/migrate-runtime-api-base.mjs
+      - name: Commit migration
+        run: |
+          if git diff --quiet; then
+            echo 'No API base migrations required.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src
+          git commit -m 'Use runtime API base across frontend'
+          git push origin HEAD:main
