@@ -1,0 +1,21 @@
+name: Responsive workspace contract
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  responsive-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Check responsive contract
+        run: node scripts/check-responsive-contract.mjs
