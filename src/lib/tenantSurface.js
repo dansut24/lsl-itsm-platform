@@ -1,5 +1,90 @@
+import { deploymentConfig } from './deploymentConfig.js'
+
 function normaliseSlug(value = '') {
   return String(value).trim().toLowerCase().replace(/[^a-z0-9-]/g, '')
+}
+
+function escapeRegex(value = '') {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function urlMatchesOrigin(url, location) {
+  if (!url) return false
+  try {
+    return new URL(url).origin.toLowerCase() === String(location.origin || '').toLowerCase()
+  } catch {
+    return false
+  }
+}
+
+function singleTenantSurface(location, config) {
+  const pathname = String(location.pathname || '/')
+  const tenantSlug = normaliseSlug(config.primaryTenantSlug)
+  const tenantName = tenantDisplayName(tenantSlug)
+
+  if (pathname === '/signup' || pathname.startsWith('/signup/')) {
+    return {
+      kind: 'marketing',
+      tenantSlug: '',
+      tenantName: 'Hi5Central',
+      canonical: true,
+      preview: false,
+      pathBased: false,
+    }
+  }
+
+  if (urlMatchesOrigin(config.portalUrl, location) && !urlMatchesOrigin(config.appUrl, location)) {
+    return {
+      kind: 'portal',
+      tenantSlug,
+      tenantName,
+      canonical: true,
+      preview: false,
+      pathBased: false,
+    }
+  }
+
+  if (urlMatchesOrigin(config.rmmUrl, location) && !urlMatchesOrigin(config.appUrl, location)) {
+    return {
+      kind: 'rmm',
+      tenantSlug,
+      tenantName,
+      canonical: true,
+      preview: false,
+      pathBased: false,
+    }
+  }
+
+  if (pathname === '/portal' || pathname.startsWith('/portal/')) {
+    return {
+      kind: 'portal',
+      tenantSlug,
+      tenantName,
+      canonical: true,
+      preview: false,
+      pathBased: true,
+    }
+  }
+
+  if (pathname === '/rmm' || pathname.startsWith('/rmm/')) {
+    return {
+      kind: 'rmm',
+      tenantSlug,
+      tenantName,
+      canonical: true,
+      preview: false,
+      pathBased: true,
+    }
+  }
+
+  return {
+    kind: 'workspace',
+    tenantSlug,
+    tenantName,
+    canonical: true,
+    preview: false,
+    pathBased: false,
+  }
 }
 
 export function tenantDisplayName(slug = '') {
@@ -13,33 +98,41 @@ export function tenantDisplayName(slug = '') {
 }
 
 export function resolveTenantSurface(location = window.location) {
+  const config = deploymentConfig()
   const hostname = String(location.hostname || '').toLowerCase()
   const pathname = String(location.pathname || '/')
   const params = new URLSearchParams(location.search || '')
 
-  if (hostname === 'hi5central.com' || hostname === 'www.hi5central.com') {
+  if (config.tenancyMode === 'single') return singleTenantSurface(location, config)
+
+  const rootDomain = escapeRegex(config.rootDomain)
+  const rootHost = config.rootDomain.toLowerCase()
+
+  if (hostname === rootHost || hostname === `www.${rootHost}`) {
     return {
       kind: 'marketing',
       tenantSlug: '',
       tenantName: 'Hi5Central',
       canonical: true,
       preview: false,
+      pathBased: false,
     }
   }
 
   // Keep /signup testable on localhost/Vercel without changing the default
   // prototype surface for those hosts.
-  if (pathname === '/signup' && !hostname.endsWith('.hi5central.com')) {
+  if (pathname === '/signup' && !hostname.endsWith(`.${rootHost}`)) {
     return {
       kind: 'marketing',
       tenantSlug: '',
       tenantName: 'Hi5Central',
       canonical: false,
       preview: true,
+      pathBased: false,
     }
   }
 
-  const rmmHost = hostname.match(/^([a-z0-9-]+)-rmm\.hi5central\.com$/i)
+  const rmmHost = hostname.match(new RegExp(`^([a-z0-9-]+)-rmm\\.${rootDomain}$`, 'i'))
   if (rmmHost) {
     const tenantSlug = normaliseSlug(rmmHost[1])
     return {
@@ -48,10 +141,11 @@ export function resolveTenantSurface(location = window.location) {
       tenantName: tenantDisplayName(tenantSlug),
       canonical: true,
       preview: false,
+      pathBased: false,
     }
   }
 
-  const portalHost = hostname.match(/^([a-z0-9-]+)-portal\.hi5central\.com$/i)
+  const portalHost = hostname.match(new RegExp(`^([a-z0-9-]+)-portal\\.${rootDomain}$`, 'i'))
   if (portalHost) {
     const tenantSlug = normaliseSlug(portalHost[1])
     return {
@@ -60,16 +154,15 @@ export function resolveTenantSurface(location = window.location) {
       tenantName: tenantDisplayName(tenantSlug),
       canonical: true,
       preview: false,
+      pathBased: false,
     }
   }
 
-  const tenantHost = hostname.match(/^([a-z0-9-]+)\.hi5central\.com$/i)
+  const tenantHost = hostname.match(new RegExp(`^([a-z0-9-]+)\\.${rootDomain}$`, 'i'))
   const tenantSlug = tenantHost && !['admin', 'api', 'reseller', 'downloads', 'turn', 'rmm'].includes(tenantHost[1])
     ? normaliseSlug(tenantHost[1])
-    : 'demo-tenant'
+    : config.primaryTenantSlug
 
-  // A real tenant host remains the technician workspace even when somebody
-  // manually enters /portal. The self-service surface exists on -portal only.
   if (tenantHost) {
     return {
       kind: 'workspace',
@@ -77,33 +170,35 @@ export function resolveTenantSurface(location = window.location) {
       tenantName: tenantDisplayName(tenantSlug),
       canonical: true,
       preview: false,
+      pathBased: false,
     }
   }
 
-  // Keep route-based previews while the prototype is still hosted on one
-  // Vercel origin. Production RMM traffic uses the dedicated -rmm host.
+  // Keep route-based previews while development/test environments still use
+  // a single origin. Production multi-tenant traffic uses dedicated hosts.
   const rmmPreviewSlug = normaliseSlug(params.get('rmm') || '')
   if (rmmPreviewSlug || pathname === '/rmm' || pathname.startsWith('/rmm/')) {
-    const rmmTenantSlug = rmmPreviewSlug || 'demo-tenant'
+    const rmmTenantSlug = rmmPreviewSlug || config.primaryTenantSlug
     return {
       kind: 'rmm',
       tenantSlug: rmmTenantSlug,
       tenantName: tenantDisplayName(rmmTenantSlug),
       canonical: false,
       preview: true,
+      pathBased: true,
     }
   }
 
-  // Production portal traffic uses the dedicated -portal host.
   const previewSlug = normaliseSlug(params.get('portal') || '')
   if (previewSlug || pathname === '/portal' || pathname.startsWith('/portal/')) {
-    const portalTenantSlug = previewSlug || 'demo-tenant'
+    const portalTenantSlug = previewSlug || config.primaryTenantSlug
     return {
       kind: 'portal',
       tenantSlug: portalTenantSlug,
       tenantName: tenantDisplayName(portalTenantSlug),
       canonical: false,
       preview: true,
+      pathBased: true,
     }
   }
 
@@ -113,14 +208,15 @@ export function resolveTenantSurface(location = window.location) {
     tenantName: tenantDisplayName(tenantSlug),
     canonical: false,
     preview: true,
+    pathBased: false,
   }
 }
 
 export function portalRouteFromLocation(surface, location = window.location) {
   const pathname = String(location.pathname || '/')
-  const patterns = surface?.canonical
-    ? [/^\/requests\/([^/]+)$/i]
-    : [/^\/portal\/requests\/([^/]+)$/i, /^\/requests\/([^/]+)$/i]
+  const patterns = surface?.pathBased
+    ? [/^\/portal\/requests\/([^/]+)$/i, /^\/requests\/([^/]+)$/i]
+    : [/^\/requests\/([^/]+)$/i]
 
   for (const pattern of patterns) {
     const match = pathname.match(pattern)
@@ -146,17 +242,17 @@ export function portalRouteFromLocation(surface, location = window.location) {
 }
 
 export function portalHomePath(surface) {
-  return surface?.canonical ? '/' : '/portal'
+  return surface?.pathBased || !surface?.canonical ? '/portal' : '/'
 }
 
 export function portalRequestPath(surface, id) {
   const encoded = encodeURIComponent(String(id || '').toUpperCase())
-  return surface?.canonical ? `/requests/${encoded}` : `/portal/requests/${encoded}`
+  return surface?.pathBased || !surface?.canonical ? `/portal/requests/${encoded}` : `/requests/${encoded}`
 }
 
 export function rmmRouteFromLocation(surface = resolveTenantSurface(), location = window.location) {
   const pathname = String(location.pathname || '/')
-  const prefix = surface?.canonical ? '' : '/rmm'
+  const prefix = surface?.pathBased || !surface?.canonical ? '/rmm' : ''
   const normalized = prefix && pathname.startsWith(prefix) ? pathname.slice(prefix.length) || '/' : pathname
 
   const deviceMatch = normalized.match(/^\/devices\/([^/]+)$/i)
@@ -179,5 +275,7 @@ export function rmmPath(surface = resolveTenantSurface(), viewId = 'dashboard', 
   const suffix = page === 'dashboard' ? '' : `/${page}`
   const recordSuffix = recordId ? `/${encodeURIComponent(String(recordId).toUpperCase())}` : ''
   const canonicalPath = `${suffix}${recordSuffix}` || '/'
-  return surface?.canonical ? canonicalPath : `/rmm${canonicalPath === '/' ? '' : canonicalPath}`
+  return surface?.pathBased || !surface?.canonical
+    ? `/rmm${canonicalPath === '/' ? '' : canonicalPath}`
+    : canonicalPath
 }
