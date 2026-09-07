@@ -38,11 +38,6 @@ function readPortalTheme() {
   return Object.fromEntries(PORTAL_THEME_VARS.map((name) => [name, computed.getPropertyValue(name).trim()]))
 }
 
-function workspaceEdgeInset() {
-  const value = Number.parseFloat(window.getComputedStyle(document.documentElement).getPropertyValue('--hi5-workspace-edge'))
-  return Number.isFinite(value) ? value : 2
-}
-
 export function KnowledgeContextEnhancer() {
   const categories = useMemo(categorySummary, [])
   const [activeCategory, setActiveCategory] = useState(ALL_ARTICLES)
@@ -145,10 +140,9 @@ export function KnowledgeContextEnhancer() {
 
   if (!knowledgeView || !viewRect) return null
 
-  const edgeInset = workspaceEdgeInset()
-  const horizontalInset = edgeInset
-  const topInset = edgeInset
-  const bottomInset = Math.max(edgeInset, window.innerHeight - viewRect.bottom + topInset)
+  const horizontalInset = 14
+  const topInset = mobile ? 10 : 14
+  const bottomInset = Math.max(10, window.innerHeight - viewRect.bottom + topInset)
   const portalTheme = readPortalTheme()
 
   if (mobile) {
@@ -158,9 +152,9 @@ export function KnowledgeContextEnhancer() {
         aria-label="Knowledge categories"
         style={{
           ...portalTheme,
-          left: Math.max(horizontalInset, viewRect.left + edgeInset),
-          top: Math.max(edgeInset, viewRect.top + edgeInset),
-          width: Math.max(0, viewRect.width - (edgeInset * 2)),
+          left: Math.max(horizontalInset, viewRect.left + 12),
+          top: Math.max(10, viewRect.top + 10),
+          width: Math.max(0, viewRect.width - 24),
         }}
       >
         {categories.map((category) => (
@@ -185,7 +179,7 @@ export function KnowledgeContextEnhancer() {
       <button
         className="knowledge-category-rail-reveal"
         onClick={() => setRailVisible(true)}
-        style={{ ...portalTheme, left: viewRect.left + edgeInset, top: viewRect.top + edgeInset }}
+        style={{ ...portalTheme, left: viewRect.left + 14, top: viewRect.top + 14 }}
         title="Show Knowledge categories"
         type="button"
       >
@@ -203,8 +197,8 @@ export function KnowledgeContextEnhancer() {
       aria-label="Knowledge categories"
       style={{
         ...portalTheme,
-        left: viewRect.left + edgeInset,
-        top: viewRect.top + edgeInset,
+        left: viewRect.left + 14,
+        top: viewRect.top + 14,
         bottom: bottomInset,
         width: '258px',
       }}

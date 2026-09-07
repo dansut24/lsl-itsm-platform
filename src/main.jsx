@@ -17,7 +17,6 @@ import { ProductionOnboardingBootstrap } from './production/ProductionOnboarding
 import { ProductionOrganisationWriteThrough } from './production/ProductionOrganisationWriteThrough.jsx'
 import { ProductionPortalBootstrap } from './production/ProductionPortalBootstrap.jsx'
 import { ProductionRecordDetailRouter } from './production/ProductionRecordDetailRouter.jsx'
-import { installProductionRuntimeDiagnostics } from './production/ProductionRuntimeDiagnostics.js'
 import { ProductionServiceRequestIntake } from './production/ProductionServiceRequestIntake.jsx'
 import { ProductionWorkspaceBootstrap } from './production/ProductionWorkspaceBootstrap.jsx'
 import { ProductionWorkspaceRefinement } from './production/ProductionWorkspaceRefinement.jsx'
@@ -32,11 +31,6 @@ import './PlatformCurves.css'
 import './ContextualSurfaces.css'
 import './production/ProductionWorkspaceVisualSystem.css'
 import './production/ProductionActivityFirstRecord.css'
-import './production/ProductionWorkspaceDensity.css'
-import './production/ProductionWorkspaceOverscrollGuard.css'
-import './production/ProductionMobileShellSizingFix.css'
-
-installProductionRuntimeDiagnostics()
 
 const rootElement = document.getElementById('root')
 const initialSurface = resolveTenantSurface()
@@ -47,10 +41,6 @@ if (rootElement) rootElement.dataset.hi5Surface = initialSurface.kind
 const productionWorkspace = initialSurface.kind === 'workspace' && initialSurface.canonical
 const productionOnboarding = productionWorkspace
   && (window.location.pathname === '/onboarding' || window.location.pathname.startsWith('/onboarding/'))
-const mobileWorkspaceMedia = typeof window.matchMedia === 'function'
-  ? window.matchMedia('(max-width: 680px) and (any-pointer: coarse), (max-height: 600px) and (any-pointer: coarse)')
-  : null
-const phoneClassWorkspace = Boolean(mobileWorkspaceMedia && mobileWorkspaceMedia.matches)
 
 let RootApp = App
 if (initialSurface.kind === 'marketing') {
@@ -71,7 +61,7 @@ createRoot(rootElement).render(
     {productionWorkspace && !productionOnboarding ? <ProductionItsmWorkspace /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionRecordDetailRouter /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionServiceRequestIntake /> : null}
-    {productionWorkspace && !productionOnboarding && !phoneClassWorkspace ? <ProductionWorkspaceRefinement /> : null}
+    {productionWorkspace && !productionOnboarding ? <ProductionWorkspaceRefinement /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionMfaLoginEnhancer /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionMfaSettingsEnhancer /> : null}
     {productionWorkspace && productionOnboarding ? <OnboardingMfaEnhancer /> : null}
