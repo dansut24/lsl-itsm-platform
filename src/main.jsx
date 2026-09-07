@@ -30,6 +30,7 @@ import './production/ProductionWorkspaceFinalPolish.css'
 import './PlatformCurves.css'
 import './ContextualSurfaces.css'
 import './production/ProductionWorkspaceVisualSystem.css'
+import './production/ProductionActivityFirstRecord.css'
 
 const rootElement = document.getElementById('root')
 const initialSurface = resolveTenantSurface()
