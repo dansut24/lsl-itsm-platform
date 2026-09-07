@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ProductionActivityCanvasRecord } from './ProductionActivityCanvasRecord.jsx'
+import { ProductionActivityActionRecord } from './ProductionActivityActionRecord.jsx'
 import { ProductionUnifiedRecordDetail } from './ProductionUnifiedRecordDetail.jsx'
 
 function detailRoute(pathname = window.location.pathname) {
@@ -40,6 +40,6 @@ export function ProductionRecordDetailRouter() {
   }, [])
 
   if (route === 'service-request') return <ProductionUnifiedRecordDetail />
-  if (route === 'generic') return <ProductionActivityCanvasRecord />
+  if (route === 'generic') return <ProductionActivityActionRecord />
   return null
 }
