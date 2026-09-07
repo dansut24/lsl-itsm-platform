@@ -33,5 +33,32 @@ function walk(directory) {
   }
 }
 
+function wireLicensing() {
+  const indexPath = path.join(repoRoot, 'api/src/index.js')
+  const original = fs.readFileSync(indexPath, 'utf8')
+  let content = original
+
+  if (!content.includes("from './licensing.js'")) {
+    content = content.replace(
+      "import { registerCatalogueRoutes } from './catalogue.js'",
+      "import { registerCatalogueRoutes } from './catalogue.js'\nimport { registerLicensingRoutes } from './licensing.js'",
+    )
+  }
+
+  if (!content.includes('registerLicensingRoutes(app)')) {
+    content = content.replace(
+      'registerCatalogueRoutes(app)',
+      'registerLicensingRoutes(app)\nregisterCatalogueRoutes(app)',
+    )
+  }
+
+  if (content !== original) {
+    fs.writeFileSync(indexPath, content)
+    changedFiles += 1
+    console.log('wired api/src/index.js licensing routes')
+  }
+}
+
 walk(sourceRoot)
-console.log(`Runtime API migration complete: ${replacements} replacements in ${changedFiles} files.`)
+wireLicensing()
+console.log(`Runtime API migration complete: ${replacements} API-origin replacements across ${changedFiles} changed files.`)
