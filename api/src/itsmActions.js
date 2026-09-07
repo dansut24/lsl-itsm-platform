@@ -227,7 +227,16 @@ export function registerItsmActionRoutes(app) {
       const resolutionCode = current.record_type === 'Incident' ? text(body.resolutionCode, 120) : ''
       if (current.record_type === 'Incident' && !resolutionCode) return { resolutionCodeRequired: true }
       const visibility = body.visibility === 'customer' ? 'customer' : 'internal'
-      const now = new Date()
+
+      let pausedSeconds = Number(current.sla_paused_seconds || 0)
+      let responseDueAt = current.response_due_at
+      let resolutionDueAt = current.resolution_due_at
+      if (current.record_type === 'Incident' && current.sla_paused_at) {
+        const deltaSeconds = Math.max(0, Math.floor((Date.now() - new Date(current.sla_paused_at).getTime()) / 1000))
+        pausedSeconds += deltaSeconds
+        responseDueAt = responseDueAt ? new Date(new Date(responseDueAt).getTime() + deltaSeconds * 1000) : null
+        resolutionDueAt = resolutionDueAt ? new Date(new Date(resolutionDueAt).getTime() + deltaSeconds * 1000) : null
+      }
 
       const updated = await client.query(
         `UPDATE itsm_records
@@ -235,6 +244,9 @@ export function registerItsmActionRoutes(app) {
              resolution_code = CASE WHEN record_type = 'Incident' THEN $4 ELSE resolution_code END,
              resolution_summary = CASE WHEN record_type = 'Incident' THEN $5 ELSE resolution_summary END,
              first_response_at = CASE WHEN $6 = 'customer' THEN COALESCE(first_response_at, now()) ELSE first_response_at END,
+             response_due_at = $7,
+             resolution_due_at = $8,
+             sla_paused_seconds = $9,
              resolved_at = COALESCE(resolved_at, now()),
              closed_at = CASE WHEN $3 = 'Completed' THEN COALESCE(closed_at, now()) ELSE closed_at END,
              sla_paused_at = NULL,
@@ -242,7 +254,7 @@ export function registerItsmActionRoutes(app) {
              updated_at = now()
          WHERE tenant_id = $1 AND id = $2
          RETURNING reference, version`,
-        [auth.session.tenant_id, current.id, targetStatus, resolutionCode, note, visibility],
+        [auth.session.tenant_id, current.id, targetStatus, resolutionCode, note, visibility, responseDueAt, resolutionDueAt, pausedSeconds],
       )
 
       await addActivity(client, {
