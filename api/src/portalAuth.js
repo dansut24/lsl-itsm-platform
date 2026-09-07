@@ -11,7 +11,7 @@ import {
   resolveSession,
   revokeCurrentSession,
   sessionPayload,
-  setSessionCookie,
+  setPortalSessionCookie,
 } from './session.js'
 
 function normaliseEmail(value = '') {
@@ -193,7 +193,7 @@ export function registerPortalAuthRoutes(app) {
       return sessionToken
     })
 
-    setSessionCookie(c, token, sessionTtlSeconds(account))
+    setPortalSessionCookie(c, token, sessionTtlSeconds(account))
     return c.json(portalSessionPayload(account))
   })
 
