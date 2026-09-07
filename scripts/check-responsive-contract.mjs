@@ -4,7 +4,10 @@ const read = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url), '
 
 const main = read('src/main.jsx')
 const responsive = read('src/production/ProductionResponsiveViewport.css')
+const planning = read('src/production/ProductionPlanningSurface.css')
 const refinement = read('src/production/ProductionWorkspaceRefinement.css')
+const projectEntry = read('src/features/projects/ProjectViews.jsx')
+const projectsV2 = read('src/features/projects/ProjectWorkspaceV2.jsx')
 
 const failures = []
 const expect = (condition, message) => {
@@ -12,12 +15,18 @@ const expect = (condition, message) => {
 }
 
 const responsiveImport = "./production/ProductionResponsiveViewport.css"
+const planningImport = "./production/ProductionPlanningSurface.css"
 const densityImport = "./production/ProductionWorkspaceDensity.css"
 
 expect(main.includes(responsiveImport), 'ProductionResponsiveViewport.css must be imported by src/main.jsx')
+expect(main.includes(planningImport), 'ProductionPlanningSurface.css must be imported by src/main.jsx')
 expect(
-  main.indexOf(responsiveImport) > main.indexOf(densityImport),
-  'ProductionResponsiveViewport.css must load after ProductionWorkspaceDensity.css',
+  main.indexOf(planningImport) > main.indexOf(densityImport),
+  'ProductionPlanningSurface.css must load after ProductionWorkspaceDensity.css',
+)
+expect(
+  main.indexOf(responsiveImport) > main.indexOf(planningImport),
+  'ProductionResponsiveViewport.css must remain the final workspace layout authority',
 )
 
 expect(responsive.includes('@media (max-width: 1180px)'), '1180px narrow-workspace breakpoint is missing')
@@ -52,6 +61,39 @@ expect(
   refinement.includes('position: fixed;'),
   'Workspace refinement must preserve the fixed mobile sidebar safeguard',
 )
+
+expect(
+  /\.calendar-toolbar\s*\{[\s\S]*?display:\s*flex;[\s\S]*?flex-wrap:\s*nowrap;/.test(planning),
+  'Calendar toolbar must stay on one row',
+)
+expect(
+  planning.includes('.calendar-filter-bar.mobile-open'),
+  'Calendar must provide a compact filter surface instead of squeezing filters',
+)
+expect(
+  /\.cmdb-view \.asset-grid\s*\{[\s\S]*?repeat\(auto-fit,\s*minmax/.test(planning),
+  'CMDB asset grid must adapt to available width',
+)
+expect(
+  /\.cmdb-view \.queue-table\s*\{[\s\S]*?overflow-x:\s*auto;/.test(planning),
+  'CMDB linked-record overflow must remain local to its table surface',
+)
+expect(
+  /\.project-detail-tabs\s*\{[\s\S]*?flex-wrap:\s*nowrap;[\s\S]*?overflow-x:\s*auto;/.test(planning),
+  'Project view tabs must never wrap and must scroll locally',
+)
+expect(
+  planning.includes('.project-timeline-shell') && planning.includes('.project-workload-grid'),
+  'Projects must retain responsive Timeline and Workload surfaces',
+)
+expect(
+  projectEntry.includes("ProjectWorkspaceV2.jsx"),
+  'ProjectViews.jsx must route the workspace to Projects v2',
+)
+for (const section of ['overview', 'list', 'board', 'timeline', 'milestones', 'workload', 'risks', 'team', 'activity']) {
+  expect(projectsV2.includes(`id: '${section}'`), `Projects v2 is missing the ${section} view`)
+}
+expect(projectsV2.includes('dependsOn') && projectsV2.includes('linkedRecord'), 'Project tasks must retain dependency and ITSM linkage fields')
 
 if (failures.length) {
   console.error('Responsive contract check failed:')
