@@ -9,7 +9,7 @@ import { synchroniseProductionServiceRequestSnapshot } from './productionService
 import { synchroniseProductionItsmRecordSnapshot } from './productionItsmRecords.js'
 
 const PRODUCTION_SESSION_KEY = 'hi5central-production-session-v1'
-const API_BASE = 'https://api.hi5central.com'
+const API_BASE = window.__HI5_API_BASE__
 const serviceRequestSyncQueues = new Map()
 const itsmRecordSyncQueues = new Map()
 

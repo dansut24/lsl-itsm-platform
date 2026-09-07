@@ -5,7 +5,7 @@ import { resolveTenantSurface } from '../lib/tenantSurface.js'
 import { takeProductionAuthHandoff } from './productionSessionBridge.js'
 import './ProductionWorkspaceBootstrap.css'
 
-const API_BASE = 'https://api.hi5central.com'
+const API_BASE = window.__HI5_API_BASE__
 const SESSION_TIMEOUT_MS = 8000
 
 function validSession(payload, tenantSlug) {

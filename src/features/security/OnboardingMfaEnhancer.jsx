@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { CheckCircle2, KeyRound, ShieldCheck } from 'lucide-react'
 import './OnboardingMfaEnhancer.css'
 
-const API_BASE = 'https://api.hi5central.com'
+const API_BASE = window.__HI5_API_BASE__
 
 export function OnboardingMfaEnhancer() {
   const [target, setTarget] = useState(null)

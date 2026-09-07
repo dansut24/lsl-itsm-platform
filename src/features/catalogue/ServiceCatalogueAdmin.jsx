@@ -15,7 +15,7 @@ import {
 import { portalServiceCatalog } from '../../data/portalData.js'
 import './ServiceCatalogueAdmin.css'
 
-const API_BASE = 'https://api.hi5central.com'
+const API_BASE = window.__HI5_API_BASE__
 const STORAGE_KEY = 'hi5central-service-catalogue-admin-v1'
 const PRODUCTION_SESSION_KEY = 'hi5central-production-session-v1'
 const ALL_ITEMS = 'All items'

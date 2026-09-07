@@ -24,7 +24,7 @@ import {
 } from 'lucide-react'
 import './ProductionRequesterPortal.css'
 
-const API_BASE = 'https://api.hi5central.com'
+const API_BASE = window.__HI5_API_BASE__
 
 function formatMoney(value, currency = 'GBP') {
   return new Intl.NumberFormat('en-GB', {

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { ArrowRight, CheckCircle2, MonitorCog, Wrench } from 'lucide-react'
 import './MarketingApp.css'
 
-const API_BASE = 'https://api.hi5central.com'
+const API_BASE = window.__HI5_API_BASE__
 
 function slugFromCompany(value = '') {
   return String(value)

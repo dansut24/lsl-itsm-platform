@@ -30,7 +30,7 @@ import {
 import './ProductionActivityCanvasRecord.css'
 import './ProductionActivityActionRecord.css'
 
-const API_BASE = 'https://api.hi5central.com'
+const API_BASE = window.__HI5_API_BASE__
 const TYPES = { incidents: 'Incident', problems: 'Problem', changes: 'Change' }
 const SAFE_TAGS = new Set(['P','BR','STRONG','B','EM','I','U','S','UL','OL','LI','BLOCKQUOTE','PRE','CODE','TABLE','THEAD','TBODY','TFOOT','TR','TH','TD','H1','H2','H3','H4','HR','A','SPAN'])
 const DROP_TAGS = new Set(['SCRIPT','STYLE','IFRAME','OBJECT','EMBED','FORM','INPUT','BUTTON','SVG','MATH','META','LINK'])

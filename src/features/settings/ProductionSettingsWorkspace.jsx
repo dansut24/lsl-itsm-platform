@@ -25,7 +25,7 @@ import {
 } from 'lucide-react'
 import './ProductionSettingsWorkspace.css'
 
-const API_BASE = 'https://api.hi5central.com'
+const API_BASE = window.__HI5_API_BASE__
 const TENANT_RUNTIME_CONFIG_KEY = 'hi5central-tenant-runtime-config-v1'
 const SETTINGS_NAV_VISIBLE_KEY = 'hi5central-settings-nav-visible-v1'
 

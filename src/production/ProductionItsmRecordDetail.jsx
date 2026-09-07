@@ -19,7 +19,7 @@ import {
 } from 'lucide-react'
 import './ProductionItsmRecordDetail.css'
 
-const API_BASE = 'https://api.hi5central.com'
+const API_BASE = window.__HI5_API_BASE__
 const SECTION_TYPES = {
   incidents: 'Incident',
   problems: 'Problem',

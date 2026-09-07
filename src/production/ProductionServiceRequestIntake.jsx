@@ -4,7 +4,7 @@ import { ArrowLeft, CheckCircle2, ChevronRight, Search, ShoppingCart } from 'luc
 import { hydrateProductionItsmWorkspaceRecords } from '../services/productionItsmRecords.js'
 import './ProductionServiceRequestIntake.css'
 
-const API_BASE = 'https://api.hi5central.com'
+const API_BASE = window.__HI5_API_BASE__
 
 function optionObject(option) {
   if (option && typeof option === 'object' && !Array.isArray(option)) return option

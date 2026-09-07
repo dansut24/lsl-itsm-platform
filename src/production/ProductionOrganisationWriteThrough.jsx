@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import './ProductionOrganisationWriteThrough.css'
 
-const API_BASE = 'https://api.hi5central.com'
+const API_BASE = window.__HI5_API_BASE__
 const POLL_MS = 300
 const RETRY_MS = 1200
 const BASELINE_RELOAD_KEY = 'hi5central-production-org-baseline-reload-v1'

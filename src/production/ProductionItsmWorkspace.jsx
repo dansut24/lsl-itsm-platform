@@ -15,7 +15,7 @@ import {
 import { hydrateProductionItsmWorkspaceRecords } from '../services/productionItsmRecords.js'
 import './ProductionItsmWorkspace.css'
 
-const API_BASE = 'https://api.hi5central.com'
+const API_BASE = window.__HI5_API_BASE__
 const ROUTES = {
   '/incidents': { type: 'Incident', title: 'Incidents', singular: 'incident', section: 'incidents' },
   '/requests': { type: 'Service Request', title: 'Service Requests', singular: 'service request', section: 'requests' },

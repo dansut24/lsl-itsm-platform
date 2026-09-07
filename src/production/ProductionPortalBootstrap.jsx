@@ -5,7 +5,7 @@ import { resolveTenantSurface } from '../lib/tenantSurface.js'
 import { ProductionRequesterPortal } from './ProductionRequesterPortal.jsx'
 import './ProductionPortalBootstrap.css'
 
-const API_BASE = 'https://api.hi5central.com'
+const API_BASE = window.__HI5_API_BASE__
 
 function replaceCatalogue(items) {
   portalServiceCatalog.splice(0, portalServiceCatalog.length, ...items)

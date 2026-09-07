@@ -26,7 +26,7 @@ import './ProductionActivityCanvasRecord.css'
 import './ProductionActivityActionRecord.css'
 import './ProductionServiceRequestActivityRecord.css'
 
-const API_BASE = 'https://api.hi5central.com'
+const API_BASE = window.__HI5_API_BASE__
 const SERVICE_REQUEST_STATUSES = ['New', 'Pending Approval', 'Approved', 'In Progress', 'Completed', 'Closed', 'Rejected']
 
 function routeState() {

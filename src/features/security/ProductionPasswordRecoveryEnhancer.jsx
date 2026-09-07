@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { ArrowLeft, CheckCircle2, KeyRound, LockKeyhole, Mail, ShieldCheck, X } from 'lucide-react'
 import './ProductionPasswordRecoveryEnhancer.css'
 
-const API_BASE = 'https://api.hi5central.com'
+const API_BASE = window.__HI5_API_BASE__
 
 function tenantSlugFromHost() {
   const host = window.location.hostname.toLowerCase()

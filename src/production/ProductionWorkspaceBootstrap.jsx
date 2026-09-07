@@ -17,7 +17,7 @@ import { hydrateProductionServiceRequests } from '../services/productionServiceR
 import { takeProductionAuthHandoff } from './productionSessionBridge.js'
 import './ProductionWorkspaceBootstrap.css'
 
-const API_BASE = 'https://api.hi5central.com'
+const API_BASE = window.__HI5_API_BASE__
 const PRODUCTION_SESSION_KEY = 'hi5central-production-session-v1'
 const TENANT_RUNTIME_CONFIG_KEY = 'hi5central-tenant-runtime-config-v1'
 const SESSION_BOOTSTRAP_TIMEOUT_MS = 8000
