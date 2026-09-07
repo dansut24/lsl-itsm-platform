@@ -22,6 +22,7 @@ import { resolveTenantSurface } from './lib/tenantSurface.js'
 import './features/settings/ProductionSettingsFloating.css'
 import './features/people/OrganisationContextual.css'
 import './features/onboarding/OnboardingViewportFix.css'
+import './production/ProductionItsmMobileViewFix.css'
 import './PlatformCurves.css'
 import './ContextualSurfaces.css'
 
