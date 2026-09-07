@@ -29,6 +29,7 @@ import './production/ProductionItsmSurfacePolish.css'
 import './production/ProductionWorkspaceFinalPolish.css'
 import './PlatformCurves.css'
 import './ContextualSurfaces.css'
+import './production/ProductionWorkspaceVisualSystem.css'
 
 const rootElement = document.getElementById('root')
 const initialSurface = resolveTenantSurface()
