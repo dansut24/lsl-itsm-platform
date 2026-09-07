@@ -1,12 +1,12 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
+import { deployment, portalRequestFromHeaders } from './deploymentConfig.js'
 import { pool } from './db.js'
 import { mfaRequiredFor, sessionNeedsMfa, sessionTtlSeconds } from './securityPolicy.js'
 
 const COOKIE_NAME = 'hi5central_session'
 const PORTAL_COOKIE_NAME = 'hi5central_portal_session'
 const DEFAULT_SESSION_TTL_SECONDS = 60 * 60 * 12
-const COOKIE_DOMAIN = process.env.COOKIE_DOMAIN || '.hi5central.com'
 
 function hashToken(token) {
   return createHash('sha256').update(token).digest('hex')
@@ -15,12 +15,22 @@ function hashToken(token) {
 function portalRequest(c) {
   const origin = String(c.req.header('origin') || '').toLowerCase()
   const referer = String(c.req.header('referer') || '').toLowerCase()
-  return /^https:\/\/[a-z0-9-]+-portal\.hi5central\.com(?::\d+)?$/.test(origin)
-    || /^https:\/\/[a-z0-9-]+-portal\.hi5central\.com(?:[:/]\d*)?\//.test(referer)
+  return portalRequestFromHeaders(origin, referer)
 }
 
 function requestCookieName(c) {
   return portalRequest(c) ? PORTAL_COOKIE_NAME : COOKIE_NAME
+}
+
+function cookieOptions(extra = {}) {
+  const options = {
+    secure: true,
+    sameSite: 'Lax',
+    path: '/',
+    ...extra,
+  }
+  if (deployment.cookieDomain) options.domain = deployment.cookieDomain
+  return options
 }
 
 async function sessionPolicy(client, tenantId, userId) {
@@ -73,23 +83,14 @@ export async function createSession(client, { tenantId, userId, mfaVerified = fa
 
 function writeCookie(c, name, token, maxAge) {
   const resolvedMaxAge = Math.max(60 * 60, Math.min(60 * 60 * 24, Number(maxAge || DEFAULT_SESSION_TTL_SECONDS)))
-  setCookie(c, name, token, {
+  setCookie(c, name, token, cookieOptions({
     httpOnly: true,
-    secure: true,
-    sameSite: 'Lax',
-    domain: COOKIE_DOMAIN,
-    path: '/',
     maxAge: resolvedMaxAge,
-  })
+  }))
 }
 
 function deleteNamedCookie(c, name) {
-  deleteCookie(c, name, {
-    secure: true,
-    sameSite: 'Lax',
-    domain: COOKIE_DOMAIN,
-    path: '/',
-  })
+  deleteCookie(c, name, cookieOptions())
 }
 
 export function setSessionCookie(c, token, maxAge = DEFAULT_SESSION_TTL_SECONDS) {
