@@ -3,42 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="%BASE_URL%favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#ffffff" />
     <meta name="description" content="Hi5Central brings modern IT service management and remote monitoring together in one connected ecosystem." />
-    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-    <meta http-equiv="Pragma" content="no-cache" />
-    <meta http-equiv="Expires" content="0" />
     <title>Hi5Central</title>
-    <script>
-      (() => {
-        const RECOVERY_KEY = 'hi5central-static-asset-recovery-v1'
-
-        const recoverStaticAsset = (event) => {
-          const target = event.target
-          const tagName = target?.tagName
-          const isStaticAsset = tagName === 'SCRIPT'
-            || (tagName === 'LINK' && target?.rel === 'stylesheet')
-
-          if (!isStaticAsset) return
-
-          const currentUrl = new URL(window.location.href)
-          if (currentUrl.searchParams.has('_hi5_reload')) return
-
-          try {
-            if (window.sessionStorage.getItem(RECOVERY_KEY)) return
-            window.sessionStorage.setItem(RECOVERY_KEY, '1')
-          } catch {
-            // The URL marker below still guarantees at most one recovery reload.
-          }
-
-          currentUrl.searchParams.set('_hi5_reload', Date.now().toString())
-          window.location.replace(currentUrl.toString())
-        }
-
-        window.addEventListener('error', recoverStaticAsset, true)
-      })()
-    </script>
   </head>
   <body>
     <div id="root"></div>
