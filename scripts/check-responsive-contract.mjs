@@ -5,6 +5,7 @@ const read = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url), '
 const main = read('src/main.jsx')
 const responsive = read('src/production/ProductionResponsiveViewport.css')
 const planning = read('src/production/ProductionPlanningSurface.css')
+const planningResponsive = read('src/production/ProductionPlanningResponsive.css')
 const refinement = read('src/production/ProductionWorkspaceRefinement.css')
 const projectEntry = read('src/features/projects/ProjectViews.jsx')
 const projectsV2 = read('src/features/projects/ProjectWorkspaceV2.jsx')
@@ -16,16 +17,22 @@ const expect = (condition, message) => {
 
 const responsiveImport = "./production/ProductionResponsiveViewport.css"
 const planningImport = "./production/ProductionPlanningSurface.css"
+const planningResponsiveImport = "./production/ProductionPlanningResponsive.css"
 const densityImport = "./production/ProductionWorkspaceDensity.css"
 
 expect(main.includes(responsiveImport), 'ProductionResponsiveViewport.css must be imported by src/main.jsx')
 expect(main.includes(planningImport), 'ProductionPlanningSurface.css must be imported by src/main.jsx')
+expect(main.includes(planningResponsiveImport), 'ProductionPlanningResponsive.css must be imported by src/main.jsx')
 expect(
   main.indexOf(planningImport) > main.indexOf(densityImport),
   'ProductionPlanningSurface.css must load after ProductionWorkspaceDensity.css',
 )
 expect(
-  main.indexOf(responsiveImport) > main.indexOf(planningImport),
+  main.indexOf(planningResponsiveImport) > main.indexOf(planningImport),
+  'ProductionPlanningResponsive.css must load after the planning surface contract',
+)
+expect(
+  main.indexOf(responsiveImport) > main.indexOf(planningResponsiveImport),
   'ProductionResponsiveViewport.css must remain the final workspace layout authority',
 )
 
@@ -67,7 +74,15 @@ expect(
   'Calendar toolbar must stay on one row',
 )
 expect(
-  planning.includes('.calendar-filter-bar.mobile-open'),
+  planningResponsive.includes('@media (max-width: 980px)') && planningResponsive.includes('@media (max-width: 720px)'),
+  'Calendar responsive behaviour must be viewport-driven',
+)
+expect(
+  /\.calendar-view\s*\{[\s\S]*?position:\s*relative;/.test(planningResponsive),
+  'Calendar compact overlays must be anchored to the Calendar surface',
+)
+expect(
+  planningResponsive.includes('.calendar-filter-bar.mobile-open'),
   'Calendar must provide a compact filter surface instead of squeezing filters',
 )
 expect(
