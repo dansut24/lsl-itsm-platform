@@ -5,6 +5,12 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { secureHeaders } from 'hono/secure-headers'
 import { registerCatalogueRoutes } from './catalogue.js'
+import {
+  allowedRequestOrigin,
+  deployment,
+  originMatchesTenant,
+  tenantUrls,
+} from './deploymentConfig.js'
 import { pool, withTransaction } from './db.js'
 import { sendVerificationEmail, verifySmtpConnection } from './mailer.js'
 import { registerOrganisationRoutes } from './organisation.js'
@@ -22,7 +28,7 @@ import {
 const scryptAsync = promisify(scrypt)
 const app = new Hono()
 const port = Number(process.env.PORT || 3001)
-const marketingUrl = process.env.MARKETING_URL || 'https://hi5central.com'
+const marketingUrl = deployment.marketingUrl || deployment.appUrl || `https://${deployment.rootDomain}`
 
 const reservedSlugs = new Set([
   'admin', 'api', 'app', 'auth', 'downloads', 'help', 'login', 'mail', 'portal',
@@ -73,22 +79,11 @@ function requestIp(c) {
 }
 
 function allowedOrigin(origin) {
-  if (!origin) return ''
-  if (origin === 'https://hi5central.com' || origin === 'https://www.hi5central.com') return origin
-  if (/^https:\/\/[a-z0-9-]+(?:-portal|-rmm)?\.hi5central\.com$/i.test(origin)) return origin
-  if (process.env.NODE_ENV !== 'production' && /^http:\/\/localhost:\d+$/.test(origin)) return origin
-  return ''
+  return allowedRequestOrigin(origin)
 }
 
 function originMatchesSession(c, session) {
-  const origin = c.req.header('origin')
-  if (!origin) return true
-  const expected = new Set([
-    `https://${session.slug}.hi5central.com`,
-    `https://${session.slug}-portal.hi5central.com`,
-    `https://${session.slug}-rmm.hi5central.com`,
-  ])
-  return expected.has(origin.toLowerCase())
+  return originMatchesTenant(c.req.header('origin'), session.slug)
 }
 
 function onboardingSequence(modules = {}) {
@@ -167,6 +162,17 @@ app.get('/health', async (c) => {
   }
 })
 
+app.get('/api/v1/system/deployment', (c) => c.json({
+  deploymentMode: deployment.deploymentMode,
+  tenancyMode: deployment.tenancyMode,
+  rootDomain: deployment.rootDomain,
+  primaryTenantSlug: deployment.primaryTenantSlug,
+  appUrl: deployment.appUrl,
+  apiUrl: deployment.apiUrl,
+  portalUrl: deployment.portalUrl,
+  rmmUrl: deployment.rmmUrl,
+}))
+
 app.get('/api/v1/system/smtp-health', async (c) => {
   try {
     await verifySmtpConnection()
@@ -180,6 +186,9 @@ app.get('/api/v1/system/smtp-health', async (c) => {
 app.get('/api/v1/auth/tenant-slug/:slug', async (c) => {
   const slug = normaliseSlug(c.req.param('slug'))
   if (!validSlug(slug)) return c.json({ slug, available: false, reason: 'invalid' }, 200)
+  if (deployment.tenancyMode === 'single' && slug !== deployment.primaryTenantSlug) {
+    return c.json({ slug, available: false, reason: 'single_tenant' }, 200)
+  }
   const result = await pool.query('SELECT 1 FROM tenants WHERE slug = $1 LIMIT 1', [slug])
   return c.json({ slug, available: result.rowCount === 0 })
 })
@@ -214,7 +223,9 @@ app.post('/api/v1/auth/login', async (c) => {
     return c.json({ error: 'A valid JSON request body is required.' }, 400)
   }
 
-  const tenantSlug = normaliseSlug(body?.tenantSlug)
+  const tenantSlug = normaliseSlug(
+    body?.tenantSlug || (deployment.tenancyMode === 'single' ? deployment.primaryTenantSlug : ''),
+  )
   const email = normaliseEmail(body?.email)
   const password = String(body?.password || '')
   if (!validSlug(tenantSlug) || !validEmail(email) || !password) {
@@ -222,7 +233,7 @@ app.post('/api/v1/auth/login', async (c) => {
   }
 
   const origin = c.req.header('origin')
-  if (process.env.NODE_ENV === 'production' && origin && origin !== `https://${tenantSlug}.hi5central.com`) {
+  if (process.env.NODE_ENV === 'production' && origin && !originMatchesTenant(origin, tenantSlug)) {
     return c.json({ error: 'Tenant sign-in origin mismatch.' }, 403)
   }
 
@@ -297,7 +308,9 @@ app.post('/api/v1/auth/signup', async (c) => {
   }
 
   const companyName = String(body?.companyName || '').trim()
-  const tenantSlug = normaliseSlug(body?.tenantSlug)
+  const tenantSlug = normaliseSlug(
+    body?.tenantSlug || (deployment.tenancyMode === 'single' ? deployment.primaryTenantSlug : ''),
+  )
   const name = String(body?.name || '').trim()
   const email = normaliseEmail(body?.email)
   const password = String(body?.password || '')
@@ -306,24 +319,32 @@ app.post('/api/v1/auth/signup', async (c) => {
 
   if (companyName.length < 2 || companyName.length > 120) return c.json({ error: 'Company name must be between 2 and 120 characters.' }, 400)
   if (!validSlug(tenantSlug)) return c.json({ error: 'Choose a valid tenant URL using 3-48 lowercase letters, numbers or hyphens.' }, 400)
+  if (deployment.tenancyMode === 'single' && tenantSlug !== deployment.primaryTenantSlug) {
+    return c.json({ error: `This installation is assigned to tenant ${deployment.primaryTenantSlug}.`, field: 'tenantSlug' }, 400)
+  }
   if (name.length < 2 || name.length > 120) return c.json({ error: 'Your name must be between 2 and 120 characters.' }, 400)
   if (!validEmail(email)) return c.json({ error: 'Enter a valid email address.' }, 400)
   if (password.length < 12 || password.length > 256) return c.json({ error: 'Use a password or passphrase of at least 12 characters.' }, 400)
   if (!modules.length) return c.json({ error: 'Select at least one Hi5Central product.' }, 400)
 
-  const [slugExists, emailExists] = await Promise.all([
+  const [slugExists, emailExists, tenantCount] = await Promise.all([
     pool.query('SELECT 1 FROM tenants WHERE slug = $1 LIMIT 1', [tenantSlug]),
     pool.query('SELECT 1 FROM users WHERE email = $1 LIMIT 1', [email]),
+    deployment.tenancyMode === 'single'
+      ? pool.query('SELECT count(*)::int AS count FROM tenants')
+      : Promise.resolve({ rows: [{ count: 0 }] }),
   ])
+  if (deployment.tenancyMode === 'single' && Number(tenantCount.rows[0]?.count || 0) > 0) {
+    return c.json({ error: 'This single-tenant installation has already been initialised.' }, 409)
+  }
   if (slugExists.rowCount) return c.json({ error: 'That tenant URL is already in use.', field: 'tenantSlug' }, 409)
   if (emailExists.rowCount) return c.json({ error: 'An account already exists for that email address.', field: 'email' }, 409)
 
   const passwordHash = await hashPassword(password)
   const verificationToken = randomBytes(32).toString('base64url')
   const verificationTokenHash = hashToken(verificationToken)
-  const tenantUrl = `https://${tenantSlug}.hi5central.com`
-  const portalUrl = `https://${tenantSlug}-portal.hi5central.com`
-  const rmmUrl = modules.includes('rmm') ? `https://${tenantSlug}-rmm.hi5central.com` : null
+  const generatedUrls = tenantUrls(tenantSlug, { rmm: modules.includes('rmm') })
+  const { tenantUrl, portalUrl, rmmUrl } = generatedUrls
 
   try {
     const result = await withTransaction(async (client) => {
@@ -404,7 +425,9 @@ app.post('/api/v1/auth/resend-verification', async (c) => {
   }
 
   const email = normaliseEmail(body?.email)
-  const tenantSlug = normaliseSlug(body?.tenantSlug)
+  const tenantSlug = normaliseSlug(
+    body?.tenantSlug || (deployment.tenancyMode === 'single' ? deployment.primaryTenantSlug : ''),
+  )
   if (!validEmail(email) || !validSlug(tenantSlug)) return c.json({ status: 'accepted' }, 202)
 
   const lookup = await pool.query(
