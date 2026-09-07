@@ -47,6 +47,28 @@ jobs:
         working-directory: api
         run: npm install --omit=dev
 
+      - name: Adapt fresh-tenant harness to isolated Portal cookie
+        working-directory: api
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/portal-fresh-tenant-e2e.mjs')
+          text = path.read_text()
+          text = text.replace(
+              "function cookieFrom(response) {\n  const raw = response.headers.get('set-cookie') || ''\n  const match = raw.match(/hi5central_session=([^;]+)/)\n  return match ? `hi5central_session=${match[1]}` : ''\n}",
+              "function cookieFrom(response, name = 'hi5central_session') {\n  const raw = response.headers.get('set-cookie') || ''\n  const match = raw.match(new RegExp(`${name}=([^;]+)`))\n  return match ? `${name}=${match[1]}` : ''\n}",
+          )
+          text = text.replace(
+              "const requesterCookie = cookieFrom(requesterLogin.response)",
+              "const requesterCookie = cookieFrom(requesterLogin.response, 'hi5central_portal_session')",
+          )
+          marker = "assert(requesterSession.response.ok && requesterSession.payload.user?.tenantRole === 'requester', 'Requester Portal session was not restored')"
+          isolation = marker + "\n  const ownerCookieOnPortal = await json('/api/v1/portal/auth/session', { cookie: ownerCookie, origin: portalOrigin })\n  assert(ownerCookieOnPortal.response.status === 401, 'Workspace cookie was incorrectly accepted as a Portal session')\n  const requesterCookieOnWorkspace = await json('/api/v1/auth/session', { cookie: requesterCookie, origin: tenantOrigin })\n  assert(requesterCookieOnWorkspace.response.status === 401, 'Portal cookie was incorrectly accepted as a workspace session')"
+          text = text.replace(marker, isolation)
+          path.write_text(text)
+          PY
+
       - name: Parse API and E2E source
         working-directory: api
         run: |
