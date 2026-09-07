@@ -45,9 +45,11 @@ jobs:
         working-directory: api
         run: |
           node --check src/itsmRecords.js
+          node --check src/itsmLifecycle.js
           node --check src/itsmQueue.js
           node --check src/serviceRequests.js
           node --check scripts/itsm-production-e2e.mjs
+          node --check scripts/itsm-lifecycle-e2e.mjs
       - name: Run database migrations
         working-directory: api
         env:
@@ -74,7 +76,13 @@ jobs:
           curl -fsS http://127.0.0.1:3001/health
           echo
           node scripts/itsm-production-e2e.mjs
-          RESULT=$?
+          FIRST_RESULT=$?
+          if [ "$FIRST_RESULT" -eq 0 ]; then
+            node scripts/itsm-lifecycle-e2e.mjs
+            RESULT=$?
+          else
+            RESULT=$FIRST_RESULT
+          fi
           kill $API_PID 2>/dev/null || true
           if [ "$RESULT" -ne 0 ]; then
             cat /tmp/hi5central-api.log

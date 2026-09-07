@@ -170,7 +170,27 @@ try {
   const isolated = await json('/api/v1/itsm-queue?type=Incident&search=secret&limit=25&offset=0')
   assert(isolated.response.ok && isolated.payload.total === 0, 'Shared ITSM queue leaked another tenant record')
 
-  console.log('6. Publishing a real technician Service Catalogue form')
+  console.log('6. Proving concurrent Incident numbering is collision-safe')
+  const concurrentBody = (suffixLabel) => ({
+    type: 'Incident', requesterId: 'USR-E2E-REQUESTER', requester: 'CI Requester',
+    title: `Concurrent CI incident ${suffixLabel}`, description: 'Parallel reference allocation test',
+    service: 'Identity', category: 'Concurrency', priority: 'Medium', status: 'New',
+    team: 'Service Desk', assignee: 'Unassigned',
+  })
+  const [concurrentA, concurrentB] = await Promise.all([
+    json('/api/v1/itsm-records', { method: 'POST', body: concurrentBody('A') }),
+    json('/api/v1/itsm-records', { method: 'POST', body: concurrentBody('B') }),
+  ])
+  assert(concurrentA.response.status === 201, `Concurrent Incident A failed: ${concurrentA.payload.error || concurrentA.response.status}`)
+  assert(concurrentB.response.status === 201, `Concurrent Incident B failed: ${concurrentB.payload.error || concurrentB.response.status}`)
+  assert(concurrentA.payload.id !== concurrentB.payload.id, `Concurrent Incidents received the same reference: ${concurrentA.payload.id}`)
+  const concurrentNumbers = [concurrentA.payload.id, concurrentB.payload.id]
+    .map((reference) => Number(String(reference).split('-').pop()))
+    .sort((left, right) => left - right)
+  assert(concurrentNumbers.every(Number.isFinite), 'Concurrent Incident references were not numeric')
+  assert(concurrentNumbers[1] === concurrentNumbers[0] + 1, `Concurrent Incident references were not consecutive: ${concurrentA.payload.id}, ${concurrentB.payload.id}`)
+
+  console.log('7. Publishing a real technician Service Catalogue form')
   const catalogue = await json('/api/v1/catalogue', {
     method: 'PUT',
     body: {
@@ -193,7 +213,7 @@ try {
   })
   assert(catalogue.response.ok, `Catalogue publish failed: ${catalogue.payload.error || catalogue.response.status}`)
 
-  console.log('7. Creating a technician Service Request on behalf of the Person')
+  console.log('8. Creating a technician Service Request on behalf of the Person')
   const request = await json('/api/v1/service-requests', {
     method: 'POST',
     body: {
@@ -214,16 +234,18 @@ try {
   const requestQueue = await json('/api/v1/itsm-queue?type=Service%20Request&limit=25&offset=0')
   assert(requestQueue.response.ok && requestQueue.payload.items?.some((item) => item.id === request.payload.id), 'Shared queue did not include the real Service Request')
 
-  console.log('8. Verifying database persistence directly')
+  console.log('9. Verifying database persistence directly')
   const counts = await db.query(
     `SELECT
        (SELECT count(*)::int FROM itsm_records WHERE tenant_id = $1) AS generic_records,
+       (SELECT count(DISTINCT reference)::int FROM itsm_records WHERE tenant_id = $1) AS unique_references,
        (SELECT count(*)::int FROM itsm_record_activities a JOIN itsm_records r ON r.id = a.record_id WHERE r.tenant_id = $1) AS generic_activities,
        (SELECT count(*)::int FROM service_requests WHERE tenant_id = $1) AS service_requests`,
     [tenantId],
   )
-  assert(counts.rows[0].generic_records === 3, `Expected 3 persistent generic ITSM records, got ${counts.rows[0].generic_records}`)
-  assert(counts.rows[0].generic_activities >= 4, 'Expected create/activity audit rows for generic ITSM records')
+  assert(counts.rows[0].generic_records === 5, `Expected 5 persistent generic ITSM records, got ${counts.rows[0].generic_records}`)
+  assert(counts.rows[0].unique_references === 5, `Expected 5 unique persistent ITSM references, got ${counts.rows[0].unique_references}`)
+  assert(counts.rows[0].generic_activities >= 6, 'Expected create/activity audit rows for generic ITSM records')
   assert(counts.rows[0].service_requests === 1, 'Expected one persistent Service Request')
 
   console.log('Production ITSM persistence E2E passed')

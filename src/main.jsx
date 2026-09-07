@@ -17,12 +17,15 @@ import { ProductionOnboardingBootstrap } from './production/ProductionOnboarding
 import { ProductionOrganisationWriteThrough } from './production/ProductionOrganisationWriteThrough.jsx'
 import { ProductionPortalBootstrap } from './production/ProductionPortalBootstrap.jsx'
 import { ProductionServiceRequestIntake } from './production/ProductionServiceRequestIntake.jsx'
+import { ProductionUnifiedRecordDetail } from './production/ProductionUnifiedRecordDetail.jsx'
 import { ProductionWorkspaceBootstrap } from './production/ProductionWorkspaceBootstrap.jsx'
+import { ProductionWorkspaceRefinement } from './production/ProductionWorkspaceRefinement.jsx'
 import { resolveTenantSurface } from './lib/tenantSurface.js'
 import './features/settings/ProductionSettingsFloating.css'
 import './features/people/OrganisationContextual.css'
 import './features/onboarding/OnboardingViewportFix.css'
 import './production/ProductionItsmMobileViewFix.css'
+import './production/ProductionItsmSurfacePolish.css'
 import './PlatformCurves.css'
 import './ContextualSurfaces.css'
 
@@ -53,7 +56,9 @@ createRoot(rootElement).render(
     {initialSurface.kind === 'workspace' && !productionOnboarding ? <ServiceCatalogueSettingsEnhancer /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionOrganisationWriteThrough /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionItsmWorkspace /> : null}
+    {productionWorkspace && !productionOnboarding ? <ProductionUnifiedRecordDetail /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionServiceRequestIntake /> : null}
+    {productionWorkspace && !productionOnboarding ? <ProductionWorkspaceRefinement /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionMfaLoginEnhancer /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionMfaSettingsEnhancer /> : null}
     {productionWorkspace && productionOnboarding ? <OnboardingMfaEnhancer /> : null}
