@@ -34,6 +34,7 @@ import './production/ProductionWorkspaceVisualSystem.css'
 import './production/ProductionActivityFirstRecord.css'
 import './production/ProductionWorkspaceDensity.css'
 import './production/ProductionWorkspaceOverscrollGuard.css'
+import './production/ProductionMobileShellSizingFix.css'
 
 installProductionRuntimeDiagnostics()
 
