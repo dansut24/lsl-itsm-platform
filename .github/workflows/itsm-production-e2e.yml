@@ -46,6 +46,7 @@ jobs:
         run: |
           node --check src/itsmRecords.js
           node --check src/itsmLifecycle.js
+          node --check src/itsmActions.js
           node --check src/itsmQueue.js
           node --check src/serviceRequests.js
           node --check scripts/itsm-production-e2e.mjs
