@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer'
+import { deployment } from './deploymentConfig.js'
 
 function smtpConfig() {
   const port = Number(process.env.SMTP_PORT || 587)
@@ -56,7 +57,7 @@ function emailShell({ kicker, title, body, actionLabel, actionUrl, footer }) {
 
 export async function sendVerificationEmail({ to, name, companyName, token, tenantUrl }) {
   const transporter = nodemailer.createTransport(smtpConfig())
-  const apiBase = process.env.API_URL || 'https://api.hi5central.com'
+  const apiBase = deployment.apiUrl || deployment.appUrl || `https://${deployment.rootDomain}`
   const verificationUrl = `${apiBase}/api/v1/auth/verify-email?token=${encodeURIComponent(token)}`
   const from = process.env.SMTP_FROM || process.env.SMTP_USER
 
