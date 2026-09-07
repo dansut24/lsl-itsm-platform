@@ -1,0 +1,35 @@
+{
+  email {$ACME_EMAIL}
+}
+
+{$APP_HOST} {
+  encode zstd gzip
+
+  handle /api/* {
+    reverse_proxy api:3001
+  }
+
+  handle /healthz {
+    respond "ok" 200
+  }
+
+  handle {
+    root * /srv
+    try_files {path} /index.html
+    file_server
+  }
+}
+
+# The web image healthcheck uses 127.0.0.1. Keep this HTTP-only internal
+# listener so container health does not depend on public DNS or ACME.
+http://127.0.0.1 {
+  handle /healthz {
+    respond "ok" 200
+  }
+
+  handle {
+    root * /srv
+    try_files {path} /index.html
+    file_server
+  }
+}
