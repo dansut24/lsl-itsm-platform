@@ -97,6 +97,7 @@ function sanitiseRichHtml(value = '') {
       if (child.nodeType !== Node.ELEMENT_NODE) return
       if (DROP_TAGS.has(child.tagName)) { child.remove(); return }
       if (!SAFE_TAGS.has(child.tagName)) {
+        walk(child)
         child.replaceWith(...Array.from(child.childNodes))
         return
       }
@@ -115,7 +116,7 @@ function sanitiseRichHtml(value = '') {
     })
   }
   walk(doc.body)
-  return doc.body.innerHTML.slice(0, 100000)
+  return doc.body.innerHTML.slice(0, 45000)
 }
 
 function richPlainText(html = '') {
