@@ -12,6 +12,7 @@ import { ProductionMfaLoginEnhancer } from './features/security/ProductionMfaLog
 import { ProductionMfaSettingsEnhancer } from './features/security/ProductionMfaSettingsEnhancer.jsx'
 import { ProductionPasswordRecoveryEnhancer } from './features/security/ProductionPasswordRecoveryEnhancer.jsx'
 import { ProductionSecurityCenterEnhancer } from './features/security/ProductionSecurityCenterEnhancer.jsx'
+import { ProductionItsmWorkspace } from './production/ProductionItsmWorkspace.jsx'
 import { ProductionOnboardingBootstrap } from './production/ProductionOnboardingBootstrap.jsx'
 import { ProductionOrganisationWriteThrough } from './production/ProductionOrganisationWriteThrough.jsx'
 import { ProductionPortalBootstrap } from './production/ProductionPortalBootstrap.jsx'
@@ -49,6 +50,7 @@ createRoot(rootElement).render(
     {initialSurface.kind === 'workspace' && !productionOnboarding ? <OrganisationSitesEnhancer /> : null}
     {initialSurface.kind === 'workspace' && !productionOnboarding ? <ServiceCatalogueSettingsEnhancer /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionOrganisationWriteThrough /> : null}
+    {productionWorkspace && !productionOnboarding ? <ProductionItsmWorkspace /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionMfaLoginEnhancer /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionMfaSettingsEnhancer /> : null}
     {productionWorkspace && productionOnboarding ? <OnboardingMfaEnhancer /> : null}
