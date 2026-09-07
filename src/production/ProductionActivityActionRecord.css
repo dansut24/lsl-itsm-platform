@@ -235,50 +235,50 @@
   }
 }
 
-/* Record canvas density: preserve only a small frame around the record surface. */
+/* Record canvas density: preserve only a 2px frame around the record surface. */
 .activity-canvas-top {
-  margin: 4px 4px 0;
+  margin: 2px 2px 0;
 }
 
 .activity-canvas-ribbon,
 .activity-canvas-banner {
-  margin-inline: 4px;
+  margin-inline: 2px;
 }
 
 .activity-canvas-body {
-  padding: 8px 4px 4px;
+  padding: 8px 2px 2px;
 }
 
 .activity-canvas-skeleton.is-ribbon {
-  margin-inline: 4px;
+  margin-inline: 2px;
 }
 
 @media (max-width: 1100px) {
   .activity-canvas-top {
-    margin: 4px 4px 0;
+    margin: 2px 2px 0;
   }
 
   .activity-canvas-ribbon,
   .activity-canvas-banner {
-    margin-inline: 4px;
+    margin-inline: 2px;
   }
 
   .activity-canvas-body {
-    padding: 8px 4px 4px;
+    padding: 8px 2px 2px;
   }
 }
 
 @media (max-width: 700px) {
   .activity-canvas-top {
-    margin: 4px 4px 0;
+    margin: 2px 2px 0;
   }
 
   .activity-canvas-ribbon,
   .activity-canvas-banner {
-    margin-inline: 4px;
+    margin-inline: 2px;
   }
 
   .activity-canvas-body {
-    padding: 4px;
+    padding: 2px;
   }
 }
