@@ -25,6 +25,18 @@ function walk(directory) {
       return 'window.__HI5_API_BASE__'
     })
 
+    // The regex above intentionally matches only a complete standalone string
+    // literal. Keep a second explicit quote-specific pass to avoid any
+    // JavaScript-regex backreference ambiguity across runtimes.
+    content = content.replace(/'https:\/\/api\.hi5central\.com'/g, () => {
+      replacements += 1
+      return 'window.__HI5_API_BASE__'
+    })
+    content = content.replace(/"https:\/\/api\.hi5central\.com"/g, () => {
+      replacements += 1
+      return 'window.__HI5_API_BASE__'
+    })
+
     if (content !== original) {
       fs.writeFileSync(full, content)
       changedFiles += 1
