@@ -7,4 +7,11 @@ import { defineConfig } from 'vite'
 export default defineConfig({
   base: '/',
   plugins: [react()],
+  build: {
+    // Keep the production bundle compatible with mobile Safari/WebKit rather
+    // than relying on Vite's moving default baseline. This is intentionally a
+    // little more conservative because Hi5Central is an operational tool that
+    // must still open reliably on managed phones and tablets.
+    target: ['es2020', 'safari15'],
+  },
 })
