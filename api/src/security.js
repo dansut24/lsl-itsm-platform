@@ -12,6 +12,7 @@ import {
 } from './securityAudit.js'
 import { securitySettings } from './securityPolicy.js'
 import { resolveSession } from './session.js'
+import { originMatchesTenant as deploymentOriginMatchesTenant } from './deploymentConfig.js'
 
 function text(value, max = 255) {
   return String(value ?? '').trim().slice(0, max)
@@ -38,13 +39,7 @@ function hashToken(value) {
 }
 
 function originMatchesTenant(c, slug) {
-  const origin = c.req.header('origin')
-  if (!origin) return true
-  return new Set([
-    `https://${slug}.hi5central.com`,
-    `https://${slug}-portal.hi5central.com`,
-    `https://${slug}-rmm.hi5central.com`,
-  ]).has(origin.toLowerCase())
+  return deploymentOriginMatchesTenant(c.req.header('origin'), slug)
 }
 
 async function requireSession(c, admin = false) {

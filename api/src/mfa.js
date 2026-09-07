@@ -16,6 +16,7 @@ import {
   setSessionCookie,
 } from './session.js'
 import {
+import { originMatchesTenant as deploymentOriginMatchesTenant } from './deploymentConfig.js'
   mfaGraceEndsAt,
   mfaRequiredFor,
   securitySettings,
@@ -67,13 +68,7 @@ async function rateLimit(key, max, seconds) {
 }
 
 function originMatchesTenant(c, slug) {
-  const origin = c.req.header('origin')
-  if (!origin) return true
-  return new Set([
-    `https://${slug}.hi5central.com`,
-    `https://${slug}-portal.hi5central.com`,
-    `https://${slug}-rmm.hi5central.com`,
-  ]).has(origin.toLowerCase())
+  return deploymentOriginMatchesTenant(c.req.header('origin'), slug)
 }
 
 function encryptionKey() {
