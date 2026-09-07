@@ -234,3 +234,51 @@
     transition: none !important;
   }
 }
+
+/* Record canvas density: preserve only a small frame around the record surface. */
+.activity-canvas-top {
+  margin: 4px 4px 0;
+}
+
+.activity-canvas-ribbon,
+.activity-canvas-banner {
+  margin-inline: 4px;
+}
+
+.activity-canvas-body {
+  padding: 8px 4px 4px;
+}
+
+.activity-canvas-skeleton.is-ribbon {
+  margin-inline: 4px;
+}
+
+@media (max-width: 1100px) {
+  .activity-canvas-top {
+    margin: 4px 4px 0;
+  }
+
+  .activity-canvas-ribbon,
+  .activity-canvas-banner {
+    margin-inline: 4px;
+  }
+
+  .activity-canvas-body {
+    padding: 8px 4px 4px;
+  }
+}
+
+@media (max-width: 700px) {
+  .activity-canvas-top {
+    margin: 4px 4px 0;
+  }
+
+  .activity-canvas-ribbon,
+  .activity-canvas-banner {
+    margin-inline: 4px;
+  }
+
+  .activity-canvas-body {
+    padding: 4px;
+  }
+}
