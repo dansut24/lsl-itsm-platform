@@ -198,21 +198,6 @@ function CardList({ items, onOpen }) {
   )
 }
 
-function QueueSkeleton({ viewStyle }) {
-  if (viewStyle === 'cards') {
-    return <div className="production-record-skeleton-cards" aria-label="Loading records">{Array.from({ length: 6 }, (_, index) => <div className="production-skeleton production-record-skeleton-card" key={index}><i /><i /><i /><i /></div>)}</div>
-  }
-  if (viewStyle === 'compact') {
-    return <div className="production-record-skeleton-compact" aria-label="Loading records">{Array.from({ length: 8 }, (_, index) => <div className="production-skeleton production-record-skeleton-line" key={index}><i /><i /><i /><i /></div>)}</div>
-  }
-  return (
-    <div className="production-record-skeleton-table" aria-label="Loading records">
-      <div className="production-record-skeleton-head">{Array.from({ length: 8 }, (_, index) => <i key={index} />)}</div>
-      {Array.from({ length: 7 }, (_, row) => <div className="production-skeleton production-record-skeleton-row" key={row}>{Array.from({ length: 8 }, (_, cell) => <i key={cell} />)}</div>)}
-    </div>
-  )
-}
-
 function ProductionQueue({ route }) {
   const productionSession = readJson('hi5central-production-session-v1', {})
   const savedStyles = readJson('hi5central-record-view-style-v1', {})
@@ -265,33 +250,38 @@ function ProductionQueue({ route }) {
   const ActiveViewIcon = VIEW_STYLES.find((item) => item.id === viewStyle)?.icon || TableProperties
 
   return (
-    <section className="production-record-shell production-motion-enter">
+    <section className="production-record-shell">
       <aside className="production-record-filter-rail">
         <div className="production-record-filter-heading"><span>Queue</span><strong>{route.title}</strong></div>
         <QueueFilters filterOptions={payload.filters || {}} filters={filters} onChange={setFilters} onClear={clearFilters} sessionName={productionSession.name} />
       </aside>
 
       <main className="production-record-main">
+        <header className="production-record-topbar">
+          <div><span>ITSM</span><h1>{route.title}</h1></div>
+          <button className="production-record-new" onClick={createRecord} type="button"><Plus size={16} />New</button>
+        </header>
+
+        <div className="production-record-mobile-filter-row">
+          <button onClick={() => setMobileFilters(true)} type="button"><Filter size={15} />Filters</button>
+        </div>
+
         <div className="production-record-toolbar">
-          <button className="production-record-filter-trigger" onClick={() => setMobileFilters(true)} type="button"><Filter size={15} />Filters</button>
           <label className="production-record-search"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${route.title.toLowerCase()}...`} type="search" /></label>
           <button className="production-record-refresh" onClick={() => setRevision((value) => value + 1)} type="button" title="Refresh"><RefreshCw size={16} /></button>
           <label className="production-record-view-select"><ActiveViewIcon size={15} /><select value={viewStyle} onChange={(event) => changeViewStyle(event.target.value)}>{VIEW_STYLES.map((style) => <option key={style.id} value={style.id}>{style.label}</option>)}</select></label>
-          <button className="production-record-new" onClick={createRecord} type="button"><Plus size={16} />New</button>
         </div>
 
         <div className="production-record-result-line"><span><strong>{payload.total || 0}</strong> {Number(payload.total) === 1 ? route.singular : route.title.toLowerCase()}</span><span>{start}–{end} of {payload.total || 0}</span></div>
 
         <div className="production-record-content">
-          {loading ? <QueueSkeleton viewStyle={viewStyle} /> : null}
+          {loading ? <div className="production-record-state">Loading {route.title.toLowerCase()}…</div> : null}
           {!loading && error ? <div className="production-record-state is-error"><strong>Could not load this queue</strong><span>{error}</span><button onClick={() => setRevision((value) => value + 1)} type="button">Retry</button></div> : null}
-          {!loading && !error && !payload.items?.length ? <div className="production-record-state"><strong>No {route.title.toLowerCase()} in this view</strong><span>Change the filters or create the first {route.singular}.</span></div> : null}
+          {!loading && !error && !payload.items?.length ? <div className="production-record-state"><strong>No {route.title.toLowerCase()} in this view</strong><span>Production queues now show PostgreSQL records only. Change the filters or create the first {route.singular}.</span></div> : null}
           {!loading && !error && payload.items?.length ? (
-            <div className="production-motion-enter production-motion-enter-fast">
-              {viewStyle === 'compact' ? <CompactList items={payload.items} onOpen={openRecord} />
-                : viewStyle === 'cards' ? <CardList items={payload.items} onOpen={openRecord} />
-                  : <RecordTable items={payload.items} onOpen={openRecord} />}
-            </div>
+            viewStyle === 'compact' ? <CompactList items={payload.items} onOpen={openRecord} />
+              : viewStyle === 'cards' ? <CardList items={payload.items} onOpen={openRecord} />
+                : <RecordTable items={payload.items} onOpen={openRecord} />
           ) : null}
         </div>
 
@@ -303,7 +293,7 @@ function ProductionQueue({ route }) {
       </main>
 
       {mobileFilters ? (
-        <><button className="production-record-filter-backdrop" aria-label="Close filters" onClick={() => setMobileFilters(false)} type="button" /><aside className="production-record-mobile-filter production-motion-drawer"><header><div><span>Queue filters</span><strong>{route.title}</strong></div><button onClick={() => setMobileFilters(false)} type="button"><X size={17} /></button></header><QueueFilters filterOptions={payload.filters || {}} filters={filters} onChange={setFilters} onClear={clearFilters} sessionName={productionSession.name} /></aside></>
+        <><button className="production-record-filter-backdrop" aria-label="Close filters" onClick={() => setMobileFilters(false)} type="button" /><aside className="production-record-mobile-filter"><header><div><span>Queue filters</span><strong>{route.title}</strong></div><button onClick={() => setMobileFilters(false)} type="button"><X size={17} /></button></header><QueueFilters filterOptions={payload.filters || {}} filters={filters} onChange={setFilters} onClear={clearFilters} sessionName={productionSession.name} /></aside></>
       ) : null}
     </section>
   )
