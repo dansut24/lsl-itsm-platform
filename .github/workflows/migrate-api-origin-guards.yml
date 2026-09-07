@@ -1,0 +1,38 @@
+name: Migrate API origin guards
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/migrate-api-origin-guards.mjs'
+      - '.github/workflows/migrate-api-origin-guards.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Use Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Migrate API origin guards
+        run: node scripts/migrate-api-origin-guards.mjs
+      - name: Commit migration
+        run: |
+          if git diff --quiet; then
+            echo 'No API origin migrations required.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add api/src
+          git commit -m 'Use deployment-aware API origin guards'
+          git push origin HEAD:main
