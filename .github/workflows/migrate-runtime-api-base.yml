@@ -33,6 +33,6 @@ jobs:
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src
-          git commit -m 'Use runtime API base across frontend'
+          git add src api/src
+          git commit -m 'Use runtime deployment endpoints across app'
           git push origin HEAD:main
