@@ -1,0 +1,163 @@
+/* Workspace-wide refinement layer: live preferences, clean scrolling and compact page chrome. */
+.production-settings-nav,
+.nav-stack {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.production-settings-nav::-webkit-scrollbar,
+.nav-stack::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.production-settings-sidebar,
+.sidebar {
+  position: relative;
+}
+
+.production-scroll-assist {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+  pointer-events: none;
+}
+
+.production-scroll-assist.is-settings {
+  top: 72px;
+  bottom: 8px;
+}
+
+.production-scroll-assist.is-primary {
+  top: 82px;
+  bottom: 82px;
+}
+
+.production-scroll-assist button {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(var(--accent-rgb), .30);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  color: var(--brand);
+  box-shadow: 0 8px 22px rgba(16, 33, 63, .16);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  pointer-events: auto;
+  cursor: pointer;
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  transition: opacity 150ms ease, transform 150ms ease, background 150ms ease, border-color 150ms ease;
+}
+
+.sidebar .production-scroll-assist button {
+  border-color: rgba(255,255,255,.18);
+  background: rgba(9, 29, 61, .76);
+  color: color-mix(in srgb, rgb(var(--accent-rgb)) 88%, white);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, .26);
+}
+
+.production-scroll-assist button:hover,
+.production-scroll-assist button:focus-visible {
+  border-color: rgba(var(--accent-rgb), .58);
+  background: color-mix(in srgb, var(--surface) 78%, rgb(var(--accent-rgb)) 22%);
+}
+
+.production-scroll-assist button.is-hidden {
+  opacity: 0;
+  transform: scale(.82);
+  pointer-events: none;
+}
+
+/* Page location is already represented by the workspace tab + breadcrumb. */
+.production-settings-topbar {
+  min-height: 48px !important;
+  padding-block: 6px !important;
+}
+
+.production-settings-title-row > div {
+  display: none !important;
+}
+
+.production-settings-title-row {
+  min-height: 34px;
+}
+
+/* Production queues: clean white list area and pagination fixed to the panel floor. */
+.production-record-main {
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: auto auto minmax(0, 1fr) auto !important;
+  background: var(--surface) !important;
+}
+
+.production-record-toolbar {
+  border-radius: var(--record-radius-lg) var(--record-radius-lg) 0 0;
+  background: var(--surface) !important;
+}
+
+.production-record-content {
+  min-height: 0;
+  overflow: auto;
+  background: var(--surface) !important;
+  padding: 12px 14px 16px;
+}
+
+.production-record-result-line {
+  background: var(--surface) !important;
+}
+
+.production-record-pagination {
+  align-self: end;
+  margin-top: 0;
+  background: var(--surface) !important;
+}
+
+.production-record-table-wrap,
+.production-record-compact-list {
+  background: var(--surface) !important;
+}
+
+.production-record-toolbar .production-record-new {
+  flex: 0 0 auto;
+}
+
+.production-record-filter-trigger {
+  display: none !important;
+}
+
+@media (max-width: 760px) {
+  .production-scroll-assist.is-primary {
+    display: none;
+  }
+
+  .production-record-filter-trigger {
+    display: inline-flex !important;
+  }
+
+  .production-record-toolbar {
+    flex-wrap: wrap;
+    padding: 9px 10px;
+  }
+
+  .production-record-search {
+    order: 3;
+    flex-basis: 100%;
+  }
+
+  .production-record-content {
+    background: var(--surface) !important;
+  }
+
+  .production-settings-topbar {
+    min-height: 44px !important;
+  }
+}
