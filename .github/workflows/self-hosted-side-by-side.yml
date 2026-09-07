@@ -1,0 +1,101 @@
+name: Self-hosted side-by-side smoke test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'api/**'
+      - 'deployment/runtime-config-entrypoint.sh'
+      - 'deployment/self-hosted/**'
+      - 'Dockerfile.production'
+      - '.github/workflows/self-hosted-side-by-side.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'api/**'
+      - 'deployment/runtime-config-entrypoint.sh'
+      - 'deployment/self-hosted/**'
+      - 'Dockerfile.production'
+      - '.github/workflows/self-hosted-side-by-side.yml'
+
+jobs:
+  side-by-side:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare isolated self-host environment
+        run: |
+          cp deployment/self-hosted/side-by-side/.env.example deployment/self-hosted/side-by-side/.env
+          sed -i 's/CHANGE_ME_HEX_64/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/' deployment/self-hosted/side-by-side/.env
+          sed -i 's/^SMTP_USER=.*/SMTP_USER=ci@example.invalid/' deployment/self-hosted/side-by-side/.env
+          sed -i 's/^SMTP_PASSWORD=.*/SMTP_PASSWORD=ci-not-used/' deployment/self-hosted/side-by-side/.env
+          sed -i 's/^SMTP_FROM=.*/SMTP_FROM=ci@example.invalid/' deployment/self-hosted/side-by-side/.env
+          chmod 600 deployment/self-hosted/side-by-side/.env
+
+      - name: Create production-like public proxy network
+        run: docker network create hi5central
+
+      - name: Validate Compose model
+        run: docker compose --env-file deployment/self-hosted/side-by-side/.env -f deployment/self-hosted/side-by-side/compose.yml config >/dev/null
+
+      - name: Build isolated API and web images
+        run: docker compose --env-file deployment/self-hosted/side-by-side/.env -f deployment/self-hosted/side-by-side/compose.yml build api web
+
+      - name: Start isolated self-host stack
+        run: docker compose --env-file deployment/self-hosted/side-by-side/.env -f deployment/self-hosted/side-by-side/compose.yml up -d
+
+      - name: Wait for self-host web health
+        run: |
+          for i in $(seq 1 60); do
+            status="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' hi5self-web 2>/dev/null || true)"
+            echo "hi5self-web=$status"
+            if [ "$status" = "healthy" ]; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose --env-file deployment/self-hosted/side-by-side/.env -f deployment/self-hosted/side-by-side/compose.yml ps
+          docker logs hi5self-api --tail 120 || true
+          docker logs hi5self-web --tail 120 || true
+          exit 1
+
+      - name: Verify side-by-side proxy and deployment identity
+        run: |
+          docker run --rm --network hi5central curlimages/curl:8.12.1 -fsS http://hi5self-web/healthz
+          deployment="$(docker run --rm --network hi5central curlimages/curl:8.12.1 -fsS http://hi5self-web/api/v1/system/deployment)"
+          license="$(docker run --rm --network hi5central curlimages/curl:8.12.1 -fsS http://hi5self-web/api/v1/system/license)"
+          echo "$deployment"
+          echo "$license"
+          echo "$deployment" | grep -q '"deploymentMode":"self_hosted"'
+          echo "$deployment" | grep -q '"tenancyMode":"single"'
+          echo "$deployment" | grep -q '"rootDomain":"itsm.hi5tech.co.uk"'
+          echo "$license" | grep -q '"status":"evaluation"'
+          echo "$license" | grep -q '"offlineCapable":true'
+
+      - name: Verify isolation and resource limits
+        run: |
+          docker inspect hi5self-postgres --format '{{json .NetworkSettings.Networks}}' | grep -q hi5self_internal
+          docker inspect hi5self-redis --format '{{json .NetworkSettings.Networks}}' | grep -q hi5self_internal
+          docker inspect hi5self-api --format '{{json .NetworkSettings.Networks}}' | grep -q hi5self_internal
+          docker inspect hi5self-web --format '{{json .NetworkSettings.Networks}}' | grep -q hi5central
+          test "$(docker inspect hi5self-postgres --format '{{.HostConfig.Memory}}')" -gt 0
+          test "$(docker inspect hi5self-api --format '{{.HostConfig.Memory}}')" -gt 0
+
+      - name: Show diagnostics on failure
+        if: failure()
+        run: |
+          docker compose --env-file deployment/self-hosted/side-by-side/.env -f deployment/self-hosted/side-by-side/compose.yml ps || true
+          docker logs hi5self-postgres --tail 100 || true
+          docker logs hi5self-redis --tail 100 || true
+          docker logs hi5self-api --tail 150 || true
+          docker logs hi5self-web --tail 150 || true
+
+      - name: Tear down test stack
+        if: always()
+        run: |
+          docker compose --env-file deployment/self-hosted/side-by-side/.env -f deployment/self-hosted/side-by-side/compose.yml down -v --remove-orphans || true
+          docker network rm hi5central || true
