@@ -1,0 +1,53 @@
+/*
+ * Authenticated workspace overscroll contract.
+ *
+ * Hi5Central owns its own mobile pull-to-refresh interaction. Browser-level
+ * rubber-band / pull-to-refresh must therefore never be allowed to chain out of
+ * the application shell. Keep this active at every viewport width so a touch
+ * that begins in desktop mode remains protected if the viewport crosses into
+ * the mobile breakpoint before that same gesture ends.
+ */
+html[data-hi5-surface='workspace'],
+html[data-hi5-surface='workspace'] body,
+html[data-hi5-surface='workspace'] #root,
+html[data-hi5-surface='workspace'] .app-shell,
+html[data-hi5-surface='workspace'] .main-frame {
+  overscroll-behavior-x: none;
+  overscroll-behavior-y: none;
+}
+
+/* The primary navigation may scroll internally, but must never hand vertical
+ * overscroll back to the browser. This is especially important while the
+ * desktop expanded rail becomes the fixed mobile drawer. */
+html[data-hi5-surface='workspace'] .sidebar,
+html[data-hi5-surface='workspace'] .nav-stack {
+  overscroll-behavior-y: contain;
+}
+
+@media (max-width: 680px) and (any-pointer: coarse),
+       (max-height: 600px) and (any-pointer: coarse) {
+  /* Do not animate the desktop grid column itself through the breakpoint. The
+   drawer owns the mobile transition; the workspace grid should switch state
+   atomically instead of interpolating from a 276px/78px desktop column. */
+  html[data-hi5-surface='workspace'] .app-shell,
+  html[data-hi5-surface='workspace'] .app-shell.sidebar-collapsed,
+  html[data-hi5-surface='workspace'] .app-shell.sidebar-hidden {
+    transition: none !important;
+  }
+
+  /* A closed mobile drawer is visually and interactively absent. Prevent an
+   off-canvas expanded desktop sidebar from remaining a touch target during the
+   breakpoint hand-off. */
+  html[data-hi5-surface='workspace'] .sidebar:not(.mobile-open) {
+    pointer-events: none;
+  }
+
+  html[data-hi5-surface='workspace'] .sidebar.mobile-open {
+    overscroll-behavior-y: contain;
+    pointer-events: auto;
+  }
+
+  html[data-hi5-surface='workspace'] .nav-stack {
+    overscroll-behavior-y: contain;
+  }
+}
