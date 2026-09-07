@@ -4,11 +4,23 @@ import { pool } from './db.js'
 import { mfaRequiredFor, sessionNeedsMfa, sessionTtlSeconds } from './securityPolicy.js'
 
 const COOKIE_NAME = 'hi5central_session'
+const PORTAL_COOKIE_NAME = 'hi5central_portal_session'
 const DEFAULT_SESSION_TTL_SECONDS = 60 * 60 * 12
 const COOKIE_DOMAIN = process.env.COOKIE_DOMAIN || '.hi5central.com'
 
 function hashToken(token) {
   return createHash('sha256').update(token).digest('hex')
+}
+
+function portalRequest(c) {
+  const origin = String(c.req.header('origin') || '').toLowerCase()
+  const referer = String(c.req.header('referer') || '').toLowerCase()
+  return /^https:\/\/[a-z0-9-]+-portal\.hi5central\.com(?::\d+)?$/.test(origin)
+    || /^https:\/\/[a-z0-9-]+-portal\.hi5central\.com(?:[:/]\d*)?\//.test(referer)
+}
+
+function requestCookieName(c) {
+  return portalRequest(c) ? PORTAL_COOKIE_NAME : COOKIE_NAME
 }
 
 async function sessionPolicy(client, tenantId, userId) {
@@ -59,9 +71,9 @@ export async function createSession(client, { tenantId, userId, mfaVerified = fa
   return token
 }
 
-export function setSessionCookie(c, token, maxAge = DEFAULT_SESSION_TTL_SECONDS) {
+function writeCookie(c, name, token, maxAge) {
   const resolvedMaxAge = Math.max(60 * 60, Math.min(60 * 60 * 24, Number(maxAge || DEFAULT_SESSION_TTL_SECONDS)))
-  setCookie(c, COOKIE_NAME, token, {
+  setCookie(c, name, token, {
     httpOnly: true,
     secure: true,
     sameSite: 'Lax',
@@ -71,8 +83,8 @@ export function setSessionCookie(c, token, maxAge = DEFAULT_SESSION_TTL_SECONDS)
   })
 }
 
-export function clearSessionCookie(c) {
-  deleteCookie(c, COOKIE_NAME, {
+function deleteNamedCookie(c, name) {
+  deleteCookie(c, name, {
     secure: true,
     sameSite: 'Lax',
     domain: COOKIE_DOMAIN,
@@ -80,8 +92,24 @@ export function clearSessionCookie(c) {
   })
 }
 
+export function setSessionCookie(c, token, maxAge = DEFAULT_SESSION_TTL_SECONDS) {
+  writeCookie(c, COOKIE_NAME, token, maxAge)
+}
+
+export function setPortalSessionCookie(c, token, maxAge = DEFAULT_SESSION_TTL_SECONDS) {
+  writeCookie(c, PORTAL_COOKIE_NAME, token, maxAge)
+}
+
+export function clearSessionCookie(c) {
+  deleteNamedCookie(c, COOKIE_NAME)
+}
+
+export function clearPortalSessionCookie(c) {
+  deleteNamedCookie(c, PORTAL_COOKIE_NAME)
+}
+
 export async function resolveSession(c) {
-  const token = getCookie(c, COOKIE_NAME)
+  const token = getCookie(c, requestCookieName(c))
   if (!token) return null
 
   const tokenHash = hashToken(token)
@@ -143,7 +171,8 @@ export async function resolveSession(c) {
 }
 
 export async function revokeCurrentSession(c) {
-  const token = getCookie(c, COOKIE_NAME)
+  const cookieName = requestCookieName(c)
+  const token = getCookie(c, cookieName)
   if (token) {
     await pool.query(
       `UPDATE auth_sessions
@@ -152,7 +181,7 @@ export async function revokeCurrentSession(c) {
       [hashToken(token)],
     )
   }
-  clearSessionCookie(c)
+  deleteNamedCookie(c, cookieName)
 }
 
 export function sessionPayload(session) {
