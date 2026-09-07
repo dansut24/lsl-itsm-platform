@@ -17,6 +17,7 @@ import { ProductionOnboardingBootstrap } from './production/ProductionOnboarding
 import { ProductionOrganisationWriteThrough } from './production/ProductionOrganisationWriteThrough.jsx'
 import { ProductionPortalBootstrap } from './production/ProductionPortalBootstrap.jsx'
 import { ProductionRecordDetailRouter } from './production/ProductionRecordDetailRouter.jsx'
+import { installProductionRuntimeDiagnostics } from './production/ProductionRuntimeDiagnostics.js'
 import { ProductionServiceRequestIntake } from './production/ProductionServiceRequestIntake.jsx'
 import { ProductionWorkspaceBootstrap } from './production/ProductionWorkspaceBootstrap.jsx'
 import { ProductionWorkspaceRefinement } from './production/ProductionWorkspaceRefinement.jsx'
@@ -33,6 +34,8 @@ import './production/ProductionWorkspaceVisualSystem.css'
 import './production/ProductionActivityFirstRecord.css'
 import './production/ProductionWorkspaceDensity.css'
 import './production/ProductionWorkspaceOverscrollGuard.css'
+
+installProductionRuntimeDiagnostics()
 
 const rootElement = document.getElementById('root')
 const initialSurface = resolveTenantSurface()
