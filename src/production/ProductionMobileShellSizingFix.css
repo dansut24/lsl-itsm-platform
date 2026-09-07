@@ -1,0 +1,41 @@
+/*
+ * Mobile authenticated-shell sizing contract.
+ *
+ * Runtime diagnostics on iPhone/Chrome showed the shell at 440x766 while the
+ * routed .main-frame collapsed to 440x0 whenever the persisted desktop sidebar
+ * mode was "expanded". Mobile must always give the routed content the one
+ * available grid cell, regardless of the desktop sidebar preference.
+ */
+@media (max-width: 680px) and (any-pointer: coarse),
+       (max-height: 600px) and (any-pointer: coarse) {
+  html[data-hi5-surface='workspace'] .app-shell,
+  html[data-hi5-surface='workspace'] .app-shell.sidebar-expanded,
+  html[data-hi5-surface='workspace'] .app-shell.sidebar-collapsed,
+  html[data-hi5-surface='workspace'] .app-shell.sidebar-hidden {
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: minmax(0, 1fr) !important;
+    grid-auto-columns: minmax(0, 1fr) !important;
+    grid-auto-rows: minmax(0, 1fr) !important;
+    align-items: stretch !important;
+    justify-items: stretch !important;
+  }
+
+  html[data-hi5-surface='workspace'] .main-frame {
+    box-sizing: border-box;
+    grid-column: 1 / -1 !important;
+    grid-row: 1 / -1 !important;
+    align-self: stretch !important;
+    justify-self: stretch !important;
+    width: 100% !important;
+    height: 100% !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    max-height: none !important;
+  }
+
+  html[data-hi5-surface='workspace'] .content-frame,
+  html[data-hi5-surface='workspace'] .workspace {
+    min-width: 0 !important;
+    min-height: 0 !important;
+  }
+}
