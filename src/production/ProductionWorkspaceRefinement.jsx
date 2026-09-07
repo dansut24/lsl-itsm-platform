@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronUp } from 'lucide-react'
 import './ProductionWorkspaceRefinement.css'
@@ -8,6 +8,7 @@ const THEMES = new Set(['system', 'light', 'dark'])
 const SCROLL_TARGETS = [
   { selector: '.production-settings-nav', kind: 'settings' },
   { selector: '.nav-stack', kind: 'primary' },
+  { selector: '.production-unified-detail-nav-scroll', kind: 'record' },
 ]
 
 function readJson(key, fallback) {
@@ -33,20 +34,22 @@ function preferenceSnapshot() {
   }
 }
 
-function applyPreferences() {
+function applyPreferences(next = preferenceSnapshot()) {
   const shell = document.querySelector('.app-shell')
   if (!(shell instanceof HTMLElement)) return
-  const next = preferenceSnapshot()
   shell.dataset.accent = next.accent
   shell.dataset.theme = resolvedTheme(next.theme)
   document.documentElement.dataset.hi5Accent = next.accent
   document.documentElement.dataset.hi5Theme = next.theme
+  document.body.dataset.hi5Accent = next.accent
+  document.body.dataset.hi5Theme = next.theme
 }
 
 function hostFor(target, kind) {
   if (!(target instanceof HTMLElement)) return null
   if (kind === 'settings') return target.closest('.production-settings-sidebar')
   if (kind === 'primary') return target.closest('.sidebar')
+  if (kind === 'record') return target.closest('.production-unified-rail')
   return target.parentElement
 }
 
@@ -71,7 +74,7 @@ function ScrollAssist({ target, kind }) {
 
     const resizeObserver = new ResizeObserver(update)
     resizeObserver.observe(target)
-    if (target.firstElementChild) resizeObserver.observe(target.firstElementChild)
+    Array.from(target.children).slice(0, 12).forEach((child) => resizeObserver.observe(child))
 
     const mutationObserver = new MutationObserver(update)
     mutationObserver.observe(target, { childList: true, subtree: true, attributes: true })
@@ -95,24 +98,8 @@ function ScrollAssist({ target, kind }) {
 
   return createPortal(
     <div className={`production-scroll-assist is-${kind}`} aria-hidden={!state.up && !state.down}>
-      <button
-        aria-label="Scroll navigation up"
-        className={!state.up ? 'is-hidden' : ''}
-        onClick={() => move(-1)}
-        tabIndex={state.up ? 0 : -1}
-        type="button"
-      >
-        <ChevronUp size={16} />
-      </button>
-      <button
-        aria-label="Scroll navigation down"
-        className={!state.down ? 'is-hidden' : ''}
-        onClick={() => move(1)}
-        tabIndex={state.down ? 0 : -1}
-        type="button"
-      >
-        <ChevronDown size={16} />
-      </button>
+      <button aria-label="Scroll navigation up" className={!state.up ? 'is-hidden' : ''} onClick={() => move(-1)} tabIndex={state.up ? 0 : -1} type="button"><ChevronUp size={16} /></button>
+      <button aria-label="Scroll navigation down" className={!state.down ? 'is-hidden' : ''} onClick={() => move(1)} tabIndex={state.down ? 0 : -1} type="button"><ChevronDown size={16} /></button>
     </div>,
     host,
   )
@@ -120,20 +107,19 @@ function ScrollAssist({ target, kind }) {
 
 export function ProductionWorkspaceRefinement() {
   const [targets, setTargets] = useState([])
+  const targetSignatureRef = useRef('')
 
   useEffect(() => {
-    let signature = ''
-
     const scan = () => {
       const next = []
       for (const definition of SCROLL_TARGETS) {
-        document.querySelectorAll(definition.selector).forEach((node) => {
-          if (node instanceof HTMLElement) next.push({ target: node, kind: definition.kind })
+        document.querySelectorAll(definition.selector).forEach((node, index) => {
+          if (node instanceof HTMLElement) next.push({ target: node, kind: definition.kind, key: `${definition.kind}-${index}` })
         })
       }
-      const nextSignature = next.map((item) => `${item.kind}:${item.target.className}`).join('|')
-      if (nextSignature !== signature || next.length !== targets.length) {
-        signature = nextSignature
+      const nextSignature = next.map((item) => `${item.key}:${item.target.className}:${item.target.scrollHeight}:${item.target.clientHeight}`).join('|')
+      if (nextSignature !== targetSignatureRef.current) {
+        targetSignatureRef.current = nextSignature
         setTargets(next)
       }
     }
@@ -142,11 +128,13 @@ export function ProductionWorkspaceRefinement() {
     const observer = new MutationObserver(scan)
     observer.observe(document.body, { childList: true, subtree: true })
     window.addEventListener('hi5-routechange', scan)
-    const timer = window.setInterval(scan, 750)
+    window.addEventListener('resize', scan)
+    const timer = window.setInterval(scan, 900)
 
     return () => {
       observer.disconnect()
       window.removeEventListener('hi5-routechange', scan)
+      window.removeEventListener('resize', scan)
       window.clearInterval(timer)
     }
   }, [])
@@ -158,28 +146,28 @@ export function ProductionWorkspaceRefinement() {
       const signature = `${next.accent}:${next.theme}:${resolvedTheme(next.theme)}`
       if (signature !== last) {
         last = signature
-        applyPreferences()
+        applyPreferences(next)
         window.dispatchEvent(new CustomEvent('hi5-runtime-preferences-applied', { detail: next }))
       }
     }
 
     sync()
-    const timer = window.setInterval(sync, 160)
+    const timer = window.setInterval(sync, 120)
     const media = window.matchMedia?.('(prefers-color-scheme: dark)')
     const mediaListener = () => { last = ''; sync() }
     media?.addEventListener?.('change', mediaListener)
     window.addEventListener('storage', sync)
     window.addEventListener('focus', sync)
+    window.addEventListener('hi5-settings-saved', sync)
 
     return () => {
       window.clearInterval(timer)
       media?.removeEventListener?.('change', mediaListener)
       window.removeEventListener('storage', sync)
       window.removeEventListener('focus', sync)
+      window.removeEventListener('hi5-settings-saved', sync)
     }
   }, [])
 
-  return targets.map((item, index) => (
-    <ScrollAssist key={`${item.kind}-${index}`} kind={item.kind} target={item.target} />
-  ))
+  return targets.map((item) => <ScrollAssist key={item.key} kind={item.kind} target={item.target} />)
 }
