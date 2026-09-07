@@ -23,6 +23,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: Sync latest main
+        run: |
+          git fetch origin main
+          git reset --hard origin/main
       - name: Repair MFA module from exact source snapshot
         run: node scripts/repair-mfa-origin-import.mjs
       - name: Commit repair
