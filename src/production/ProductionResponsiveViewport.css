@@ -1,0 +1,179 @@
+/* Width-driven responsive contract for workspace chrome.
+   Device type and orientation are intentionally irrelevant: available width wins. */
+
+/* Narrow desktop / portrait monitor / large tablet.
+   Remove the persistent primary rail before it starts competing with page-local rails. */
+@media (max-width: 1180px) {
+  html[data-hi5-surface='workspace'] .app-shell,
+  html[data-hi5-surface='workspace'] .app-shell.sidebar-collapsed,
+  html[data-hi5-surface='workspace'] .app-shell.sidebar-hidden {
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: minmax(0, 1fr) !important;
+  }
+
+  html[data-hi5-surface='workspace'] .main-frame {
+    grid-column: 1;
+    grid-row: 1;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  html[data-hi5-surface='workspace'] .sidebar,
+  html[data-hi5-surface='workspace'] .sidebar-collapsed .sidebar {
+    position: fixed !important;
+    z-index: 30;
+    inset: 0 auto 0 0;
+    width: min(82vw, 304px);
+    height: 100dvh;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    gap: 16px;
+    padding: 14px;
+    overflow: hidden;
+    box-shadow: 20px 0 48px rgba(0, 0, 0, .28);
+    transform: translateX(-108%);
+    transition: transform 180ms ease;
+  }
+
+  html[data-hi5-surface='workspace'] .sidebar.mobile-open,
+  html[data-hi5-surface='workspace'] .sidebar-collapsed .sidebar.mobile-open {
+    transform: translateX(0);
+  }
+
+  html[data-hi5-surface='workspace'] .sidebar-top,
+  html[data-hi5-surface='workspace'] .sidebar-collapsed .sidebar-top {
+    grid-template-columns: minmax(0, 1fr) 36px;
+  }
+
+  html[data-hi5-surface='workspace'] .sidebar-collapsed .brand,
+  html[data-hi5-surface='workspace'] .sidebar-collapsed .nav-item,
+  html[data-hi5-surface='workspace'] .sidebar-collapsed .sidebar-toggle {
+    justify-content: flex-start;
+  }
+
+  html[data-hi5-surface='workspace'] .brand span,
+  html[data-hi5-surface='workspace'] .nav-item span,
+  html[data-hi5-surface='workspace'] .sidebar-status div,
+  html[data-hi5-surface='workspace'] .sidebar-collapsed .brand span,
+  html[data-hi5-surface='workspace'] .sidebar-collapsed .nav-item span,
+  html[data-hi5-surface='workspace'] .sidebar-collapsed .sidebar-status div {
+    display: block;
+  }
+
+  html[data-hi5-surface='workspace'] .nav-group-label,
+  html[data-hi5-surface='workspace'] .sidebar-collapsed .nav-group-label {
+    display: flex;
+  }
+
+  html[data-hi5-surface='workspace'] .sidebar-collapsed .nav-item {
+    padding-inline: 12px;
+  }
+
+  html[data-hi5-surface='workspace'] .desktop-sidebar-toggle {
+    display: none;
+  }
+
+  html[data-hi5-surface='workspace'] .mobile-drawer-close {
+    display: inline-grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    border: 1px solid rgba(255, 255, 255, .16);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, .08);
+    color: #fff;
+  }
+
+  html[data-hi5-surface='workspace'] .mobile-nav-backdrop {
+    position: fixed;
+    z-index: 25;
+    inset: 0 0 0 min(82vw, 304px);
+    display: block;
+    width: calc(100% - min(82vw, 304px));
+    height: 100%;
+    border: 0;
+    background: rgba(3, 12, 29, .46);
+    cursor: pointer;
+  }
+
+  /* The existing tabbar logo is the launcher for the off-canvas primary nav. */
+  html[data-hi5-surface='workspace'] .tabbar-tab-zone {
+    display: grid;
+    grid-template-columns: 40px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    column-gap: 0;
+    width: 100%;
+    min-width: 0;
+  }
+
+  html[data-hi5-surface='workspace'] .tabbar-tab-zone > .tab-list {
+    grid-column: 2;
+    grid-row: 1;
+    min-width: 0;
+    width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  html[data-hi5-surface='workspace'] .tabbar-tab-zone > .tabbar-brand {
+    position: relative;
+    z-index: 5;
+    grid-column: 1;
+    grid-row: 1;
+    align-self: center;
+    justify-self: start;
+    display: inline-grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  html[data-hi5-surface='workspace'] .tabbar-brand img {
+    width: 25px;
+    height: 25px;
+    object-fit: contain;
+  }
+}
+
+/* Tablet portrait / very narrow desktop.
+   Page-local navigation becomes horizontal so content owns the width. */
+@media (max-width: 880px) {
+  html[data-hi5-surface='workspace'] .production-settings-shell,
+  html[data-hi5-surface='workspace'] .production-settings-shell.settings-nav-hidden {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  html[data-hi5-surface='workspace'] .production-settings-sidebar,
+  html[data-hi5-surface='workspace'] .production-settings-shell.settings-nav-hidden .production-settings-sidebar {
+    display: none !important;
+  }
+
+  html[data-hi5-surface='workspace'] .production-settings-inline-nav,
+  html[data-hi5-surface='workspace'] .production-settings-shell.settings-nav-hidden .production-settings-inline-nav {
+    display: flex !important;
+  }
+
+  html[data-hi5-surface='workspace'] .production-settings-nav-reveal,
+  html[data-hi5-surface='workspace'] .production-settings-shell.settings-nav-hidden .production-settings-nav-reveal {
+    display: none !important;
+  }
+
+  html[data-hi5-surface='workspace'] .production-settings-content {
+    width: min(100% - 20px, 1060px);
+    padding: 12px 0 28px;
+  }
+}
+
+/* Compact phones keep the existing phone layout, but field-heavy settings never squeeze. */
+@media (max-width: 680px) {
+  html[data-hi5-surface='workspace'] .production-settings-grid,
+  html[data-hi5-surface='workspace'] .production-role-cards,
+  html[data-hi5-surface='workspace'] .production-integration-grid,
+  html[data-hi5-surface='workspace'] .production-product-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
