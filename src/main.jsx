@@ -33,6 +33,7 @@ import './production/ProductionWorkspaceVisualSystem.css'
 import './production/ProductionActivityFirstRecord.css'
 import './production/ProductionWorkspaceDensity.css'
 import './production/ProductionPlanningSurface.css'
+import './production/ProductionPlanningResponsive.css'
 import './production/ProductionResponsiveViewport.css'
 
 const rootElement = document.getElementById('root')
