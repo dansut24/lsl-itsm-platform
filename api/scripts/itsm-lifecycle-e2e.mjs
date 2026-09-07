@@ -56,6 +56,11 @@ await db.query(
    VALUES ($1,'USR-LIFE',$2,$3,'Lifecycle Requester',$4,'Employee','employee',true)`,
   [tenantId, team.rows[0].id, department.rows[0].id, `requester-${suffix}@hi5central.test`],
 )
+await db.query(
+  `INSERT INTO organisation_people (tenant_id, external_key, primary_team_id, department_id, name, email, job_title, access_profile, active)
+   VALUES ($1,'USR-TECH',$2,$3,'Lifecycle Technician',$4,'Support Engineer','technician',true)`,
+  [tenantId, team.rows[0].id, department.rows[0].id, `technician-${suffix}@hi5central.test`],
+)
 
 console.log('1. Create shared lifecycle records')
 const incident = await json('/api/v1/itsm-records', { method: 'POST', body: { type: 'Incident', requesterId: 'USR-LIFE', requester: 'Lifecycle Requester', title: 'Lifecycle incident', description: 'Lifecycle E2E', service: 'Identity', category: 'Access', priority: 'Medium', status: 'New', team: 'Lifecycle Desk', impact: 'High', urgency: 'Medium' } })
@@ -82,11 +87,15 @@ const customer = await json(`/api/v1/itsm-lifecycle/${encodeURIComponent(inciden
 assert(customer.response.status === 201 && customer.payload.firstResponseAt, 'Customer update did not complete first response SLA')
 assert(customer.payload.activities.some((item) => item.kind === 'field_change'), 'Field-change audit event missing')
 
-console.log('5. Persist cross-record relationship')
+console.log('5. Keep mandatory Incident resolution validation')
+const invalidLegacyResolve = await json(`/api/v1/itsm-lifecycle/${encodeURIComponent(incident.payload.id)}`, { method: 'PATCH', body: { version: customer.payload.version, status: 'Resolved', resolutionCode: '', resolutionSummary: '' } })
+assert(invalidLegacyResolve.response.status === 400, 'Incident resolved without mandatory resolution data')
+
+console.log('6. Persist cross-record relationship')
 const linked = await json(`/api/v1/itsm-lifecycle/${encodeURIComponent(incident.payload.id)}/relationships`, { method: 'POST', body: { targetReference: problem.payload.id, relationshipType: 'caused-by' } })
 assert(linked.response.status === 201 && linked.payload.relationships.some((item) => item.targetReference === problem.payload.id), 'Relationship was not persisted')
 
-console.log('6. Persist attachment and verify SHA-256/download')
+console.log('7. Persist attachment and verify SHA-256/download')
 const attachmentText = `Lifecycle attachment ${suffix}`
 const upload = await json(`/api/v1/itsm-lifecycle/${encodeURIComponent(incident.payload.id)}/attachments`, { method: 'POST', body: { fileName: 'lifecycle.txt', mimeType: 'text/plain', contentBase64: Buffer.from(attachmentText).toString('base64') } })
 assert(upload.response.status === 201, `Attachment upload failed: ${upload.payload.error || upload.response.status}`)
@@ -95,13 +104,43 @@ assert(attachment?.sha256 === createHash('sha256').update(attachmentText).digest
 const download = await fetch(`${API}/api/v1/itsm-lifecycle/${encodeURIComponent(incident.payload.id)}/attachments/${encodeURIComponent(attachment.id)}`, { headers: { Origin: origin, Cookie: cookie } })
 assert(download.ok && await download.text() === attachmentText, 'Attachment download mismatch')
 
-console.log('7. Enforce and persist Incident resolution')
-const invalid = await json(`/api/v1/itsm-lifecycle/${encodeURIComponent(incident.payload.id)}`, { method: 'PATCH', body: { version: upload.payload.version, status: 'Resolved', resolutionCode: '', resolutionSummary: '' } })
-assert(invalid.response.status === 400, 'Incident resolved without mandatory resolution data')
-const resolved = await json(`/api/v1/itsm-lifecycle/${encodeURIComponent(incident.payload.id)}`, { method: 'PATCH', body: { version: upload.payload.version, status: 'Resolved', resolutionCode: 'Fixed', resolutionSummary: 'Corrected the lifecycle test condition.' } })
-assert(resolved.response.ok && resolved.payload.status === 'Resolved' && resolved.payload.resolvedAt, 'Incident resolution did not persist')
+console.log('8. Reassign atomically from the Activity composer')
+let latest = await json(`/api/v1/itsm-lifecycle/${encodeURIComponent(incident.payload.id)}`)
+const staleAction = await json(`/api/v1/itsm-actions/${encodeURIComponent(incident.payload.id)}/reassign`, { method: 'POST', body: { version: Math.max(1, latest.payload.version - 1), team: 'Lifecycle Desk', assignee: 'Lifecycle Technician', note: 'Stale handoff must not apply.' } })
+assert(staleAction.response.status === 409 && staleAction.payload.conflict === true, 'Quick action did not reject a stale record version')
+const reassigned = await json(`/api/v1/itsm-actions/${encodeURIComponent(incident.payload.id)}/reassign`, { method: 'POST', body: { version: latest.payload.version, team: 'Lifecycle Desk', assignee: 'Lifecycle Technician', note: 'Identity investigation handed to the lifecycle technician.', richHtml: '<p><strong>Identity investigation</strong> handed to the lifecycle technician.</p>' } })
+assert(reassigned.response.ok, `Reassign action failed: ${reassigned.payload.error || reassigned.response.status}`)
+latest = await json(`/api/v1/itsm-lifecycle/${encodeURIComponent(incident.payload.id)}`)
+assert(latest.payload.assignee === 'Lifecycle Technician', 'Reassign action did not persist assignee')
+assert(latest.payload.activities.some((item) => item.kind === 'reassign' && item.metadata?.action === 'reassign'), 'Reassign timeline event missing')
 
-console.log('8. Reuse lifecycle contract for Problem and Change')
+console.log('9. Create a persistent generic ITSM task')
+const taskDueAt = new Date(Date.now() + 60 * 60 * 1000).toISOString()
+const taskCreated = await json(`/api/v1/itsm-actions/${encodeURIComponent(incident.payload.id)}/tasks`, { method: 'POST', body: { version: latest.payload.version, title: 'Check identity logs', team: 'Lifecycle Desk', assignee: 'Lifecycle Technician', dueAt: taskDueAt, note: 'Review authentication logs before closure.' } })
+assert(taskCreated.response.status === 201 && taskCreated.payload.task?.title === 'Check identity logs', `Task action failed: ${taskCreated.payload.error || taskCreated.response.status}`)
+const taskList = await json(`/api/v1/itsm-actions/${encodeURIComponent(incident.payload.id)}/tasks`)
+assert(taskList.response.ok && taskList.payload.tasks.some((item) => item.title === 'Check identity logs' && item.assignee === 'Lifecycle Technician'), 'Created task was not returned by the record task API')
+latest = await json(`/api/v1/itsm-lifecycle/${encodeURIComponent(incident.payload.id)}`)
+assert(latest.payload.activities.some((item) => item.kind === 'task' && item.metadata?.title === 'Check identity logs'), 'Task-created timeline event missing')
+
+console.log('10. Set Incident pending and pause SLA atomically')
+const pending = await json(`/api/v1/itsm-actions/${encodeURIComponent(incident.payload.id)}/pending`, { method: 'POST', body: { version: latest.payload.version, status: 'Pending Customer', visibility: 'customer', note: 'Please confirm whether the new sign-in works.' } })
+assert(pending.response.ok && pending.payload.status === 'Pending Customer', `Pending action failed: ${pending.payload.error || pending.response.status}`)
+latest = await json(`/api/v1/itsm-lifecycle/${encodeURIComponent(incident.payload.id)}`)
+assert(latest.payload.status === 'Pending Customer' && latest.payload.sla?.paused === true, 'Pending action did not pause the Incident SLA')
+assert(latest.payload.activities.some((item) => item.kind === 'pending' && item.visibility === 'customer'), 'Pending customer timeline event missing')
+
+console.log('11. Resolve from the Activity composer with required notes')
+const invalidActionResolve = await json(`/api/v1/itsm-actions/${encodeURIComponent(incident.payload.id)}/resolve`, { method: 'POST', body: { version: latest.payload.version, resolutionCode: '', visibility: 'customer', note: 'Resolved through quick action.' } })
+assert(invalidActionResolve.response.status === 400, 'Quick resolve accepted an Incident without a resolution code')
+const resolved = await json(`/api/v1/itsm-actions/${encodeURIComponent(incident.payload.id)}/resolve`, { method: 'POST', body: { version: latest.payload.version, resolutionCode: 'Fixed', visibility: 'customer', note: 'Corrected the lifecycle test condition and confirmed access.', richHtml: '<p>Corrected the <strong>lifecycle test condition</strong> and confirmed access.</p>' } })
+assert(resolved.response.ok && resolved.payload.status === 'Resolved', `Quick resolve failed: ${resolved.payload.error || resolved.response.status}`)
+latest = await json(`/api/v1/itsm-lifecycle/${encodeURIComponent(incident.payload.id)}`)
+assert(latest.payload.status === 'Resolved' && latest.payload.resolvedAt && latest.payload.sla?.paused === false, 'Quick resolution did not persist final Incident state')
+assert(latest.payload.resolutionCode === 'Fixed' && latest.payload.resolutionSummary.includes('Corrected'), 'Quick resolution details did not persist')
+assert(latest.payload.activities.some((item) => item.kind === 'resolution' && item.metadata?.resolutionCode === 'Fixed'), 'Resolution timeline event missing')
+
+console.log('12. Reuse lifecycle contract for Problem and Change')
 const problemDetail = await json(`/api/v1/itsm-lifecycle/${encodeURIComponent(problem.payload.id)}`)
 const problemPatched = await json(`/api/v1/itsm-lifecycle/${encodeURIComponent(problem.payload.id)}`, { method: 'PATCH', body: { version: problemDetail.payload.version, status: 'Known Error', priority: 'High', recordData: { rootCause: 'Expired identity cache', workaround: 'Refresh identity token', knownError: true } } })
 assert(problemPatched.response.ok && problemPatched.payload.recordData.knownError === true, 'Problem lifecycle fields did not persist')
@@ -109,17 +148,21 @@ const changeDetail = await json(`/api/v1/itsm-lifecycle/${encodeURIComponent(cha
 const changePatched = await json(`/api/v1/itsm-lifecycle/${encodeURIComponent(change.payload.id)}`, { method: 'PATCH', body: { version: changeDetail.payload.version, status: 'Assessment', priority: 'High', recordData: { changeType: 'Normal', risk: 'High', implementationPlan: 'Apply policy', testPlan: 'Validate sign-in', backoutPlan: 'Restore snapshot' } } })
 assert(changePatched.response.ok && changePatched.payload.recordData.backoutPlan === 'Restore snapshot', 'Change lifecycle plans did not persist')
 
-console.log('9. Verify lifecycle rows in PostgreSQL')
+console.log('13. Verify lifecycle and action rows in PostgreSQL')
 const counts = await db.query(
   `SELECT
      (SELECT count(*)::int FROM itsm_record_relationships WHERE tenant_id = $1) AS relationships,
      (SELECT count(*)::int FROM itsm_record_attachments WHERE tenant_id = $1) AS attachments,
-     (SELECT count(*)::int FROM itsm_record_activities WHERE tenant_id = $1 AND kind = 'field_change') AS field_changes`,
+     (SELECT count(*)::int FROM itsm_record_tasks WHERE tenant_id = $1) AS tasks,
+     (SELECT count(*)::int FROM itsm_record_activities WHERE tenant_id = $1 AND kind = 'field_change') AS field_changes,
+     (SELECT count(*)::int FROM itsm_record_activities WHERE tenant_id = $1 AND kind IN ('reassign','pending','resolution','task')) AS action_events`,
   [tenantId],
 )
 assert(counts.rows[0].relationships === 1, 'Expected one lifecycle relationship')
 assert(counts.rows[0].attachments === 1, 'Expected one lifecycle attachment')
+assert(counts.rows[0].tasks === 1, 'Expected one generic ITSM task')
 assert(counts.rows[0].field_changes >= 3, 'Expected lifecycle field-change audit rows')
+assert(counts.rows[0].action_events >= 4, 'Expected quick-action timeline events')
 
 await db.end()
 console.log('Production ITSM lifecycle E2E passed')
