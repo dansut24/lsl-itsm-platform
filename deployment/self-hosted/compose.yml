@@ -1,0 +1,135 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [hi5internal]
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD}"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a '${REDIS_PASSWORD}' ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [hi5internal]
+
+  migrate:
+    image: postgres:17-alpine
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ../../api/migrations:/migrations:ro
+      - ./migrate.sh:/usr/local/bin/hi5-migrate:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/hi5-migrate"]
+    networks: [hi5internal]
+
+  api:
+    build:
+      context: ../../api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+
+      DEPLOYMENT_MODE: ${DEPLOYMENT_MODE}
+      TENANCY_MODE: ${TENANCY_MODE}
+      ROOT_DOMAIN: ${ROOT_DOMAIN}
+      PRIMARY_TENANT_SLUG: ${PRIMARY_TENANT_SLUG}
+      APP_URL: ${APP_URL}
+      API_URL: ${API_URL}
+      PORTAL_URL: ${PORTAL_URL}
+      RMM_URL: ${RMM_URL}
+      MARKETING_URL: ${MARKETING_URL}
+      DOWNLOADS_URL: ${DOWNLOADS_URL}
+      TURN_URL: ${TURN_URL}
+      COOKIE_DOMAIN: ${COOKIE_DOMAIN}
+
+      SELF_HOST_EVALUATION_PRODUCTS: ${SELF_HOST_EVALUATION_PRODUCTS}
+      SELF_HOST_EVALUATION_USER_LIMIT: ${SELF_HOST_EVALUATION_USER_LIMIT}
+      SELF_HOST_EVALUATION_DEVICE_LIMIT: ${SELF_HOST_EVALUATION_DEVICE_LIMIT}
+
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      SMTP_FROM: ${SMTP_FROM}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/live').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 12
+    networks: [hi5internal]
+
+  web:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.production
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      APP_HOST: ${APP_HOST}
+      ACME_EMAIL: ${ACME_EMAIL}
+      DEPLOYMENT_MODE: ${DEPLOYMENT_MODE}
+      TENANCY_MODE: ${TENANCY_MODE}
+      ROOT_DOMAIN: ${ROOT_DOMAIN}
+      PRIMARY_TENANT_SLUG: ${PRIMARY_TENANT_SLUG}
+      APP_URL: ${APP_URL}
+      API_URL: ${API_URL}
+      PORTAL_URL: ${PORTAL_URL}
+      RMM_URL: ${RMM_URL}
+      MARKETING_URL: ${MARKETING_URL}
+      DOWNLOADS_URL: ${DOWNLOADS_URL}
+      TURN_URL: ${TURN_URL}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [hi5internal]
+
+networks:
+  hi5internal:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:
