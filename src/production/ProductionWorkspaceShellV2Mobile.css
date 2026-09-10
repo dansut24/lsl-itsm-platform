@@ -1,0 +1,47 @@
+/* Mobile completion layer for Workspace Shell v2.
+   The old breadcrumb quick-actions row is retired, so New Record must remain
+   directly reachable from the single compact command bar. */
+
+@media (max-width: 680px) {
+  html[data-hi5-surface='workspace'] .production-workspace-mobile-new {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    width: auto;
+    min-width: 42px;
+    height: 31px;
+    flex: 0 0 auto;
+    padding: 0 7px;
+    border-color: rgba(var(--accent-rgb), 0.28);
+    background: rgb(var(--accent-rgb));
+    color: var(--accent-ink);
+  }
+
+  html[data-hi5-surface='workspace'] .production-workspace-mobile-new:hover,
+  html[data-hi5-surface='workspace'] .production-workspace-mobile-new:focus-visible {
+    border-color: rgba(var(--accent-rgb), 0.48);
+    background: rgb(var(--accent-rgb));
+    color: var(--accent-ink);
+    filter: brightness(0.98);
+  }
+
+  /* Settings and sign-out remain available from navigation/profile surfaces;
+     keeping them out of this 42px row protects the working-context controls. */
+  html[data-hi5-surface='workspace'] .production-workspace-utility-actions > button[title='Settings'],
+  html[data-hi5-surface='workspace'] .production-workspace-utility-actions > button[title='Sign out'] {
+    display: none;
+  }
+}
+
+@media (max-width: 420px) {
+  html[data-hi5-surface='workspace'] .production-workspace-mobile-new {
+    min-width: 31px;
+    width: 31px;
+    padding: 0;
+  }
+
+  html[data-hi5-surface='workspace'] .production-workspace-mobile-new > span {
+    display: none;
+  }
+}
