@@ -1,0 +1,469 @@
+/* Hi5Central floating glass workspace refinement.
+   This layer is deliberately loaded after the responsive shell so it can
+   reinterpret the proven navigation and command-bar behaviour without
+   replacing any routing, permissions or workspace state. */
+
+html[data-hi5-surface='workspace'] .main-frame {
+  grid-template-rows: 56px minmax(0, 1fr) !important;
+}
+
+html[data-hi5-surface='workspace'] .tabbar {
+  align-self: start;
+  width: calc(100% - 16px) !important;
+  height: 44px !important;
+  min-height: 44px !important;
+  margin: 6px 8px !important;
+  padding: 4px 6px !important;
+  border: 1px solid color-mix(in srgb, var(--line) 78%, rgb(var(--accent-rgb)) 22%) !important;
+  border-radius: 16px !important;
+  background: var(--surface);
+  background:
+    linear-gradient(112deg, rgba(var(--accent-rgb), 0.075), transparent 28%),
+    color-mix(in srgb, var(--surface) 86%, transparent) !important;
+  box-shadow:
+    0 12px 30px rgba(7, 27, 61, 0.09),
+    inset 0 1px 0 rgba(255, 255, 255, 0.34) !important;
+  backdrop-filter: blur(24px) saturate(1.3);
+  -webkit-backdrop-filter: blur(24px) saturate(1.3);
+}
+
+html[data-hi5-surface='workspace'] .app-shell[data-theme='dark'] .tabbar {
+  box-shadow:
+    0 14px 34px rgba(0, 0, 0, 0.26),
+    inset 0 1px 0 rgba(255, 255, 255, 0.055) !important;
+}
+
+html[data-hi5-surface='workspace'] .tabbar::after {
+  inset: auto 16px -1px 16px;
+  border-radius: 999px;
+}
+
+html[data-hi5-surface='workspace'] .workspace {
+  grid-row: 2 !important;
+}
+
+html[data-hi5-surface='workspace'] .notifications-panel,
+html[data-hi5-surface='workspace'] .global-search-panel {
+  top: 60px !important;
+  max-height: calc(100dvh - 68px) !important;
+}
+
+html[data-hi5-surface='workspace'] .production-open-work-panel {
+  top: 58px;
+  border-radius: 20px;
+  background: var(--surface);
+  background:
+    linear-gradient(145deg, rgba(var(--accent-rgb), 0.055), transparent 34%),
+    color-mix(in srgb, var(--surface) 91%, transparent);
+  box-shadow:
+    0 24px 70px rgba(5, 16, 36, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  backdrop-filter: blur(24px) saturate(1.24);
+  -webkit-backdrop-filter: blur(24px) saturate(1.24);
+}
+
+/* Floating primary navigation ------------------------------------------------ */
+html[data-hi5-surface='workspace'] .sidebar {
+  align-self: start;
+  min-height: 0;
+  height: calc(100dvh - 20px) !important;
+  margin: 10px 0 10px 10px;
+  padding: 13px 12px !important;
+  border: 1px solid color-mix(in srgb, var(--line) 74%, rgb(var(--accent-rgb)) 26%);
+  border-radius: 24px;
+  background: var(--surface);
+  background:
+    radial-gradient(circle at 14% 4%, rgba(var(--accent-rgb), 0.13), transparent 26%),
+    linear-gradient(160deg, rgba(255, 255, 255, 0.16), transparent 34%),
+    color-mix(in srgb, var(--surface) 84%, transparent);
+  color: var(--ink);
+  box-shadow:
+    10px 18px 46px rgba(5, 16, 36, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.34);
+  backdrop-filter: blur(28px) saturate(1.32);
+  -webkit-backdrop-filter: blur(28px) saturate(1.32);
+}
+
+html[data-hi5-surface='workspace'] .app-shell[data-theme='dark'] .sidebar {
+  box-shadow:
+    12px 20px 48px rgba(0, 0, 0, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.055);
+}
+
+html[data-hi5-surface='workspace'] .sidebar::before {
+  position: absolute;
+  inset: 18px auto 18px -1px;
+  width: 2px;
+  border-radius: 999px;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    rgba(var(--accent-rgb), 0.82) 24%,
+    rgba(var(--accent-rgb), 0.22) 72%,
+    transparent
+  );
+  pointer-events: none;
+  content: '';
+}
+
+html[data-hi5-surface='workspace'] .sidebar-top {
+  gap: 7px;
+}
+
+html[data-hi5-surface='workspace'] .sidebar .brand {
+  min-height: 48px;
+  padding: 7px 8px;
+  border: 1px solid color-mix(in srgb, var(--line) 84%, rgb(var(--accent-rgb)) 16%);
+  border-radius: 15px;
+  background: color-mix(in srgb, var(--surface-soft) 88%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+html[data-hi5-surface='workspace'] .sidebar .brand span {
+  color: var(--ink);
+}
+
+html[data-hi5-surface='workspace'] .sidebar .sidebar-toggle,
+html[data-hi5-surface='workspace'] .sidebar .mobile-drawer-close {
+  border-color: color-mix(in srgb, var(--line) 80%, rgb(var(--accent-rgb)) 20%);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-soft) 88%, transparent);
+  color: var(--ink);
+}
+
+html[data-hi5-surface='workspace'] .sidebar .sidebar-toggle:hover,
+html[data-hi5-surface='workspace'] .sidebar .mobile-drawer-close:hover {
+  border-color: rgba(var(--accent-rgb), 0.36);
+  background: rgba(var(--accent-rgb), 0.09);
+}
+
+html[data-hi5-surface='workspace'] .sidebar .nav-stack {
+  gap: 12px;
+  padding: 2px 2px 4px 0;
+}
+
+html[data-hi5-surface='workspace'] .sidebar .nav-group {
+  gap: 4px;
+}
+
+html[data-hi5-surface='workspace'] .sidebar .nav-group-separated {
+  border-color: color-mix(in srgb, var(--line) 86%, transparent);
+}
+
+html[data-hi5-surface='workspace'] .sidebar .nav-group-label {
+  color: var(--muted);
+}
+
+html[data-hi5-surface='workspace'] .sidebar .nav-group-active .nav-group-label {
+  color: color-mix(in srgb, rgb(var(--accent-rgb)) 76%, var(--ink));
+}
+
+html[data-hi5-surface='workspace'] .sidebar .nav-item {
+  min-height: 40px;
+  padding: 8px 10px;
+  border-radius: 13px;
+  color: var(--muted);
+}
+
+html[data-hi5-surface='workspace'] .sidebar .nav-item svg {
+  color: color-mix(in srgb, var(--muted) 80%, rgb(var(--accent-rgb)) 20%);
+}
+
+html[data-hi5-surface='workspace'] .sidebar .nav-item:hover {
+  border-color: rgba(var(--accent-rgb), 0.14);
+  background: rgba(var(--accent-rgb), 0.065);
+  color: var(--ink);
+}
+
+html[data-hi5-surface='workspace'] .sidebar .nav-item:hover svg {
+  color: var(--ink);
+}
+
+html[data-hi5-surface='workspace'] .sidebar .nav-item.active {
+  border-color: rgba(var(--accent-rgb), 0.26);
+  background:
+    linear-gradient(100deg, rgba(var(--accent-rgb), 0.17), rgba(var(--accent-rgb), 0.055));
+  color: var(--ink);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 6px 16px rgba(var(--accent-rgb), 0.08);
+}
+
+html[data-hi5-surface='workspace'] .sidebar .nav-item.active svg {
+  color: color-mix(in srgb, rgb(var(--accent-rgb)) 80%, var(--ink));
+}
+
+html[data-hi5-surface='workspace'] .sidebar .nav-item.active::before {
+  inset: 9px auto 9px -1px;
+  width: 3px;
+}
+
+html[data-hi5-surface='workspace'] .sidebar .sidebar-status {
+  padding: 12px;
+  border-color: color-mix(in srgb, var(--line) 78%, rgb(var(--accent-rgb)) 22%);
+  border-radius: 15px;
+  background: color-mix(in srgb, var(--surface-soft) 84%, transparent);
+  color: var(--ink);
+}
+
+html[data-hi5-surface='workspace'] .sidebar .sidebar-status span {
+  color: var(--muted);
+}
+
+html[data-hi5-surface='workspace'] .sidebar .sidebar-status svg {
+  color: rgb(var(--accent-rgb));
+}
+
+html[data-hi5-surface='workspace'] .sidebar-collapsed .sidebar {
+  margin-left: 9px;
+  padding-inline: 8px !important;
+  border-radius: 22px;
+}
+
+html[data-hi5-surface='workspace'] .sidebar-collapsed .sidebar .brand {
+  border-radius: 14px;
+}
+
+html[data-hi5-surface='workspace'] .sidebar-collapsed .sidebar .nav-item {
+  border-radius: 12px;
+}
+
+/* Live Chat remains a permanent surface even though browser-style tabs are
+   retired. The underlying fixed Live Chat tab is still the source of truth. */
+.production-floating-live-chat {
+  position: fixed;
+  z-index: 38;
+  right: 18px;
+  bottom: calc(18px + env(safe-area-inset-bottom));
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 126px;
+  height: 46px;
+  padding: 5px 9px 5px 7px;
+  border: 1px solid color-mix(in srgb, var(--line) 72%, rgb(var(--accent-rgb)) 28%);
+  border-radius: 17px;
+  background: var(--surface);
+  background:
+    linear-gradient(135deg, rgba(var(--accent-rgb), 0.095), transparent 48%),
+    color-mix(in srgb, var(--surface) 84%, transparent);
+  color: var(--ink);
+  box-shadow:
+    0 16px 38px rgba(5, 16, 36, 0.17),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  backdrop-filter: blur(24px) saturate(1.3);
+  -webkit-backdrop-filter: blur(24px) saturate(1.3);
+  cursor: pointer;
+  transition:
+    transform 150ms ease,
+    border-color 150ms ease,
+    background 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.production-floating-live-chat:hover {
+  transform: translateY(-2px);
+  border-color: rgba(var(--accent-rgb), 0.42);
+  background:
+    linear-gradient(135deg, rgba(var(--accent-rgb), 0.16), transparent 52%),
+    color-mix(in srgb, var(--surface) 88%, transparent);
+  box-shadow:
+    0 20px 44px rgba(5, 16, 36, 0.2),
+    0 0 0 3px rgba(var(--accent-rgb), 0.055);
+}
+
+.production-floating-live-chat:active {
+  transform: translateY(0);
+}
+
+.production-floating-live-chat.is-active {
+  border-color: rgba(var(--accent-rgb), 0.48);
+  background:
+    linear-gradient(135deg, rgba(var(--accent-rgb), 0.22), rgba(var(--accent-rgb), 0.075)),
+    color-mix(in srgb, var(--surface) 88%, transparent);
+  box-shadow:
+    0 16px 38px rgba(5, 16, 36, 0.17),
+    0 0 0 3px rgba(var(--accent-rgb), 0.065);
+}
+
+.production-floating-live-chat.has-unread {
+  border-color: rgba(var(--accent-rgb), 0.58);
+}
+
+.production-floating-live-chat-icon {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border-radius: 12px;
+  background: rgba(var(--accent-rgb), 0.14);
+  color: color-mix(in srgb, rgb(var(--accent-rgb)) 82%, var(--ink));
+}
+
+.production-floating-live-chat.has-unread .production-floating-live-chat-icon::after {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 8px;
+  height: 8px;
+  border: 2px solid var(--surface);
+  border-radius: 50%;
+  background: rgb(var(--accent-rgb));
+  box-shadow: 0 0 0 4px rgba(var(--accent-rgb), 0.11);
+  content: '';
+  animation: hi5-live-chat-soft-pulse 1.8s ease-in-out infinite;
+}
+
+.production-floating-live-chat-copy {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+  text-align: left;
+  line-height: 1.05;
+}
+
+.production-floating-live-chat-copy small {
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 850;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.production-floating-live-chat-copy strong {
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.production-floating-live-chat-unread {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  margin-left: 1px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgb(var(--accent-rgb));
+  color: var(--accent-ink);
+  font-size: 9px;
+  font-weight: 950;
+  line-height: 1;
+}
+
+@keyframes hi5-live-chat-soft-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.14); opacity: 0.78; }
+}
+
+/* Tablet / narrow desktop: the existing off-canvas navigation behaviour is
+   retained, but the drawer becomes a detached curved glass sheet. */
+@media (max-width: 1180px) {
+  html[data-hi5-surface='workspace'] .sidebar,
+  html[data-hi5-surface='workspace'] .sidebar-collapsed .sidebar {
+    z-index: 75;
+    inset: 8px auto 8px 8px !important;
+    width: min(84vw, 320px) !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 13px 12px !important;
+    border-radius: 24px;
+    transform: translateX(calc(-100% - 24px));
+    box-shadow:
+      20px 28px 66px rgba(5, 16, 36, 0.28),
+      inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  }
+
+  html[data-hi5-surface='workspace'] .sidebar.mobile-open,
+  html[data-hi5-surface='workspace'] .sidebar-collapsed .sidebar.mobile-open {
+    transform: translateX(0);
+  }
+
+  html[data-hi5-surface='workspace'] .mobile-nav-backdrop {
+    z-index: 72;
+    inset: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    background: rgba(3, 12, 29, 0.28);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+  }
+}
+
+@media (max-width: 680px) {
+  html[data-hi5-surface='workspace'] .main-frame {
+    grid-template-rows: 52px minmax(0, 1fr) !important;
+  }
+
+  html[data-hi5-surface='workspace'] .tabbar {
+    width: calc(100% - 12px) !important;
+    height: 42px !important;
+    min-height: 42px !important;
+    margin: 5px 6px !important;
+    padding: 4px 5px !important;
+    border-radius: 15px !important;
+  }
+
+  html[data-hi5-surface='workspace'] .workspace {
+    grid-row: 2 !important;
+  }
+
+  html[data-hi5-surface='workspace'] .production-open-work-panel {
+    top: auto;
+    border-radius: 24px 24px 0 0;
+  }
+
+  html[data-hi5-surface='workspace'] .notifications-panel,
+  html[data-hi5-surface='workspace'] .global-search-panel {
+    top: 58px !important;
+    max-height: calc(100dvh - 66px) !important;
+  }
+
+  html[data-hi5-surface='workspace'] .sidebar,
+  html[data-hi5-surface='workspace'] .sidebar-collapsed .sidebar {
+    inset: 8px auto 8px 8px !important;
+    width: min(88vw, 332px) !important;
+    border-radius: 24px;
+  }
+
+  .production-floating-live-chat {
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    width: 48px;
+    min-width: 48px;
+    height: 48px;
+    padding: 6px;
+    border-radius: 17px;
+  }
+
+  .production-floating-live-chat-icon {
+    width: 34px;
+    height: 34px;
+    flex-basis: 34px;
+  }
+
+  .production-floating-live-chat-copy {
+    display: none;
+  }
+
+  .production-floating-live-chat-unread {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    min-width: 20px;
+    height: 20px;
+    border: 2px solid var(--surface);
+    box-shadow: 0 4px 10px rgba(5, 16, 36, 0.16);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .production-floating-live-chat,
+  .production-floating-live-chat.has-unread .production-floating-live-chat-icon::after {
+    animation: none;
+    transition: none;
+  }
+}
