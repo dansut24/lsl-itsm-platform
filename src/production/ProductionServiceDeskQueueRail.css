@@ -1,0 +1,362 @@
+/* Service Desk List v2 queue rail.
+   Restores the quieter Queue -> Views -> Filters hierarchy while retaining
+   List v2 data, saved views, sorting, columns, mobile cards and Peek. */
+
+.hi5-service-desk-v2.has-queue-rail {
+  box-sizing: border-box;
+}
+
+.hi5-service-desk-v2.has-queue-rail > .hi5-list-views-row {
+  display: none !important;
+}
+
+.hi5-queue-rail {
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  border: 1px solid color-mix(in srgb, var(--line, #d8e1ee) 82%, rgb(var(--accent-rgb, 244, 177, 61)) 18%);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface, #fff) 96%, transparent);
+  color: var(--ink, #10213f);
+  box-shadow: 0 12px 32px rgba(15, 31, 52, .07), inset 0 1px 0 rgba(255,255,255,.35);
+  backdrop-filter: blur(18px) saturate(1.08);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
+}
+
+.hi5-queue-rail-header {
+  min-height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line, #d8e1ee);
+  background: linear-gradient(112deg, rgba(var(--accent-rgb, 244, 177, 61), .075), transparent 56%);
+}
+
+.hi5-queue-rail-header > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.hi5-queue-rail-header span,
+.hi5-queue-rail-label {
+  color: var(--muted, #65728a);
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: .085em;
+  text-transform: uppercase;
+}
+
+.hi5-queue-rail-header strong {
+  overflow: hidden;
+  color: var(--ink, #10213f);
+  font-size: 13px;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hi5-queue-rail-header > button {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--line, #d8e1ee);
+  border-radius: 10px;
+  background: var(--surface-soft, #f8fbff);
+  color: var(--ink, #10213f);
+}
+
+.hi5-queue-rail-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 10px 8px 18px;
+  scrollbar-width: thin;
+}
+
+.hi5-queue-rail-section {
+  display: grid;
+  gap: 6px;
+  padding: 4px 0 12px;
+}
+
+.hi5-queue-rail-section + .hi5-queue-rail-section {
+  margin-top: 2px;
+  padding-top: 13px;
+  border-top: 1px solid color-mix(in srgb, var(--line, #d8e1ee) 78%, transparent);
+}
+
+.hi5-queue-rail-label {
+  padding: 0 8px 3px;
+}
+
+.hi5-queue-rail-views {
+  display: grid;
+  gap: 2px;
+}
+
+.hi5-queue-rail-views > button {
+  position: relative;
+  width: 100%;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted, #65728a);
+  font: inherit;
+  font-size: 9px;
+  font-weight: 760;
+  text-align: left;
+  cursor: pointer;
+  transition: background 130ms ease, border-color 130ms ease, color 130ms ease;
+}
+
+.hi5-queue-rail-views > button:hover {
+  border-color: color-mix(in srgb, var(--line, #d8e1ee) 82%, rgb(var(--accent-rgb, 244, 177, 61)) 18%);
+  background: var(--surface-soft, #f8fbff);
+  color: var(--ink, #10213f);
+}
+
+.hi5-queue-rail-views > button.is-active {
+  border-color: rgba(var(--accent-rgb, 244, 177, 61), .16);
+  background: linear-gradient(90deg, rgba(var(--accent-rgb, 244, 177, 61), .105), rgba(var(--accent-rgb, 244, 177, 61), .025));
+  color: var(--ink, #10213f);
+  font-weight: 850;
+}
+
+.hi5-queue-rail-views > button.is-active::before {
+  position: absolute;
+  inset: 7px auto 7px 0;
+  width: 3px;
+  border-radius: 999px;
+  background: rgb(var(--accent-rgb, 244, 177, 61));
+  content: '';
+}
+
+.hi5-queue-rail-saved {
+  display: grid;
+  gap: 2px;
+}
+
+.hi5-queue-rail-saved > div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0,1fr) 28px;
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 9px;
+}
+
+.hi5-queue-rail-saved > div:hover {
+  border-color: var(--line, #d8e1ee);
+  background: var(--surface-soft, #f8fbff);
+}
+
+.hi5-queue-rail-saved button {
+  min-width: 0;
+  min-height: 32px;
+  overflow: hidden;
+  padding: 0 9px;
+  border: 0;
+  background: transparent;
+  color: var(--ink, #10213f);
+  font: inherit;
+  font-size: 8.5px;
+  font-weight: 760;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.hi5-queue-rail-saved button:last-child {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: var(--muted, #65728a);
+}
+
+.hi5-queue-rail-filters label {
+  display: grid;
+  gap: 4px;
+  padding: 0 7px;
+}
+
+.hi5-queue-rail-filters label > span {
+  color: var(--muted, #65728a);
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.hi5-queue-rail-filters select {
+  width: 100%;
+  min-height: 34px;
+  padding: 0 8px;
+  border: 1px solid var(--line, #d8e1ee);
+  border-radius: 9px;
+  outline: 0;
+  background: var(--surface-soft, #f8fbff);
+  color: var(--ink, #10213f);
+  font: inherit;
+  font-size: 9px;
+  font-weight: 720;
+}
+
+.hi5-queue-rail-filters select:focus {
+  border-color: rgba(var(--accent-rgb, 244, 177, 61), .44);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb, 244, 177, 61), .07);
+}
+
+.hi5-queue-rail-clear {
+  justify-self: start;
+  min-height: 28px;
+  margin: 2px 8px 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: color-mix(in srgb, rgb(var(--accent-rgb, 244, 177, 61)) 68%, var(--ink, #10213f));
+  font: inherit;
+  font-size: 8px;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.hi5-queue-rail-footer {
+  padding: 8px;
+  border-top: 1px solid var(--line, #d8e1ee);
+  background: color-mix(in srgb, var(--surface-soft, #f8fbff) 82%, transparent);
+}
+
+.hi5-queue-rail-footer > button {
+  width: 100%;
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid color-mix(in srgb, var(--line, #d8e1ee) 76%, rgb(var(--accent-rgb, 244, 177, 61)) 24%);
+  border-radius: 9px;
+  background: var(--surface, #fff);
+  color: var(--ink, #10213f);
+  font: inherit;
+  font-size: 8.5px;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.hi5-queue-rail-mobile-trigger,
+.hi5-queue-rail-mobile-layer {
+  display: none;
+}
+
+@media (min-width: 761px) {
+  .hi5-service-desk-v2.has-queue-rail {
+    padding-left: 224px;
+  }
+
+  .hi5-service-desk-v2.has-queue-rail > .hi5-queue-rail {
+    position: absolute;
+    z-index: 95;
+    top: 10px;
+    left: 10px;
+    bottom: 10px;
+    width: 204px;
+  }
+
+  .hi5-service-desk-v2.has-queue-rail .hi5-list-toolbar > .hi5-list-filter-select,
+  .hi5-service-desk-v2.has-queue-rail .hi5-list-toolbar > .hi5-list-save-view {
+    display: none !important;
+  }
+}
+
+@media (max-width: 760px) {
+  .hi5-service-desk-v2.has-queue-rail {
+    padding-left: 0;
+  }
+
+  .hi5-service-desk-v2.has-queue-rail > .hi5-queue-rail {
+    display: none !important;
+  }
+
+  .hi5-service-desk-v2.has-queue-rail .hi5-list-toolbar > .hi5-list-filter-select,
+  .hi5-service-desk-v2.has-queue-rail .hi5-list-toolbar > .hi5-list-save-view {
+    display: none !important;
+  }
+
+  .hi5-queue-rail-mobile-trigger {
+    order: -1;
+    min-width: 126px;
+    height: 34px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 0 9px;
+    border: 1px solid var(--line, #d8e1ee);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--surface, #fff) 92%, transparent);
+    color: var(--ink, #10213f);
+    font: inherit;
+    font-size: 8px;
+    font-weight: 850;
+    cursor: pointer;
+  }
+
+  .hi5-queue-rail-mobile-trigger > svg:last-child {
+    margin-left: auto;
+    color: var(--muted, #65728a);
+  }
+
+  .hi5-queue-rail-mobile-layer {
+    position: fixed;
+    z-index: 1900;
+    inset: 0;
+    display: block;
+  }
+
+  .hi5-queue-rail-mobile-backdrop {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: rgba(7,18,34,.28);
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
+  }
+
+  .hi5-queue-rail.is-mobile-sheet {
+    position: absolute;
+    z-index: 1;
+    top: 8px;
+    left: 8px;
+    bottom: 8px;
+    width: min(86vw, 330px);
+    border-radius: 20px;
+    animation: hi5-queue-rail-mobile-in 170ms cubic-bezier(.2,.75,.2,1) both;
+  }
+
+  @keyframes hi5-queue-rail-mobile-in {
+    from { opacity: 0; transform: translateX(-12px) scale(.99); }
+    to { opacity: 1; transform: none; }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hi5-queue-rail,
+  .hi5-queue-rail-mobile-layer {
+    animation: none !important;
+    transition: none !important;
+  }
+}
