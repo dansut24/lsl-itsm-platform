@@ -7,12 +7,16 @@ const required = [
   "<ProductionItsmWorkspace />",
   "className=\"production-record-filter-rail\"",
   "className=\"production-record-view-list\"",
-  "className=\"production-record-table\"",
+  "production-record-table-enhanced",
 ]
 
 for (const token of required) {
   const source = token.includes('ProductionItsmWorkspace') ? main : workspace
   if (!source.includes(token)) throw new Error(`Missing stable Service Desk contract token: ${token}`)
+}
+
+if (!workspace.includes('production-record-table')) {
+  throw new Error('Stable Service Desk table base class is missing.')
 }
 
 for (const forbidden of [
