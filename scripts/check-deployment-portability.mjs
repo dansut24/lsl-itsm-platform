@@ -55,6 +55,17 @@ if (!dockerfile.includes('hi5-runtime-entrypoint')) {
   failures.push('Dockerfile.production: runtime deployment configuration entrypoint is missing')
 }
 
+const runtimeEntrypoint = fs.readFileSync(path.join(repoRoot, 'deployment/runtime-config-entrypoint.sh'), 'utf8')
+if (!runtimeEntrypoint.includes('API_URL_RAW="https://api.${ROOT_DOMAIN_RAW}"')) {
+  failures.push('runtime-config-entrypoint.sh: managed multi-tenant API origin must default to https://api.<root-domain>')
+}
+if (!runtimeEntrypoint.includes('API_URL_RAW="${APP_URL_RAW:-https://${ROOT_DOMAIN_RAW}}"')) {
+  failures.push('runtime-config-entrypoint.sh: single-tenant API origin must default to the configured application/root origin')
+}
+if (!runtimeEntrypoint.includes('window.__HI5_API_BASE__ = window.__HI5_CONFIG__.apiUrl || window.location.origin')) {
+  failures.push('runtime-config-entrypoint.sh: browser API base must remain runtime-configured')
+}
+
 if (failures.length) {
   console.error('Deployment portability check failed:')
   for (const failure of failures) console.error(`- ${failure}`)
