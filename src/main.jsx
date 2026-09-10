@@ -41,6 +41,8 @@ import './production/ProductionWorkspaceShellV2.css'
 import './production/ProductionWorkspaceShellV2Mobile.css'
 import './production/ProductionLiquidGlassWorkspace.css'
 import './production/ProductionShellV3Corrections.css'
+import './production/ProductionWorkspaceTabBehaviour.css'
+import './production/ProductionSharedRecordMasthead.css'
 
 const rootElement = document.getElementById('root')
 const initialSurface = resolveTenantSurface()
