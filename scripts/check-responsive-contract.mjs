@@ -9,6 +9,8 @@ const planningResponsive = read('src/production/ProductionPlanningResponsive.css
 const refinement = read('src/production/ProductionWorkspaceRefinement.css')
 const shellV2 = read('src/production/ProductionWorkspaceShellV2.css')
 const shellV2Component = read('src/production/ProductionWorkspaceShellV2.jsx')
+const floatingGlass = read('src/production/ProductionLiquidGlassWorkspace.css')
+const floatingLiveChat = read('src/production/ProductionFloatingLiveChat.jsx')
 const projectEntry = read('src/features/projects/ProjectViews.jsx')
 const projectsV2 = read('src/features/projects/ProjectWorkspaceV2.jsx')
 
@@ -19,6 +21,8 @@ const expect = (condition, message) => {
 
 const responsiveImport = "./production/ProductionResponsiveViewport.css"
 const shellV2Import = "./production/ProductionWorkspaceShellV2.css"
+const shellV2MobileImport = "./production/ProductionWorkspaceShellV2Mobile.css"
+const floatingGlassImport = "./production/ProductionLiquidGlassWorkspace.css"
 const planningImport = "./production/ProductionPlanningSurface.css"
 const planningResponsiveImport = "./production/ProductionPlanningResponsive.css"
 const densityImport = "./production/ProductionWorkspaceDensity.css"
@@ -27,6 +31,9 @@ expect(main.includes(responsiveImport), 'ProductionResponsiveViewport.css must b
 expect(main.includes(shellV2Import), 'ProductionWorkspaceShellV2.css must be imported by src/main.jsx')
 expect(main.includes("ProductionWorkspaceShellV2 } from './production/ProductionWorkspaceShellV2.jsx'"), 'Workspace Shell v2 component must be imported by src/main.jsx')
 expect(main.includes('<ProductionWorkspaceShellV2 />'), 'Workspace Shell v2 must be mounted in production workspace')
+expect(main.includes("ProductionFloatingLiveChat } from './production/ProductionFloatingLiveChat.jsx'"), 'Floating Live Chat component must be imported by src/main.jsx')
+expect(main.includes('<ProductionFloatingLiveChat />'), 'Floating Live Chat must be mounted in production workspace')
+expect(main.includes(floatingGlassImport), 'ProductionLiquidGlassWorkspace.css must be imported by src/main.jsx')
 expect(main.includes(planningImport), 'ProductionPlanningSurface.css must be imported by src/main.jsx')
 expect(main.includes(planningResponsiveImport), 'ProductionPlanningResponsive.css must be imported by src/main.jsx')
 expect(
@@ -43,7 +50,11 @@ expect(
 )
 expect(
   main.indexOf(shellV2Import) > main.indexOf(responsiveImport),
-  'ProductionWorkspaceShellV2.css must remain the final workspace chrome authority',
+  'ProductionWorkspaceShellV2.css must load after the responsive fallback',
+)
+expect(
+  main.indexOf(floatingGlassImport) > main.indexOf(shellV2MobileImport),
+  'ProductionLiquidGlassWorkspace.css must remain the final workspace chrome authority',
 )
 
 expect(responsive.includes('@media (max-width: 1180px)'), '1180px narrow-workspace breakpoint is missing')
@@ -126,6 +137,47 @@ expect(
   shellV2Component.includes("proxyClick('.tabbar-brand')")
     && shellV2.includes('.production-workspace-mobile-nav'),
   'Workspace Shell v2 must preserve mobile navigation access',
+)
+
+// Floating glass shell ---------------------------------------------------------
+expect(
+  floatingGlass.includes("html[data-hi5-surface='workspace'] .sidebar")
+    && floatingGlass.includes('border-radius: 24px')
+    && floatingGlass.includes('backdrop-filter: blur(28px)'),
+  'Primary navigation must retain the curved floating glass treatment',
+)
+expect(
+  floatingGlass.includes('@media (max-width: 1180px)')
+    && floatingGlass.includes('translateX(calc(-100% - 24px))')
+    && floatingGlass.includes('.sidebar.mobile-open'),
+  'Floating navigation must preserve the width-driven off-canvas mobile/tablet contract',
+)
+expect(
+  floatingGlass.includes("grid-template-rows: 56px minmax(0, 1fr) !important")
+    && floatingGlass.includes('width: calc(100% - 16px) !important'),
+  'Workspace command bar must remain detached from the viewport as a floating surface',
+)
+expect(
+  floatingGlass.includes('var(--accent-rgb)')
+    && floatingGlass.includes('.production-floating-live-chat'),
+  'Floating workspace surfaces must remain tenant-accent aware',
+)
+expect(
+  floatingGlass.includes('@media (max-width: 680px)')
+    && floatingGlass.includes('width: 48px')
+    && floatingGlass.includes('safe-area-inset-bottom'),
+  'Live Chat dock must compact safely on phones',
+)
+expect(
+  floatingLiveChat.includes('LIVE_CHAT_SELECTOR')
+    && floatingLiveChat.includes('.live-chat-tab-notification')
+    && floatingLiveChat.includes('tab.click()'),
+  'Floating Live Chat must reuse the fixed Live Chat workspace and unread source of truth',
+)
+expect(
+  floatingLiveChat.includes('data-hi5-live-chat-dock="true"')
+    && floatingLiveChat.includes('ProductionFloatingLiveChat'),
+  'Floating Live Chat dock contract is missing',
 )
 
 expect(
