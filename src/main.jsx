@@ -37,6 +37,7 @@ import './production/ProductionPlanningSurface.css'
 import './production/ProductionPlanningResponsive.css'
 import './production/ProductionResponsiveViewport.css'
 import './production/ProductionWorkspaceShellV2.css'
+import './production/ProductionWorkspaceShellV2Mobile.css'
 
 const rootElement = document.getElementById('root')
 const initialSurface = resolveTenantSurface()
