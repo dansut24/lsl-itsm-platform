@@ -19,8 +19,6 @@ import { ProductionOrganisationWriteThrough } from './production/ProductionOrgan
 import { ProductionPortalBootstrap } from './production/ProductionPortalBootstrap.jsx'
 import { ProductionPremiumWorkspaceExperience } from './production/ProductionPremiumWorkspaceExperience.jsx'
 import { ProductionRecordDetailRouter } from './production/ProductionRecordDetailRouter.jsx'
-import { ProductionServiceDeskListV2 } from './production/ProductionServiceDeskListV2.jsx'
-import { ProductionServiceDeskQueueRail } from './production/ProductionServiceDeskQueueRail.jsx'
 import { ProductionServiceRequestIntake } from './production/ProductionServiceRequestIntake.jsx'
 import { ProductionUniversalPeekV2 } from './production/ProductionUniversalPeekV2.jsx'
 import { ProductionWorkspaceBootstrap } from './production/ProductionWorkspaceBootstrap.jsx'
@@ -48,9 +46,6 @@ import './production/ProductionShellV3Corrections.css'
 import './production/ProductionWorkspaceTabBehaviour.css'
 import './production/ProductionSharedRecordMasthead.css'
 import './production/ProductionPremiumWorkspaceExperience.css'
-import './production/ProductionServiceDeskListV2.css'
-import './production/ProductionServiceDeskListV2Final.css'
-import './production/ProductionServiceDeskQueueRail.css'
 import './production/ProductionUniversalPeekV2.css'
 import './production/ProductionRecordInspectorClassic.css'
 
@@ -82,8 +77,6 @@ createRoot(rootElement).render(
     {productionWorkspace && !productionOnboarding ? <ProductionOrganisationWriteThrough /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionItsmWorkspace /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionRecordDetailRouter /> : null}
-    {productionWorkspace && !productionOnboarding ? <ProductionServiceDeskListV2 /> : null}
-    {productionWorkspace && !productionOnboarding ? <ProductionServiceDeskQueueRail /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionServiceRequestIntake /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionWorkspaceRefinement /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionNavigationDockPreferences /> : null}
