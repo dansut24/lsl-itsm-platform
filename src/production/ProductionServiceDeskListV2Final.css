@@ -1,0 +1,10 @@
+/* Final placement guard: optional selection/error rows must never steal the list scroll viewport. */
+.hi5-service-desk-v2 > .hi5-list-scroll {
+  grid-row: 6;
+}
+
+@media (max-width: 760px) {
+  .hi5-service-desk-v2 > .hi5-list-scroll {
+    grid-row: 6;
+  }
+}
