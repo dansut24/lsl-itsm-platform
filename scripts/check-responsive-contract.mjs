@@ -7,6 +7,8 @@ const responsive = read('src/production/ProductionResponsiveViewport.css')
 const planning = read('src/production/ProductionPlanningSurface.css')
 const planningResponsive = read('src/production/ProductionPlanningResponsive.css')
 const refinement = read('src/production/ProductionWorkspaceRefinement.css')
+const shellV2 = read('src/production/ProductionWorkspaceShellV2.css')
+const shellV2Component = read('src/production/ProductionWorkspaceShellV2.jsx')
 const projectEntry = read('src/features/projects/ProjectViews.jsx')
 const projectsV2 = read('src/features/projects/ProjectWorkspaceV2.jsx')
 
@@ -16,11 +18,15 @@ const expect = (condition, message) => {
 }
 
 const responsiveImport = "./production/ProductionResponsiveViewport.css"
+const shellV2Import = "./production/ProductionWorkspaceShellV2.css"
 const planningImport = "./production/ProductionPlanningSurface.css"
 const planningResponsiveImport = "./production/ProductionPlanningResponsive.css"
 const densityImport = "./production/ProductionWorkspaceDensity.css"
 
 expect(main.includes(responsiveImport), 'ProductionResponsiveViewport.css must be imported by src/main.jsx')
+expect(main.includes(shellV2Import), 'ProductionWorkspaceShellV2.css must be imported by src/main.jsx')
+expect(main.includes("ProductionWorkspaceShellV2 } from './production/ProductionWorkspaceShellV2.jsx'"), 'Workspace Shell v2 component must be imported by src/main.jsx')
+expect(main.includes('<ProductionWorkspaceShellV2 />'), 'Workspace Shell v2 must be mounted in production workspace')
 expect(main.includes(planningImport), 'ProductionPlanningSurface.css must be imported by src/main.jsx')
 expect(main.includes(planningResponsiveImport), 'ProductionPlanningResponsive.css must be imported by src/main.jsx')
 expect(
@@ -33,7 +39,11 @@ expect(
 )
 expect(
   main.indexOf(responsiveImport) > main.indexOf(planningResponsiveImport),
-  'ProductionResponsiveViewport.css must remain the final workspace layout authority',
+  'ProductionResponsiveViewport.css must load after planning responsive rules',
+)
+expect(
+  main.indexOf(shellV2Import) > main.indexOf(responsiveImport),
+  'ProductionWorkspaceShellV2.css must remain the final workspace chrome authority',
 )
 
 expect(responsive.includes('@media (max-width: 1180px)'), '1180px narrow-workspace breakpoint is missing')
@@ -42,15 +52,15 @@ expect(responsive.includes('@media (max-width: 680px)'), '680px compact-width br
 
 expect(
   /\.main-frame\s*\{[\s\S]*?grid-template-rows:\s*48px 34px minmax\(0, 1fr\) !important;/.test(responsive),
-  'Narrow workspace must reserve exactly one tabbar row',
+  'Responsive fallback must retain the pre-v2 narrow workspace shell contract',
 )
 expect(
   /\.tabbar\s*\{[\s\S]*?grid-template-rows:\s*48px !important;[\s\S]*?height:\s*48px !important;/.test(responsive),
-  'Narrow workspace tabbar must remain a single 48px row',
+  'Responsive fallback tabbar must remain a single row',
 )
 expect(
   /\.chrome-actions\s*\{[\s\S]*?grid-row:\s*1 !important;[\s\S]*?flex-wrap:\s*nowrap !important;/.test(responsive),
-  'Workspace command actions must remain on tabbar row 1 and never wrap',
+  'Workspace command actions must retain their no-wrap fallback contract',
 )
 expect(
   /\.sidebar,[\s\S]*?\.sidebar-collapsed \.sidebar\s*\{[\s\S]*?position:\s*fixed !important;/.test(responsive),
@@ -67,6 +77,55 @@ expect(
 expect(
   refinement.includes('position: fixed;'),
   'Workspace refinement must preserve the fixed mobile sidebar safeguard',
+)
+
+// Hi5Central Workspace Shell v2 ------------------------------------------------
+expect(
+  /html\[data-hi5-surface='workspace'\] \.main-frame\s*\{[\s\S]*?grid-template-rows:\s*44px minmax\(0, 1fr\) !important;/.test(shellV2),
+  'Workspace Shell v2 must collapse legacy tab + breadcrumb chrome into one 44px desktop row',
+)
+expect(
+  /html\[data-hi5-surface='workspace'\] \.tabbar\s*\{[\s\S]*?grid-template-rows:\s*44px !important;[\s\S]*?height:\s*44px !important;/.test(shellV2),
+  'Workspace Shell v2 command bar must remain one 44px row',
+)
+expect(
+  shellV2.includes(".tabbar-tab-zone,\nhtml[data-hi5-surface='workspace'] .breadcrumbs") && shellV2.includes('display: none !important;'),
+  'Legacy browser tabs and the separate breadcrumb row must remain visually retired',
+)
+expect(
+  shellV2.includes('var(--accent-rgb)') && shellV2.includes('var(--accent-ink)'),
+  'Workspace Shell v2 must derive emphasis from tenant accent tokens',
+)
+expect(
+  shellV2.includes('@media (max-width: 680px)') && /grid-template-rows:\s*42px minmax\(0, 1fr\) !important;/.test(shellV2),
+  'Workspace Shell v2 must provide a compact single-row mobile contract',
+)
+expect(
+  shellV2.includes('.production-open-work-panel') && shellV2.includes('.production-open-work-trigger'),
+  'Workspace Shell v2 must retain the Open Work switcher surface',
+)
+expect(
+  shellV2Component.includes("const TAB_SELECTOR = '.tab-list .workspace-tab'"),
+  'Workspace Shell v2 must reuse the proven tab engine rather than replacing workspace state',
+)
+expect(
+  shellV2Component.includes('data-hi5-workspace-shell="v2"') && shellV2Component.includes('Open work'),
+  'Workspace Shell v2 command bar and Open Work control are missing',
+)
+expect(
+  shellV2Component.includes("invokeLegacyContextAction(tabKey, 'Duplicate')")
+    && shellV2Component.includes("invokeLegacyContextAction(source.key, 'Close all tabs')"),
+  'Open Work must preserve duplicate and close-all workspace behaviour',
+)
+expect(
+  shellV2Component.includes("proxyClick('.record-create-trigger')")
+    && shellV2.includes('.chrome-actions .record-create-trigger'),
+  'Workspace Shell v2 must preserve the existing New Record experience',
+)
+expect(
+  shellV2Component.includes("proxyClick('.tabbar-brand')")
+    && shellV2.includes('.production-workspace-mobile-nav'),
+  'Workspace Shell v2 must preserve mobile navigation access',
 )
 
 expect(
