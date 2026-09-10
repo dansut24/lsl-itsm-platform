@@ -91,7 +91,8 @@
 }
 
 /* Narrow touch phones retain the same behaviour but slightly tighter pills. */
-@media (max-width: 680px) and ((hover: none) or (pointer: coarse)) {
+@media (max-width: 680px) and (hover: none),
+       (max-width: 680px) and (pointer: coarse) {
   .production-workspace-tabs {
     gap: 3px !important;
   }
