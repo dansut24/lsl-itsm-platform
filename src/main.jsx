@@ -52,6 +52,7 @@ import './production/ProductionServiceDeskListV2.css'
 import './production/ProductionServiceDeskListV2Final.css'
 import './production/ProductionServiceDeskQueueRail.css'
 import './production/ProductionUniversalPeekV2.css'
+import './production/ProductionRecordInspectorClassic.css'
 
 const rootElement = document.getElementById('root')
 const initialSurface = resolveTenantSurface()
