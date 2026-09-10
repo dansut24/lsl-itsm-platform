@@ -13,6 +13,7 @@ import { ProductionMfaSettingsEnhancer } from './features/security/ProductionMfa
 import { ProductionPasswordRecoveryEnhancer } from './features/security/ProductionPasswordRecoveryEnhancer.jsx'
 import { ProductionSecurityCenterEnhancer } from './features/security/ProductionSecurityCenterEnhancer.jsx'
 import { ProductionItsmWorkspace } from './production/ProductionItsmWorkspace.jsx'
+import { ProductionNavigationDockPreferences } from './production/ProductionNavigationDockPreferences.jsx'
 import { ProductionOnboardingBootstrap } from './production/ProductionOnboardingBootstrap.jsx'
 import { ProductionOrganisationWriteThrough } from './production/ProductionOrganisationWriteThrough.jsx'
 import { ProductionPortalBootstrap } from './production/ProductionPortalBootstrap.jsx'
@@ -39,6 +40,7 @@ import './production/ProductionResponsiveViewport.css'
 import './production/ProductionWorkspaceShellV2.css'
 import './production/ProductionWorkspaceShellV2Mobile.css'
 import './production/ProductionLiquidGlassWorkspace.css'
+import './production/ProductionShellV3Corrections.css'
 
 const rootElement = document.getElementById('root')
 const initialSurface = resolveTenantSurface()
@@ -70,6 +72,7 @@ createRoot(rootElement).render(
     {productionWorkspace && !productionOnboarding ? <ProductionRecordDetailRouter /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionServiceRequestIntake /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionWorkspaceRefinement /> : null}
+    {productionWorkspace && !productionOnboarding ? <ProductionNavigationDockPreferences /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionWorkspaceShellV2 /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionMfaLoginEnhancer /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionMfaSettingsEnhancer /> : null}
