@@ -41,6 +41,8 @@ expect(css.includes('rgb(var(--accent-rgb))'), 'Tenant accent variables must dri
 expect(css.includes('.hi5-list-preview'), 'Universal list quick preview surface is missing')
 expect(css.includes('@media (prefers-reduced-motion: reduce)'), 'List v2 must respect reduced motion')
 expect(guard.includes('grid-row: 6'), 'List scroll viewport placement guard is missing')
+expect(guard.includes('production-itsm-queue-mounted.production-service-desk-v2-mounted > .hi5-service-desk-v2'), 'List v2 must override the legacy queue visibility rule')
+expect(guard.includes('> .production-record-shell') && guard.includes('display: none !important'), 'Legacy production queue shell must be hidden while List v2 owns the route')
 
 if (failures.length) {
   console.error('Service Desk List v2 contract failed:')
