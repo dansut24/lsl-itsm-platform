@@ -36,10 +36,12 @@ html[data-hi5-surface='workspace'] .tabbar {
 }
 
 .production-workspace-tabs {
-  width: max-content !important;
-  min-width: 100%;
-  max-width: none;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100%;
   padding-right: 2px;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
 }
 
 .production-workspace-tabdock-actions {
