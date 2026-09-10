@@ -1,4 +1,21 @@
-/* Final placement guard: optional selection/error rows must never steal the list scroll viewport. */
+/* Final placement + ownership guard for Service Desk List v2. */
+
+/* The legacy ProductionItsmWorkspace deliberately hides every direct child
+   except .production-record-shell. When List v2 is mounted it owns the four
+   queue routes, so explicitly reverse that legacy visibility contract. */
+.content-frame.production-itsm-queue-mounted.production-service-desk-v2-mounted > .hi5-service-desk-v2 {
+  display: grid !important;
+}
+
+.content-frame.production-service-desk-v2-mounted > .production-record-shell {
+  display: none !important;
+}
+
+.content-frame.production-service-desk-v2-mounted > .hi5-service-desk-v2 {
+  z-index: 90 !important;
+}
+
+/* Optional selection/error rows must never steal the list scroll viewport. */
 .hi5-service-desk-v2 > .hi5-list-scroll {
   grid-row: 6;
 }
