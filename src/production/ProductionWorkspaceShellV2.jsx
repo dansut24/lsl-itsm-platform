@@ -16,6 +16,8 @@ import {
 } from 'lucide-react'
 
 const TAB_SELECTOR = '.tab-list .workspace-tab'
+const WORKSPACE_MENU_WIDTH = 214
+const WORKSPACE_MENU_HEIGHT = 330
 
 function cleanTabTitle(button) {
   const label = button?.querySelector('.workspace-tab-label')
@@ -37,11 +39,42 @@ function proxyClick(selector) {
   return true
 }
 
+function semanticTabIdentity(tab) {
+  const key = String(tab?.key || '').trim().toLowerCase()
+  const module = String(tab?.module || '').trim().toLowerCase()
+  const title = String(tab?.title || '').trim().toLowerCase()
+
+  if (key === 'livechat' || module === 'livechat') return 'fixed:livechat'
+  if (key === 'home' || module === 'home' || title === 'dashboard') return 'fixed:dashboard'
+  return `${module || 'workspace'}:${title || key}`
+}
+
+function dedupeWorkspaceTabs(tabs) {
+  const result = []
+  const indexByIdentity = new Map()
+
+  for (const tab of tabs) {
+    const identity = semanticTabIdentity(tab)
+    const existingIndex = indexByIdentity.get(identity)
+
+    if (existingIndex === undefined) {
+      indexByIdentity.set(identity, result.length)
+      result.push(tab)
+      continue
+    }
+
+    const existing = result[existingIndex]
+    if (tab.active && !existing.active) result[existingIndex] = tab
+  }
+
+  return result
+}
+
 function readWorkspaceSnapshot() {
   const buttons = Array.from(document.querySelectorAll(TAB_SELECTOR))
     .filter((node) => node instanceof HTMLElement)
 
-  const tabs = buttons.map((button, index) => {
+  const rawTabs = buttons.map((button, index) => {
     const unreadText = button.querySelector('.live-chat-tab-notification')?.textContent || ''
     const unread = Number.parseInt(String(unreadText).match(/\d+/)?.[0] || '0', 10)
     return {
@@ -55,6 +88,7 @@ function readWorkspaceSnapshot() {
     }
   })
 
+  const tabs = dedupeWorkspaceTabs(rawTabs)
   const shell = document.querySelector('.app-shell')
   const searchInput = document.querySelector('.chrome-search input') || document.querySelector('.breadcrumb-compact-search input')
   const notificationCounter = document.querySelector('.notification-trigger .notification-count, .notification-trigger .notification-badge')
@@ -108,15 +142,35 @@ function invokeLegacyContextAction(tabKey, actionPrefix) {
   })
 }
 
+function menuPositionFor(button) {
+  const rect = button?.getBoundingClientRect()
+  if (!rect) return { top: 54, left: Math.max(8, window.innerWidth - WORKSPACE_MENU_WIDTH - 8) }
+
+  const left = Math.max(8, Math.min(
+    rect.right - WORKSPACE_MENU_WIDTH,
+    window.innerWidth - WORKSPACE_MENU_WIDTH - 8,
+  ))
+
+  const below = rect.bottom + 7
+  const roomBelow = window.innerHeight - below
+  const top = roomBelow >= WORKSPACE_MENU_HEIGHT
+    ? below
+    : Math.max(8, rect.top - WORKSPACE_MENU_HEIGHT - 7)
+
+  return { top, left }
+}
+
 export function ProductionWorkspaceShellV2() {
   const [tabbar, setTabbar] = useState(null)
   const [snapshot, setSnapshot] = useState(() => readWorkspaceSnapshot())
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchValue, setSearchValue] = useState('')
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false)
+  const [workspaceMenuPosition, setWorkspaceMenuPosition] = useState({ top: 54, left: 8 })
   const snapshotRef = useRef('')
   const searchInputRef = useRef(null)
   const activeTabRef = useRef(null)
+  const moreButtonRef = useRef(null)
 
   useEffect(() => {
     const scan = () => {
@@ -162,7 +216,7 @@ export function ProductionWorkspaceShellV2() {
   }, [])
 
   useEffect(() => {
-    if (searchOpen) searchInputRef.current?.focus()
+    if (searchOpen) searchInputRef.current?.focus({ preventScroll: true })
   }, [searchOpen])
 
   useEffect(() => {
@@ -170,6 +224,17 @@ export function ProductionWorkspaceShellV2() {
     if (!(activeNode instanceof HTMLElement)) return
     activeNode.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' })
   }, [snapshot.active?.key])
+
+  useEffect(() => {
+    if (!workspaceMenuOpen) return undefined
+    const reposition = () => setWorkspaceMenuPosition(menuPositionFor(moreButtonRef.current))
+    window.addEventListener('resize', reposition)
+    window.addEventListener('scroll', reposition, true)
+    return () => {
+      window.removeEventListener('resize', reposition)
+      window.removeEventListener('scroll', reposition, true)
+    }
+  }, [workspaceMenuOpen])
 
   const visibleTabs = useMemo(
     () => snapshot.tabs.filter((tab) => tab.key !== 'newtab'),
@@ -245,8 +310,19 @@ export function ProductionWorkspaceShellV2() {
     setWorkspaceMenuOpen(false)
   }
 
+  const toggleWorkspaceMenu = () => {
+    setSearchOpen(false)
+    setWorkspaceMenuOpen((current) => {
+      if (!current) setWorkspaceMenuPosition(menuPositionFor(moreButtonRef.current))
+      return !current
+    })
+  }
+
   const commandBar = (
-    <div className="production-workspace-tabdock" data-hi5-workspace-shell="v3">
+    <div
+      className={`production-workspace-tabdock${searchOpen ? ' is-searching' : ''}`}
+      data-hi5-workspace-shell="v3"
+    >
       <button
         aria-label="Open Hi5Central navigation"
         className="production-workspace-mobile-nav"
@@ -269,7 +345,7 @@ export function ProductionWorkspaceShellV2() {
                 tab.key === 'livechat' || tab.module === 'livechat' ? 'is-livechat' : '',
                 tab.dirty ? 'is-dirty' : '',
               ].filter(Boolean).join(' ')}
-              key={tab.key}
+              key={semanticTabIdentity(tab)}
               ref={tab.active ? activeTabRef : undefined}
               onContextMenu={(event) => {
                 event.preventDefault()
@@ -327,6 +403,8 @@ export function ProductionWorkspaceShellV2() {
               <Search size={14} aria-hidden="true" />
               <input
                 aria-label="Search Hi5Central"
+                autoCapitalize="none"
+                autoCorrect="off"
                 onChange={(event) => updateSearch(event.target.value)}
                 placeholder="Search records"
                 ref={searchInputRef}
@@ -380,59 +458,81 @@ export function ProductionWorkspaceShellV2() {
           aria-expanded={workspaceMenuOpen}
           aria-label="Workspace menu"
           className="production-workspace-icon-action production-workspace-more"
-          onClick={() => {
-            setWorkspaceMenuOpen((current) => !current)
-            setSearchOpen(false)
-          }}
+          onClick={toggleWorkspaceMenu}
+          ref={moreButtonRef}
           title="Workspace menu"
           type="button"
         >
           <MoreHorizontal size={17} aria-hidden="true" />
         </button>
       </div>
-
-      {workspaceMenuOpen && (
-        <div className="production-workspace-menu" role="menu">
-          <button
-            disabled={!active || active.key === 'livechat' || active.key === 'newtab'}
-            onClick={duplicateActive}
-            role="menuitem"
-            type="button"
-          >
-            <Copy size={14} aria-hidden="true" />
-            Duplicate current
-          </button>
-          <button disabled={!active?.closable} onClick={closeActive} role="menuitem" type="button">
-            <X size={14} aria-hidden="true" />
-            Close current
-          </button>
-          <button disabled={!closableCount} onClick={closeAll} role="menuitem" type="button">
-            <X size={14} aria-hidden="true" />
-            Close all work
-          </button>
-          <span className="production-workspace-menu-separator" role="separator" />
-          {snapshot.sidebarHidden && (
-            <button onClick={showSidebar} role="menuitem" type="button">
-              <PanelLeftOpen size={14} aria-hidden="true" />
-              Show navigation
-            </button>
-          )}
-          <button onClick={toggleTheme} role="menuitem" type="button">
-            {snapshot.theme === 'dark' ? <Sun size={14} aria-hidden="true" /> : <Moon size={14} aria-hidden="true" />}
-            {snapshot.theme === 'dark' ? 'Light mode' : 'Dark mode'}
-          </button>
-          <button onClick={openSettings} role="menuitem" type="button">
-            <Settings size={14} aria-hidden="true" />
-            Settings
-          </button>
-          <button onClick={signOut} role="menuitem" type="button">
-            <LogOut size={14} aria-hidden="true" />
-            Sign out
-          </button>
-        </div>
-      )}
     </div>
   )
 
-  return tabbar ? createPortal(commandBar, tabbar) : null
+  const menu = workspaceMenuOpen
+    ? createPortal(
+        <>
+          <button
+            aria-label="Close workspace menu"
+            className="production-workspace-menu-backdrop"
+            onClick={() => setWorkspaceMenuOpen(false)}
+            type="button"
+          />
+          <div
+            className="production-workspace-menu production-workspace-menu-floating"
+            role="menu"
+            style={{
+              '--hi5-workspace-menu-top': `${workspaceMenuPosition.top}px`,
+              '--hi5-workspace-menu-left': `${workspaceMenuPosition.left}px`,
+            }}
+          >
+            <button
+              disabled={!active || active.key === 'livechat' || active.key === 'newtab'}
+              onClick={duplicateActive}
+              role="menuitem"
+              type="button"
+            >
+              <Copy size={14} aria-hidden="true" />
+              Duplicate current
+            </button>
+            <button disabled={!active?.closable} onClick={closeActive} role="menuitem" type="button">
+              <X size={14} aria-hidden="true" />
+              Close current
+            </button>
+            <button disabled={!closableCount} onClick={closeAll} role="menuitem" type="button">
+              <X size={14} aria-hidden="true" />
+              Close all work
+            </button>
+            <span className="production-workspace-menu-separator" role="separator" />
+            {snapshot.sidebarHidden && (
+              <button onClick={showSidebar} role="menuitem" type="button">
+                <PanelLeftOpen size={14} aria-hidden="true" />
+                Show navigation
+              </button>
+            )}
+            <button onClick={toggleTheme} role="menuitem" type="button">
+              {snapshot.theme === 'dark' ? <Sun size={14} aria-hidden="true" /> : <Moon size={14} aria-hidden="true" />}
+              {snapshot.theme === 'dark' ? 'Light mode' : 'Dark mode'}
+            </button>
+            <button onClick={openSettings} role="menuitem" type="button">
+              <Settings size={14} aria-hidden="true" />
+              Settings
+            </button>
+            <button onClick={signOut} role="menuitem" type="button">
+              <LogOut size={14} aria-hidden="true" />
+              Sign out
+            </button>
+          </div>
+        </>,
+        document.body,
+      )
+    : null
+
+  if (!tabbar) return null
+  return (
+    <>
+      {createPortal(commandBar, tabbar)}
+      {menu}
+    </>
+  )
 }
