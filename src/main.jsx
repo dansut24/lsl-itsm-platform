@@ -20,6 +20,7 @@ import { ProductionRecordDetailRouter } from './production/ProductionRecordDetai
 import { ProductionServiceRequestIntake } from './production/ProductionServiceRequestIntake.jsx'
 import { ProductionWorkspaceBootstrap } from './production/ProductionWorkspaceBootstrap.jsx'
 import { ProductionWorkspaceRefinement } from './production/ProductionWorkspaceRefinement.jsx'
+import { ProductionWorkspaceShellV2 } from './production/ProductionWorkspaceShellV2.jsx'
 import { resolveTenantSurface } from './lib/tenantSurface.js'
 import './features/settings/ProductionSettingsFloating.css'
 import './features/people/OrganisationContextual.css'
@@ -35,6 +36,7 @@ import './production/ProductionWorkspaceDensity.css'
 import './production/ProductionPlanningSurface.css'
 import './production/ProductionPlanningResponsive.css'
 import './production/ProductionResponsiveViewport.css'
+import './production/ProductionWorkspaceShellV2.css'
 
 const rootElement = document.getElementById('root')
 const initialSurface = resolveTenantSurface()
@@ -66,6 +68,7 @@ createRoot(rootElement).render(
     {productionWorkspace && !productionOnboarding ? <ProductionRecordDetailRouter /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionServiceRequestIntake /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionWorkspaceRefinement /> : null}
+    {productionWorkspace && !productionOnboarding ? <ProductionWorkspaceShellV2 /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionMfaLoginEnhancer /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionMfaSettingsEnhancer /> : null}
     {productionWorkspace && productionOnboarding ? <OnboardingMfaEnhancer /> : null}
