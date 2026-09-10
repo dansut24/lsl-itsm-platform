@@ -7,6 +7,7 @@ import './ProductionWorkspaceBootstrap.css'
 
 const API_BASE = window.__HI5_API_BASE__
 const SESSION_TIMEOUT_MS = 8000
+const ONBOARDING_HANDOFF_KEY = 'hi5central-onboarding-handoff-v1'
 
 function validSession(payload, tenantSlug) {
   return Boolean(
@@ -14,6 +15,20 @@ function validSession(payload, tenantSlug) {
       && payload?.tenant?.slug
       && payload.tenant.slug === tenantSlug,
   )
+}
+
+function markOnboardingHandoff(payload) {
+  try {
+    window.sessionStorage.setItem(ONBOARDING_HANDOFF_KEY, JSON.stringify({
+      companyName: payload?.tenant?.companyName || payload?.tenant?.slug || 'Your workspace',
+      tenantSlug: payload?.tenant?.slug || '',
+      modules: payload?.tenant?.modules || {},
+      completedAt: payload?.onboarding?.completedAt || new Date().toISOString(),
+      createdAt: Date.now(),
+    }))
+  } catch {
+    // The handoff is presentation-only; setup completion must never depend on storage.
+  }
 }
 
 async function loadSessionWithDeadline(tenantSlug) {
@@ -126,6 +141,7 @@ export function ProductionOnboardingBootstrap() {
     }
 
     if (nextSession.onboarding?.completedAt) {
+      markOnboardingHandoff(nextSession)
       window.location.replace('/dashboard')
       return
     }
