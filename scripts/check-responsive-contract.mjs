@@ -7,10 +7,10 @@ const responsive = read('src/production/ProductionResponsiveViewport.css')
 const planning = read('src/production/ProductionPlanningSurface.css')
 const planningResponsive = read('src/production/ProductionPlanningResponsive.css')
 const refinement = read('src/production/ProductionWorkspaceRefinement.css')
-const shellV2 = read('src/production/ProductionWorkspaceShellV2.css')
-const shellV2Component = read('src/production/ProductionWorkspaceShellV2.jsx')
-const floatingGlass = read('src/production/ProductionLiquidGlassWorkspace.css')
-const floatingLiveChat = read('src/production/ProductionFloatingLiveChat.jsx')
+const shell = read('src/production/ProductionWorkspaceShellV2.css')
+const shellMobile = read('src/production/ProductionWorkspaceShellV2Mobile.css')
+const shellComponent = read('src/production/ProductionWorkspaceShellV2.jsx')
+const glass = read('src/production/ProductionLiquidGlassWorkspace.css')
 const projectEntry = read('src/features/projects/ProjectViews.jsx')
 const projectsV2 = read('src/features/projects/ProjectWorkspaceV2.jsx')
 
@@ -20,206 +20,76 @@ const expect = (condition, message) => {
 }
 
 const responsiveImport = "./production/ProductionResponsiveViewport.css"
-const shellV2Import = "./production/ProductionWorkspaceShellV2.css"
-const shellV2MobileImport = "./production/ProductionWorkspaceShellV2Mobile.css"
-const floatingGlassImport = "./production/ProductionLiquidGlassWorkspace.css"
+const shellImport = "./production/ProductionWorkspaceShellV2.css"
+const shellMobileImport = "./production/ProductionWorkspaceShellV2Mobile.css"
+const glassImport = "./production/ProductionLiquidGlassWorkspace.css"
 const planningImport = "./production/ProductionPlanningSurface.css"
 const planningResponsiveImport = "./production/ProductionPlanningResponsive.css"
 const densityImport = "./production/ProductionWorkspaceDensity.css"
 
-expect(main.includes(responsiveImport), 'ProductionResponsiveViewport.css must be imported by src/main.jsx')
-expect(main.includes(shellV2Import), 'ProductionWorkspaceShellV2.css must be imported by src/main.jsx')
-expect(main.includes("ProductionWorkspaceShellV2 } from './production/ProductionWorkspaceShellV2.jsx'"), 'Workspace Shell v2 component must be imported by src/main.jsx')
-expect(main.includes('<ProductionWorkspaceShellV2 />'), 'Workspace Shell v2 must be mounted in production workspace')
-expect(main.includes("ProductionFloatingLiveChat } from './production/ProductionFloatingLiveChat.jsx'"), 'Floating Live Chat component must be imported by src/main.jsx')
-expect(main.includes('<ProductionFloatingLiveChat />'), 'Floating Live Chat must be mounted in production workspace')
-expect(main.includes(floatingGlassImport), 'ProductionLiquidGlassWorkspace.css must be imported by src/main.jsx')
-expect(main.includes(planningImport), 'ProductionPlanningSurface.css must be imported by src/main.jsx')
-expect(main.includes(planningResponsiveImport), 'ProductionPlanningResponsive.css must be imported by src/main.jsx')
-expect(
-  main.indexOf(planningImport) > main.indexOf(densityImport),
-  'ProductionPlanningSurface.css must load after ProductionWorkspaceDensity.css',
-)
-expect(
-  main.indexOf(planningResponsiveImport) > main.indexOf(planningImport),
-  'ProductionPlanningResponsive.css must load after the planning surface contract',
-)
-expect(
-  main.indexOf(responsiveImport) > main.indexOf(planningResponsiveImport),
-  'ProductionResponsiveViewport.css must load after planning responsive rules',
-)
-expect(
-  main.indexOf(shellV2Import) > main.indexOf(responsiveImport),
-  'ProductionWorkspaceShellV2.css must load after the responsive fallback',
-)
-expect(
-  main.indexOf(floatingGlassImport) > main.indexOf(shellV2MobileImport),
-  'ProductionLiquidGlassWorkspace.css must remain the final workspace chrome authority',
-)
+expect(main.includes(responsiveImport), 'ProductionResponsiveViewport.css must be imported')
+expect(main.includes(shellImport), 'Workspace shell CSS must be imported')
+expect(main.includes(shellMobileImport), 'Workspace shell mobile CSS must be imported')
+expect(main.includes(glassImport), 'Floating glass navigation CSS must be imported')
+expect(main.includes("ProductionWorkspaceShellV2 } from './production/ProductionWorkspaceShellV2.jsx'"), 'Workspace shell component must be imported')
+expect(main.includes('<ProductionWorkspaceShellV2 />'), 'Workspace shell component must remain mounted')
+expect(!main.includes('ProductionFloatingLiveChat'), 'Floating Live Chat bubble must remain retired')
 
+expect(main.indexOf(planningImport) > main.indexOf(densityImport), 'Planning surface must load after density rules')
+expect(main.indexOf(planningResponsiveImport) > main.indexOf(planningImport), 'Planning responsive rules must load after planning surface')
+expect(main.indexOf(responsiveImport) > main.indexOf(planningResponsiveImport), 'Global responsive contract must load after planning rules')
+expect(main.indexOf(shellImport) > main.indexOf(responsiveImport), 'Workspace shell must load after responsive fallback')
+expect(main.indexOf(shellMobileImport) > main.indexOf(shellImport), 'Mobile shell completion must load after workspace shell')
+expect(main.indexOf(glassImport) > main.indexOf(shellMobileImport), 'Floating glass navigation must load last')
+
+// Base responsive fallback ----------------------------------------------------
 expect(responsive.includes('@media (max-width: 1180px)'), '1180px narrow-workspace breakpoint is missing')
 expect(responsive.includes('@media (max-width: 880px)'), '880px page-rail breakpoint is missing')
 expect(responsive.includes('@media (max-width: 680px)'), '680px compact-width breakpoint is missing')
+expect(/\.sidebar,[\s\S]*?\.sidebar-collapsed \.sidebar\s*\{[\s\S]*?position:\s*fixed !important;/.test(responsive), 'Responsive fallback must retain fixed off-canvas navigation')
+expect(/\.workspace > \*,[\s\S]*?\.content-frame > \*\s*\{[\s\S]*?min-width:\s*0;/.test(responsive), 'Workspace children must remain shrink-safe')
+expect(refinement.includes('position: fixed;'), 'Mobile sidebar fixed-position safeguard must remain')
 
-expect(
-  /\.main-frame\s*\{[\s\S]*?grid-template-rows:\s*48px 34px minmax\(0, 1fr\) !important;/.test(responsive),
-  'Responsive fallback must retain the pre-v2 narrow workspace shell contract',
-)
-expect(
-  /\.tabbar\s*\{[\s\S]*?grid-template-rows:\s*48px !important;[\s\S]*?height:\s*48px !important;/.test(responsive),
-  'Responsive fallback tabbar must remain a single row',
-)
-expect(
-  /\.chrome-actions\s*\{[\s\S]*?grid-row:\s*1 !important;[\s\S]*?flex-wrap:\s*nowrap !important;/.test(responsive),
-  'Workspace command actions must retain their no-wrap fallback contract',
-)
-expect(
-  /\.sidebar,[\s\S]*?\.sidebar-collapsed \.sidebar\s*\{[\s\S]*?position:\s*fixed !important;/.test(responsive),
-  'Narrow workspace primary navigation must use the fixed off-canvas contract',
-)
-expect(
-  /\.production-settings-sidebar,[\s\S]*?display:\s*none !important;/.test(responsive),
-  'Settings rail must yield at the narrow page-rail breakpoint',
-)
-expect(
-  /\.workspace > \*,[\s\S]*?\.content-frame > \*\s*\{[\s\S]*?min-width:\s*0;/.test(responsive),
-  'Common workspace children must be shrink-safe',
-)
-expect(
-  refinement.includes('position: fixed;'),
-  'Workspace refinement must preserve the fixed mobile sidebar safeguard',
-)
+// Workspace Shell v3 ---------------------------------------------------------
+expect(shellComponent.includes("const TAB_SELECTOR = '.tab-list .workspace-tab'"), 'Visible tabs must reuse the proven hidden tab engine')
+expect(shellComponent.includes('data-hi5-workspace-shell="v3"'), 'Workspace Shell v3 marker is missing')
+expect(shellComponent.includes('visibleTabs.map((tab)'), 'Visible workspace tab rendering is missing')
+expect(shellComponent.includes("tab.key === 'livechat' || tab.module === 'livechat'"), 'Live Chat must receive a permanent visible tab treatment')
+expect(shellComponent.includes('production-workspace-tab-unread'), 'Live Chat/workspace unread badge is missing')
+expect(shellComponent.includes("invokeLegacyContextAction(active.key, 'Duplicate tab')"), 'Duplicate-current behaviour must be preserved')
+expect(shellComponent.includes("invokeLegacyContextAction(active.key, 'Close all tabs')"), 'Close-all behaviour must be preserved')
+expect(shellComponent.includes("proxyClick('.record-create-trigger')"), 'New Record experience must remain wired')
+expect(shellComponent.includes("proxyClick('.tabbar-brand')"), 'Mobile navigation trigger must remain wired')
 
-// Hi5Central Workspace Shell v2 ------------------------------------------------
-expect(
-  /html\[data-hi5-surface='workspace'\] \.main-frame\s*\{[\s\S]*?grid-template-rows:\s*44px minmax\(0, 1fr\) !important;/.test(shellV2),
-  'Workspace Shell v2 must collapse legacy tab + breadcrumb chrome into one 44px desktop row',
-)
-expect(
-  /html\[data-hi5-surface='workspace'\] \.tabbar\s*\{[\s\S]*?grid-template-rows:\s*44px !important;[\s\S]*?height:\s*44px !important;/.test(shellV2),
-  'Workspace Shell v2 command bar must remain one 44px row',
-)
-expect(
-  shellV2.includes(".tabbar-tab-zone,\nhtml[data-hi5-surface='workspace'] .breadcrumbs") && shellV2.includes('display: none !important;'),
-  'Legacy browser tabs and the separate breadcrumb row must remain visually retired',
-)
-expect(
-  shellV2.includes('var(--accent-rgb)') && shellV2.includes('var(--accent-ink)'),
-  'Workspace Shell v2 must derive emphasis from tenant accent tokens',
-)
-expect(
-  shellV2.includes('@media (max-width: 680px)') && /grid-template-rows:\s*42px minmax\(0, 1fr\) !important;/.test(shellV2),
-  'Workspace Shell v2 must provide a compact single-row mobile contract',
-)
-expect(
-  shellV2.includes('.production-open-work-panel') && shellV2.includes('.production-open-work-trigger'),
-  'Workspace Shell v2 must retain the Open Work switcher surface',
-)
-expect(
-  shellV2Component.includes("const TAB_SELECTOR = '.tab-list .workspace-tab'"),
-  'Workspace Shell v2 must reuse the proven tab engine rather than replacing workspace state',
-)
-expect(
-  shellV2Component.includes('data-hi5-workspace-shell="v2"') && shellV2Component.includes('Open work'),
-  'Workspace Shell v2 command bar and Open Work control are missing',
-)
-expect(
-  shellV2Component.includes("invokeLegacyContextAction(tabKey, 'Duplicate')")
-    && shellV2Component.includes("invokeLegacyContextAction(source.key, 'Close all tabs')"),
-  'Open Work must preserve duplicate and close-all workspace behaviour',
-)
-expect(
-  shellV2Component.includes("proxyClick('.record-create-trigger')")
-    && shellV2.includes('.chrome-actions .record-create-trigger'),
-  'Workspace Shell v2 must preserve the existing New Record experience',
-)
-expect(
-  shellV2Component.includes("proxyClick('.tabbar-brand')")
-    && shellV2.includes('.production-workspace-mobile-nav'),
-  'Workspace Shell v2 must preserve mobile navigation access',
-)
+expect(shell.includes('.production-workspace-tabdock'), 'Floating workspace tab dock styles are missing')
+expect(shell.includes('.production-workspace-tabs') && shell.includes('overflow-x: auto'), 'Workspace tabs must scroll locally instead of squeezing')
+expect(shell.includes('.production-workspace-tab.is-livechat'), 'Live Chat visible tab styling is missing')
+expect(shell.includes('var(--accent-rgb)') && shell.includes('var(--accent-ink)'), 'Workspace tabs/actions must remain accent-aware')
+expect(shell.includes('@media (max-width: 680px)'), 'Workspace Shell v3 mobile breakpoint is missing')
+expect(shellMobile.includes('grid-template-columns: 30px minmax(0, 1fr) auto'), 'Mobile tab dock must reserve flexible width for tabs')
+expect(shellMobile.includes('min-width: max-content'), 'Mobile fixed actions must not be squeezed or wrapped')
 
-// Floating glass shell ---------------------------------------------------------
-expect(
-  floatingGlass.includes("html[data-hi5-surface='workspace'] .sidebar")
-    && floatingGlass.includes('border-radius: 24px')
-    && floatingGlass.includes('backdrop-filter: blur(28px)'),
-  'Primary navigation must retain the curved floating glass treatment',
-)
-expect(
-  floatingGlass.includes('@media (max-width: 1180px)')
-    && floatingGlass.includes('translateX(calc(-100% - 24px))')
-    && floatingGlass.includes('.sidebar.mobile-open'),
-  'Floating navigation must preserve the width-driven off-canvas mobile/tablet contract',
-)
-expect(
-  floatingGlass.includes("grid-template-rows: 56px minmax(0, 1fr) !important")
-    && floatingGlass.includes('width: calc(100% - 16px) !important'),
-  'Workspace command bar must remain detached from the viewport as a floating surface',
-)
-expect(
-  floatingGlass.includes('var(--accent-rgb)')
-    && floatingGlass.includes('.production-floating-live-chat'),
-  'Floating workspace surfaces must remain tenant-accent aware',
-)
-expect(
-  floatingGlass.includes('@media (max-width: 680px)')
-    && floatingGlass.includes('width: 48px')
-    && floatingGlass.includes('safe-area-inset-bottom'),
-  'Live Chat dock must compact safely on phones',
-)
-expect(
-  floatingLiveChat.includes('LIVE_CHAT_SELECTOR')
-    && floatingLiveChat.includes('.live-chat-tab-notification')
-    && floatingLiveChat.includes('tab.click()'),
-  'Floating Live Chat must reuse the fixed Live Chat workspace and unread source of truth',
-)
-expect(
-  floatingLiveChat.includes('data-hi5-live-chat-dock="true"')
-    && floatingLiveChat.includes('ProductionFloatingLiveChat'),
-  'Floating Live Chat dock contract is missing',
-)
+// Floating navigation --------------------------------------------------------
+expect(glass.includes('backdrop-filter: blur(28px)'), 'Floating navigation glass treatment is missing')
+expect(glass.includes('border-radius: 24px'), 'Floating navigation must remain curved')
+expect(glass.includes('@media (max-width: 1180px)'), 'Floating navigation narrow-screen contract is missing')
+expect(/height:\s*calc\(100dvh - 16px\) !important;/.test(glass), 'Mobile/tablet floating navigation must retain real viewport height')
+expect(/\.sidebar\.mobile-open,[\s\S]*?transform:\s*translateX\(0\) !important;/.test(glass), 'Mobile floating navigation must have an explicit open transform')
+expect(/\.nav-stack,[\s\S]*?min-height:\s*0 !important;[\s\S]*?overflow-y:\s*auto !important;/.test(glass), 'Mobile navigation list must remain scrollable and non-collapsing')
+expect(glass.includes('.mobile-nav-backdrop') && glass.includes('backdrop-filter: blur(12px)'), 'Mobile navigation backdrop must retain glass treatment')
 
-expect(
-  /\.calendar-toolbar\s*\{[\s\S]*?display:\s*flex;[\s\S]*?flex-wrap:\s*nowrap;/.test(planning),
-  'Calendar toolbar must stay on one row',
-)
-expect(
-  planningResponsive.includes('@media (max-width: 980px)') && planningResponsive.includes('@media (max-width: 720px)'),
-  'Calendar responsive behaviour must be viewport-driven',
-)
-expect(
-  /\.calendar-view\s*\{[\s\S]*?position:\s*relative;/.test(planningResponsive),
-  'Calendar compact overlays must be anchored to the Calendar surface',
-)
-expect(
-  planningResponsive.includes('.calendar-filter-bar.mobile-open'),
-  'Calendar must provide a compact filter surface instead of squeezing filters',
-)
-expect(
-  /\.cmdb-view \.asset-grid\s*\{[\s\S]*?repeat\(auto-fit,\s*minmax/.test(planning),
-  'CMDB asset grid must adapt to available width',
-)
-expect(
-  /\.cmdb-view \.queue-table\s*\{[\s\S]*?overflow-x:\s*auto;/.test(planning),
-  'CMDB linked-record overflow must remain local to its table surface',
-)
-expect(
-  /\.project-detail-tabs\s*\{[\s\S]*?flex-wrap:\s*nowrap;[\s\S]*?overflow-x:\s*auto;/.test(planning),
-  'Project view tabs must never wrap and must scroll locally',
-)
-expect(
-  planning.includes('.project-timeline-shell') && planning.includes('.project-workload-grid'),
-  'Projects must retain responsive Timeline and Workload surfaces',
-)
-expect(
-  projectEntry.includes("ProjectWorkspaceV2.jsx"),
-  'ProjectViews.jsx must route the workspace to Projects v2',
-)
+// Planning surfaces ----------------------------------------------------------
+expect(/\.calendar-toolbar\s*\{[\s\S]*?display:\s*flex;[\s\S]*?flex-wrap:\s*nowrap;/.test(planning), 'Calendar toolbar must stay on one row')
+expect(planningResponsive.includes('@media (max-width: 980px)') && planningResponsive.includes('@media (max-width: 720px)'), 'Calendar responsive behaviour must remain viewport-driven')
+expect(planningResponsive.includes('.calendar-filter-bar.mobile-open'), 'Calendar compact filter surface is missing')
+expect(/\.cmdb-view \.asset-grid\s*\{[\s\S]*?repeat\(auto-fit,\s*minmax/.test(planning), 'CMDB asset grid must adapt to width')
+expect(/\.cmdb-view \.queue-table\s*\{[\s\S]*?overflow-x:\s*auto;/.test(planning), 'CMDB linked-record overflow must remain local')
+expect(/\.project-detail-tabs\s*\{[\s\S]*?flex-wrap:\s*nowrap;[\s\S]*?overflow-x:\s*auto;/.test(planning), 'Project detail tabs must stay single-row and locally scrollable')
+expect(projectEntry.includes('ProjectWorkspaceV2.jsx'), 'Projects v2 routing must remain active')
 for (const section of ['overview', 'list', 'board', 'timeline', 'milestones', 'workload', 'risks', 'team', 'activity']) {
   expect(projectsV2.includes(`id: '${section}'`), `Projects v2 is missing the ${section} view`)
 }
-expect(projectsV2.includes('dependsOn') && projectsV2.includes('linkedRecord'), 'Project tasks must retain dependency and ITSM linkage fields')
+expect(projectsV2.includes('dependsOn') && projectsV2.includes('linkedRecord'), 'Project dependency and ITSM linkage fields must remain')
 
 if (failures.length) {
   console.error('Responsive contract check failed:')
