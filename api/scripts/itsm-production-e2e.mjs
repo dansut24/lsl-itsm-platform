@@ -88,8 +88,14 @@ try {
   )
   const team = await db.query(
     `INSERT INTO organisation_teams (tenant_id, external_key, department_id, name)
-     VALUES ($1, 'TEAM-SD', $2, 'Service Desk') RETURNING id`,
+     VALUES ($1, 'TEAM-CI-SD', $2, 'Service Desk') RETURNING id`,
     [tenantId, department.rows[0].id],
+  )
+  await db.query(
+    `INSERT INTO organisation_people (
+       tenant_id, external_key, user_id, primary_team_id, department_id, name, email, job_title, access_profile, active
+     ) VALUES ($1, 'CI-AGT-OWNER', $2, $3, $4, 'CI ITSM Owner', $5, 'Service Desk Owner', 'tenant_admin', true)`,
+    [tenantId, ownerId, team.rows[0].id, department.rows[0].id, ownerEmail],
   )
   await db.query(
     `INSERT INTO organisation_people (
@@ -135,10 +141,10 @@ try {
   console.log('3. Updating Incident state and activity through the production API')
   const patched = await json(`/api/v1/itsm-records/${encodeURIComponent(incident.payload.id)}`, {
     method: 'PATCH',
-    body: { status: 'In Progress', assignee: 'CI Requester', recordData: { impact: 'High', urgency: 'Medium', slaPercent: 22 } },
+    body: { status: 'In Progress', assignee: 'CI ITSM Owner', recordData: { impact: 'High', urgency: 'Medium', slaPercent: 22 } },
   })
   assert(patched.response.ok && patched.payload.status === 'In Progress', 'Incident state update was not persisted')
-  assert(patched.payload.assignee === 'CI Requester', 'Incident assignee was not resolved to a Person')
+  assert(patched.payload.assignee === 'CI ITSM Owner', 'Incident assignee was not resolved to an active technician account')
 
   const activity = await json(`/api/v1/itsm-records/${encodeURIComponent(incident.payload.id)}/activities`, {
     method: 'POST', body: { kind: 'work', text: 'Internal CI investigation note' },
