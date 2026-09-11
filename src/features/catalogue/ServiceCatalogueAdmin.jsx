@@ -13,6 +13,7 @@ import {
   X,
 } from 'lucide-react'
 import { portalServiceCatalog } from '../../data/portalData.js'
+import { ServiceRequestFulfilmentBuilder } from './ServiceRequestFulfilmentBuilder.jsx'
 import './ServiceCatalogueAdmin.css'
 
 const API_BASE = window.__HI5_API_BASE__
@@ -53,6 +54,7 @@ function seedItemsFromPortal() {
     monthlyPrice: 0,
     currency: 'GBP',
     workflow: `${item.service || 'Service'} fulfilment`,
+    workflowTasks: [],
     formSchema: item.fields || [],
     options: [],
     optionsCount: item.fields?.length || 0,
@@ -86,6 +88,7 @@ function seedItemsFromPortal() {
           monthlyPrice: monthly ? Number(option.cost || 0) : 0,
           currency: 'GBP',
           workflow: `${form.service || 'Catalogue'} fulfilment`,
+          workflowTasks: [],
           formSchema: [],
           options: [],
           optionsCount: 0,
@@ -157,6 +160,18 @@ async function syncRemoteCatalogue(value) {
   return payload
 }
 
+async function saveRemoteFulfilment(itemId, tasks) {
+  const response = await fetch(`${API_BASE}/api/v1/catalogue/${encodeURIComponent(itemId)}/fulfilment`, {
+    method: 'PUT',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tasks }),
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(payload.error || 'Could not save the fulfilment flow.')
+  return payload
+}
+
 function itemPrice(item) {
   if (item.priceMode === 'calculated') return 'Calculated from selections'
   const oneOff = Number(item.oneOffPrice || 0)
@@ -180,7 +195,7 @@ function kindLabel(kind) {
   return kind === 'product' ? 'Product' : 'Request form'
 }
 
-function ItemEditor({ categories, item, onClose, onSave }) {
+function ItemEditor({ categories, item, onClose, onSave, production }) {
   const creating = !item
   const [draft, setDraft] = useState(() => item ? { ...item } : {
     id: '',
@@ -201,12 +216,14 @@ function ItemEditor({ categories, item, onClose, onSave }) {
     monthlyPrice: 0,
     currency: 'GBP',
     workflow: 'Default fulfilment',
+    workflowTasks: [],
     formSchema: [],
     options: [],
     optionsCount: 0,
     source: 'local-demo',
     active: true,
   })
+  const [workflowTasks, setWorkflowTasks] = useState(() => Array.isArray(item?.workflowTasks) ? item.workflowTasks : [])
 
   function update(field, value) {
     setDraft((current) => ({ ...current, [field]: value }))
@@ -215,13 +232,16 @@ function ItemEditor({ categories, item, onClose, onSave }) {
   function submit(event) {
     event.preventDefault()
     const generatedId = `CAT-${String(draft.title || 'ITEM').toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 24)}-${Date.now().toString().slice(-4)}`
+    const itemId = draft.id || generatedId
+    const fulfilmentTasks = draft.kind === 'request-form' && draft.requestType === 'Service Request' ? workflowTasks : []
     onSave({
       ...draft,
-      id: draft.id || generatedId,
+      id: itemId,
+      workflowTasks: fulfilmentTasks,
       oneOffPrice: Number(draft.oneOffPrice || 0),
       monthlyPrice: Number(draft.monthlyPrice || 0),
       approvalThreshold: draft.approval === 'manager-cost' ? Number(draft.approvalThreshold || 0) : null,
-    })
+    }, fulfilmentTasks)
   }
 
   return (
@@ -259,11 +279,12 @@ function ItemEditor({ categories, item, onClose, onSave }) {
               <label>Service<input value={draft.service || ''} onChange={(event) => update('service', event.target.value)} /></label>
             </div>
             <div className="catalogue-form-grid two">
-              <label>Fulfilment team<input value={draft.team || ''} onChange={(event) => update('team', event.target.value)} /></label>
+              <label>Default fulfilment team<input value={draft.team || ''} onChange={(event) => update('team', event.target.value)} /></label>
               <label>Approval<select value={draft.approval || 'none'} onChange={(event) => update('approval', event.target.value)}><option value="none">No approval</option><option value="manager">Manager</option><option value="manager-cost">Manager / cost policy</option><option value="custom">Custom workflow</option></select></label>
             </div>
             {draft.approval === 'manager-cost' ? <label>Approval threshold (£)<input min="0" step="0.01" type="number" value={draft.approvalThreshold ?? 500} onChange={(event) => update('approvalThreshold', event.target.value)} /><small>Requests at or above this total can require manager/cost approval.</small></label> : null}
-            <label>Fulfilment workflow<input value={draft.workflow || ''} onChange={(event) => update('workflow', event.target.value)} /></label>
+            <label>Flow name<input value={draft.workflow || ''} onChange={(event) => update('workflow', event.target.value)} placeholder="Standard fulfilment" /></label>
+            {draft.kind === 'request-form' && draft.requestType === 'Service Request' ? <ServiceRequestFulfilmentBuilder itemKey={item?.id || ''} production={production} value={workflowTasks} onChange={setWorkflowTasks} /> : null}
           </section>
 
           <section>
@@ -345,12 +366,25 @@ export function ServiceCatalogueAdmin() {
       })
   }
 
-  function saveItem(item) {
+  function saveItem(item, workflowTasks = []) {
+    const storedItem = { ...item, workflowTasks }
     const items = catalogue.items.some((candidate) => candidate.id === item.id)
-      ? catalogue.items.map((candidate) => candidate.id === item.id ? item : candidate)
-      : [...catalogue.items, item]
+      ? catalogue.items.map((candidate) => candidate.id === item.id ? storedItem : candidate)
+      : [...catalogue.items, storedItem]
     const categories = [...new Set([...catalogue.categories, item.category].filter(Boolean))].sort((a, b) => a.localeCompare(b))
-    persist({ items, categories })
+    const next = { items, categories }
+    setCatalogue(next)
+    saveCatalogue(next)
+
+    if (productionCatalogueEnabled()) {
+      setSyncState('saving')
+      Promise.all([syncRemoteCatalogue(next), saveRemoteFulfilment(item.id, workflowTasks)])
+        .then(() => setSyncState('saved'))
+        .catch((error) => {
+          console.error('Service Catalogue or fulfilment flow synchronisation failed', error)
+          setSyncState('error')
+        })
+    }
     setEditorItem(undefined)
   }
 
@@ -420,7 +454,7 @@ export function ServiceCatalogueAdmin() {
         {!visibleItems.length ? <div className="catalogue-empty"><PackageOpen size={30} /><strong>No catalogue items found</strong><span>Try a different category, search or filter.</span></div> : null}
       </section>
 
-      {editorItem !== undefined ? <ItemEditor categories={catalogue.categories} item={editorItem} onClose={() => setEditorItem(undefined)} onSave={saveItem} /> : null}
+      {editorItem !== undefined ? <ItemEditor categories={catalogue.categories} item={editorItem} onClose={() => setEditorItem(undefined)} onSave={saveItem} production={productionCatalogueEnabled()} /> : null}
     </div>
   )
 }
