@@ -1,5 +1,6 @@
 import { originMatchesPortalTenant, originMatchesTenant } from './deploymentConfig.js'
 import { pool } from './db.js'
+import { liveChatServiceWindow } from './liveChatServiceWindow.js'
 import { resolveSession } from './session.js'
 
 const PRESENCE_STALE_SECONDS = 90
@@ -79,36 +80,41 @@ async function presenceForUser(db, tenantId, userId) {
 }
 
 export async function liveChatSupportAvailability(db, tenantId) {
-  const result = await db.query(
-    `SELECT
-       count(*) FILTER (
-         WHERE p.desired_status='Online'
-           AND p.last_seen_at > now() - ($2::text || ' seconds')::interval
-       )::int AS online,
-       count(*) FILTER (
-         WHERE p.desired_status='Away'
-           AND p.last_seen_at > now() - ($2::text || ' seconds')::interval
-       )::int AS away,
-       count(*)::int AS total
-     FROM tenant_memberships m
-     LEFT JOIN live_chat_agent_presence p
-       ON p.tenant_id=m.tenant_id AND p.user_id=m.user_id
-     WHERE m.tenant_id=$1
-       AND m.status='active'
-       AND m.role IN ('owner','admin','analyst')`,
-    [tenantId, PRESENCE_STALE_SECONDS],
-  )
+  const [result, serviceHours] = await Promise.all([
+    db.query(
+      `SELECT
+         count(*) FILTER (
+           WHERE p.desired_status='Online'
+             AND p.last_seen_at > now() - ($2::text || ' seconds')::interval
+         )::int AS online,
+         count(*) FILTER (
+           WHERE p.desired_status='Away'
+             AND p.last_seen_at > now() - ($2::text || ' seconds')::interval
+         )::int AS away,
+         count(*)::int AS total
+       FROM tenant_memberships m
+       LEFT JOIN live_chat_agent_presence p
+         ON p.tenant_id=m.tenant_id AND p.user_id=m.user_id
+       WHERE m.tenant_id=$1
+         AND m.status='active'
+         AND m.role IN ('owner','admin','analyst')`,
+      [tenantId, PRESENCE_STALE_SECONDS],
+    ),
+    liveChatServiceWindow(db, tenantId),
+  ])
   const row = result.rows[0] || {}
   const online = Number(row.online || 0)
   const away = Number(row.away || 0)
   const total = Number(row.total || 0)
+  const withinHours = serviceHours.open !== false
   return {
-    status: online > 0 ? 'Online' : away > 0 ? 'Away' : 'Offline',
+    status: withinHours ? (online > 0 ? 'Online' : away > 0 ? 'Away' : 'Offline') : 'Offline',
     online,
     away,
     offline: Math.max(0, total - online - away),
-    available: online > 0,
+    available: withinHours && online > 0,
     staleAfterSeconds: PRESENCE_STALE_SECONDS,
+    serviceHours,
   }
 }
 
@@ -200,9 +206,6 @@ export function registerLiveChatPresenceRoutes(app) {
     return c.json({ enabled: true, ...support })
   })
 
-  // This guard runs before the existing Live Chat route registration. Existing
-  // conversations remain readable/replyable while analysts are Away/Offline,
-  // but a brand-new real-time chat requires at least one genuinely Online analyst.
   app.use('/api/v1/portal/live-chat', async (c, next) => {
     if (c.req.method !== 'POST') return next()
     const auth = await requirePortal(c)
@@ -211,9 +214,12 @@ export function registerLiveChatPresenceRoutes(app) {
     if (!enabled) return next()
     const support = await liveChatSupportAvailability(pool, auth.session.tenant_id)
     if (!support.available) {
+      const outsideHours = support.serviceHours?.open === false
       return c.json({
-        error: 'Live Chat is currently offline. Please raise an incident or try again when the Service Desk is online.',
-        code: 'live_chat_offline',
+        error: outsideHours
+          ? 'Live Chat is currently outside Service Desk opening hours. Please raise an incident or try again during service hours.'
+          : 'Live Chat is currently offline. Please raise an incident or try again when the Service Desk is online.',
+        code: outsideHours ? 'live_chat_outside_service_hours' : 'live_chat_offline',
         support,
       }, 409)
     }

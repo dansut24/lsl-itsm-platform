@@ -1,6 +1,7 @@
 import { originMatchesTenant } from './deploymentConfig.js'
 import { pool, withTransaction } from './db.js'
 import { registerKnowledgeRoutes } from './knowledge.js'
+import { registerLiveChatOperationsRoutes } from './liveChatOperations.js'
 import { registerLiveChatPresenceRoutes } from './liveChatPresence.js'
 import { registerLiveChatRoutes } from './liveChat.js'
 import { registerMfaRoutes } from './mfa.js'
@@ -214,6 +215,7 @@ export function registerSettingsRoutes(app) {
   registerWorkflowRoutes(app)
   registerNotificationRoutes(app)
   registerKnowledgeRoutes(app)
+  registerLiveChatOperationsRoutes(app)
   registerLiveChatPresenceRoutes(app)
   registerLiveChatRoutes(app)
   registerSecurityInstrumentation(app)

@@ -110,3 +110,4 @@ jobs:
           node scripts/portal-fresh-tenant-e2e.mjs
           node scripts/portal-incident-notification-e2e.mjs
           node scripts/knowledge-live-chat-e2e.mjs
+          node scripts/live-chat-operations-e2e.mjs

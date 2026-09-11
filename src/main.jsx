@@ -17,6 +17,7 @@ import { ProductionFirstLoginRouteBridge } from './production/ProductionFirstLog
 import { ProductionItsmWorkspace } from './production/ProductionItsmWorkspace.jsx'
 import { ProductionKnowledgeBase } from './production/ProductionKnowledgeBase.jsx'
 import { ProductionLiveChatBadgeBridge } from './production/ProductionLiveChatBadgeBridge.jsx'
+import { ProductionLiveChatOperations, ProductionPortalLiveChatOperations } from './production/ProductionLiveChatOperations.jsx'
 import { ProductionLiveChatWorkspace } from './production/ProductionLiveChatWorkspace.jsx'
 import { ProductionNavigationDockPreferences } from './production/ProductionNavigationDockPreferences.jsx'
 import { ProductionNotificationCenter } from './production/ProductionNotificationCenter.jsx'
@@ -94,6 +95,7 @@ createRoot(rootElement).render(
     {productionWorkspace && !productionOnboarding ? <ProductionKnowledgeBase /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionLiveChatBadgeBridge /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionLiveChatWorkspace /> : null}
+    {productionWorkspace && !productionOnboarding ? <ProductionLiveChatOperations /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionRecordDetailRouter /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionRecordExportEnhancer /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionRecordListInteractionEnhancer /> : null}
@@ -115,5 +117,6 @@ createRoot(rootElement).render(
     {productionWorkspace && !productionOnboarding ? <ProductionSecurityCenterEnhancer /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionPasswordRecoveryEnhancer /> : null}
     {productionPortal ? <ProductionPortalKnowledgeChat /> : null}
+    {productionPortal ? <ProductionPortalLiveChatOperations /> : null}
   </StrictMode>,
 )
