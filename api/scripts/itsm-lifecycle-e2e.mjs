@@ -56,10 +56,16 @@ await db.query(
    VALUES ($1,'USR-LIFE',$2,$3,'Lifecycle Requester',$4,'Employee','employee',true)`,
   [tenantId, team.rows[0].id, department.rows[0].id, `requester-${suffix}@hi5central.test`],
 )
+const technician = await db.query(
+  `INSERT INTO organisation_people (tenant_id, external_key, user_id, primary_team_id, department_id, name, email, job_title, access_profile, active)
+   VALUES ($1,'USR-TECH',$2,$3,$4,'Lifecycle Technician',$5,'Support Engineer','technician',true)
+   RETURNING id`,
+  [tenantId, ownerId, team.rows[0].id, department.rows[0].id, `technician-${suffix}@hi5central.test`],
+)
 await db.query(
-  `INSERT INTO organisation_people (tenant_id, external_key, primary_team_id, department_id, name, email, job_title, access_profile, active)
-   VALUES ($1,'USR-TECH',$2,$3,'Lifecycle Technician',$4,'Support Engineer','technician',true)`,
-  [tenantId, team.rows[0].id, department.rows[0].id, `technician-${suffix}@hi5central.test`],
+  `INSERT INTO organisation_team_memberships (tenant_id, person_id, team_id, role, is_primary)
+   VALUES ($1,$2,$3,'member',true)`,
+  [tenantId, technician.rows[0].id, team.rows[0].id],
 )
 
 console.log('1. Create shared lifecycle records')
