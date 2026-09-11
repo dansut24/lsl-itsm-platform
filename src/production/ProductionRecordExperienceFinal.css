@@ -2,25 +2,69 @@
    Loaded last so mobile action sizing and Peek surfaces cannot be overridden by
    older production refinement layers. */
 
+/* Fallback workspace tokens for any surface portalled directly to body.
+   ProductionPortalThemeBridge replaces these with the active tenant values. */
+body[data-hi5-surface='workspace'] {
+  --page: #edf3fb;
+  --surface: #ffffff;
+  --surface-soft: #f8fbff;
+  --surface-strong: #d9e6f7;
+  --ink: #10213f;
+  --muted: #65728a;
+  --line: #d8e1ee;
+  --brand: #17488d;
+  --brand-strong: #071b3d;
+  --accent-ink: #05203a;
+  --accent-rgb: 244, 177, 61;
+}
+
+body[data-hi5-workspace-theme='dark'] {
+  --page: #0f1726;
+  --surface: #172235;
+  --surface-soft: #1d2a40;
+  --surface-strong: #263650;
+  --ink: #eef4ff;
+  --muted: #a9b7ca;
+  --line: #31435e;
+  --brand: #76a7f7;
+  --brand-strong: #061225;
+}
+
 /* Universal Peek should look like the tenant workspace, not a translucent grey card. */
 .hi5-universal-peek {
-  background: var(--surface) !important;
-  color: var(--ink) !important;
+  opacity: 1 !important;
+  background: var(--surface, #ffffff) !important;
+  color: var(--ink, #10213f) !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
-  box-shadow: 0 28px 82px rgba(7, 20, 39, .28), 0 0 0 1px rgba(var(--accent-rgb), .05) !important;
+  box-shadow: 0 28px 82px rgba(7, 20, 39, .28), 0 0 0 1px rgba(var(--accent-rgb, 244,177,61), .08) !important;
 }
 
 .hi5-universal-peek > header,
 .hi5-universal-peek > footer,
 .hi5-universal-peek-body,
-.hi5-universal-peek-working-body {
-  background: var(--surface) !important;
+.hi5-universal-peek-working-body,
+.hi5-working-peek,
+.hi5-working-peek-content,
+.hi5-working-peek-tabs {
+  background: var(--surface, #ffffff) !important;
+  color: var(--ink, #10213f) !important;
 }
 
 .hi5-universal-peek-fields > div,
-.hi5-universal-peek-items article {
-  background: var(--surface-soft) !important;
+.hi5-universal-peek-items article,
+.hi5-working-peek-activity article,
+.hi5-working-peek-facts > div,
+.hi5-working-peek-task-view article,
+.hi5-working-peek-approval-view article,
+.hi5-working-peek-attachments article {
+  background: var(--surface-soft, #f8fbff) !important;
+}
+
+.hi5-working-peek-composer {
+  background: var(--surface, #ffffff) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 .hi5-universal-peek.is-working-record {
@@ -28,7 +72,7 @@
   height: min(88dvh, 860px);
   max-height: none;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  border-color: color-mix(in srgb, var(--line) 62%, rgb(var(--accent-rgb)) 38%);
+  border-color: color-mix(in srgb, var(--line, #d8e1ee) 62%, rgb(var(--accent-rgb, 244,177,61)) 38%);
 }
 
 .hi5-universal-peek-working-body {
@@ -37,11 +81,11 @@
 }
 
 .hi5-universal-peek.is-working-record > header {
-  background: linear-gradient(110deg, rgba(var(--accent-rgb), .075), var(--surface) 40%) !important;
+  background: linear-gradient(110deg, rgba(var(--accent-rgb, 244,177,61), .075), var(--surface, #ffffff) 40%) !important;
 }
 
 .hi5-universal-peek.is-working-record > footer {
-  border-top-color: var(--line);
+  border-top-color: var(--line, #d8e1ee);
 }
 
 /* Current stable Service Desk toolbar: keep Export before New and both inside the viewport. */
