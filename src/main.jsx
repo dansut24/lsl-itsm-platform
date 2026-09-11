@@ -17,6 +17,7 @@ import { ProductionNavigationDockPreferences } from './production/ProductionNavi
 import { ProductionOnboardingBootstrap } from './production/ProductionOnboardingBootstrap.jsx'
 import { ProductionOrganisationWriteThrough } from './production/ProductionOrganisationWriteThrough.jsx'
 import { ProductionPortalBootstrap } from './production/ProductionPortalBootstrap.jsx'
+import { ProductionPortalThemeBridge } from './production/ProductionPortalThemeBridge.jsx'
 import { ProductionPremiumWorkspaceExperience } from './production/ProductionPremiumWorkspaceExperience.jsx'
 import { ProductionRecordDetailRouter } from './production/ProductionRecordDetailRouter.jsx'
 import { ProductionRecordExportEnhancer } from './production/ProductionRecordExportEnhancer.jsx'
@@ -87,6 +88,7 @@ createRoot(rootElement).render(
     {productionWorkspace && !productionOnboarding ? <ProductionNavigationDockPreferences /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionWorkspaceShellV2 /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionPremiumWorkspaceExperience /> : null}
+    {productionWorkspace && !productionOnboarding ? <ProductionPortalThemeBridge /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionUniversalPeekV2 /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionMfaLoginEnhancer /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionMfaSettingsEnhancer /> : null}
