@@ -1,6 +1,7 @@
 import { originMatchesTenant } from './deploymentConfig.js'
 import { pool, withTransaction } from './db.js'
 import { registerMfaRoutes } from './mfa.js'
+import { registerNotificationRoutes } from './notifications.js'
 import { registerSecurityRoutes } from './security.js'
 import { registerSecurityInstrumentation } from './securityInstrumentation.js'
 import {
@@ -11,6 +12,7 @@ import {
 } from './securityAudit.js'
 import { resolveSession, sessionPayload } from './session.js'
 import { registerUserPreferenceRoutes } from './userPreferences.js'
+import { registerWorkflowRoutes } from './itsmWorkflows.js'
 
 const writableAreas = new Set([
   'company',
@@ -206,6 +208,8 @@ export function registerSettingsRoutes(app) {
   })
 
   registerUserPreferenceRoutes(app)
+  registerWorkflowRoutes(app)
+  registerNotificationRoutes(app)
   registerSecurityInstrumentation(app)
   registerMfaRoutes(app)
   registerSecurityRoutes(app)
