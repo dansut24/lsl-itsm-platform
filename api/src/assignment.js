@@ -229,7 +229,7 @@ async function validateAssignee(db, tenantId, recordType, team, person) {
 
 async function currentGeneric(db, tenantId, reference) {
   const result = await db.query(
-    `SELECT assignment_team_id AS team_id,assigned_person_id AS person_id,record_type
+    `SELECT assignment_team_id AS team_id,assigned_person_id AS person_id,record_type,version
      FROM itsm_records
      WHERE tenant_id=$1 AND upper(reference)=upper($2)
      LIMIT 1`,
@@ -336,7 +336,7 @@ async function enrichLifecycleResponse(c, session) {
   payload.options = {
     ...object(payload.options),
     people: directory.people,
-    teams: directory.teams.map(({ members, ...team }) => team),
+    teams: directory.teams,
     assignmentTeams: directory.teams,
   }
   c.res = new Response(JSON.stringify(payload), {
@@ -344,6 +344,12 @@ async function enrichLifecycleResponse(c, session) {
     statusText: c.res.statusText,
     headers: responseHeaders(c.res),
   })
+}
+
+function versionMatches(current, body) {
+  const supplied = Number(body?.version)
+  if (!Number.isInteger(supplied) || !Number.isInteger(Number(current?.version))) return true
+  return supplied === Number(current.version)
 }
 
 async function requestBodyClone(c) {
@@ -435,7 +441,7 @@ export function registerAssignmentRoutes(app) {
       if (!body) return c.json({ error: 'A valid JSON request body is required.' }, 400)
       const reference = c.req.path.match(/\/itsm-lifecycle\/([^/]+)\/?$/i)?.[1]
       const current = reference ? await currentGeneric(pool, auth.session.tenant_id, decodeURIComponent(reference)) : null
-      if (current) {
+      if (current && versionMatches(current, body)) {
         try { await validateAssignmentMutation(pool, auth.session.tenant_id, current.record_type, current, body) }
         catch (error) { return c.json({ error: error.message }, error.status || 400) }
       }
@@ -452,7 +458,7 @@ export function registerAssignmentRoutes(app) {
       if (!body) return c.json({ error: 'A valid JSON request body is required.' }, 400)
       const match = c.req.path.match(/\/itsm-actions\/([^/]+)\/reassign\/?$/i)
       const current = match ? await currentGeneric(pool, auth.session.tenant_id, decodeURIComponent(match[1])) : null
-      if (current) {
+      if (current && versionMatches(current, body)) {
         try { await validateAssignmentMutation(pool, auth.session.tenant_id, current.record_type, current, body) }
         catch (error) { return c.json({ error: error.message }, error.status || 400) }
       }
