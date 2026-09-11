@@ -18,6 +18,7 @@ import { ProductionItsmWorkspace } from './production/ProductionItsmWorkspace.js
 import { ProductionKnowledgeBase } from './production/ProductionKnowledgeBase.jsx'
 import { ProductionLiveChatBadgeBridge } from './production/ProductionLiveChatBadgeBridge.jsx'
 import { ProductionLiveChatOperations, ProductionPortalLiveChatOperations } from './production/ProductionLiveChatOperations.jsx'
+import { ProductionLiveChatCompactTools } from './production/ProductionLiveChatCompactTools.jsx'
 import { ProductionLiveChatWorkspace } from './production/ProductionLiveChatWorkspace.jsx'
 import { ProductionNavigationDockPreferences } from './production/ProductionNavigationDockPreferences.jsx'
 import { ProductionNotificationCenter } from './production/ProductionNotificationCenter.jsx'
@@ -96,6 +97,7 @@ createRoot(rootElement).render(
     {productionWorkspace && !productionOnboarding ? <ProductionLiveChatBadgeBridge /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionLiveChatWorkspace /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionLiveChatOperations /> : null}
+    {productionWorkspace && !productionOnboarding ? <ProductionLiveChatCompactTools /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionRecordDetailRouter /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionRecordExportEnhancer /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionRecordListInteractionEnhancer /> : null}
