@@ -83,7 +83,7 @@ async function assignmentRows(db, tenantId) {
        tm.role AS team_role,
        tm.is_primary,
        m.status AS membership_status,
-       COALESCE(array_agg(DISTINCT grant.permission) FILTER (WHERE grant.permission IS NOT NULL), '{}'::text[]) AS permissions
+       COALESCE(array_agg(DISTINCT permission_grant.permission) FILTER (WHERE permission_grant.permission IS NOT NULL), '{}'::text[]) AS permissions
      FROM organisation_teams t
      LEFT JOIN organisation_team_memberships tm
        ON tm.tenant_id = t.tenant_id AND tm.team_id = t.id
@@ -95,7 +95,7 @@ async function assignmentRows(db, tenantId) {
        ON aur.tenant_id = t.tenant_id AND aur.user_id = p.user_id
      LEFT JOIN access_roles ar
        ON ar.tenant_id = t.tenant_id AND ar.id = aur.role_id AND ar.active = true
-     LEFT JOIN LATERAL unnest(ar.permissions) AS grant(permission) ON true
+     LEFT JOIN LATERAL unnest(ar.permissions) AS permission_grant(permission) ON true
      WHERE t.tenant_id = $1 AND t.active = true
      GROUP BY
        t.id,t.external_key,t.name,
@@ -180,10 +180,10 @@ async function personByValue(db, tenantId, value) {
 async function grantsForUser(db, tenantId, userId) {
   if (!userId) return []
   const result = await db.query(
-    `SELECT DISTINCT grant.permission
+    `SELECT DISTINCT permission_grant.permission
      FROM access_user_roles aur
      JOIN access_roles ar ON ar.tenant_id=aur.tenant_id AND ar.id=aur.role_id AND ar.active=true
-     CROSS JOIN LATERAL unnest(ar.permissions) AS grant(permission)
+     CROSS JOIN LATERAL unnest(ar.permissions) AS permission_grant(permission)
      WHERE aur.tenant_id=$1 AND aur.user_id=$2`,
     [tenantId, userId],
   )
