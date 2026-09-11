@@ -108,3 +108,4 @@ jobs:
           curl -fsS http://127.0.0.1:3001/health
           echo
           node scripts/portal-fresh-tenant-e2e.mjs
+          node scripts/portal-incident-notification-e2e.mjs
