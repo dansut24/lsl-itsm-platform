@@ -1,6 +1,11 @@
 /* Personal navigation presentation. Position is handled by the existing dock
    preference layer; this file only changes visual treatment. */
 
+/* Service Health belongs on dashboards/monitoring surfaces, not in primary navigation. */
+html[data-hi5-surface='workspace'] .sidebar .sidebar-status {
+  display: none !important;
+}
+
 html[data-hi5-surface='workspace'][data-hi5-nav-style='clean'] .sidebar {
   border-radius: 18px !important;
   background: var(--surface) !important;
@@ -40,10 +45,6 @@ html[data-hi5-surface='workspace'][data-hi5-nav-style='clean'] .sidebar .nav-ite
   width: 3px !important;
   border-radius: 999px;
   background: rgb(var(--accent-rgb));
-}
-
-html[data-hi5-surface='workspace'][data-hi5-nav-style='clean'] .sidebar .sidebar-status {
-  display: none !important;
 }
 
 html[data-hi5-surface='workspace'][data-hi5-nav-style='floating'] .sidebar {
