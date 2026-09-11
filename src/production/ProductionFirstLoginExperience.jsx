@@ -12,11 +12,9 @@ import {
   Palette,
   PanelLeft,
   PanelRight,
-  Search,
   Settings2,
   Sparkles,
   Sun,
-  UserRound,
   WandSparkles,
   X,
 } from 'lucide-react'
@@ -131,9 +129,7 @@ function effectiveTheme(mode) {
 
 function applyPreferences(preferences) {
   const next = mergePreferences(preferences)
-  const accent = next.appearance.accentMode === 'personal'
-    ? next.appearance.accent
-    : tenantAccent()
+  const accent = next.appearance.accentMode === 'personal' ? next.appearance.accent : tenantAccent()
 
   saveTheme(next.appearance.theme)
   saveAccent(accent)
@@ -148,10 +144,9 @@ function applyPreferences(preferences) {
     // Server preferences remain authoritative if local storage is unavailable.
   }
 
-  const theme = effectiveTheme(next.appearance.theme)
   const shell = document.querySelector('.app-shell')
   if (shell instanceof HTMLElement) {
-    shell.dataset.theme = theme
+    shell.dataset.theme = effectiveTheme(next.appearance.theme)
     shell.dataset.accent = accent
     shell.dataset.navSide = next.navigation.desktopSide
     shell.dataset.mobileNavSide = next.navigation.mobileSide
@@ -194,7 +189,10 @@ async function patchPreferences(preferences, markers = {}) {
 function navigate(path) {
   if (!path) return
   window.history.pushState({}, '', path)
-  window.dispatchEvent(new PopStateEvent('popstate', { state: window.history.state }))
+  const event = typeof PopStateEvent === 'function'
+    ? new PopStateEvent('popstate', { state: window.history.state })
+    : new Event('popstate')
+  window.dispatchEvent(event)
   window.dispatchEvent(new Event('hi5-routechange'))
 }
 
@@ -269,7 +267,7 @@ function FirstLoginDialog({ payload, preferences, setPreferences, onComplete, sa
       <section className="hi5-first-login-card" role="dialog" aria-modal="true" aria-label="Welcome to Hi5Central">
         <header className="hi5-first-login-header">
           <div className="hi5-first-login-brand"><img src="/hi5central-logo.png" alt="" /><span>Hi5Central</span></div>
-          <div className="hi5-first-login-progress" aria-label={`Step ${step + 1} of 3`}><i className={step >= 0 ? 'is-active' : ''} /><i className={step >= 1 ? 'is-active' : ''} /><i className={step >= 2 ? 'is-active' : ''} /></div>
+          <div className="hi5-first-login-progress" aria-label={`Step ${step + 1} of 3`}><i className="is-active" /><i className={step >= 1 ? 'is-active' : ''} /><i className={step >= 2 ? 'is-active' : ''} /></div>
         </header>
 
         <div className="hi5-first-login-body">
@@ -353,7 +351,6 @@ function GettingStarted({ payload, onDismiss }) {
   const [open, setOpen] = useState(true)
   const admin = ['owner', 'admin'].includes(payload.user?.tenantRole)
   const modules = payload.tenant?.modules || {}
-
   const adminItems = [
     ['/settings/organisation', 'Organisation'],
     ['/settings/people-directory', 'People & directory'],
@@ -375,7 +372,7 @@ function GettingStarted({ payload, onDismiss }) {
       <div className="hi5-getting-started-list">
         <button className="is-complete" type="button"><CheckCircle2 size={15} /><span><strong>Personalise workspace</strong><small>Appearance and navigation saved.</small></span></button>
         <button onClick={() => navigate('/incidents')} type="button"><Compass size={15} /><span><strong>Open your first record</strong><small>Use Peek or open it in a workspace tab.</small></span></button>
-        <button onClick={() => navigate('/new/incident')} type="button"><Sparkles size={15} /><span><strong>Create or update a record</strong><small>Learn the Service Desk flow.</small></span></button>
+        <button onClick={() => navigate('/incidents/new')} type="button"><Sparkles size={15} /><span><strong>Create or update a record</strong><small>Learn the Service Desk flow.</small></span></button>
       </div>
       {admin ? <div className="hi5-admin-setup-centre"><span>Admin setup centre</span>{adminItems.map(([path, label]) => <button key={path} onClick={() => navigate(path)} type="button"><Settings2 size={13} />{label}<ChevronRight size={13} /></button>)}</div> : null}
       <footer><button onClick={onDismiss} type="button">Dismiss getting started</button></footer>
@@ -393,7 +390,7 @@ export function ProductionFirstLoginExperience() {
   const [path, setPath] = useState(() => window.location.pathname)
   const [coachIndex, setCoachIndex] = useState(-1)
   const [tenantHandoffVisible, setTenantHandoffVisible] = useState(false)
-  const readyTimer = useRef(null)
+  const coachTimer = useRef(null)
 
   useEffect(() => {
     const update = () => setPath(window.location.pathname)
@@ -418,11 +415,16 @@ export function ProductionFirstLoginExperience() {
     getPreferences()
       .then((next) => {
         if (!active) return
-        const merged = mergePreferences(next.preferences)
+        const merged = next.preferences ? mergePreferences(next.preferences) : defaultPreferences()
         setPayload(next)
         setPreferences(merged)
-        applyPreferences(merged)
-        try { window.localStorage.setItem(PREFERENCE_SYNC_KEY, JSON.stringify({ userId: next.user?.id, syncedAt: Date.now() })) } catch { /* optional cache */ }
+
+        const localSync = readJson(PREFERENCE_SYNC_KEY, {})
+        const needsCrossDeviceSync = Boolean(next.firstLoginCompletedAt && next.preferences && localSync.userId !== next.user?.id)
+        if (!next.firstLoginCompletedAt || needsCrossDeviceSync) applyPreferences(merged)
+        if (next.firstLoginCompletedAt && next.user?.id) {
+          try { window.localStorage.setItem(PREFERENCE_SYNC_KEY, JSON.stringify({ userId: next.user.id, syncedAt: Date.now() })) } catch { /* optional cache */ }
+        }
       })
       .catch((loadError) => {
         if (!active) return
@@ -433,10 +435,10 @@ export function ProductionFirstLoginExperience() {
   }, [])
 
   useEffect(() => {
-    if (!payload?.firstLoginCompletedAt || payload.coachmarksCompletedAt || payload.preferences?.guidance?.coachMarks === false) return
-    if (path !== '/dashboard' || tenantHandoffVisible) return
-    readyTimer.current = window.setTimeout(() => setCoachIndex(0), 900)
-    return () => window.clearTimeout(readyTimer.current)
+    if (!payload?.firstLoginCompletedAt || payload.coachmarksCompletedAt || payload.preferences?.guidance?.coachMarks === false) return undefined
+    if (path !== '/dashboard' || tenantHandoffVisible) return undefined
+    coachTimer.current = window.setTimeout(() => setCoachIndex(0), 900)
+    return () => window.clearTimeout(coachTimer.current)
   }, [path, payload?.firstLoginCompletedAt, payload?.coachmarksCompletedAt, payload?.preferences?.guidance?.coachMarks, tenantHandoffVisible])
 
   async function complete(nextPreferences) {
@@ -447,6 +449,9 @@ export function ProductionFirstLoginExperience() {
       const next = await patchPreferences(nextPreferences, { firstLoginComplete: true })
       setPayload(next)
       setPreferences(mergePreferences(next.preferences))
+      if (next.user?.id) {
+        try { window.localStorage.setItem(PREFERENCE_SYNC_KEY, JSON.stringify({ userId: next.user.id, syncedAt: Date.now() })) } catch { /* optional cache */ }
+      }
       if (window.location.pathname !== '/dashboard') navigate('/dashboard')
       window.setTimeout(() => window.location.reload(), 180)
     } catch (saveError) {
