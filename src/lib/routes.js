@@ -421,6 +421,9 @@ export function writeRoute(path, { replace = false } = {}) {
 
   const method = replace ? 'replaceState' : 'pushState'
   window.history[method]({}, '', normalizedPath)
+  window.dispatchEvent(new CustomEvent('hi5-routechange', {
+    detail: { path: normalizedPath, replace },
+  }))
 }
 
 export function allTicketFilters() {
