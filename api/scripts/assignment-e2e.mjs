@@ -137,7 +137,7 @@ try {
 
   const incident = await json('/api/v1/itsm-lifecycle/INC-90001', { cookie })
   assert(incident.response.ok, `Could not load Incident: ${incident.payload.error || incident.response.status}`)
-  const serviceDesk = (incident.payload.options?.teams || []).find((team) => team.name === 'Service Desk')
+  const serviceDesk = (incident.payload.options?.assignmentTeams || []).find((team) => team.name === 'Service Desk')
   assert(serviceDesk, 'Service Desk was not returned as an assignment target')
   const eligibleNames = new Set((serviceDesk.members || []).map((person) => person.name))
   assert(eligibleNames.has('Team Analyst'), 'Service Desk analyst was not returned as eligible')
