@@ -111,7 +111,20 @@ export function registerPortalAuthRoutes(app) {
     }
 
     const access = await effectiveAccessForUser(pool, account.tenant_id, account.user_id, account.tenant_role)
-    if (!access.portalAccess) return c.json({ error: 'Email address or password is incorrect.' }, 401)
+    if (!access.portalAccess) {
+      await recordSecurityEvent({
+        tenantId: account.tenant_id,
+        actorUserId: account.user_id,
+        eventType: 'portal.login',
+        outcome: 'failure',
+        ipAddress: requestIp(c),
+        userAgent: requestUserAgent(c),
+        metadata: { reason: 'portal_access_denied' },
+      })
+      return c.json({
+        error: 'This account does not have access to the requester portal. Sign in to the Hi5Central workspace instead, or ask an administrator to add a Portal-enabled role.',
+      }, 403)
+    }
     const resolvedAccount = attachAccess(account, access, 'portal')
 
     const token = await withTransaction(async (client) => {
