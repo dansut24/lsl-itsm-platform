@@ -38,6 +38,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 24
+      - name: Validate workflow and notification contract
+        run: node scripts/check-itsm-end-to-end.mjs
       - name: Install API dependencies
         working-directory: api
         run: npm install --omit=dev
@@ -49,8 +51,13 @@ jobs:
           node --check src/itsmActions.js
           node --check src/itsmQueue.js
           node --check src/serviceRequests.js
+          node --check src/serviceRequestOperations.js
+          node --check src/itsmWorkflows.js
+          node --check src/notifications.js
+          node --check src/notificationMailer.js
           node --check scripts/itsm-production-e2e.mjs
           node --check scripts/itsm-lifecycle-e2e.mjs
+          node --check scripts/itsm-workflow-notification-e2e.mjs
       - name: Run database migrations
         working-directory: api
         env:
@@ -68,6 +75,7 @@ jobs:
         run: |
           npm start > /tmp/hi5central-api.log 2>&1 &
           API_PID=$!
+          trap 'kill $API_PID 2>/dev/null || true' EXIT
           for attempt in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:3001/live >/dev/null; then
               break
@@ -76,16 +84,17 @@ jobs:
           done
           curl -fsS http://127.0.0.1:3001/health
           echo
-          node scripts/itsm-production-e2e.mjs
-          FIRST_RESULT=$?
-          if [ "$FIRST_RESULT" -eq 0 ]; then
-            node scripts/itsm-lifecycle-e2e.mjs
-            RESULT=$?
-          else
-            RESULT=$FIRST_RESULT
+
+          RESULT=0
+          node scripts/itsm-production-e2e.mjs || RESULT=$?
+          if [ "$RESULT" -eq 0 ]; then
+            node scripts/itsm-lifecycle-e2e.mjs || RESULT=$?
           fi
-          kill $API_PID 2>/dev/null || true
+          if [ "$RESULT" -eq 0 ]; then
+            node scripts/itsm-workflow-notification-e2e.mjs || RESULT=$?
+          fi
+
           if [ "$RESULT" -ne 0 ]; then
             cat /tmp/hi5central-api.log
-            return $RESULT 2>/dev/null || exit $RESULT
+            exit "$RESULT"
           fi

@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process'
 const main = fs.readFileSync('src/main.jsx', 'utf8')
 const workflowUi = fs.readFileSync('src/production/ProductionWorkflowExperience.jsx', 'utf8')
 const workflowCss = fs.readFileSync('src/production/ProductionWorkflowExperience.css', 'utf8')
+const workflowGuardCss = fs.readFileSync('src/production/ProductionWorkflowGuard.css', 'utf8')
 const notificationUi = fs.readFileSync('src/production/ProductionNotificationCenter.jsx', 'utf8')
 const notificationCss = fs.readFileSync('src/production/ProductionNotificationCenter.css', 'utf8')
 const workflows = fs.readFileSync('api/src/itsmWorkflows.js', 'utf8')
@@ -12,6 +13,7 @@ const mailer = fs.readFileSync('api/src/notificationMailer.js', 'utf8')
 const settings = fs.readFileSync('api/src/settings.js', 'utf8')
 const migration = fs.readFileSync('api/migrations/016_workflows_notifications.sql', 'utf8')
 const refinements = fs.readFileSync('api/migrations/017_workflow_trigger_refinements.sql', 'utf8')
+const statusGuard = fs.readFileSync('api/migrations/018_service_request_status_guard.sql', 'utf8')
 
 for (const file of [
   'api/src/itsmWorkflows.js',
@@ -22,6 +24,7 @@ for (const file of [
   'api/src/serviceRequests.js',
   'api/src/serviceRequestOperations.js',
   'api/src/itsmLifecycle.js',
+  'api/scripts/itsm-workflow-notification-e2e.mjs',
 ]) {
   execFileSync(process.execPath, ['--check', file], { stdio: 'inherit' })
 }
@@ -29,6 +32,7 @@ for (const file of [
 const requirements = [
   [main, '<ProductionWorkflowExperience />', 'Workflow experience is not mounted.'],
   [main, '<ProductionNotificationCenter />', 'Platform notification centre is not mounted.'],
+  [main, "import './production/ProductionWorkflowGuard.css'", 'Workflow status guard stylesheet is not mounted.'],
   [workflowUi, "workflow.type === 'Service Request'", 'Service Request workflow surface is missing.'],
   [workflowUi, "workflow.type === 'Problem'", 'Problem workflow surface is missing.'],
   [workflowUi, "workflow.type === 'Change'", 'Change workflow surface is missing.'],
@@ -41,6 +45,8 @@ const requirements = [
   [workflowUi, 'Post-implementation review', 'Change PIR workflow is missing.'],
   [workflowUi, "['Failed', 'Backed Out']", 'Change failure/backout outcomes are missing.'],
   [workflowCss, '@media(max-width:760px)', 'Workflow mobile layout is missing.'],
+  [workflowGuardCss, "[data-hi5-workflow='Problem']", 'Problem legacy status control guard is missing.'],
+  [workflowGuardCss, "[data-hi5-workflow='Change']", 'Change legacy status control guard is missing.'],
   [workflows, 'PROBLEM_TRANSITIONS', 'Problem lifecycle definition is missing.'],
   [workflows, 'CHANGE_TRANSITIONS', 'Change lifecycle definition is missing.'],
   [workflows, 'SERVICE_REQUEST_TRANSITIONS', 'Service Request lifecycle definition is missing.'],
@@ -57,6 +63,9 @@ const requirements = [
   [migration, 'hi5_service_request_task_reconcile', 'Service Request task reconciliation is missing.'],
   [refinements, "v_request.status IN ('Approved', 'In Progress')", 'Task dependency release is not approval-gated.'],
   [refinements, "IF NEW.kind = 'workflow'", 'Duplicate workflow timeline notifications are not suppressed.'],
+  [statusGuard, 'hi5_service_request_status_guard', 'Service Request status compatibility guard is missing.'],
+  [statusGuard, "OLD.status = 'Approved' AND NEW.status = 'New'", 'Approved Service Requests are not protected from the legacy Approved -> New regression.'],
+  [statusGuard, "status <> 'Approved'", 'Service Request guard does not verify that all approvals are complete.'],
   [notifications, "app.get('/api/v1/notifications'", 'Notification list API is missing.'],
   [notifications, "app.post('/api/v1/notifications/client-event'", 'Cross-platform client event bridge is missing.'],
   [notifications, "app.patch('/api/v1/notification-preferences'", 'Personal notification settings are missing.'],

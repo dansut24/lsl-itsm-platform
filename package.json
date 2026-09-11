@@ -9,6 +9,7 @@
     "lint": "oxlint",
     "check:responsive": "node scripts/check-responsive-contract.mjs",
     "check:deployment": "node scripts/check-deployment-portability.mjs",
+    "check:itsm": "node scripts/check-itsm-end-to-end.mjs",
     "preview": "vite preview --configLoader native"
   },
   "dependencies": {
