@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import { execFileSync } from 'node:child_process'
 
 const main = fs.readFileSync('src/main.jsx', 'utf8')
 const firstLogin = fs.readFileSync('src/production/ProductionFirstLoginExperience.jsx', 'utf8')
@@ -9,6 +10,14 @@ const navStyles = fs.readFileSync('src/production/ProductionNavigationStyles.css
 const api = fs.readFileSync('api/src/userPreferences.js', 'utf8')
 const settings = fs.readFileSync('api/src/settings.js', 'utf8')
 const migration = fs.readFileSync('api/migrations/015_user_preferences.sql', 'utf8')
+
+for (const file of [
+  'api/src/userPreferences.js',
+  'api/src/settings.js',
+  'api/src/index.js',
+]) {
+  execFileSync(process.execPath, ['--check', file], { stdio: 'inherit' })
+}
 
 const requirements = [
   [main, 'ProductionFirstLoginExperience', 'First Login Experience is not mounted.'],
@@ -34,7 +43,7 @@ const requirements = [
   [navPrefs, 'NAV_STYLE_KEY', 'Navigation style is not persisted in Settings.'],
   [navPrefs, 'hi5NavStyle', 'Navigation style is not applied to the workspace shell.'],
   [navStyles, "data-hi5-nav-style='clean'", 'Clean sidebar visual treatment is missing.'],
-  [navStyles, ".sidebar .sidebar-status", 'Service Health has not been removed from primary navigation.'],
+  [navStyles, '.sidebar .sidebar-status', 'Service Health has not been removed from primary navigation.'],
   [api, "app.get('/api/v1/user-preferences'", 'User preference read API is missing.'],
   [api, "app.patch('/api/v1/user-preferences'", 'User preference write API is missing.'],
   [settings, 'registerUserPreferenceRoutes(app)', 'User preference routes are not registered.'],
