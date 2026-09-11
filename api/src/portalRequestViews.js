@@ -4,6 +4,10 @@ import { originMatchesPortalTenant } from './deploymentConfig.js'
 
 const allowedPriorities = new Set(['Low', 'Medium', 'High', 'Critical'])
 const maxFieldsBytes = 250_000
+const genericIncidentSchema = [
+  { id: 'affectedService', type: 'text', label: 'Affected service', required: false },
+  { id: 'impact', type: 'select', label: 'Impact', required: true },
+]
 
 function text(value, max = 255) {
   return String(value ?? '').trim().slice(0, max)
@@ -163,6 +167,20 @@ async function portalIncidentForm(client, tenantId, externalKey) {
        AND i.request_type = 'Incident'
      LIMIT 1`,
     [tenantId, key(externalKey)],
+  )
+  return result.rows[0] || null
+}
+
+async function defaultIncidentTeam(client, tenantId) {
+  const result = await client.query(
+    `SELECT id, external_key, name
+     FROM organisation_teams
+     WHERE tenant_id = $1
+       AND active = true
+       AND (external_key = 'TEAM-SERVICE-DESK' OR lower(name) = 'service desk')
+     ORDER BY CASE WHEN external_key = 'TEAM-SERVICE-DESK' THEN 0 ELSE 1 END
+     LIMIT 1`,
+    [tenantId],
   )
   return result.rows[0] || null
 }
@@ -414,22 +432,23 @@ export function registerPortalRequestViewRoutes(app) {
     const summary = text(body?.summary, 240)
     const fields = asObject(body?.fields)
     const details = asObject(body?.details)
+    const detailText = text(details.text, 20_000)
     const priority = allowedPriorities.has(body?.urgency) ? body.urgency : 'Medium'
 
-    if (!catalogueItemId) return c.json({ error: 'Select a Service Catalogue item.' }, 400)
     if (summary.length < 3) return c.json({ error: 'Add a summary of at least 3 characters.' }, 400)
+    if (!catalogueItemId && detailText.length < 3) return c.json({ error: 'Tell the Service Desk what happened.' }, 400)
     if (JSON.stringify(fields).length > maxFieldsBytes) return c.json({ error: 'Submitted request fields are too large.' }, 413)
 
     try {
       const created = await withTransaction(async (client) => {
-        const form = await portalIncidentForm(client, auth.session.tenant_id, catalogueItemId)
-        if (!form) {
+        const form = catalogueItemId ? await portalIncidentForm(client, auth.session.tenant_id, catalogueItemId) : null
+        if (catalogueItemId && !form) {
           const error = new Error('That Incident form is unavailable in this Help Centre.')
           error.status = 404
           throw error
         }
 
-        const schema = asArray(form.form_schema)
+        const schema = form ? asArray(form.form_schema) : genericIncidentSchema
         const visible = schema.filter((field) => visibleField(field, fields))
         const missing = visible.filter((field) => field?.required && !fieldHasValue(field, fields[field.id]))
         if (missing.length) {
@@ -445,11 +464,12 @@ export function registerPortalRequestViewRoutes(app) {
           throw error
         }
 
-        let teamId = form.fulfilment_team_id
-        let teamName = form.resolved_team_name || form.fulfilment_team_name || ''
+        let teamId = form?.fulfilment_team_id || null
+        let teamKey = ''
+        let teamName = form?.resolved_team_name || form?.fulfilment_team_name || ''
         if (!teamId && teamName) {
           const team = await client.query(
-            `SELECT id, name
+            `SELECT id, external_key, name
              FROM organisation_teams
              WHERE tenant_id = $1 AND name = $2 AND active = true
              LIMIT 1`,
@@ -457,7 +477,16 @@ export function registerPortalRequestViewRoutes(app) {
           )
           if (team.rowCount) {
             teamId = team.rows[0].id
+            teamKey = team.rows[0].external_key
             teamName = team.rows[0].name
+          }
+        }
+        if (!form && !teamId) {
+          const team = await defaultIncidentTeam(client, auth.session.tenant_id)
+          if (team) {
+            teamId = team.id
+            teamKey = team.external_key
+            teamName = team.name
           }
         }
 
@@ -480,18 +509,19 @@ export function registerPortalRequestViewRoutes(app) {
             person.id,
             JSON.stringify(snapshot),
             summary,
-            text(details.text, 20_000),
-            text(form.service || 'IT Support', 160),
-            text(form.category_name || 'Incident', 160),
+            detailText,
+            text(form?.service || 'IT Support', 160),
+            text(form?.category_name || 'Incident', 160),
             priority,
             teamId || null,
-            JSON.stringify({ id: teamId || '', name: teamName }),
+            JSON.stringify({ id: teamKey || teamId || '', name: teamName }),
             JSON.stringify({
-              catalogueItemId: form.external_key,
-              catalogueItemTitle: form.title,
+              catalogueItemId: form?.external_key || '',
+              catalogueItemTitle: form?.title || 'Raise incident',
               submittedFields: fields,
               requestInformation: info,
               attachments,
+              portalEntryPoint: form ? 'catalogue' : 'raise-incident',
             }),
             auth.session.user_id,
           ],
@@ -509,8 +539,8 @@ export function registerPortalRequestViewRoutes(app) {
             auth.session.user_id,
             person.id,
             JSON.stringify({ name: snapshot.name, email: snapshot.email }),
-            text(details.text || `Reported ${form.title}.`, 20_000),
-            JSON.stringify({ event: 'incident.portal_submitted', catalogueItemId: form.external_key, attachments }),
+            detailText || `Reported ${form?.title || 'an incident'}.`,
+            JSON.stringify({ event: 'incident.portal_submitted', catalogueItemId: form?.external_key || '', attachments, portalEntryPoint: form ? 'catalogue' : 'raise-incident' }),
           ],
         )
 
