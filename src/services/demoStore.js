@@ -3,7 +3,6 @@ import { seedRotaEntries } from '../data/rotaData.js'
 import { seedCalendarEvents } from '../data/calendarData.js'
 import { defaultLiveChatPreferences, seedLiveChatConversations } from '../data/liveChatData.js'
 import { seedProjects } from '../data/workPlanningData.js'
-import { organisationDepartments, organisationPeople, organisationTeams } from '../data/organisationData.js'
 import { createSeedNotifications } from '../data/notificationData.js'
 import { synchroniseProductionServiceRequestSnapshot } from './productionServiceRequests.js'
 import { synchroniseProductionItsmRecordSnapshot } from './productionItsmRecords.js'
@@ -12,6 +11,15 @@ const PRODUCTION_SESSION_KEY = 'hi5central-production-session-v1'
 const API_BASE = window.__HI5_API_BASE__
 const serviceRequestSyncQueues = new Map()
 const itsmRecordSyncQueues = new Map()
+
+const LEGACY_ORGANISATION_SEED_IDS = new Set([
+  'DEPT-TECH', 'DEPT-FIN', 'DEPT-OPS', 'DEPT-PEOPLE',
+  'TEAM-SD', 'TEAM-INFRA', 'TEAM-EUC', 'TEAM-CHANGE', 'TEAM-LEADERSHIP',
+  'TEAM-FINANCE', 'TEAM-BIZOPS', 'TEAM-PEOPLE',
+  'AGT-DANA', 'AGT-SOFIA', 'AGT-LEWIS', 'AGT-EMILY', 'AGT-PRIYA',
+  'AGT-NOAH', 'AGT-MAYA', 'AGT-AISHA', 'AGT-JAMES', 'AGT-OLIVIA',
+  'USR-ELEANOR', 'USR-MARCUS', 'USR-HELEN', 'USR-AMELIA', 'USR-SAM',
+])
 
 function readJson(key, fallback) {
   try {
@@ -45,6 +53,11 @@ function productionServiceRequestsEnabled() {
 
 function productionItsmEnabled() {
   return productionServiceRequestsEnabled()
+}
+
+function withoutLegacyOrganisationSeeds(value) {
+  if (!Array.isArray(value)) return []
+  return value.filter((item) => item?.id && !LEGACY_ORGANISATION_SEED_IDS.has(item.id))
 }
 
 function serviceRequestMutableFingerprint(ticket) {
@@ -145,6 +158,9 @@ function queueItsmRecordSync(previous, next) {
   itsmRecordSyncQueues.set(queueKey, job)
 }
 
+// Explicit organisation writes may still use this helper, but the generic local
+// store never calls it. ProductionOrganisationWriteThrough owns production writes
+// after it has loaded the authoritative PostgreSQL baseline.
 export async function syncOrganisationCollection(collection, items) {
   if (!productionOrganisationEnabled()) return null
   try {
@@ -163,10 +179,6 @@ export async function syncOrganisationCollection(collection, items) {
     window.dispatchEvent(new CustomEvent('hi5-organisation-sync-error', { detail: { collection, message: error.message } }))
     return null
   }
-}
-
-function mirrorOrganisationCollection(collection, items) {
-  syncOrganisationCollection(collection, items).catch(() => {})
 }
 
 function hydrateTicketEnhancements(tickets) {
@@ -209,24 +221,15 @@ export function loadTickets() {
 }
 
 export function loadOrganisationPeople() {
-  const stored = readJson('hi5central-organisation-people-v1', organisationPeople)
-  if (!Array.isArray(stored) || !stored.length) return organisationPeople
-  const seedsById = new Map(organisationPeople.map((person) => [person.id, person]))
-  return stored.map((person) => ({ ...seedsById.get(person.id), ...person }))
+  return withoutLegacyOrganisationSeeds(readJson('hi5central-organisation-people-v1', []))
 }
 
 export function loadOrganisationTeams() {
-  const stored = readJson('hi5central-organisation-teams-v1', organisationTeams)
-  if (!Array.isArray(stored) || !stored.length) return organisationTeams
-  const seedsById = new Map(organisationTeams.map((team) => [team.id, team]))
-  return stored.map((team) => ({ ...seedsById.get(team.id), ...team }))
+  return withoutLegacyOrganisationSeeds(readJson('hi5central-organisation-teams-v1', []))
 }
 
 export function loadOrganisationDepartments() {
-  const stored = readJson('hi5central-organisation-departments-v1', organisationDepartments)
-  if (!Array.isArray(stored) || !stored.length) return organisationDepartments
-  const seedsById = new Map(organisationDepartments.map((department) => [department.id, department]))
-  return stored.map((department) => ({ ...seedsById.get(department.id), ...department }))
+  return withoutLegacyOrganisationSeeds(readJson('hi5central-organisation-departments-v1', []))
 }
 
 export function loadOrganisationAudit() {
@@ -361,9 +364,13 @@ export function saveTickets(value) {
     if (['Incident', 'Problem', 'Change'].includes(ticket.type)) queueItsmRecordSync(before || null, ticket)
   })
 }
-export function saveOrganisationPeople(value) { writeJson('hi5central-organisation-people-v1', value); mirrorOrganisationCollection('people', value) }
-export function saveOrganisationTeams(value) { writeJson('hi5central-organisation-teams-v1', value); mirrorOrganisationCollection('teams', value) }
-export function saveOrganisationDepartments(value) { writeJson('hi5central-organisation-departments-v1', value); mirrorOrganisationCollection('departments', value) }
+
+// Organisation state is cached locally for the existing UI, but production writes
+// are deliberately owned by ProductionOrganisationWriteThrough. This prevents an
+// empty or stale browser cache from overwriting the tenant's PostgreSQL directory.
+export function saveOrganisationPeople(value) { writeJson('hi5central-organisation-people-v1', withoutLegacyOrganisationSeeds(value)) }
+export function saveOrganisationTeams(value) { writeJson('hi5central-organisation-teams-v1', withoutLegacyOrganisationSeeds(value)) }
+export function saveOrganisationDepartments(value) { writeJson('hi5central-organisation-departments-v1', withoutLegacyOrganisationSeeds(value)) }
 export function saveOrganisationAudit(value) { writeJson('hi5central-organisation-audit-v1', Array.isArray(value) ? value.slice(0, 500) : []) }
 export function saveProjects(value) { writeJson('hi5central-projects-v1', value) }
 export function saveRotaEntries(value) { writeJson('hi5central-rota-v1', value) }
