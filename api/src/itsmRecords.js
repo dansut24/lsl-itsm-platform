@@ -95,10 +95,17 @@ async function personByIdentity(client, tenantId, value) {
   const identity = text(value, 254)
   if (!identity || identity === 'Unassigned') return null
   const result = await client.query(
-    `SELECT id, external_key, name, email, job_title, user_id
-     FROM organisation_people
-     WHERE tenant_id = $1 AND active = true AND (name = $2 OR lower(email) = lower($2))
-     ORDER BY CASE WHEN name = $2 THEN 0 ELSE 1 END
+    `SELECT p.id, p.external_key, p.name, p.email, p.job_title, p.user_id
+     FROM organisation_people p
+     JOIN tenant_memberships m
+       ON m.tenant_id = p.tenant_id
+      AND m.user_id = p.user_id
+      AND m.status = 'active'
+      AND m.role <> 'requester'
+     WHERE p.tenant_id = $1
+       AND p.active = true
+       AND (p.name = $2 OR lower(p.email) = lower($2))
+     ORDER BY CASE WHEN p.name = $2 THEN 0 ELSE 1 END
      LIMIT 1`,
     [tenantId, identity],
   )
@@ -300,8 +307,17 @@ export function registerItsmRecordRoutes(app) {
     const current = await lookupRecord(auth.session.tenant_id, c.req.param('reference'))
     if (!current) return c.json({ error: 'ITSM record not found.' }, 404)
 
-    const team = Object.prototype.hasOwnProperty.call(body, 'team') ? await teamByName(pool, auth.session.tenant_id, body.team) : null
-    const assignee = Object.prototype.hasOwnProperty.call(body, 'assignee') ? await personByIdentity(pool, auth.session.tenant_id, body.assignee) : null
+    const hasTeam = Object.prototype.hasOwnProperty.call(body, 'team')
+    const hasAssignee = Object.prototype.hasOwnProperty.call(body, 'assignee')
+    const assigneeIdentity = hasAssignee ? text(body.assignee, 254) : ''
+    const clearAssignee = hasAssignee && (!assigneeIdentity || assigneeIdentity === 'Unassigned')
+    const team = hasTeam ? await teamByName(pool, auth.session.tenant_id, body.team) : null
+    const assignee = hasAssignee && !clearAssignee ? await personByIdentity(pool, auth.session.tenant_id, assigneeIdentity) : null
+
+    if (hasAssignee && !clearAssignee && !assignee) {
+      return c.json({ error: 'Assignee must be an active technician account in this tenant.' }, 422)
+    }
+
     const data = { ...object(current.record_data), ...object(body.recordData) }
     const status = Object.prototype.hasOwnProperty.call(body, 'status') ? text(body.status, 80) : current.status
     const closedAt = ['Closed', 'Resolved', 'Completed', 'Cancelled'].includes(status) ? (current.closed_at || new Date()) : null
@@ -332,10 +348,10 @@ export function registerItsmRecordRoutes(app) {
         Object.prototype.hasOwnProperty.call(body, 'category') ? text(body.category, 160) : null,
         Object.prototype.hasOwnProperty.call(body, 'priority') && priorities.has(body.priority) ? body.priority : null,
         status,
-        Object.prototype.hasOwnProperty.call(body, 'team'),
+        hasTeam,
         team?.id || null,
         JSON.stringify({ id: team?.external_key || '', name: team?.name || text(body.team, 160) }),
-        Object.prototype.hasOwnProperty.call(body, 'assignee'),
+        hasAssignee,
         assignee?.id || null,
         JSON.stringify({ id: assignee?.external_key || '', name: assignee?.name || 'Unassigned', email: assignee?.email || '' }),
         JSON.stringify(data),
