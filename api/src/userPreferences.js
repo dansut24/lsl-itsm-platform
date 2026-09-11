@@ -77,7 +77,7 @@ function responsePayload(session, row) {
       companyName: session.company_name,
       modules: session.modules || {},
     },
-    preferences: normalisePreferences(row?.preferences || {}),
+    preferences: row ? normalisePreferences(row.preferences || {}) : null,
     firstLoginCompletedAt: row?.first_login_completed_at || null,
     coachmarksCompletedAt: row?.coachmarks_completed_at || null,
     gettingStartedDismissedAt: row?.getting_started_dismissed_at || null,
