@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { exportRecordDocument } from '../lib/recordExport.js'
+import { exportRecordDocument } from '../lib/recordExportPremium.js'
 import { fetchProductionServiceRequest } from '../services/productionServiceRequests.js'
 import { ProductionRecordExportMenu } from './ProductionRecordExportMenu.jsx'
 
 const API_BASE = window.__HI5_API_BASE__
 const LIST_STATE_PREFIX = 'hi5central-record-list-state-v3'
 const COLUMN_STATE_KEY = 'hi5central-record-columns-v3'
+const SELECTION_PREFIX = 'hi5central-record-selection-v1'
+const SELECTION_EVENT = 'hi5-record-selection-changed'
 const LISTS = {
   incidents: { type: 'Incident', title: 'Incidents' },
   requests: { type: 'Service Request', title: 'Service Requests' },
@@ -49,6 +51,15 @@ function contextFor(pathname = window.location.pathname) {
   return null
 }
 
+function selectionKey(type) {
+  return `${SELECTION_PREFIX}:${type}`
+}
+
+function selectedIdsFor(type) {
+  const value = readJson(window.sessionStorage, selectionKey(type), [])
+  return Array.isArray(value) ? value.filter(Boolean) : []
+}
+
 async function apiJson(path) {
   const response = await fetch(`${API_BASE}${path}`, { credentials: 'include' })
   const payload = await response.json().catch(() => ({}))
@@ -82,6 +93,17 @@ async function fetchWholeQueue(context, state) {
   return records
 }
 
+async function recordsForScope(context, currentState, scope, selectedIds) {
+  if (scope === 'selected') {
+    const selected = new Set(selectedIds)
+    if (!selected.size) return []
+    const records = await fetchWholeQueue(context, { query: '', filters: {} })
+    return records.filter((record) => selected.has(record.id))
+  }
+  if (scope === 'all') return fetchWholeQueue(context, { query: '', filters: {} })
+  return fetchWholeQueue(context, currentState)
+}
+
 function currentColumns(context) {
   const stored = readJson(window.localStorage, COLUMN_STATE_KEY, {})?.[context.type] || {}
   const order = Array.isArray(stored.order) && stored.order.length ? stored.order : Object.keys(COLUMNS)
@@ -89,16 +111,17 @@ function currentColumns(context) {
   return order.filter((key) => COLUMNS[key] && (key === 'reference' || !hidden.has(key)))
 }
 
-function listDocument(context, records, state) {
+function listDocument(context, records, state, scope) {
   const keys = currentColumns(context)
   const filters = state.filters || {}
-  const filterSummary = [
+  const scopeLabel = scope === 'selected' ? 'Selected records' : scope === 'all' ? 'All records' : 'Current view'
+  const filterSummary = scope === 'current' ? [
     state.query ? `Search: ${state.query}` : '',
     ...['status', 'priority', 'team', 'assignee', 'service'].map((key) => filters[key] && filters[key] !== 'All' ? `${key}: ${filters[key]}` : ''),
-  ].filter(Boolean).join(' · ')
+  ].filter(Boolean).join(' · ') : ''
   return {
     title: `${context.title} export`,
-    subtitle: `${records.length} record${records.length === 1 ? '' : 's'}${filterSummary ? ` · ${filterSummary}` : ''}`,
+    subtitle: `${scopeLabel} · ${records.length} record${records.length === 1 ? '' : 's'}${filterSummary ? ` · ${filterSummary}` : ''}`,
     sections: [{
       title: context.title,
       type: 'table',
@@ -169,11 +192,14 @@ function serviceRequestDocument(context, detail) {
   }
 }
 
-async function documentFor(context) {
+async function documentFor(context, scope, selectedIds) {
   if (context.kind === 'list') {
     const state = readJson(window.sessionStorage, `${LIST_STATE_PREFIX}:${context.type}`, { query: '', filters: {} })
-    const records = await fetchWholeQueue(context, state)
-    return { model: listDocument(context, records, state), fileName: `${context.section}-${new Date().toISOString().slice(0, 10)}` }
+    const records = await recordsForScope(context, state, scope, selectedIds)
+    return {
+      model: listDocument(context, records, state, scope),
+      fileName: `${context.section}-${scope}-${new Date().toISOString().slice(0, 10)}`,
+    }
   }
 
   if (context.type === 'Service Request') {
@@ -191,6 +217,10 @@ async function documentFor(context) {
 export function ProductionRecordExportEnhancer() {
   const [context, setContext] = useState(() => contextFor())
   const [target, setTarget] = useState(null)
+  const [selectedIds, setSelectedIds] = useState(() => {
+    const initial = contextFor()
+    return initial?.kind === 'list' ? selectedIdsFor(initial.type) : []
+  })
 
   useEffect(() => {
     const update = () => setContext(contextFor())
@@ -203,6 +233,16 @@ export function ProductionRecordExportEnhancer() {
       window.clearInterval(timer)
     }
   }, [])
+
+  useEffect(() => {
+    setSelectedIds(context?.kind === 'list' ? selectedIdsFor(context.type) : [])
+    const handleSelection = (event) => {
+      if (context?.kind !== 'list' || event.detail?.type !== context.type) return
+      setSelectedIds(Array.isArray(event.detail.ids) ? event.detail.ids : [])
+    }
+    window.addEventListener(SELECTION_EVENT, handleSelection)
+    return () => window.removeEventListener(SELECTION_EVENT, handleSelection)
+  }, [context?.kind, context?.type])
 
   useEffect(() => {
     setTarget(null)
@@ -227,10 +267,20 @@ export function ProductionRecordExportEnhancer() {
   const key = useMemo(() => context ? `${context.kind}:${context.section}:${context.reference || ''}` : 'none', [context])
   if (!context || !target) return null
 
-  async function onExport(format) {
-    const output = await documentFor(context)
+  async function onExport(format, scope = 'record') {
+    const output = await documentFor(context, scope, selectedIds)
     await exportRecordDocument(output.model, format, output.fileName)
   }
 
-  return createPortal(<ProductionRecordExportMenu key={key} onExport={onExport} compact={context.kind === 'detail'} className="hi5-record-export-mounted" />, target)
+  return createPortal(
+    <ProductionRecordExportMenu
+      key={key}
+      onExport={onExport}
+      compact={context.kind === 'detail'}
+      className="hi5-record-export-mounted"
+      listMode={context.kind === 'list'}
+      selectedCount={selectedIds.length}
+    />,
+    target,
+  )
 }
