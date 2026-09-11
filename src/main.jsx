@@ -22,7 +22,6 @@ import { ProductionNavigationDockPreferences } from './production/ProductionNavi
 import { ProductionNotificationCenter } from './production/ProductionNotificationCenter.jsx'
 import { ProductionOnboardingBootstrap } from './production/ProductionOnboardingBootstrap.jsx'
 import { ProductionOrganisationWriteThrough } from './production/ProductionOrganisationWriteThrough.jsx'
-import { ProductionPeopleLiveChatEntitlement } from './production/ProductionPeopleLiveChatEntitlement.jsx'
 import { ProductionPortalBootstrap } from './production/ProductionPortalBootstrap.jsx'
 import { ProductionPortalKnowledgeChat } from './production/ProductionPortalKnowledgeChat.jsx'
 import { ProductionPortalThemeBridge } from './production/ProductionPortalThemeBridge.jsx'
@@ -34,6 +33,7 @@ import { ProductionServiceRequestIntake } from './production/ProductionServiceRe
 import { ProductionUniversalPeekV2 } from './production/ProductionUniversalPeekV2.jsx'
 import { ProductionWorkflowExperience } from './production/ProductionWorkflowExperience.jsx'
 import { ProductionWorkspaceBootstrap } from './production/ProductionWorkspaceBootstrap.jsx'
+import { ProductionWorkspaceLiveChatMenu } from './production/ProductionWorkspaceLiveChatMenu.jsx'
 import { ProductionWorkspaceRefinement } from './production/ProductionWorkspaceRefinement.jsx'
 import { ProductionWorkspaceShellV2 } from './production/ProductionWorkspaceShellV2.jsx'
 import { resolveTenantSurface } from './lib/tenantSurface.js'
@@ -94,7 +94,6 @@ createRoot(rootElement).render(
     {productionWorkspace && !productionOnboarding ? <ProductionKnowledgeBase /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionLiveChatBadgeBridge /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionLiveChatWorkspace /> : null}
-    {productionWorkspace && !productionOnboarding ? <ProductionPeopleLiveChatEntitlement /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionRecordDetailRouter /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionRecordExportEnhancer /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionRecordListInteractionEnhancer /> : null}
@@ -104,6 +103,7 @@ createRoot(rootElement).render(
     {productionWorkspace && !productionOnboarding ? <ProductionWorkspaceRefinement /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionNavigationDockPreferences /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionWorkspaceShellV2 /> : null}
+    {productionWorkspace && !productionOnboarding ? <ProductionWorkspaceLiveChatMenu /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionPremiumWorkspaceExperience /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionPortalThemeBridge /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionUniversalPeekV2 /> : null}
