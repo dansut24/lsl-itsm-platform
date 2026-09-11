@@ -335,8 +335,7 @@ async function enrichLifecycleResponse(c, session) {
   const directory = await assignmentDirectory(pool, session.tenant_id, payload.type)
   payload.options = {
     ...object(payload.options),
-    people: directory.people,
-    teams: directory.teams,
+    assignmentPeople: directory.people,
     assignmentTeams: directory.teams,
   }
   c.res = new Response(JSON.stringify(payload), {
