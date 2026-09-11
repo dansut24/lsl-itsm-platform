@@ -56,6 +56,17 @@ html[data-hi5-surface='workspace'] .tabbar {
   -webkit-backdrop-filter: blur(20px) saturate(1.16);
 }
 
+/* The production Notification Centre is authoritative for unread state.
+   The underlying workspace still contains its historical local/demo counter,
+   so keep that legacy badge hidden even when the real server count is zero.
+   A real non-zero count is rendered by ProductionNotificationCenter via the
+   hi5-has-server-notifications pseudo-element. */
+html[data-hi5-surface='workspace'] .production-workspace-notifications > span,
+html[data-hi5-surface='workspace'] .notification-trigger .notification-count,
+html[data-hi5-surface='workspace'] .notification-trigger .notification-badge {
+  display: none !important;
+}
+
 /* Search owns its border; the global form focus ring must not escape the
    floating workspace dock. */
 .production-workspace-search,
@@ -271,6 +282,18 @@ html[data-hi5-surface='workspace'] .sidebar .sidebar-status {
   .production-workspace-tabdock-actions {
     order: 2;
     flex: 0 0 auto;
+  }
+
+  /* Navigation is an overlay at tablet/mobile widths. Keep both the drawer
+     and its backdrop above the floating tab dock (z-index 90), otherwise the
+     dock remains interactive and visually cuts across the open navigation. */
+  html[data-hi5-surface='workspace'] .sidebar,
+  html[data-hi5-surface='workspace'] .sidebar-collapsed .sidebar {
+    z-index: 160 !important;
+  }
+
+  html[data-hi5-surface='workspace'] .mobile-nav-backdrop {
+    z-index: 150 !important;
   }
 
   /* The tab viewport ends before the fixed actions. It can scroll internally,
