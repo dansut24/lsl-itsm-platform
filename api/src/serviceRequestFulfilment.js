@@ -287,6 +287,7 @@ async function taskDependenciesSatisfied(db, tenantId, reference, taskKey) {
 async function incompleteTaskCount(db, tenantId, reference) {
   const request = await requestByReference(db, tenantId, reference)
   if (!request) return 0
+  if (!asArray(request.workflow_tasks_snapshot).length) return 0
   const result = await db.query(
     `SELECT count(*)::int AS count
      FROM service_request_tasks
@@ -301,7 +302,7 @@ function taskPayload(row) {
     id: row.external_key,
     title: row.title,
     status: row.status,
-    team: row.team_snapshot?.name || row.team_snapshot?.name || '',
+    team: row.team_snapshot?.name || '',
     assignee: row.assignee_snapshot?.name || '',
     instructions: row.instructions,
     dependencies: row.dependencies || [],
