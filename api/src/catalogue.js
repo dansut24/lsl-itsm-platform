@@ -4,6 +4,7 @@ import { registerItsmLifecycleRoutes } from './itsmLifecycle.js'
 import { registerItsmQueueRoutes } from './itsmQueue.js'
 import { registerItsmRecordRoutes } from './itsmRecords.js'
 import { registerPortalAuthRoutes } from './portalAuth.js'
+import { registerServiceRequestConditionalTaskRoutes } from './serviceRequestConditionalTasks.js'
 import { registerServiceRequestFulfilmentRoutes } from './serviceRequestFulfilment.js'
 import { registerServiceRequestOperationRoutes } from './serviceRequestOperations.js'
 import { registerServiceRequestRoutes } from './serviceRequests.js'
@@ -385,6 +386,7 @@ export function registerCatalogueRoutes(app) {
 
   registerAssignmentRoutes(app)
   registerPortalAuthRoutes(app)
+  registerServiceRequestConditionalTaskRoutes(app)
   registerServiceRequestFulfilmentRoutes(app)
   registerServiceRequestRoutes(app)
   registerServiceRequestOperationRoutes(app)
