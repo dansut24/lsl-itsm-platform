@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { MessageCircleMore, RefreshCw } from 'lucide-react'
+import { Check, Clock3, MessageCircleMore, RefreshCw, WifiOff } from 'lucide-react'
 
 const API_BASE = window.__HI5_API_BASE__
 const LIVE_CHAT_PREFERENCES_KEY = 'hi5central-live-chat-preferences-v1'
 const LIVE_CHAT_TAB_SELECTOR = '.workspace-tab-livechat, .workspace-tab[data-tab-module="livechat"]'
 const MENU_SELECTOR = '.production-workspace-menu'
 const MENU_ANCHOR_ATTRIBUTE = 'data-hi5-live-chat-menu-anchor'
+const HEARTBEAT_MS = 25_000
 
 async function api(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -73,14 +74,27 @@ function toggleLocalWorkspacePreference(enabled) {
   }))
 }
 
+function presenceTone(status) {
+  if (status === 'Online') return '#16a34a'
+  if (status === 'Away') return '#d97706'
+  return '#94a3b8'
+}
+
 export function ProductionWorkspaceLiveChatMenu() {
   const [menuAnchor, setMenuAnchor] = useState(null)
   const [workspaceEnabled, setWorkspaceEnabled] = useState(() => liveChatWorkspaceEnabled())
   const [personEmail, setPersonEmail] = useState(() => selectedPersonEmail())
   const [person, setPerson] = useState(null)
   const [personLoading, setPersonLoading] = useState(false)
+  const [presence, setPresence] = useState({ status: 'Offline', desiredStatus: 'Offline', support: null })
+  const [presenceLoading, setPresenceLoading] = useState(false)
   const [error, setError] = useState('')
   const personRequestRef = useRef(0)
+  const workspaceEnabledRef = useRef(workspaceEnabled)
+  const desiredPresenceRef = useRef(presence.desiredStatus)
+
+  useEffect(() => { workspaceEnabledRef.current = workspaceEnabled }, [workspaceEnabled])
+  useEffect(() => { desiredPresenceRef.current = presence.desiredStatus }, [presence.desiredStatus])
 
   useEffect(() => {
     const scan = () => {
@@ -115,6 +129,49 @@ export function ProductionWorkspaceLiveChatMenu() {
       window.clearInterval(timer)
       window.removeEventListener('hi5-routechange', scan)
       window.removeEventListener('hi5-organisation-hydrated', scan)
+    }
+  }, [])
+
+  useEffect(() => {
+    let active = true
+
+    const refreshPresence = async ({ heartbeat = false } = {}) => {
+      try {
+        const next = await api(heartbeat
+          ? '/api/v1/live-chat/presence/heartbeat'
+          : '/api/v1/live-chat/presence', heartbeat ? { method: 'POST' } : {})
+        if (active) setPresence(next)
+      } catch (nextError) {
+        if (active && nextError.status !== 401) setError(nextError.message)
+      }
+    }
+
+    refreshPresence().then(() => {
+      if (workspaceEnabledRef.current && ['Online', 'Away'].includes(desiredPresenceRef.current)) {
+        refreshPresence({ heartbeat: true })
+      }
+    })
+
+    const timer = window.setInterval(() => {
+      if (!workspaceEnabledRef.current) return
+      if (!['Online', 'Away'].includes(desiredPresenceRef.current)) return
+      refreshPresence({ heartbeat: true })
+    }, HEARTBEAT_MS)
+
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return
+      refreshPresence().then(() => {
+        if (workspaceEnabledRef.current && ['Online', 'Away'].includes(desiredPresenceRef.current)) {
+          refreshPresence({ heartbeat: true })
+        }
+      })
+    }
+    document.addEventListener('visibilitychange', onVisible)
+
+    return () => {
+      active = false
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
     }
   }, [])
 
@@ -156,10 +213,38 @@ export function ProductionWorkspaceLiveChatMenu() {
     }
   }, [personEmail])
 
-  function toggleWorkspaceLiveChat() {
-    toggleLocalWorkspacePreference(!workspaceEnabled)
+  async function toggleWorkspaceLiveChat() {
+    const nextEnabled = !workspaceEnabled
+    if (!nextEnabled && presence.desiredStatus !== 'Offline') {
+      try {
+        await api('/api/v1/live-chat/presence', {
+          method: 'PATCH',
+          body: JSON.stringify({ status: 'Offline' }),
+        })
+      } catch {
+        // The local workspace preference must remain recoverable even if the API is unavailable.
+      }
+    }
+    toggleLocalWorkspacePreference(nextEnabled)
     closeWorkspaceMenu()
     window.location.reload()
+  }
+
+  async function setAnalystPresence(status) {
+    if (presenceLoading || (status !== 'Offline' && !workspaceEnabled)) return
+    setPresenceLoading(true)
+    setError('')
+    try {
+      const next = await api('/api/v1/live-chat/presence', {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      })
+      setPresence(next)
+    } catch (nextError) {
+      setError(nextError.message)
+    } finally {
+      setPresenceLoading(false)
+    }
   }
 
   async function togglePersonLiveChat() {
@@ -191,6 +276,42 @@ export function ProductionWorkspaceLiveChatMenu() {
   return createPortal(
     <>
       <span className="production-workspace-menu-separator" role="separator" />
+      <div
+        role="group"
+        aria-label="Live Chat presence"
+        style={{ padding: '4px 7px 3px' }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '7px', padding: '3px 2px 6px' }}>
+          <span
+            aria-hidden="true"
+            style={{ width: '8px', height: '8px', borderRadius: '50%', background: presenceTone(presence.status), boxShadow: `0 0 0 3px ${presenceTone(presence.status)}22` }}
+          />
+          <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+            <small style={{ color: 'var(--muted)', fontSize: '9px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.06em' }}>Live Chat presence</small>
+            <strong style={{ fontSize: '11px' }}>{presence.status}{presence.status !== presence.desiredStatus ? ` · ${presence.desiredStatus} selected` : ''}</strong>
+          </span>
+          {presenceLoading ? <RefreshCw className="is-spinning" size={13} style={{ marginLeft: 'auto' }} /> : null}
+        </div>
+        {['Online', 'Away', 'Offline'].map((status) => (
+          <button
+            disabled={presenceLoading || (status !== 'Offline' && !workspaceEnabled)}
+            key={status}
+            onClick={() => setAnalystPresence(status)}
+            role="menuitemradio"
+            aria-checked={presence.desiredStatus === status}
+            type="button"
+          >
+            {status === 'Online'
+              ? <MessageCircleMore size={14} aria-hidden="true" />
+              : status === 'Away'
+                ? <Clock3 size={14} aria-hidden="true" />
+                : <WifiOff size={14} aria-hidden="true" />}
+            {status === 'Online' ? 'Go Online' : status === 'Away' ? 'Set Away' : 'Go Offline'}
+            {presence.desiredStatus === status ? <Check size={13} aria-hidden="true" style={{ marginLeft: 'auto' }} /> : null}
+          </button>
+        ))}
+        {!workspaceEnabled ? <small style={{ display: 'block', padding: '3px 3px 5px', color: 'var(--muted)', fontSize: '9px' }}>Enable the Live Chat workspace before going Online or Away.</small> : null}
+      </div>
       <button onClick={toggleWorkspaceLiveChat} role="menuitem" type="button">
         <MessageCircleMore size={14} aria-hidden="true" />
         {workspaceEnabled ? 'Disable Live Chat workspace' : 'Enable Live Chat workspace'}
