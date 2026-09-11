@@ -60,6 +60,7 @@ function buildStages(tasks) {
 export function ServiceRequestFulfilmentBuilder({ itemKey = '', production = false, value = [], onChange, formSchema = [] }) {
   const tasks = cleanTasks(value)
   const [teams, setTeams] = useState([])
+  const [remoteDateFields, setRemoteDateFields] = useState([])
   const [loading, setLoading] = useState(production)
   const [error, setError] = useState('')
   const [titleDateFieldId, setTitleDateFieldId] = useState(() => tasks[0]?.titleDateFieldId || AUTO_DATE)
@@ -77,10 +78,11 @@ export function ServiceRequestFulfilmentBuilder({ itemKey = '', production = fal
       try {
         const [options, flow] = await Promise.all([
           api('/api/v1/catalogue/fulfilment-options'),
-          itemKey ? api(`/api/v1/catalogue/${encodeURIComponent(itemKey)}/fulfilment`) : Promise.resolve({ tasks: [] }),
+          itemKey ? api(`/api/v1/catalogue/${encodeURIComponent(itemKey)}/fulfilment`) : Promise.resolve({ tasks: [], dateFields: [] }),
         ])
         if (!active) return
         setTeams(options.teams || [])
+        setRemoteDateFields(Array.isArray(flow.dateFields) ? flow.dateFields : [])
         if (itemKey && Array.isArray(flow.tasks)) {
           const hydrated = cleanTasks(flow.tasks)
           setTitleDateFieldId(hydrated[0]?.titleDateFieldId || AUTO_DATE)
@@ -99,7 +101,12 @@ export function ServiceRequestFulfilmentBuilder({ itemKey = '', production = fal
 
   const taskNames = useMemo(() => new Map(tasks.map((task, index) => [task.id, task.title || `Task ${index + 1}`])), [tasks])
   const stages = useMemo(() => buildStages(tasks), [tasks])
-  const dateFields = useMemo(() => (Array.isArray(formSchema) ? formSchema : []).filter((field) => ['date', 'datetime-local'].includes(field?.type) && field?.id), [formSchema])
+  const dateFields = useMemo(() => {
+    const local = (Array.isArray(formSchema) ? formSchema : [])
+      .filter((field) => ['date', 'datetime-local'].includes(field?.type) && field?.id)
+      .map((field) => ({ id: field.id, label: field.label || field.id, type: field.type }))
+    return local.length ? local : remoteDateFields
+  }, [formSchema, remoteDateFields])
   const selectedDateField = useMemo(() => {
     if (titleDateFieldId === NO_DATE) return null
     if (titleDateFieldId === AUTO_DATE) return dateFields.length === 1 ? dateFields[0] : null
