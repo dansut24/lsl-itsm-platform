@@ -44,12 +44,15 @@
   border-top-color: var(--line);
 }
 
-/* Current stable Service Desk toolbar: keep New fully inside the viewport. */
+/* Current stable Service Desk toolbar: keep Export before New and both inside the viewport. */
 .production-record-main,
 .production-record-toolbar,
 .production-record-toolbar > * {
   box-sizing: border-box;
 }
+
+.production-record-toolbar > .hi5-record-export-mounted { order: 20; }
+.production-record-toolbar > .production-record-new { order: 30; }
 
 @media (max-width: 760px) {
   .production-record-toolbar {
