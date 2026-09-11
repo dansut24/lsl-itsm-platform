@@ -3,6 +3,7 @@ import fs from 'node:fs'
 const main = fs.readFileSync('src/main.jsx', 'utf8')
 const firstLogin = fs.readFileSync('src/production/ProductionFirstLoginExperience.jsx', 'utf8')
 const firstLoginCss = fs.readFileSync('src/production/ProductionFirstLoginExperience.css', 'utf8')
+const routeBridge = fs.readFileSync('src/production/ProductionFirstLoginRouteBridge.jsx', 'utf8')
 const navPrefs = fs.readFileSync('src/production/ProductionNavigationDockPreferences.jsx', 'utf8')
 const navStyles = fs.readFileSync('src/production/ProductionNavigationStyles.css', 'utf8')
 const api = fs.readFileSync('api/src/userPreferences.js', 'utf8')
@@ -11,6 +12,8 @@ const migration = fs.readFileSync('api/migrations/015_user_preferences.sql', 'ut
 
 const requirements = [
   [main, 'ProductionFirstLoginExperience', 'First Login Experience is not mounted.'],
+  [main, 'ProductionFirstLoginRouteBridge', 'Post-login first-run route bridge is not mounted.'],
+  [routeBridge, "window.location.replace('/dashboard')", 'Newly authenticated users are not handed to Dashboard.'],
   [firstLogin, '/api/v1/user-preferences', 'First Login Experience is not backed by per-user preferences.'],
   [firstLogin, 'firstLoginComplete: true', 'First login completion is not persisted.'],
   [firstLogin, 'coachmarksComplete: true', 'Coach mark completion is not persisted.'],
@@ -24,12 +27,14 @@ const requirements = [
   [firstLogin, 'Mobile button right', 'Mobile accessibility-side preference is missing.'],
   [firstLogin, 'Admin setup centre', 'Role-aware Admin Setup Centre is missing.'],
   [firstLogin, 'COACH_STEPS', 'Contextual coach marks are missing.'],
+  [firstLogin, "navigate('/incidents/new')", 'Getting Started create-record route is invalid.'],
   [firstLoginCss, '.hi5-first-login-layer', 'First login responsive visual system is missing.'],
   [firstLoginCss, '.hi5-getting-started-card', 'Getting Started surface is missing.'],
   [firstLoginCss, "@media (max-width: 760px)", 'First login mobile layout is missing.'],
   [navPrefs, 'NAV_STYLE_KEY', 'Navigation style is not persisted in Settings.'],
   [navPrefs, 'hi5NavStyle', 'Navigation style is not applied to the workspace shell.'],
   [navStyles, "data-hi5-nav-style='clean'", 'Clean sidebar visual treatment is missing.'],
+  [navStyles, ".sidebar .sidebar-status", 'Service Health has not been removed from primary navigation.'],
   [api, "app.get('/api/v1/user-preferences'", 'User preference read API is missing.'],
   [api, "app.patch('/api/v1/user-preferences'", 'User preference write API is missing.'],
   [settings, 'registerUserPreferenceRoutes(app)', 'User preference routes are not registered.'],
