@@ -12,6 +12,8 @@ const tenantOrigin = `https://${slug}.hi5central.com`
 const db = new Client({ connectionString: process.env.DATABASE_URL })
 const targetDate = '2026-10-12'
 const titleDate = '12 Oct 2026'
+const skippedTargetDate = '2026-10-19'
+const skippedTitleDate = '19 Oct 2026'
 
 function assert(condition, message) {
   if (!condition) throw new Error(message)
@@ -40,6 +42,19 @@ async function json(path, { method = 'GET', body, cookie = '' } = {}) {
 function taskByTitle(payload, title) {
   return (payload.requestTasks || []).find((task) => task.title === title)
 }
+
+const flowTasks = [
+  { id: 'identity', title: 'Prepare identity', team: 'Service Desk', dependsOn: [] },
+  { id: 'entitlement', title: 'Prepare entitlement', team: 'Procurement', dependsOn: [] },
+  {
+    id: 'equipment',
+    title: 'Prepare equipment',
+    team: 'Procurement',
+    dependsOn: ['identity', 'entitlement'],
+    condition: { fieldId: 'needsEquipment', operator: 'equals', value: 'Yes' },
+  },
+  { id: 'handover', title: 'Complete workstation handover', team: 'Desktop', dependsOn: ['equipment'] },
+]
 
 await db.connect()
 try {
@@ -84,7 +99,7 @@ try {
   const cookie = cookieFrom(login.response)
   assert(cookie, 'Owner session cookie was not issued')
 
-  console.log('2. Create a request-form catalogue item with one important date')
+  console.log('2. Create a request-form catalogue item with date and branching fields')
   const catalogue = await json('/api/v1/catalogue', {
     method: 'PUT',
     cookie,
@@ -109,7 +124,10 @@ try {
         monthlyPrice: 0,
         currency: 'GBP',
         workflow: 'Joiner preparation',
-        formSchema: [{ id: 'targetDate', label: 'Target date', type: 'date', required: true }],
+        formSchema: [
+          { id: 'targetDate', label: 'Target date', type: 'date', required: true },
+          { id: 'needsEquipment', label: 'Equipment required?', type: 'select', required: true, options: ['Yes', 'No'] },
+        ],
         options: [],
         source: { provider: 'ci' },
         active: true,
@@ -118,32 +136,40 @@ try {
   })
   assert(catalogue.response.ok, `Catalogue save failed: ${catalogue.payload.error || catalogue.response.status}`)
 
-  console.log('3. Save a simple four-task flow with parallel and sequential work')
+  console.log('3. Save a four-task flow with a conditional middle stage')
   const flow = await json('/api/v1/catalogue/CAT-JOINER-FLOW/fulfilment', {
     method: 'PUT',
     cookie,
-    body: {
-      tasks: [
-        { id: 'identity', title: 'Prepare identity', team: 'Service Desk', dependsOn: [] },
-        { id: 'entitlement', title: 'Prepare entitlement', team: 'Procurement', dependsOn: [] },
-        { id: 'equipment', title: 'Prepare equipment', team: 'Procurement', dependsOn: ['identity', 'entitlement'] },
-        { id: 'handover', title: 'Complete workstation handover', team: 'Desktop', dependsOn: ['equipment'] },
-      ],
-    },
+    body: { tasks: flowTasks },
   })
   assert(flow.response.ok, `Flow save failed: ${flow.payload.error || flow.response.status}`)
   assert(flow.payload.tasks?.length === 4, 'Flow did not persist four tasks')
   assert(flow.payload.tasks.every((task) => task.titleDateFieldId === '__auto__'), 'Flow did not default task title dates to automatic')
+  assert(flow.payload.tasks.find((task) => task.id === 'equipment')?.condition?.fieldId === 'needsEquipment', 'Conditional task rule was not persisted')
   assert(flow.payload.dateFields?.[0]?.id === 'targetDate', 'Flow did not return the request date field')
+  assert(flow.payload.conditionFields?.some((field) => field.id === 'needsEquipment'), 'Flow did not return request fields for condition editing')
 
-  console.log('4. Submit the Service Request and verify dated titles and initial readiness')
+  console.log('4. Reject a condition that refers to a missing request field')
+  const invalidFlow = await json('/api/v1/catalogue/CAT-JOINER-FLOW/fulfilment', {
+    method: 'PUT',
+    cookie,
+    body: {
+      tasks: [{ id: 'bad', title: 'Invalid conditional task', team: 'Service Desk', dependsOn: [], condition: { fieldId: 'missingField', operator: 'equals', value: 'Yes' } }],
+    },
+  })
+  assert(invalidFlow.response.status === 400, `Invalid condition should return 400, got ${invalidFlow.response.status}`)
+  const flowAfterInvalid = await json('/api/v1/catalogue/CAT-JOINER-FLOW/fulfilment', { cookie })
+  assert(flowAfterInvalid.payload.tasks?.length === 4, 'Invalid conditional save changed the valid flow')
+
+  console.log('5. Submit a matching Service Request and verify all four dated tasks')
   const request = await json('/api/v1/service-requests', {
     method: 'POST',
     cookie,
-    body: { catalogueItemId: 'CAT-JOINER-FLOW', summary: 'Prepare colleague access and equipment', fields: { targetDate }, details: { text: 'Fulfilment flow acceptance request.' }, urgency: 'Medium' },
+    body: { catalogueItemId: 'CAT-JOINER-FLOW', summary: 'Prepare colleague access and equipment', fields: { targetDate, needsEquipment: 'Yes' }, details: { text: 'Fulfilment flow acceptance request.' }, urgency: 'Medium' },
   })
   assert(request.response.status === 201, `Request creation failed: ${request.payload.error || request.response.status}`)
   assert(request.payload.requestTasks?.length === 4, `Expected four request tasks, got ${request.payload.requestTasks?.length || 0}`)
+  assert(request.payload.skippedFulfilmentTasks === 0, 'Matching condition should not skip a task')
   const reference = request.payload.reference
   const identity = taskByTitle(request.payload, `Prepare identity · ${titleDate}`)
   const entitlement = taskByTitle(request.payload, `Prepare entitlement · ${titleDate}`)
@@ -151,7 +177,7 @@ try {
   const handover = taskByTitle(request.payload, `Complete workstation handover · ${titleDate}`)
   assert(identity, 'First task did not include the submitted request date in its title')
   assert(entitlement, 'Second task did not include the submitted request date in its title')
-  assert(equipment, 'Dependent task did not include the submitted request date in its title')
+  assert(equipment, 'Conditional task did not include the submitted request date in its title')
   assert(handover, 'Final task did not include the submitted request date in its title')
   assert(identity?.status === 'Ready', 'First parallel task should be Ready')
   assert(entitlement?.status === 'Ready', 'Second parallel task should be Ready')
@@ -161,13 +187,13 @@ try {
   assert(entitlement?.team === 'Procurement', 'Second task did not route to Procurement')
   assert(handover?.team === 'Desktop', 'Final task did not route to Desktop')
 
-  console.log('5. Prevent a waiting task from being worked early')
+  console.log('6. Prevent a waiting task from being worked early')
   const early = await json(`/api/v1/service-requests/${reference}/tasks/${equipment.id}`, {
     method: 'PATCH', cookie, body: { status: 'In Progress' },
   })
   assert(early.response.status === 409, `Waiting task should be rejected with 409, got ${early.response.status}`)
 
-  console.log('6. Complete only one parallel task and keep the next stage waiting')
+  console.log('7. Complete only one parallel task and keep the next stage waiting')
   const completeIdentity = await json(`/api/v1/service-requests/${reference}/tasks/${identity.id}`, {
     method: 'PATCH', cookie, body: { status: 'Completed', completionNotes: 'Identity ready.' },
   })
@@ -175,7 +201,7 @@ try {
   let refreshed = await json(`/api/v1/service-requests/${reference}`, { cookie })
   assert(taskByTitle(refreshed.payload, `Prepare equipment · ${titleDate}`)?.status === 'Waiting', 'Equipment should wait for both prerequisite tasks')
 
-  console.log('7. Complete the second parallel task and unlock the next stage')
+  console.log('8. Complete the second parallel task and unlock the conditional stage')
   const completeEntitlement = await json(`/api/v1/service-requests/${reference}/tasks/${entitlement.id}`, {
     method: 'PATCH', cookie, body: { status: 'Completed', completionNotes: 'Entitlement ready.' },
   })
@@ -184,7 +210,7 @@ try {
   const equipmentReady = taskByTitle(refreshed.payload, `Prepare equipment · ${titleDate}`)
   assert(equipmentReady?.status === 'Ready', 'Equipment should become Ready when both prerequisite tasks are complete')
 
-  console.log('8. Unlock the final task only after the intermediate task completes')
+  console.log('9. Unlock the final task only after the conditional intermediate task completes')
   const completeEquipment = await json(`/api/v1/service-requests/${reference}/tasks/${equipmentReady.id}`, {
     method: 'PATCH', cookie, body: { status: 'Completed', completionNotes: 'Equipment prepared.' },
   })
@@ -193,7 +219,7 @@ try {
   const handoverReady = taskByTitle(refreshed.payload, `Complete workstation handover · ${titleDate}`)
   assert(handoverReady?.status === 'Ready', 'Final task should unlock after its prerequisite completes')
 
-  console.log('9. Block request completion until every task is complete')
+  console.log('10. Block request completion until every generated task is complete')
   const startRequest = await json(`/api/v1/service-requests/${reference}/transition`, {
     method: 'POST', cookie, body: { targetStatus: 'In Progress', values: {} },
   })
@@ -212,7 +238,7 @@ try {
   })
   assert(completeRequest.response.ok, `Request completion failed: ${completeRequest.payload.error || completeRequest.response.status}`)
 
-  console.log('10. Confirm the submitted request keeps an immutable dated flow snapshot')
+  console.log('11. Confirm the matching request keeps an immutable dated conditional flow snapshot')
   const snapshot = await db.query(`SELECT workflow_tasks_snapshot FROM service_requests WHERE tenant_id=$1 AND reference=$2`, [tenantId, reference])
   const savedFlow = snapshot.rows[0]?.workflow_tasks_snapshot
   assert(Array.isArray(savedFlow) && savedFlow.length === 4, 'Request workflow snapshot was not stored')
@@ -220,6 +246,44 @@ try {
   assert(savedFlow[0]?.title === `Prepare identity · ${titleDate}`, 'Snapshot did not retain the generated dated title')
   assert(savedFlow[0]?.titleDate === titleDate, 'Snapshot did not retain the resolved task title date')
   assert(savedFlow[0]?.titleDateFieldLabel === 'Target date', 'Snapshot did not retain the date field context')
+  assert(savedFlow.find((task) => task.id === 'equipment')?.condition?.fieldId === 'needsEquipment', 'Snapshot did not retain the matched task condition')
+
+  console.log('12. Submit a non-matching request and skip the equipment task')
+  const skippedRequest = await json('/api/v1/service-requests', {
+    method: 'POST',
+    cookie,
+    body: { catalogueItemId: 'CAT-JOINER-FLOW', summary: 'Prepare colleague access without equipment', fields: { targetDate: skippedTargetDate, needsEquipment: 'No' }, details: { text: 'Conditional skip acceptance request.' }, urgency: 'Medium' },
+  })
+  assert(skippedRequest.response.status === 201, `Conditional request creation failed: ${skippedRequest.payload.error || skippedRequest.response.status}`)
+  assert(skippedRequest.payload.requestTasks?.length === 3, `Expected three generated tasks after conditional skip, got ${skippedRequest.payload.requestTasks?.length || 0}`)
+  assert(skippedRequest.payload.skippedFulfilmentTasks === 1, 'Non-matching condition should report one skipped task')
+  assert(!taskByTitle(skippedRequest.payload, `Prepare equipment · ${skippedTitleDate}`), 'Equipment task should not be generated when equipment is not required')
+  const skippedReference = skippedRequest.payload.reference
+  const skippedIdentity = taskByTitle(skippedRequest.payload, `Prepare identity · ${skippedTitleDate}`)
+  const skippedEntitlement = taskByTitle(skippedRequest.payload, `Prepare entitlement · ${skippedTitleDate}`)
+  const skippedHandover = taskByTitle(skippedRequest.payload, `Complete workstation handover · ${skippedTitleDate}`)
+  assert(skippedIdentity?.status === 'Ready', 'Identity should remain Ready in the skipped branch')
+  assert(skippedEntitlement?.status === 'Ready', 'Entitlement should remain Ready in the skipped branch')
+  assert(skippedHandover?.status === 'Waiting', 'Handover should inherit the skipped task prerequisites rather than start early')
+  assert(skippedHandover?.dependencies?.length === 2, 'Handover should inherit both active prerequisites from the skipped equipment task')
+
+  console.log('13. Complete inherited prerequisites and unlock the final task')
+  for (const task of [skippedIdentity, skippedEntitlement]) {
+    const completed = await json(`/api/v1/service-requests/${skippedReference}/tasks/${task.id}`, {
+      method: 'PATCH', cookie, body: { status: 'Completed', completionNotes: 'Prerequisite completed.' },
+    })
+    assert(completed.response.ok, `Conditional prerequisite completion failed: ${completed.payload.error || completed.response.status}`)
+  }
+  const skippedRefreshed = await json(`/api/v1/service-requests/${skippedReference}`, { cookie })
+  assert(taskByTitle(skippedRefreshed.payload, `Complete workstation handover · ${skippedTitleDate}`)?.status === 'Ready', 'Handover did not unlock after inherited prerequisites completed')
+
+  console.log('14. Confirm the skipped request snapshot contains only generated work')
+  const skippedSnapshot = await db.query(`SELECT workflow_tasks_snapshot FROM service_requests WHERE tenant_id=$1 AND reference=$2`, [tenantId, skippedReference])
+  const skippedSavedFlow = skippedSnapshot.rows[0]?.workflow_tasks_snapshot
+  assert(Array.isArray(skippedSavedFlow) && skippedSavedFlow.length === 3, 'Skipped request snapshot should contain only three generated tasks')
+  assert(!skippedSavedFlow.some((task) => task.id === 'equipment'), 'Skipped task should not be retained as generated work in the immutable request snapshot')
+  const savedHandover = skippedSavedFlow.find((task) => task.id === 'handover')
+  assert(savedHandover?.dependsOn?.length === 2, 'Snapshot did not retain inherited prerequisites after a conditional skip')
 
   console.log('Service Request fulfilment flow acceptance passed')
 } finally {
