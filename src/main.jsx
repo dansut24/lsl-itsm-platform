@@ -15,11 +15,15 @@ import { ProductionSecurityCenterEnhancer } from './features/security/Production
 import { ProductionFirstLoginExperience } from './production/ProductionFirstLoginExperience.jsx'
 import { ProductionFirstLoginRouteBridge } from './production/ProductionFirstLoginRouteBridge.jsx'
 import { ProductionItsmWorkspace } from './production/ProductionItsmWorkspace.jsx'
+import { ProductionKnowledgeBase } from './production/ProductionKnowledgeBase.jsx'
+import { ProductionLiveChatWorkspace } from './production/ProductionLiveChatWorkspace.jsx'
 import { ProductionNavigationDockPreferences } from './production/ProductionNavigationDockPreferences.jsx'
 import { ProductionNotificationCenter } from './production/ProductionNotificationCenter.jsx'
 import { ProductionOnboardingBootstrap } from './production/ProductionOnboardingBootstrap.jsx'
 import { ProductionOrganisationWriteThrough } from './production/ProductionOrganisationWriteThrough.jsx'
+import { ProductionPeopleLiveChatEntitlement } from './production/ProductionPeopleLiveChatEntitlement.jsx'
 import { ProductionPortalBootstrap } from './production/ProductionPortalBootstrap.jsx'
+import { ProductionPortalKnowledgeChat } from './production/ProductionPortalKnowledgeChat.jsx'
 import { ProductionPortalThemeBridge } from './production/ProductionPortalThemeBridge.jsx'
 import { ProductionPremiumWorkspaceExperience } from './production/ProductionPremiumWorkspaceExperience.jsx'
 import { ProductionRecordDetailRouter } from './production/ProductionRecordDetailRouter.jsx'
@@ -65,6 +69,7 @@ document.body.dataset.hi5Surface = initialSurface.kind
 if (rootElement) rootElement.dataset.hi5Surface = initialSurface.kind
 
 const productionWorkspace = initialSurface.kind === 'workspace' && initialSurface.canonical
+const productionPortal = initialSurface.kind === 'portal' && initialSurface.canonical
 const productionOnboarding = productionWorkspace
   && (window.location.pathname === '/onboarding' || window.location.pathname.startsWith('/onboarding/'))
 
@@ -75,16 +80,19 @@ if (initialSurface.kind === 'marketing') {
     : MarketingApp
 }
 if (productionWorkspace) RootApp = productionOnboarding ? ProductionOnboardingBootstrap : ProductionWorkspaceBootstrap
-if (initialSurface.kind === 'portal' && initialSurface.canonical) RootApp = ProductionPortalBootstrap
+if (productionPortal) RootApp = ProductionPortalBootstrap
 
 createRoot(rootElement).render(
   <StrictMode>
     <RootApp />
-    {initialSurface.kind === 'workspace' && !productionOnboarding ? <KnowledgeContextEnhancer /> : null}
+    {initialSurface.kind === 'workspace' && !productionOnboarding && !productionWorkspace ? <KnowledgeContextEnhancer /> : null}
     {initialSurface.kind === 'workspace' && !productionOnboarding ? <OrganisationSitesEnhancer /> : null}
     {initialSurface.kind === 'workspace' && !productionOnboarding ? <ServiceCatalogueSettingsEnhancer /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionOrganisationWriteThrough /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionItsmWorkspace /> : null}
+    {productionWorkspace && !productionOnboarding ? <ProductionKnowledgeBase /> : null}
+    {productionWorkspace && !productionOnboarding ? <ProductionLiveChatWorkspace /> : null}
+    {productionWorkspace && !productionOnboarding ? <ProductionPeopleLiveChatEntitlement /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionRecordDetailRouter /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionRecordExportEnhancer /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionRecordListInteractionEnhancer /> : null}
@@ -104,5 +112,6 @@ createRoot(rootElement).render(
     {productionWorkspace && productionOnboarding ? <OnboardingMfaEnhancer /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionSecurityCenterEnhancer /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionPasswordRecoveryEnhancer /> : null}
+    {productionPortal ? <ProductionPortalKnowledgeChat /> : null}
   </StrictMode>,
 )
