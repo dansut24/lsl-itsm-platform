@@ -47,7 +47,7 @@ jobs:
         working-directory: api
         run: npm install --omit=dev
 
-      - name: Adapt fresh-tenant harness to isolated Portal cookie
+      - name: Adapt fresh-tenant harness to isolated Portal cookie and v2 lookups
         working-directory: api
         run: |
           python3 - <<'PY'
@@ -63,9 +63,20 @@ jobs:
               "const requesterCookie = cookieFrom(requesterLogin.response)",
               "const requesterCookie = cookieFrom(requesterLogin.response, 'hi5central_portal_session')",
           )
+          text = text.replace(
+              "{ id: 'businessNeed', type: 'textarea', label: 'Business need', required: true },",
+              "{ id: 'businessNeed', type: 'textarea', label: 'Business need', required: true },\n            { id: 'site', type: 'lookup', source: 'sites', label: 'Delivery site', required: true },",
+          )
           marker = "assert(requesterSession.response.ok && requesterSession.payload.user?.tenantRole === 'requester', 'Requester Portal session was not restored')"
-          isolation = marker + "\n  const ownerCookieOnPortal = await json('/api/v1/portal/auth/session', { cookie: ownerCookie, origin: portalOrigin })\n  assert(ownerCookieOnPortal.response.status === 401, 'Workspace cookie was incorrectly accepted as a Portal session')\n  const requesterCookieOnWorkspace = await json('/api/v1/auth/session', { cookie: requesterCookie, origin: tenantOrigin })\n  assert(requesterCookieOnWorkspace.response.status === 401, 'Portal cookie was incorrectly accepted as a workspace session')"
+          isolation = marker + "\n  const ownerCookieOnPortal = await json('/api/v1/portal/auth/session', { cookie: ownerCookie, origin: portalOrigin })\n  assert(ownerCookieOnPortal.response.status === 401, 'Workspace cookie was incorrectly accepted as a Portal session')\n  const requesterCookieOnWorkspace = await json('/api/v1/auth/session', { cookie: requesterCookie, origin: tenantOrigin })\n  assert(requesterCookieOnWorkspace.response.status === 401, 'Portal cookie was incorrectly accepted as a workspace session')\n  const unauthenticatedOptions = await json(`/api/v1/portal/catalogue/${slug}/options`, { origin: portalOrigin })\n  assert(unauthenticatedOptions.response.status === 401, 'Portal catalogue lookup options leaked without authentication')\n  const lookupOptions = await json(`/api/v1/portal/catalogue/${slug}/options`, { cookie: requesterCookie, origin: portalOrigin })\n  assert(lookupOptions.response.ok, `Portal catalogue lookup options failed: ${lookupOptions.payload.error || lookupOptions.response.status}`)\n  assert(lookupOptions.payload.people?.some((option) => option.label === 'CI Portal Requester'), 'Authenticated Portal lookup options did not include active People')\n  assert(lookupOptions.payload.sites?.some((option) => option.label === (ownerPerson.location || 'Head Office')), 'Authenticated Portal lookup options did not include tenant Sites')"
           text = text.replace(marker, isolation)
+          text = text.replace(
+              "fields: { device: 'standard-laptop', businessNeed: 'Required for the fresh-tenant production acceptance test.' },",
+              "fields: { device: 'standard-laptop', businessNeed: 'Required for the fresh-tenant production acceptance test.', site: ownerPerson.siteId },",
+          )
+          price_marker = "assert(Number(submitted.payload.oneOffCost) === 1399, 'Server did not persist the live £1,399 price snapshot')"
+          lookup_snapshot = price_marker + "\n  const siteInformation = submitted.payload.requestInformation?.find((entry) => entry.label === 'Delivery site')\n  assert(siteInformation?.value === (ownerPerson.location || 'Head Office'), `Lookup snapshot stored ${siteInformation?.value || 'nothing'} instead of the tenant Site name`)"
+          text = text.replace(price_marker, lookup_snapshot)
           path.write_text(text)
           PY
 

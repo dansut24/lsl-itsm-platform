@@ -1,3 +1,4 @@
+import { hasPermission } from './access.js'
 import { pool, withTransaction } from './db.js'
 import { registerAssignmentRoutes } from './assignment.js'
 import { registerItsmLifecycleRoutes } from './itsmLifecycle.js'
@@ -5,18 +6,23 @@ import { registerItsmQueueRoutes } from './itsmQueue.js'
 import { registerItsmRecordRoutes } from './itsmRecords.js'
 import { registerPortalAuthRoutes } from './portalAuth.js'
 import { registerServiceRequestConditionalTaskRoutes } from './serviceRequestConditionalTasks.js'
+import { registerServiceRequestFieldResolutionRoutes } from './serviceRequestFieldResolution.js'
 import { registerServiceRequestFulfilmentRoutes } from './serviceRequestFulfilment.js'
 import { registerServiceRequestOperationRoutes } from './serviceRequestOperations.js'
 import { registerServiceRequestRoutes } from './serviceRequests.js'
 import { registerServiceRequestStateRoutes } from './serviceRequestState.js'
 import { resolveSession } from './session.js'
-import { originMatchesTenant } from './deploymentConfig.js'
+import { originMatchesPortalTenant, originMatchesTenant } from './deploymentConfig.js'
 
 const maxItems = 5000
 const maxPayloadBytes = 4_000_000
 
 function originMatchesSession(c, session) {
   return originMatchesTenant(c.req.header('origin'), session.slug)
+}
+
+function portalOrigin(c, slug) {
+  return originMatchesPortalTenant(c.req.header('origin'), c.req.header('referer'), slug)
 }
 
 async function requireSession(c, write = false) {
@@ -26,6 +32,16 @@ async function requireSession(c, write = false) {
   if (write && !['owner', 'admin'].includes(session.tenant_role)) {
     return { error: c.json({ error: 'Tenant administrator access is required.' }, 403) }
   }
+  return { session }
+}
+
+async function requirePortalCatalogueSession(c, slug) {
+  const tenantSlug = validTenantSlug(slug)
+  const session = await resolveSession(c)
+  if (!tenantSlug || !session) return { error: c.json({ error: 'Authentication required.' }, 401) }
+  if (session.slug !== tenantSlug || !portalOrigin(c, tenantSlug)) return { error: c.json({ error: 'Portal session mismatch.' }, 403) }
+  if (!hasPermission(session.access, 'portal.access')) return { error: c.json({ error: 'Requester Portal access is required.' }, 403) }
+  if (!session.onboarding_completed_at) return { error: c.json({ error: 'This tenant has not completed setup.' }, 403) }
   return { session }
 }
 
@@ -167,7 +183,7 @@ function portalProductOption(option, productRows) {
 function portalFields(row, productRows) {
   return asArray(row.form_schema).map((rawField) => {
     const field = asObject(rawField)
-    if (!['product', 'checkbox-products'].includes(field.type)) return field
+    if (!['product', 'checkbox-products'].includes(field.type) || field.source === 'catalogue-products') return field
     return {
       ...field,
       options: asArray(field.options)
@@ -222,6 +238,63 @@ async function publicPortalCatalogue(slug) {
     tenant: { slug: tenant.slug, companyName: tenant.company_name },
     categories: [...new Set(items.map((item) => item.category))],
     items,
+  }
+}
+
+async function portalLookupOptions(tenantId) {
+  const [people, departments, sites, teams, products] = await Promise.all([
+    pool.query(
+      `SELECT external_key, name, job_title
+       FROM organisation_people
+       WHERE tenant_id = $1 AND active = true
+       ORDER BY name`,
+      [tenantId],
+    ),
+    pool.query(
+      `SELECT external_key, name
+       FROM organisation_departments
+       WHERE tenant_id = $1 AND active = true
+       ORDER BY name`,
+      [tenantId],
+    ),
+    pool.query(
+      `SELECT external_key, name, type
+       FROM organisation_sites
+       WHERE tenant_id = $1 AND active = true
+       ORDER BY name`,
+      [tenantId],
+    ),
+    pool.query(
+      `SELECT external_key, name
+       FROM organisation_teams
+       WHERE tenant_id = $1 AND active = true
+       ORDER BY name`,
+      [tenantId],
+    ),
+    pool.query(
+      `SELECT i.external_key, i.title, i.one_off_price, i.monthly_price, i.currency, c.name AS category_name
+       FROM service_catalogue_items i
+       LEFT JOIN service_catalogue_categories c ON c.id = i.category_id
+       WHERE i.tenant_id = $1 AND i.active = true AND i.visibility = 'portal' AND i.kind = 'product'
+       ORDER BY c.name NULLS LAST, i.title`,
+      [tenantId],
+    ),
+  ])
+
+  return {
+    people: people.rows.map((row) => ({ value: row.external_key, label: row.name, detail: row.job_title || '' })),
+    departments: departments.rows.map((row) => ({ value: row.external_key, label: row.name })),
+    sites: sites.rows.map((row) => ({ value: row.external_key, label: row.name, detail: row.type || '' })),
+    teams: teams.rows.map((row) => ({ value: row.external_key, label: row.name })),
+    products: products.rows.map((row) => ({
+      value: row.external_key,
+      itemId: row.external_key,
+      label: row.title,
+      category: row.category_name || 'Uncategorised',
+      cost: Number(row.monthly_price || 0) > 0 ? Number(row.monthly_price) : Number(row.one_off_price || 0),
+      recurring: Number(row.monthly_price || 0) > 0 ? 'monthly' : '',
+      currency: row.currency || 'GBP',
+    })),
   }
 }
 
@@ -350,6 +423,12 @@ export function registerCatalogueRoutes(app) {
     return c.json(payload)
   })
 
+  app.get('/api/v1/portal/catalogue/:slug/options', async (c) => {
+    const auth = await requirePortalCatalogueSession(c, c.req.param('slug'))
+    if (auth.error) return auth.error
+    return c.json(await portalLookupOptions(auth.session.tenant_id))
+  })
+
   app.get('/api/v1/catalogue', async (c) => {
     const auth = await requireSession(c)
     if (auth.error) return auth.error
@@ -388,6 +467,7 @@ export function registerCatalogueRoutes(app) {
   registerPortalAuthRoutes(app)
   registerServiceRequestConditionalTaskRoutes(app)
   registerServiceRequestFulfilmentRoutes(app)
+  registerServiceRequestFieldResolutionRoutes(app)
   registerServiceRequestRoutes(app)
   registerServiceRequestOperationRoutes(app)
   registerServiceRequestStateRoutes(app)

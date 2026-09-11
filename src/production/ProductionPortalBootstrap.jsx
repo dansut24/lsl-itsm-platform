@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import App from '../App.jsx'
 import { portalServiceCatalog } from '../data/portalData.js'
 import { resolveTenantSurface } from '../lib/tenantSurface.js'
-import { ProductionRequesterPortal } from './ProductionRequesterPortal.jsx'
+import { ProductionRequesterPortalV2 } from './ProductionRequesterPortalV2.jsx'
 import './ProductionPortalBootstrap.css'
 
 const API_BASE = window.__HI5_API_BASE__
@@ -70,8 +70,6 @@ export function ProductionPortalBootstrap() {
         const payload = await response.json().catch(() => ({}))
 
         if (response.status === 404 || payload.managed === false) {
-          // Keep the permanent demo surface available without ever treating its
-          // bundled data as a managed production tenant.
           if (active) setState((current) => ({ ...current, status: 'ready', managed: false, catalogue: null, error: '' }))
           return
         }
@@ -79,10 +77,6 @@ export function ProductionPortalBootstrap() {
         if (!response.ok) throw new Error(payload.error || 'The service catalogue is temporarily unavailable.')
         if (!Array.isArray(payload.items)) throw new Error('The service catalogue response was invalid.')
 
-        // Older catalogue schemas legitimately store ordinary select choices as
-        // strings, while the production Portal renderer consumes option objects.
-        // Normalise both shapes at the production boundary so required selects
-        // such as Access Request always expose their published choices.
         const catalogue = normalizeCatalogue(payload)
         replaceCatalogue(catalogue.items)
         if (active) setState((current) => ({ ...current, status: 'ready', managed: true, catalogue, error: '' }))
@@ -108,7 +102,7 @@ export function ProductionPortalBootstrap() {
   if (!state.managed) return <App />
 
   return (
-    <ProductionRequesterPortal
+    <ProductionRequesterPortalV2
       catalogue={state.catalogue || { items: [], categories: [] }}
       tenant={state.catalogue?.tenant || { slug: surface.tenantSlug, companyName: surface.tenantName || surface.tenantSlug }}
     />

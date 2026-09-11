@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronRight, PackageOpen } from 'lucide-react'
-import { ServiceCatalogueAdmin } from './ServiceCatalogueAdmin.jsx'
+import { ServiceCatalogueAdminV2 } from './ServiceCatalogueAdminV2.jsx'
 import './ServiceCatalogueSettingsEnhancer.css'
 
+const API_BASE = window.__HI5_API_BASE__
 const CATALOGUE_PATH = '/settings/itsm/service-catalogue'
 
 function groupFor(nav, label) {
@@ -13,6 +14,7 @@ function groupFor(nav, label) {
 
 export function ServiceCatalogueSettingsEnhancer() {
   const [active, setActive] = useState(() => window.location.pathname === CATALOGUE_PATH)
+  const [catalogueReady, setCatalogueReady] = useState(false)
   const [desktopGroup, setDesktopGroup] = useState(null)
   const [mobileGroup, setMobileGroup] = useState(null)
   const [contentHost, setContentHost] = useState(null)
@@ -71,6 +73,19 @@ export function ServiceCatalogueSettingsEnhancer() {
     return () => shell.classList.remove('service-catalogue-route')
   }, [active, shell])
 
+  useEffect(() => {
+    if (!active) {
+      setCatalogueReady(false)
+      return undefined
+    }
+    let alive = true
+    setCatalogueReady(false)
+    fetch(`${API_BASE}/api/v1/organisation`, { credentials: 'include', cache: 'no-store' })
+      .catch(() => null)
+      .finally(() => { if (alive) setCatalogueReady(true) })
+    return () => { alive = false }
+  }, [active])
+
   function navigate() {
     if (window.location.pathname !== CATALOGUE_PATH) window.history.pushState({}, '', CATALOGUE_PATH)
     setActive(true)
@@ -96,7 +111,7 @@ export function ServiceCatalogueSettingsEnhancer() {
     <>
       {desktopGroup ? createPortal(navButton(false), desktopGroup) : null}
       {mobileGroup ? createPortal(navButton(true), mobileGroup) : null}
-      {active && contentHost ? createPortal(<ServiceCatalogueAdmin />, contentHost) : null}
+      {active && contentHost && catalogueReady ? createPortal(<ServiceCatalogueAdminV2 />, contentHost) : null}
     </>
   )
 }
