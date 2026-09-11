@@ -1,4 +1,5 @@
 import { pool, withTransaction } from './db.js'
+import { registerAssignmentRoutes } from './assignment.js'
 import { registerItsmLifecycleRoutes } from './itsmLifecycle.js'
 import { registerItsmQueueRoutes } from './itsmQueue.js'
 import { registerItsmRecordRoutes } from './itsmRecords.js'
@@ -381,6 +382,7 @@ export function registerCatalogueRoutes(app) {
     return c.json(await catalogueSnapshot(auth.session.tenant_id))
   })
 
+  registerAssignmentRoutes(app)
   registerPortalAuthRoutes(app)
   registerServiceRequestRoutes(app)
   registerServiceRequestOperationRoutes(app)
