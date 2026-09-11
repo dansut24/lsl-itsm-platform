@@ -192,6 +192,23 @@ try {
   assert(assignments.rows.some((row) => row.role_key === 'requester'), 'Requester role was not persisted in stack')
   assert(assignments.rows.some((row) => row.role_key === custom.payload.key), 'Custom role was not persisted in stack')
 
+  console.log('10. Proving workspace-only users get an explicit Portal access denial')
+  const analystOnly = await json(`/api/v1/access/users/${requesterId}/roles`, {
+    method: 'PUT',
+    cookie: ownerCookie,
+    body: { roleIds: [role('analyst').id] },
+  })
+  assert(analystOnly.response.ok, `Analyst-only assignment failed: ${analystOnly.payload.error || analystOnly.response.status}`)
+  assert(analystOnly.payload.effective?.workspaceAccess === true, 'Analyst-only user lost workspace access')
+  assert(analystOnly.payload.effective?.portalAccess === false, 'Analyst-only user unexpectedly has Portal access')
+
+  const analystPortalDenied = await portalLogin(requesterEmail, requesterPassword)
+  assert(analystPortalDenied.response.status === 403, `Analyst Portal login should be 403, got ${analystPortalDenied.response.status}`)
+  assert(/does not have access to the requester portal/i.test(analystPortalDenied.payload.error || ''), 'Analyst Portal denial was not explicit')
+
+  const analystWorkspaceLogin = await workspaceLogin(requesterEmail, requesterPassword)
+  assert(analystWorkspaceLogin.response.ok, `Analyst workspace login failed: ${analystWorkspaceLogin.payload.error || analystWorkspaceLogin.response.status}`)
+
   console.log('RBAC acceptance passed')
 } finally {
   await db.end()
