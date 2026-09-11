@@ -1,6 +1,6 @@
 import { effectiveAccessForUser, hasPermission } from './access.js'
 import { pool } from './db.js'
-import { originMatchesTenant } from './deploymentConfig.js'
+import { originMatchesTenant, portalRequestFromHeaders } from './deploymentConfig.js'
 import { resolveSession } from './session.js'
 
 function typePermission(type, action = 'view') {
@@ -175,6 +175,7 @@ export async function enforceWorkspacePermissions(c, next) {
   const path = c.req.path
   if (!path.startsWith('/api/v1/')) return next()
   if (path.startsWith('/api/v1/auth/') || path.startsWith('/api/v1/portal/') || path.startsWith('/api/v1/system/')) return next()
+  if (portalRequestFromHeaders(c.req.header('origin'), c.req.header('referer'))) return next()
   const session = await resolveSession(c)
   if (!session) return next()
   if (!originMatchesTenant(c.req.header('origin'), session.slug)) return next()
