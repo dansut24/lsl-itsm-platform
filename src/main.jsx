@@ -14,6 +14,7 @@ import { ProductionPasswordRecoveryEnhancer } from './features/security/Producti
 import { ProductionSecurityCenterEnhancer } from './features/security/ProductionSecurityCenterEnhancer.jsx'
 import { ProductionAccessControl } from './production/ProductionAccessControl.jsx'
 import { ProductionAccessGuard } from './production/ProductionAccessGuard.jsx'
+import { ProductionAssignmentExperience } from './production/ProductionAssignmentExperience.jsx'
 import { ProductionLegacyBoundary } from './production/ProductionLegacyBoundary.jsx'
 import { ProductionFirstLoginExperience } from './production/ProductionFirstLoginExperience.jsx'
 import { ProductionFirstLoginRouteBridge } from './production/ProductionFirstLoginRouteBridge.jsx'
@@ -102,6 +103,7 @@ createRoot(rootElement).render(
     {productionWorkspace && !productionOnboarding ? <ProductionAccessControl /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionOrganisationWriteThrough /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionItsmWorkspace /> : null}
+    {productionWorkspace && !productionOnboarding ? <ProductionAssignmentExperience /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionKnowledgeBase /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionLiveChatBadgeBridge /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionLiveChatWorkspace /> : null}
