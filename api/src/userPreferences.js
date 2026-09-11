@@ -30,7 +30,7 @@ function normalisePreferences(input = {}) {
   const navigation = asObject(data.navigation)
   const guidance = asObject(data.guidance)
 
-  const result = {
+  return {
     appearance: {
       theme: ALLOWED_THEME.has(appearance.theme) ? appearance.theme : 'system',
       accentMode: appearance.accentMode === 'personal' ? 'personal' : 'tenant',
@@ -47,8 +47,6 @@ function normalisePreferences(input = {}) {
       coachMarks: guidance.coachMarks !== false,
     },
   }
-
-  return result
 }
 
 async function readPreferenceRow(session) {
@@ -69,7 +67,7 @@ function responsePayload(session, row) {
   return {
     user: {
       id: session.user_id,
-      name: session.user_name,
+      name: session.name,
       email: session.email,
       tenantRole: session.tenant_role,
     },
@@ -102,7 +100,7 @@ export function registerUserPreferenceRoutes(app) {
     try {
       body = await c.req.json()
     } catch {
-      return c.json({ error: 'A valid JSON request body is required.' }, 400)
+      return c.json({ error: 'A valid JSON request body is required.' }, 400) }
     }
 
     const preferences = normalisePreferences(body?.preferences || {})
