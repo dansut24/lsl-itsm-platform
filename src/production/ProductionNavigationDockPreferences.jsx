@@ -1,61 +1,75 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
+import './ProductionNavigationStyles.css'
 
 const DESKTOP_SIDE_KEY = 'hi5central-primary-nav-side-v1'
 const MOBILE_SIDE_KEY = 'hi5central-mobile-nav-side-v1'
+const NAV_STYLE_KEY = 'hi5central-primary-nav-style-v1'
 const VALID_SIDES = new Set(['left', 'right'])
+const VALID_STYLES = new Set(['floating', 'clean'])
 
-function readSide(key, fallback = 'left') {
+function readPreference(key, validValues, fallback) {
   try {
     const raw = window.localStorage.getItem(key)
     const value = raw ? JSON.parse(raw) : fallback
-    return VALID_SIDES.has(value) ? value : fallback
+    return validValues.has(value) ? value : fallback
   } catch {
     return fallback
   }
 }
 
-function applySides(desktopSide, mobileSide) {
+function applyNavigation(desktopSide, mobileSide, navStyle) {
   const desktop = VALID_SIDES.has(desktopSide) ? desktopSide : 'left'
   const mobile = VALID_SIDES.has(mobileSide) ? mobileSide : 'left'
+  const style = VALID_STYLES.has(navStyle) ? navStyle : 'floating'
   document.documentElement.dataset.hi5NavSide = desktop
   document.documentElement.dataset.hi5MobileNavSide = mobile
+  document.documentElement.dataset.hi5NavStyle = style
   document.body.dataset.hi5NavSide = desktop
   document.body.dataset.hi5MobileNavSide = mobile
+  document.body.dataset.hi5NavStyle = style
 
   const shell = document.querySelector('.app-shell')
   if (shell instanceof HTMLElement) {
     shell.dataset.navSide = desktop
     shell.dataset.mobileNavSide = mobile
+    shell.dataset.navStyle = style
   }
 }
 
 export function ProductionNavigationDockPreferences() {
-  const [desktopSide, setDesktopSide] = useState(() => readSide(DESKTOP_SIDE_KEY))
-  const [mobileSide, setMobileSide] = useState(() => readSide(MOBILE_SIDE_KEY))
+  const [desktopSide, setDesktopSide] = useState(() => readPreference(DESKTOP_SIDE_KEY, VALID_SIDES, 'left'))
+  const [mobileSide, setMobileSide] = useState(() => readPreference(MOBILE_SIDE_KEY, VALID_SIDES, 'left'))
+  const [navStyle, setNavStyle] = useState(() => readPreference(NAV_STYLE_KEY, VALID_STYLES, 'floating'))
   const [settingsTarget, setSettingsTarget] = useState(null)
 
   useEffect(() => {
-    applySides(desktopSide, mobileSide)
+    applyNavigation(desktopSide, mobileSide, navStyle)
     try {
       window.localStorage.setItem(DESKTOP_SIDE_KEY, JSON.stringify(desktopSide))
       window.localStorage.setItem(MOBILE_SIDE_KEY, JSON.stringify(mobileSide))
+      window.localStorage.setItem(NAV_STYLE_KEY, JSON.stringify(navStyle))
     } catch {
-      // Per-browser accessibility preference only.
+      // Personal workspace preference only; the server preference bridge will retry next session.
     }
     window.dispatchEvent(new CustomEvent('hi5-navigation-side-change', {
-      detail: { desktopSide, mobileSide },
+      detail: { desktopSide, mobileSide, navStyle },
     }))
-  }, [desktopSide, mobileSide])
+  }, [desktopSide, mobileSide, navStyle])
 
   useEffect(() => {
     const syncFromStorage = () => {
-      setDesktopSide(readSide(DESKTOP_SIDE_KEY))
-      setMobileSide(readSide(MOBILE_SIDE_KEY))
+      setDesktopSide(readPreference(DESKTOP_SIDE_KEY, VALID_SIDES, 'left'))
+      setMobileSide(readPreference(MOBILE_SIDE_KEY, VALID_SIDES, 'left'))
+      setNavStyle(readPreference(NAV_STYLE_KEY, VALID_STYLES, 'floating'))
     }
 
     const scan = () => {
-      applySides(readSide(DESKTOP_SIDE_KEY), readSide(MOBILE_SIDE_KEY))
+      applyNavigation(
+        readPreference(DESKTOP_SIDE_KEY, VALID_SIDES, 'left'),
+        readPreference(MOBILE_SIDE_KEY, VALID_SIDES, 'left'),
+        readPreference(NAV_STYLE_KEY, VALID_STYLES, 'floating'),
+      )
       if (window.location.pathname !== '/settings/appearance') {
         setSettingsTarget(null)
         return
@@ -94,7 +108,16 @@ export function ProductionNavigationDockPreferences() {
           <option value="left">Left side</option>
           <option value="right">Right side</option>
         </select>
-        <small>Move the floating primary navigation to the side that is most comfortable to reach.</small>
+        <small>Move primary navigation to the side that is most comfortable to reach.</small>
+      </label>
+
+      <label className="production-settings-field hi5-navigation-side-field">
+        <span>Sidebar style</span>
+        <select value={navStyle} onChange={(event) => setNavStyle(event.target.value)}>
+          <option value="floating">Floating glass</option>
+          <option value="clean">Clean panel</option>
+        </select>
+        <small>Floating glass keeps the curved Liquid Glass treatment. Clean panel matches the restrained Settings navigation style.</small>
       </label>
 
       <label className="production-settings-field hi5-navigation-side-field">
