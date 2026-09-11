@@ -10,6 +10,7 @@ import {
   X,
 } from 'lucide-react'
 import { assets, knowledgeArticles } from '../data/demoData.jsx'
+import { ProductionRecordWorkingPeek } from './ProductionRecordWorkingPeek.jsx'
 
 const PEEK_EVENT = 'hi5-universal-peek'
 const PEEK_SELECTOR = [
@@ -49,6 +50,10 @@ function navigate(path) {
     : new Event('popstate')
   window.dispatchEvent(pop)
   window.dispatchEvent(new CustomEvent('hi5-routechange'))
+}
+
+function isRecordPreview(preview) {
+  return /^\/(incidents|requests|problems|changes)\/[^/?#]+/i.test(String(preview?.openPath || ''))
 }
 
 function peopleSnapshot() {
@@ -179,23 +184,25 @@ function PeekSurface({ preview, onClose }) {
   if (!preview) return null
   const fields = compactFields(preview.fields)
   const items = Array.isArray(preview.items) ? preview.items : []
+  const workingRecord = isRecordPreview(preview)
+
   return createPortal(
-    <div className="hi5-universal-peek-layer" role="presentation">
+    <div className={`hi5-universal-peek-layer${workingRecord ? ' is-working-record' : ''}`} role="presentation">
       <button className="hi5-universal-peek-backdrop" type="button" aria-label="Close preview" onClick={onClose} />
-      <section className="hi5-universal-peek" role="dialog" aria-modal="true" aria-label={`${preview.kind || 'Item'} preview`}>
+      <section className={`hi5-universal-peek${workingRecord ? ' is-working-record' : ''}`} role="dialog" aria-modal="true" aria-label={`${preview.kind || 'Item'} preview`}>
         <header>
           <div className="hi5-universal-peek-icon">{iconFor(preview)}</div>
-          <div><span>{preview.kind || 'Quick preview'}</span><strong>{preview.title || 'Quick preview'}</strong>{preview.subtitle ? <small>{preview.subtitle}</small> : null}</div>
+          <div><span>{workingRecord ? 'Working Peek' : preview.kind || 'Quick preview'}</span><strong>{preview.title || 'Quick preview'}</strong>{preview.subtitle ? <small>{preview.subtitle}</small> : null}</div>
           <button type="button" aria-label="Close preview" onClick={onClose}><X size={17} /></button>
         </header>
-        <div className="hi5-universal-peek-body">
+        {workingRecord ? <div className="hi5-universal-peek-working-body"><ProductionRecordWorkingPeek preview={preview} /></div> : <div className="hi5-universal-peek-body">
           {fields.length ? <div className="hi5-universal-peek-fields">{fields.map((field) => <div key={`${field.label}-${field.value}`}><span>{field.label}</span><strong>{String(field.value)}</strong></div>)}</div> : null}
           {items.length ? <div className="hi5-universal-peek-items">{items.map((item, index) => <article key={`${item.id || item.title || 'item'}-${index}`}><div><strong>{item.title || item.name || 'Item'}</strong>{item.meta ? <span>{item.meta}</span> : null}</div>{item.badge ? <em>{item.badge}</em> : null}{item.openPath ? <button type="button" aria-label={`Open ${item.title || 'item'}`} onClick={() => { onClose(); navigate(item.openPath) }}><ArrowUpRight size={14} /></button> : null}</article>)}</div> : null}
           {!fields.length && !items.length && preview.description ? <p className="hi5-universal-peek-copy">{preview.description}</p> : null}
-        </div>
+        </div>}
         <footer>
           <button type="button" onClick={onClose}>Close</button>
-          {typeof preview.manage === 'function' ? <button type="button" onClick={() => { onClose(); preview.manage() }}>{preview.manageLabel || 'Open full details'}<ArrowUpRight size={14} /></button> : null}
+          {typeof preview.manage === 'function' && !workingRecord ? <button type="button" onClick={() => { onClose(); preview.manage() }}>{preview.manageLabel || 'Open full details'}<ArrowUpRight size={14} /></button> : null}
           {preview.openPath ? <button type="button" className="is-primary" onClick={() => { onClose(); navigate(preview.openPath) }}>{preview.openLabel || 'Open in tab'}<ArrowUpRight size={14} /></button> : null}
         </footer>
       </section>
