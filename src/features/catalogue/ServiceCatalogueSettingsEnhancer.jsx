@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronRight, PackageOpen } from 'lucide-react'
-import { ServiceCatalogueAdmin } from './ServiceCatalogueAdmin.jsx'
+import { ServiceCatalogueAdminV2 } from './ServiceCatalogueAdminV2.jsx'
 import './ServiceCatalogueSettingsEnhancer.css'
 
 const CATALOGUE_PATH = '/settings/itsm/service-catalogue'
@@ -96,7 +96,7 @@ export function ServiceCatalogueSettingsEnhancer() {
     <>
       {desktopGroup ? createPortal(navButton(false), desktopGroup) : null}
       {mobileGroup ? createPortal(navButton(true), mobileGroup) : null}
-      {active && contentHost ? createPortal(<ServiceCatalogueAdmin />, contentHost) : null}
+      {active && contentHost ? createPortal(<ServiceCatalogueAdminV2 />, contentHost) : null}
     </>
   )
 }
