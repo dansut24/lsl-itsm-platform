@@ -113,3 +113,4 @@ jobs:
           node scripts/live-chat-operations-e2e.mjs
           node scripts/rbac-e2e.mjs
           node scripts/assignment-e2e.mjs
+          node scripts/service-request-fulfilment-e2e.mjs
