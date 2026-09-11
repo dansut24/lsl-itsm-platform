@@ -12,6 +12,7 @@ import { ProductionMfaLoginEnhancer } from './features/security/ProductionMfaLog
 import { ProductionMfaSettingsEnhancer } from './features/security/ProductionMfaSettingsEnhancer.jsx'
 import { ProductionPasswordRecoveryEnhancer } from './features/security/ProductionPasswordRecoveryEnhancer.jsx'
 import { ProductionSecurityCenterEnhancer } from './features/security/ProductionSecurityCenterEnhancer.jsx'
+import { ProductionFirstLoginExperience } from './production/ProductionFirstLoginExperience.jsx'
 import { ProductionItsmWorkspace } from './production/ProductionItsmWorkspace.jsx'
 import { ProductionNavigationDockPreferences } from './production/ProductionNavigationDockPreferences.jsx'
 import { ProductionOnboardingBootstrap } from './production/ProductionOnboardingBootstrap.jsx'
@@ -90,6 +91,7 @@ createRoot(rootElement).render(
     {productionWorkspace && !productionOnboarding ? <ProductionPremiumWorkspaceExperience /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionPortalThemeBridge /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionUniversalPeekV2 /> : null}
+    {productionWorkspace && !productionOnboarding ? <ProductionFirstLoginExperience /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionMfaLoginEnhancer /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionMfaSettingsEnhancer /> : null}
     {productionWorkspace && productionOnboarding ? <OnboardingMfaEnhancer /> : null}
