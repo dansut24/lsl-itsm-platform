@@ -112,3 +112,4 @@ jobs:
           node scripts/knowledge-live-chat-e2e.mjs
           node scripts/live-chat-operations-e2e.mjs
           node scripts/rbac-e2e.mjs
+          node scripts/assignment-e2e.mjs
