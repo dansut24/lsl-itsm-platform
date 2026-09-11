@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import './ProductionKnowledgeLiveChat.css'
+import './ProductionLiveChatBadgeBridge.css'
 
 const API_BASE = window.__HI5_API_BASE__
 const TAB_SELECTOR = '.workspace-tab-livechat, .workspace-tab[data-tab-module="livechat"]'
