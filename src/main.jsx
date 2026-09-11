@@ -19,6 +19,7 @@ import { ProductionOrganisationWriteThrough } from './production/ProductionOrgan
 import { ProductionPortalBootstrap } from './production/ProductionPortalBootstrap.jsx'
 import { ProductionPremiumWorkspaceExperience } from './production/ProductionPremiumWorkspaceExperience.jsx'
 import { ProductionRecordDetailRouter } from './production/ProductionRecordDetailRouter.jsx'
+import { ProductionRecordExportEnhancer } from './production/ProductionRecordExportEnhancer.jsx'
 import { ProductionServiceRequestIntake } from './production/ProductionServiceRequestIntake.jsx'
 import { ProductionUniversalPeekV2 } from './production/ProductionUniversalPeekV2.jsx'
 import { ProductionWorkspaceBootstrap } from './production/ProductionWorkspaceBootstrap.jsx'
@@ -48,6 +49,7 @@ import './production/ProductionSharedRecordMasthead.css'
 import './production/ProductionPremiumWorkspaceExperience.css'
 import './production/ProductionUniversalPeekV2.css'
 import './production/ProductionRecordInspectorClassic.css'
+import './production/ProductionRecordExperienceFinal.css'
 
 const rootElement = document.getElementById('root')
 const initialSurface = resolveTenantSurface()
@@ -77,6 +79,7 @@ createRoot(rootElement).render(
     {productionWorkspace && !productionOnboarding ? <ProductionOrganisationWriteThrough /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionItsmWorkspace /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionRecordDetailRouter /> : null}
+    {productionWorkspace && !productionOnboarding ? <ProductionRecordExportEnhancer /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionServiceRequestIntake /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionWorkspaceRefinement /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionNavigationDockPreferences /> : null}
