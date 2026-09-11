@@ -4,6 +4,8 @@ import { originMatchesTenant } from './deploymentConfig.js'
 import { resolveSession } from './session.js'
 
 const maxTasks = 40
+const autoDateField = '__auto__'
+const noDateField = '__none__'
 
 function text(value, max = 255) {
   return String(value ?? '').trim().slice(0, max)
@@ -11,6 +13,10 @@ function text(value, max = 255) {
 
 function asArray(value) {
   return Array.isArray(value) ? value : []
+}
+
+function asObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
 }
 
 function originMatchesSession(c, session) {
@@ -49,6 +55,7 @@ function normaliseTasks(value) {
     teamId: text(raw?.teamId, 120),
     instructions: text(raw?.instructions, 5000),
     dependsOn: [...new Set(asArray(raw?.dependsOn).map((item) => workflowTaskKey(item, 0)).filter(Boolean))].slice(0, 20),
+    titleDateFieldId: text(raw?.titleDateFieldId || autoDateField, 120) || autoDateField,
   }))
 
   const ids = new Set()
@@ -139,6 +146,67 @@ async function flowForItem(db, tenantId, itemKey) {
   return result.rows[0] || null
 }
 
+async function catalogueFormSchema(db, tenantId, itemKey) {
+  const result = await db.query(
+    `SELECT form_schema
+     FROM service_catalogue_items
+     WHERE tenant_id = $1 AND external_key = $2
+     LIMIT 1`,
+    [tenantId, catalogueKey(itemKey)],
+  )
+  return asArray(result.rows[0]?.form_schema)
+}
+
+function dateFieldsFromSchema(schema) {
+  return asArray(schema)
+    .filter((field) => field?.id && ['date', 'datetime-local'].includes(field?.type))
+    .map((field) => ({ id: text(field.id, 120), label: text(field.label || field.id, 180), type: field.type }))
+}
+
+function chosenDateField(task, dateFields) {
+  if (task.titleDateFieldId === noDateField) return null
+  if (task.titleDateFieldId === autoDateField) return dateFields.length === 1 ? dateFields[0] : null
+  return dateFields.find((field) => field.id === task.titleDateFieldId) || null
+}
+
+function formatTaskDate(value) {
+  const raw = text(value, 120)
+  if (!raw) return ''
+
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  let date = null
+  if (iso) {
+    const year = Number(iso[1])
+    const month = Number(iso[2])
+    const day = Number(iso[3])
+    date = new Date(Date.UTC(year, month - 1, day))
+    if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return ''
+  } else {
+    const parsed = new Date(raw)
+    if (Number.isNaN(parsed.getTime())) return ''
+    date = parsed
+  }
+
+  return new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  }).format(date)
+}
+
+function taskWithResolvedTitle(task, request, dateFields) {
+  const field = chosenDateField(task, dateFields)
+  const rawValue = field ? asObject(request.submitted_fields)[field.id] : ''
+  const titleDate = formatTaskDate(rawValue)
+  return {
+    ...task,
+    generatedTitle: titleDate ? text(`${task.title} · ${titleDate}`, 240) : task.title,
+    titleDate,
+    titleDateFieldLabel: field?.label || '',
+  }
+}
+
 async function requestByReference(db, tenantId, reference, lock = false) {
   const result = await db.query(
     `SELECT * FROM service_requests
@@ -161,7 +229,10 @@ async function installRequestFlow(db, tenantId, reference) {
 
   const configured = normaliseTasks(flow.tasks)
   if (!configured.length) return null
-  const tasks = await resolveTaskTeams(db, tenantId, configured)
+  const schema = await catalogueFormSchema(db, tenantId, request.catalogue_item_key_snapshot)
+  const dateFields = dateFieldsFromSchema(schema)
+  const routedTasks = await resolveTaskTeams(db, tenantId, configured)
+  const tasks = routedTasks.map((task) => taskWithResolvedTitle(task, request, dateFields))
   const externalKeys = new Map(tasks.map((task, index) => [task.id, externalTaskKey(request.reference, index)]))
 
   await db.query('DELETE FROM service_request_tasks WHERE request_id = $1', [request.id])
@@ -190,7 +261,7 @@ async function installRequestFlow(db, tenantId, reference) {
         tenantId,
         request.id,
         key,
-        task.title,
+        task.generatedTitle,
         status,
         team?.id || null,
         JSON.stringify(team ? { id: team.external_key, name: team.name } : {}),
@@ -201,14 +272,18 @@ async function installRequestFlow(db, tenantId, reference) {
     created.push(inserted.rows[0])
   }
 
-  const snapshot = tasks.map((task, index) => ({
+  const snapshot = tasks.map((task) => ({
     id: task.id,
     taskKey: externalKeys.get(task.id),
-    title: task.title,
+    title: task.generatedTitle,
+    baseTitle: task.title,
     team: task.team,
     teamId: task.teamId,
     instructions: task.instructions,
     dependsOn: task.dependsOn,
+    titleDateFieldId: task.titleDateFieldId,
+    titleDateFieldLabel: task.titleDateFieldLabel,
+    titleDate: task.titleDate,
   }))
   await db.query(
     `UPDATE service_requests
@@ -422,8 +497,16 @@ export function registerServiceRequestFulfilmentRoutes(app) {
     const auth = await requireCatalogueManager(c)
     if (auth.error) return auth.error
     const key = catalogueKey(c.req.param('itemKey'))
-    const flow = await flowForItem(pool, auth.session.tenant_id, key)
-    return c.json({ itemKey: key, tasks: flow?.tasks || [], updatedAt: flow?.updated_at || null })
+    const [flow, schema] = await Promise.all([
+      flowForItem(pool, auth.session.tenant_id, key),
+      catalogueFormSchema(pool, auth.session.tenant_id, key),
+    ])
+    return c.json({
+      itemKey: key,
+      tasks: flow?.tasks || [],
+      dateFields: dateFieldsFromSchema(schema),
+      updatedAt: flow?.updated_at || null,
+    })
   })
 
   app.put('/api/v1/catalogue/:itemKey/fulfilment', async (c) => {
@@ -435,6 +518,14 @@ export function registerServiceRequestFulfilmentRoutes(app) {
     try {
       const key = catalogueKey(c.req.param('itemKey'))
       const tasks = await resolveTaskTeams(pool, auth.session.tenant_id, normaliseTasks(body?.tasks))
+      const schema = await catalogueFormSchema(pool, auth.session.tenant_id, key)
+      const dateFields = dateFieldsFromSchema(schema)
+      const knownDateIds = new Set(dateFields.map((field) => field.id))
+      for (const task of tasks) {
+        if (![autoDateField, noDateField].includes(task.titleDateFieldId) && !knownDateIds.has(task.titleDateFieldId)) {
+          return c.json({ error: `The task title date field selected for ${task.title} no longer exists on this request form.` }, 400)
+        }
+      }
       await pool.query(
         `INSERT INTO service_catalogue_fulfilment_flows
            (tenant_id, catalogue_item_key, tasks, updated_by_user_id, updated_at)
@@ -445,7 +536,7 @@ export function registerServiceRequestFulfilmentRoutes(app) {
            updated_at = now()`,
         [auth.session.tenant_id, key, JSON.stringify(tasks), auth.session.user_id],
       )
-      return c.json({ itemKey: key, tasks })
+      return c.json({ itemKey: key, tasks, dateFields })
     } catch (error) {
       if (error?.status) return c.json({ error: error.message }, error.status)
       throw error
