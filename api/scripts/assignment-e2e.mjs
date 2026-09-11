@@ -94,7 +94,7 @@ try {
   )
   const teamB = await db.query(
     `INSERT INTO organisation_teams (tenant_id,external_key,name,description,active)
-     VALUES ($1,'TEAM-INFRA','Infrastructure','Infrastructure support',true) RETURNING id`,
+     VALUES ($1,'TEAM-CI-INFRASTRUCTURE','Infrastructure','Infrastructure support',true) RETURNING id`,
     [tenantId],
   )
   await db.query(
