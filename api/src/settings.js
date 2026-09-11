@@ -10,6 +10,7 @@ import {
   requestUserAgent,
 } from './securityAudit.js'
 import { resolveSession, sessionPayload } from './session.js'
+import { registerUserPreferenceRoutes } from './userPreferences.js'
 
 const writableAreas = new Set([
   'company',
@@ -204,6 +205,7 @@ export function registerSettingsRoutes(app) {
     return c.json(sessionPayload(refreshed))
   })
 
+  registerUserPreferenceRoutes(app)
   registerSecurityInstrumentation(app)
   registerMfaRoutes(app)
   registerSecurityRoutes(app)
