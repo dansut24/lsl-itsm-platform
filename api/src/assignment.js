@@ -433,8 +433,8 @@ export function registerAssignmentRoutes(app) {
     if (c.req.method === 'PATCH') {
       const body = await requestBodyClone(c)
       if (!body) return c.json({ error: 'A valid JSON request body is required.' }, 400)
-      const reference = c.req.param('reference') || c.req.path.split('/').filter(Boolean).pop()
-      const current = await currentGeneric(pool, auth.session.tenant_id, reference)
+      const reference = c.req.path.match(/\/itsm-lifecycle\/([^/]+)\/?$/i)?.[1]
+      const current = reference ? await currentGeneric(pool, auth.session.tenant_id, decodeURIComponent(reference)) : null
       if (current) {
         try { await validateAssignmentMutation(pool, auth.session.tenant_id, current.record_type, current, body) }
         catch (error) { return c.json({ error: error.message }, error.status || 400) }
@@ -461,22 +461,21 @@ export function registerAssignmentRoutes(app) {
   })
 
   app.use('/api/v1/service-requests/*', async (c, next) => {
+    if (c.req.method !== 'PATCH') return next()
     const auth = await requireWorkspace(c)
     if (auth.error) return auth.error
-    if (c.req.method === 'PATCH') {
-      const body = await requestBodyClone(c)
-      if (!body) return c.json({ error: 'A valid JSON request body is required.' }, 400)
-      const taskMatch = c.req.path.match(/\/service-requests\/([^/]+)\/tasks\/([^/]+)\/?$/i)
-      const requestMatch = c.req.path.match(/\/service-requests\/([^/]+)\/?$/i)
-      const current = taskMatch
-        ? await currentTask(pool, auth.session.tenant_id, decodeURIComponent(taskMatch[1]), decodeURIComponent(taskMatch[2]))
-        : requestMatch
-          ? await currentRequest(pool, auth.session.tenant_id, decodeURIComponent(requestMatch[1]))
-          : null
-      if (current) {
-        try { await validateAssignmentMutation(pool, auth.session.tenant_id, 'Service Request', current, body) }
-        catch (error) { return c.json({ error: error.message }, error.status || 400) }
-      }
+    const body = await requestBodyClone(c)
+    if (!body) return c.json({ error: 'A valid JSON request body is required.' }, 400)
+    const taskMatch = c.req.path.match(/\/service-requests\/([^/]+)\/tasks\/([^/]+)\/?$/i)
+    const requestMatch = c.req.path.match(/\/service-requests\/([^/]+)\/?$/i)
+    const current = taskMatch
+      ? await currentTask(pool, auth.session.tenant_id, decodeURIComponent(taskMatch[1]), decodeURIComponent(taskMatch[2]))
+      : requestMatch
+        ? await currentRequest(pool, auth.session.tenant_id, decodeURIComponent(requestMatch[1]))
+        : null
+    if (current) {
+      try { await validateAssignmentMutation(pool, auth.session.tenant_id, 'Service Request', current, body) }
+      catch (error) { return c.json({ error: error.message }, error.status || 400) }
     }
     await next()
   })
