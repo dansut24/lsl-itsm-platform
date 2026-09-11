@@ -54,7 +54,7 @@ try {
   const portalOrigin = `https://${tenant.slug}-portal.hi5central.com`
 
   const identities = await db.query(
-    `SELECT m.role, u.id AS user_id, u.email, p.id AS person_id,
+    `SELECT m.role, u.id AS user_id, u.email, u.name, p.id AS person_id,
             p.external_key AS person_key, team.name AS team_name
      FROM tenant_memberships m
      JOIN users u ON u.id = m.user_id
@@ -69,7 +69,6 @@ try {
   assert(owner?.user_id, 'Fresh tenant owner was not found')
   assert(owner?.person_id, 'Fresh tenant owner Person record was not found')
   assert(requester?.user_id && requester?.person_id, 'Activated requester identity was not found')
-  assert(owner.team_name, 'Owner is not attached to an assignment team')
 
   const ownerCookie = await issueSession(tenant.id, owner.user_id, 'hi5central_session')
   const requesterCookie = await issueSession(tenant.id, requester.user_id, 'hi5central_portal_session')
@@ -80,52 +79,35 @@ try {
   const requesterWorkspace = await json('/api/v1/auth/session', { cookie: requesterCookie, origin: tenantOrigin })
   assert(requesterWorkspace.response.status === 401, 'Portal cookie was incorrectly accepted by the technician workspace')
 
-  console.log('2. Publishing a real Portal Incident form')
-  const catalogue = await json('/api/v1/catalogue', { cookie: ownerCookie, origin: tenantOrigin })
-  assert(catalogue.response.ok, `Could not load catalogue: ${catalogue.payload.error || catalogue.response.status}`)
-  const incidentForm = {
-    id: 'FORM-CI-PORTAL-INCIDENT',
-    title: 'Report an IT issue',
-    category: 'Support',
-    description: 'Report something that is broken or preventing you from working.',
-    kind: 'request-form',
-    requestType: 'Incident',
-    service: 'IT Support',
-    team: owner.team_name,
-    approval: 'none',
-    visibility: 'portal',
-    workflow: '',
-    active: true,
-    formSchema: [
-      { id: 'affectedService', type: 'text', label: 'Affected service', required: true },
-      { id: 'impact', type: 'select', label: 'Impact', required: true, options: [
-        { value: 'me', label: 'Only me' },
-        { value: 'team', label: 'My team' },
-        { value: 'many', label: 'Many people' },
-      ] },
-    ],
+  console.log('2. Verifying migration 020 permanently blocks legacy organisation seeds')
+  const guards = await db.query(
+    `SELECT conname
+     FROM pg_constraint
+     WHERE conname IN (
+       'organisation_people_no_legacy_demo_keys',
+       'organisation_teams_no_legacy_demo_keys',
+       'organisation_departments_no_legacy_demo_keys'
+     )`,
+  )
+  assert(guards.rowCount === 3, `Expected all three legacy organisation guards, found ${guards.rowCount}`)
+  let legacyBlocked = false
+  try {
+    await db.query(
+      `INSERT INTO organisation_people (tenant_id, external_key, name, email)
+       VALUES ($1, 'AGT-DANA', 'Legacy Demo Probe', $2)`,
+      [tenant.id, `legacy-probe-${randomBytes(5).toString('hex')}@hi5central.test`],
+    )
+  } catch (error) {
+    legacyBlocked = error?.code === '23514'
   }
-  const items = [
-    ...(catalogue.payload.items || []).filter((item) => item.id !== incidentForm.id),
-    incidentForm,
-  ]
-  const categories = [...new Set([...(catalogue.payload.categories || []), 'Support'])]
-  const publish = await json('/api/v1/catalogue', {
-    method: 'PUT', cookie: ownerCookie, origin: tenantOrigin, body: { categories, items },
-  })
-  assert(publish.response.ok, `Could not publish Incident form: ${publish.payload.error || publish.response.status}`)
+  assert(legacyBlocked, 'Legacy organisation Person key was not rejected by the database guard')
 
-  const publicCatalogue = await json(`/api/v1/portal/catalogue/${tenant.slug}`, { origin: portalOrigin })
-  const publishedIncident = (publicCatalogue.payload.items || []).find((item) => item.id === incidentForm.id)
-  assert(publicCatalogue.response.ok && publishedIncident?.requestType === 'Incident', 'Incident form is not published to the requester Portal')
-
-  console.log('3. Raising the Incident as the portal-only requester')
+  console.log('3. Raising a direct Incident from the dedicated Portal path')
   const submitted = await json('/api/v1/portal/incidents', {
     method: 'POST',
     cookie: requesterCookie,
     origin: portalOrigin,
     body: {
-      catalogueItemId: incidentForm.id,
       summary: 'Portal incident notification acceptance',
       urgency: 'High',
       fields: { affectedService: 'Microsoft 365', impact: 'me' },
@@ -136,6 +118,7 @@ try {
   const reference = submitted.payload.reference
   assert(/^INC-\d+$/.test(reference || ''), `Portal Incident did not receive an INC reference: ${reference || 'none'}`)
   assert(submitted.payload.requestType === 'Incident' && submitted.payload.source === 'portal', 'Portal Incident payload is not classified correctly')
+  assert(submitted.payload.submittedFields?.impact === 'me', 'Direct Portal Incident fields were not persisted')
 
   console.log('4. Verifying requester-scoped Incident history and technician isolation')
   const myRequests = await json('/api/v1/portal/requests', { cookie: requesterCookie, origin: portalOrigin })
@@ -149,7 +132,7 @@ try {
   const technicianApiAsRequester = await json(`/api/v1/itsm-records/${encodeURIComponent(reference)}`, { cookie: requesterCookie, origin: portalOrigin })
   assert(technicianApiAsRequester.response.status === 403, `Requester reached technician-only Incident API: ${technicianApiAsRequester.response.status}`)
 
-  console.log('5. Verifying analyst notification and exact Incident target')
+  console.log('5. Verifying analyst creation notification and exact Incident target')
   const ownerNotifications = await json('/api/v1/notifications?limit=150', { cookie: ownerCookie, origin: tenantOrigin })
   assert(ownerNotifications.response.ok, `Could not read owner notifications: ${ownerNotifications.payload.error || ownerNotifications.response.status}`)
   const createdNotification = (ownerNotifications.payload.items || []).find((item) =>
@@ -162,7 +145,36 @@ try {
   const ownerIncident = await json(`/api/v1/itsm-records/${encodeURIComponent(reference)}`, { cookie: ownerCookie, origin: tenantOrigin })
   assert(ownerIncident.response.ok && ownerIncident.payload.id === reference, 'Notification target Incident is not available to the technician')
 
-  console.log('6. Verifying requester reply produces another analyst notification')
+  console.log('6. Reassigning the Incident and verifying explicit assigned-to-you notification')
+  const assignment = await json(`/api/v1/itsm-records/${encodeURIComponent(reference)}`, {
+    method: 'PATCH',
+    cookie: ownerCookie,
+    origin: tenantOrigin,
+    body: { assignee: owner.email },
+  })
+  assert(assignment.response.ok, `Incident assignment failed: ${assignment.payload.error || assignment.response.status}`)
+  assert(assignment.payload.assignee === owner.name, `Incident was not assigned to ${owner.name}`)
+
+  const notificationsAfterAssignment = await json('/api/v1/notifications?limit=150', { cookie: ownerCookie, origin: tenantOrigin })
+  const assignmentNotification = (notificationsAfterAssignment.payload.items || []).find((item) =>
+    item.eventType === 'incident.assigned'
+      && item.target?.type === 'Incident'
+      && item.target?.reference === reference
+      && item.title === `${reference} assigned to you`
+      && !item.read)
+  assert(assignmentNotification, `Owner did not receive an explicit incident.assigned notification for ${reference}`)
+
+  const badAssignment = await json(`/api/v1/itsm-records/${encodeURIComponent(reference)}`, {
+    method: 'PATCH',
+    cookie: ownerCookie,
+    origin: tenantOrigin,
+    body: { assignee: 'Inactive Missing Technician' },
+  })
+  assert(badAssignment.response.status === 422, `Invalid assignee was not rejected: ${badAssignment.response.status}`)
+  const afterBadAssignment = await json(`/api/v1/itsm-records/${encodeURIComponent(reference)}`, { cookie: ownerCookie, origin: tenantOrigin })
+  assert(afterBadAssignment.payload.assignee === owner.name, 'Rejected assignment unexpectedly changed the current assignee')
+
+  console.log('7. Verifying requester reply produces another analyst notification')
   const replyText = 'I have restarted twice and Outlook still fails to open.'
   const reply = await json(`/api/v1/portal/requests/${encodeURIComponent(reference)}/activities`, {
     method: 'POST', cookie: requesterCookie, origin: portalOrigin, body: { text: replyText },
@@ -177,10 +189,11 @@ try {
       && !item.read)
   assert(replyNotification, `Owner did not receive the requester update notification for ${reference}`)
 
-  console.log('7. Verifying PostgreSQL evidence')
+  console.log('8. Verifying PostgreSQL evidence')
   const evidence = await db.query(
-    `SELECT r.reference, r.source, r.record_type, r.requester_person_id,
+    `SELECT r.reference, r.source, r.record_type, r.requester_person_id, r.assigned_person_id,
             count(DISTINCT n.id) FILTER (WHERE n.user_id = $3 AND n.event_type = 'incident.created')::int AS technician_created_notifications,
+            count(DISTINCT n.id) FILTER (WHERE n.user_id = $3 AND n.event_type = 'incident.assigned')::int AS technician_assignment_notifications,
             count(DISTINCT n.id) FILTER (WHERE n.user_id = $3 AND n.event_type = 'incident.customer_update_added')::int AS technician_reply_notifications,
             count(DISTINCT a.id) FILTER (WHERE a.visibility = 'customer')::int AS customer_activities,
             count(DISTINCT a.id) FILTER (WHERE a.visibility = 'internal')::int AS internal_activities
@@ -189,13 +202,15 @@ try {
        ON n.tenant_id = r.tenant_id AND n.target_reference = r.reference
      LEFT JOIN itsm_record_activities a ON a.record_id = r.id
      WHERE r.tenant_id = $1 AND r.reference = $2
-     GROUP BY r.reference, r.source, r.record_type, r.requester_person_id`,
+     GROUP BY r.reference, r.source, r.record_type, r.requester_person_id, r.assigned_person_id`,
     [tenant.id, reference, owner.user_id],
   )
   const row = evidence.rows[0]
   assert(row?.record_type === 'Incident' && row?.source === 'portal', 'Incident persistence evidence is incorrect')
   assert(row.requester_person_id === requester.person_id, 'Incident is not linked to the authenticated requester Person')
+  assert(row.assigned_person_id === owner.person_id, 'Incident is not persisted against the assigned technician Person')
   assert(Number(row.technician_created_notifications) >= 1, 'PostgreSQL has no technician Incident-created notification')
+  assert(Number(row.technician_assignment_notifications) >= 1, 'PostgreSQL has no technician Incident-assignment notification')
   assert(Number(row.technician_reply_notifications) >= 1, 'PostgreSQL has no technician requester-update notification')
   assert(Number(row.customer_activities) >= 2, 'Portal Incident customer activity history is incomplete')
 
