@@ -160,7 +160,7 @@ try {
   assert(createdNotification, `Owner did not receive an unread incident.created notification for ${reference}`)
 
   const ownerIncident = await json(`/api/v1/itsm-records/${encodeURIComponent(reference)}`, { cookie: ownerCookie, origin: tenantOrigin })
-  assert(ownerIncident.response.ok && ownerIncident.payload.reference === reference, 'Notification target Incident is not available to the technician')
+  assert(ownerIncident.response.ok && ownerIncident.payload.id === reference, 'Notification target Incident is not available to the technician')
 
   console.log('6. Verifying requester reply produces another analyst notification')
   const replyText = 'I have restarted twice and Outlook still fails to open.'
