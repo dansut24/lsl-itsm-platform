@@ -40,6 +40,7 @@ import { ProductionWorkspaceBootstrap } from './production/ProductionWorkspaceBo
 import { ProductionWorkspaceLiveChatMenu } from './production/ProductionWorkspaceLiveChatMenu.jsx'
 import { ProductionWorkspaceRefinement } from './production/ProductionWorkspaceRefinement.jsx'
 import { ProductionWorkspaceShellV2 } from './production/ProductionWorkspaceShellV2.jsx'
+import { ProductionWorkspaceTabPersistence, installWorkspaceTabSessionIsolation } from './production/ProductionWorkspaceTabPersistence.jsx'
 import { resolveTenantSurface } from './lib/tenantSurface.js'
 import './features/settings/ProductionSettingsFloating.css'
 import './features/people/OrganisationContextual.css'
@@ -66,6 +67,8 @@ import './production/ProductionUniversalPeekV2.css'
 import './production/ProductionRecordInspectorClassic.css'
 import './production/ProductionRecordExperienceFinal.css'
 import './production/ProductionWorkflowGuard.css'
+
+installWorkspaceTabSessionIsolation()
 
 const rootElement = document.getElementById('root')
 const initialSurface = resolveTenantSurface()
@@ -111,6 +114,7 @@ createRoot(rootElement).render(
     {productionWorkspace && !productionOnboarding ? <ProductionWorkspaceRefinement /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionNavigationDockPreferences /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionWorkspaceShellV2 /> : null}
+    {productionWorkspace && !productionOnboarding ? <ProductionWorkspaceTabPersistence /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionWorkspaceLiveChatMenu /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionPremiumWorkspaceExperience /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionPortalThemeBridge /> : null}
