@@ -12,6 +12,8 @@ import { ProductionMfaLoginEnhancer } from './features/security/ProductionMfaLog
 import { ProductionMfaSettingsEnhancer } from './features/security/ProductionMfaSettingsEnhancer.jsx'
 import { ProductionPasswordRecoveryEnhancer } from './features/security/ProductionPasswordRecoveryEnhancer.jsx'
 import { ProductionSecurityCenterEnhancer } from './features/security/ProductionSecurityCenterEnhancer.jsx'
+import { ProductionAccessControl } from './production/ProductionAccessControl.jsx'
+import { ProductionAccessGuard } from './production/ProductionAccessGuard.jsx'
 import { ProductionFirstLoginExperience } from './production/ProductionFirstLoginExperience.jsx'
 import { ProductionFirstLoginRouteBridge } from './production/ProductionFirstLoginRouteBridge.jsx'
 import { ProductionItsmWorkspace } from './production/ProductionItsmWorkspace.jsx'
@@ -91,6 +93,8 @@ createRoot(rootElement).render(
     {initialSurface.kind === 'workspace' && !productionOnboarding && !productionWorkspace ? <KnowledgeContextEnhancer /> : null}
     {initialSurface.kind === 'workspace' && !productionOnboarding ? <OrganisationSitesEnhancer /> : null}
     {initialSurface.kind === 'workspace' && !productionOnboarding ? <ServiceCatalogueSettingsEnhancer /> : null}
+    {productionWorkspace && !productionOnboarding ? <ProductionAccessGuard /> : null}
+    {productionWorkspace && !productionOnboarding ? <ProductionAccessControl /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionOrganisationWriteThrough /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionItsmWorkspace /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionKnowledgeBase /> : null}
