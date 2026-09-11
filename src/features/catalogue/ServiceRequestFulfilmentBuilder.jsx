@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import { CheckCircle2, Loader2, Plus, Trash2, UsersRound } from 'lucide-react'
+import { CalendarDays, CheckCircle2, ChevronDown, Loader2, Plus, Trash2, UsersRound } from 'lucide-react'
 import './ServiceRequestFulfilmentBuilder.css'
 
 const API_BASE = window.__HI5_API_BASE__
+const AUTO_DATE = '__auto__'
+const NO_DATE = '__none__'
 
 async function api(path) {
   const response = await fetch(`${API_BASE}${path}`, { credentials: 'include', cache: 'no-store' })
@@ -11,7 +13,7 @@ async function api(path) {
   return payload
 }
 
-function createTask(index) {
+function createTask(index, titleDateFieldId = AUTO_DATE) {
   return {
     id: `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
     title: '',
@@ -19,6 +21,7 @@ function createTask(index) {
     teamId: '',
     instructions: '',
     dependsOn: [],
+    titleDateFieldId,
     order: index,
   }
 }
@@ -31,15 +34,36 @@ function cleanTasks(value) {
     teamId: task?.teamId || '',
     instructions: task?.instructions || '',
     dependsOn: Array.isArray(task?.dependsOn) ? task.dependsOn : [],
+    titleDateFieldId: task?.titleDateFieldId || AUTO_DATE,
     order: index,
   }))
 }
 
-export function ServiceRequestFulfilmentBuilder({ itemKey = '', production = false, value = [], onChange }) {
+function buildStages(tasks) {
+  const stageById = new Map()
+  const stages = []
+
+  tasks.forEach((task, index) => {
+    const prerequisiteStages = task.dependsOn
+      .map((dependency) => stageById.get(dependency))
+      .filter((stage) => Number.isInteger(stage))
+    const stageNumber = prerequisiteStages.length ? Math.max(...prerequisiteStages) + 1 : 1
+    stageById.set(task.id, stageNumber)
+    const stageIndex = stageNumber - 1
+    if (!stages[stageIndex]) stages[stageIndex] = []
+    stages[stageIndex].push({ ...task, taskNumber: index + 1 })
+  })
+
+  return stages.filter(Boolean)
+}
+
+export function ServiceRequestFulfilmentBuilder({ itemKey = '', production = false, value = [], onChange, formSchema = [] }) {
   const tasks = cleanTasks(value)
   const [teams, setTeams] = useState([])
+  const [remoteDateFields, setRemoteDateFields] = useState([])
   const [loading, setLoading] = useState(production)
   const [error, setError] = useState('')
+  const [titleDateFieldId, setTitleDateFieldId] = useState(() => tasks[0]?.titleDateFieldId || AUTO_DATE)
 
   useEffect(() => {
     if (!production) {
@@ -54,11 +78,16 @@ export function ServiceRequestFulfilmentBuilder({ itemKey = '', production = fal
       try {
         const [options, flow] = await Promise.all([
           api('/api/v1/catalogue/fulfilment-options'),
-          itemKey ? api(`/api/v1/catalogue/${encodeURIComponent(itemKey)}/fulfilment`) : Promise.resolve({ tasks: [] }),
+          itemKey ? api(`/api/v1/catalogue/${encodeURIComponent(itemKey)}/fulfilment`) : Promise.resolve({ tasks: [], dateFields: [] }),
         ])
         if (!active) return
         setTeams(options.teams || [])
-        if (itemKey && Array.isArray(flow.tasks)) onChange(cleanTasks(flow.tasks))
+        setRemoteDateFields(Array.isArray(flow.dateFields) ? flow.dateFields : [])
+        if (itemKey && Array.isArray(flow.tasks)) {
+          const hydrated = cleanTasks(flow.tasks)
+          setTitleDateFieldId(hydrated[0]?.titleDateFieldId || AUTO_DATE)
+          onChange(hydrated)
+        }
       } catch (loadError) {
         if (active) setError(loadError.message)
       } finally {
@@ -71,6 +100,20 @@ export function ServiceRequestFulfilmentBuilder({ itemKey = '', production = fal
   }, [itemKey, production])
 
   const taskNames = useMemo(() => new Map(tasks.map((task, index) => [task.id, task.title || `Task ${index + 1}`])), [tasks])
+  const stages = useMemo(() => buildStages(tasks), [tasks])
+  const dateFields = useMemo(() => {
+    const local = (Array.isArray(formSchema) ? formSchema : [])
+      .filter((field) => ['date', 'datetime-local'].includes(field?.type) && field?.id)
+      .map((field) => ({ id: field.id, label: field.label || field.id, type: field.type }))
+    return local.length ? local : remoteDateFields
+  }, [formSchema, remoteDateFields])
+  const selectedDateField = useMemo(() => {
+    if (titleDateFieldId === NO_DATE) return null
+    if (titleDateFieldId === AUTO_DATE) return dateFields.length === 1 ? dateFields[0] : null
+    return dateFields.find((field) => field.id === titleDateFieldId) || null
+  }, [dateFields, titleDateFieldId])
+  const missingTeamCount = tasks.filter((task) => !task.teamId && !task.team).length
+  const dateNeedsChoice = titleDateFieldId === AUTO_DATE && dateFields.length > 1
 
   function updateTask(index, patch) {
     const next = tasks.map((task, taskIndex) => taskIndex === index ? { ...task, ...patch } : task)
@@ -78,7 +121,7 @@ export function ServiceRequestFulfilmentBuilder({ itemKey = '', production = fal
   }
 
   function addTask() {
-    onChange([...tasks, createTask(tasks.length)])
+    onChange([...tasks, createTask(tasks.length, titleDateFieldId)])
   }
 
   function removeTask(index) {
@@ -103,15 +146,69 @@ export function ServiceRequestFulfilmentBuilder({ itemKey = '', production = fal
     updateTask(index, { teamId, team: team?.name || '' })
   }
 
+  function chooseTitleDate(nextValue) {
+    setTitleDateFieldId(nextValue)
+    onChange(tasks.map((task) => ({ ...task, titleDateFieldId: nextValue })))
+  }
+
+  function previewTitle(task) {
+    const base = task.title || `Task ${task.taskNumber}`
+    return selectedDateField ? `${base} · [${selectedDateField.label || 'request date'}]` : base
+  }
+
   return (
     <div className="catalogue-flow-builder">
       <div className="catalogue-flow-intro">
         <CheckCircle2 size={18} />
-        <div><strong>Fulfilment tasks</strong><span>Tasks with no prerequisite start together. Waiting tasks become ready automatically when every selected earlier task is completed.</span></div>
+        <div><strong>Fulfilment tasks</strong><span>Keep it simple: choose what each team does and which earlier work must finish first. Hi5Central unlocks the next stage automatically.</span></div>
       </div>
 
       {loading ? <div className="catalogue-flow-state"><Loader2 className="is-spinning" size={16} /> Loading teams and flow…</div> : null}
       {error ? <div className="catalogue-flow-state is-error">{error}</div> : null}
+
+      {dateFields.length ? (
+        <div className="catalogue-flow-date-setting">
+          <CalendarDays size={18} />
+          <div><strong>Task title date</strong><span>Add the request's important date to every generated task so queues stay immediately understandable.</span></div>
+          <label>
+            <span>Date</span>
+            <select value={titleDateFieldId} onChange={(event) => chooseTitleDate(event.target.value)}>
+              <option value={AUTO_DATE}>{dateFields.length === 1 ? `Automatic · ${dateFields[0].label}` : 'Automatic when there is one date field'}</option>
+              {dateFields.map((field) => <option key={field.id} value={field.id}>{field.label}</option>)}
+              <option value={NO_DATE}>Do not add a date</option>
+            </select>
+          </label>
+        </div>
+      ) : null}
+
+      {dateNeedsChoice ? <div className="catalogue-flow-hint is-warning">This request has more than one date field. Choose which date should appear in task titles.</div> : null}
+
+      {tasks.length ? (
+        <section className="catalogue-flow-preview" aria-label="Flow at a glance">
+          <header>
+            <div><span>Flow at a glance</span><strong>{stages.length} {stages.length === 1 ? 'stage' : 'stages'} · {tasks.length} {tasks.length === 1 ? 'task' : 'tasks'}</strong></div>
+            {missingTeamCount ? <small>{missingTeamCount} {missingTeamCount === 1 ? 'task needs' : 'tasks need'} a team</small> : <small className="is-ready">Ready to save</small>}
+          </header>
+          <div className="catalogue-flow-stages">
+            {stages.map((stage, stageIndex) => (
+              <div className="catalogue-flow-stage-wrap" key={`stage-${stageIndex + 1}`}>
+                {stageIndex > 0 ? <div className="catalogue-flow-stage-arrow"><ChevronDown size={16} /></div> : null}
+                <div className="catalogue-flow-stage">
+                  <div className="catalogue-flow-stage-heading"><strong>Stage {stageIndex + 1}</strong><span>{stage.length > 1 ? `${stage.length} tasks run together` : stageIndex === 0 ? 'Starts immediately' : 'Starts when prerequisites finish'}</span></div>
+                  <div className="catalogue-flow-stage-tasks">
+                    {stage.map((task) => (
+                      <div className="catalogue-flow-stage-task" key={task.id}>
+                        <span>{task.taskNumber}</span>
+                        <div><strong>{previewTitle(task)}</strong><small className={!task.team ? 'is-warning' : ''}>{task.team || 'Choose a team'}</small></div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <div className="catalogue-flow-list">
         {tasks.map((task, index) => {

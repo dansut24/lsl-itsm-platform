@@ -10,6 +10,8 @@ const email = `owner-${suffix}@hi5central.test`
 const password = `Flow-${randomBytes(12).toString('base64url')}Aa1`
 const tenantOrigin = `https://${slug}.hi5central.com`
 const db = new Client({ connectionString: process.env.DATABASE_URL })
+const targetDate = '2026-10-12'
+const titleDate = '12 Oct 2026'
 
 function assert(condition, message) {
   if (!condition) throw new Error(message)
@@ -82,7 +84,7 @@ try {
   const cookie = cookieFrom(login.response)
   assert(cookie, 'Owner session cookie was not issued')
 
-  console.log('2. Create a request-form catalogue item')
+  console.log('2. Create a request-form catalogue item with one important date')
   const catalogue = await json('/api/v1/catalogue', {
     method: 'PUT',
     cookie,
@@ -107,7 +109,7 @@ try {
         monthlyPrice: 0,
         currency: 'GBP',
         workflow: 'Joiner preparation',
-        formSchema: [],
+        formSchema: [{ id: 'targetDate', label: 'Target date', type: 'date', required: true }],
         options: [],
         source: { provider: 'ci' },
         active: true,
@@ -131,20 +133,26 @@ try {
   })
   assert(flow.response.ok, `Flow save failed: ${flow.payload.error || flow.response.status}`)
   assert(flow.payload.tasks?.length === 4, 'Flow did not persist four tasks')
+  assert(flow.payload.tasks.every((task) => task.titleDateFieldId === '__auto__'), 'Flow did not default task title dates to automatic')
+  assert(flow.payload.dateFields?.[0]?.id === 'targetDate', 'Flow did not return the request date field')
 
-  console.log('4. Submit the Service Request and verify initial task readiness')
+  console.log('4. Submit the Service Request and verify dated titles and initial readiness')
   const request = await json('/api/v1/service-requests', {
     method: 'POST',
     cookie,
-    body: { catalogueItemId: 'CAT-JOINER-FLOW', summary: 'Prepare colleague access and equipment', fields: {}, details: { text: 'Fulfilment flow acceptance request.' }, urgency: 'Medium' },
+    body: { catalogueItemId: 'CAT-JOINER-FLOW', summary: 'Prepare colleague access and equipment', fields: { targetDate }, details: { text: 'Fulfilment flow acceptance request.' }, urgency: 'Medium' },
   })
   assert(request.response.status === 201, `Request creation failed: ${request.payload.error || request.response.status}`)
   assert(request.payload.requestTasks?.length === 4, `Expected four request tasks, got ${request.payload.requestTasks?.length || 0}`)
   const reference = request.payload.reference
-  const identity = taskByTitle(request.payload, 'Prepare identity')
-  const entitlement = taskByTitle(request.payload, 'Prepare entitlement')
-  const equipment = taskByTitle(request.payload, 'Prepare equipment')
-  const handover = taskByTitle(request.payload, 'Complete workstation handover')
+  const identity = taskByTitle(request.payload, `Prepare identity · ${titleDate}`)
+  const entitlement = taskByTitle(request.payload, `Prepare entitlement · ${titleDate}`)
+  const equipment = taskByTitle(request.payload, `Prepare equipment · ${titleDate}`)
+  const handover = taskByTitle(request.payload, `Complete workstation handover · ${titleDate}`)
+  assert(identity, 'First task did not include the submitted request date in its title')
+  assert(entitlement, 'Second task did not include the submitted request date in its title')
+  assert(equipment, 'Dependent task did not include the submitted request date in its title')
+  assert(handover, 'Final task did not include the submitted request date in its title')
   assert(identity?.status === 'Ready', 'First parallel task should be Ready')
   assert(entitlement?.status === 'Ready', 'Second parallel task should be Ready')
   assert(equipment?.status === 'Waiting', 'Dependent task should start Waiting')
@@ -165,7 +173,7 @@ try {
   })
   assert(completeIdentity.response.ok, `Identity task completion failed: ${completeIdentity.payload.error || completeIdentity.response.status}`)
   let refreshed = await json(`/api/v1/service-requests/${reference}`, { cookie })
-  assert(taskByTitle(refreshed.payload, 'Prepare equipment')?.status === 'Waiting', 'Equipment should wait for both prerequisite tasks')
+  assert(taskByTitle(refreshed.payload, `Prepare equipment · ${titleDate}`)?.status === 'Waiting', 'Equipment should wait for both prerequisite tasks')
 
   console.log('7. Complete the second parallel task and unlock the next stage')
   const completeEntitlement = await json(`/api/v1/service-requests/${reference}/tasks/${entitlement.id}`, {
@@ -173,7 +181,7 @@ try {
   })
   assert(completeEntitlement.response.ok, `Entitlement task completion failed: ${completeEntitlement.payload.error || completeEntitlement.response.status}`)
   refreshed = await json(`/api/v1/service-requests/${reference}`, { cookie })
-  const equipmentReady = taskByTitle(refreshed.payload, 'Prepare equipment')
+  const equipmentReady = taskByTitle(refreshed.payload, `Prepare equipment · ${titleDate}`)
   assert(equipmentReady?.status === 'Ready', 'Equipment should become Ready when both prerequisite tasks are complete')
 
   console.log('8. Unlock the final task only after the intermediate task completes')
@@ -182,7 +190,7 @@ try {
   })
   assert(completeEquipment.response.ok, `Equipment task completion failed: ${completeEquipment.payload.error || completeEquipment.response.status}`)
   refreshed = await json(`/api/v1/service-requests/${reference}`, { cookie })
-  const handoverReady = taskByTitle(refreshed.payload, 'Complete workstation handover')
+  const handoverReady = taskByTitle(refreshed.payload, `Complete workstation handover · ${titleDate}`)
   assert(handoverReady?.status === 'Ready', 'Final task should unlock after its prerequisite completes')
 
   console.log('9. Block request completion until every task is complete')
@@ -204,9 +212,14 @@ try {
   })
   assert(completeRequest.response.ok, `Request completion failed: ${completeRequest.payload.error || completeRequest.response.status}`)
 
-  console.log('10. Confirm the submitted request keeps an immutable flow snapshot')
+  console.log('10. Confirm the submitted request keeps an immutable dated flow snapshot')
   const snapshot = await db.query(`SELECT workflow_tasks_snapshot FROM service_requests WHERE tenant_id=$1 AND reference=$2`, [tenantId, reference])
-  assert(Array.isArray(snapshot.rows[0]?.workflow_tasks_snapshot) && snapshot.rows[0].workflow_tasks_snapshot.length === 4, 'Request workflow snapshot was not stored')
+  const savedFlow = snapshot.rows[0]?.workflow_tasks_snapshot
+  assert(Array.isArray(savedFlow) && savedFlow.length === 4, 'Request workflow snapshot was not stored')
+  assert(savedFlow[0]?.baseTitle === 'Prepare identity', 'Snapshot did not retain the base task title')
+  assert(savedFlow[0]?.title === `Prepare identity · ${titleDate}`, 'Snapshot did not retain the generated dated title')
+  assert(savedFlow[0]?.titleDate === titleDate, 'Snapshot did not retain the resolved task title date')
+  assert(savedFlow[0]?.titleDateFieldLabel === 'Target date', 'Snapshot did not retain the date field context')
 
   console.log('Service Request fulfilment flow acceptance passed')
 } finally {
