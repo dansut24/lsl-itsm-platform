@@ -16,10 +16,10 @@ function routeTitle(pathname = window.location.pathname) {
 
 function nativeValue(element, value) {
   if (!element) return
-  const prototype = element instanceof HTMLSelectElement
+  const elementPrototype = element instanceof HTMLSelectElement
     ? HTMLSelectElement.prototype
     : HTMLInputElement.prototype
-  const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set
+  const setter = Object.getOwnPropertyDescriptor(elementPrototype, 'value')?.set
   if (setter) setter.call(element, value)
   else element.value = value
   element.dispatchEvent(new Event(element instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }))

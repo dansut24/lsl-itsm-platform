@@ -111,7 +111,7 @@ export function resolveDeviceMonitoringPolicy(device, options = {}) {
     .filter((override) => override.enabled !== false && override.deviceId === device?.id)
     .slice(-1)[0]
   const winningAssignment = matchingAssignments[matchingAssignments.length - 1]
-  const effectivePolicyId = deviceOverride?.policyId || winningAssignment?.policyId || 'MON-ENDPOINT-STD'
+  const effectivePolicyId = deviceOverride?.policyId || winningAssignment?.policyId || policies[0]?.id || ''
   const policy = policies.find((item) => item.id === effectivePolicyId) || policies[0] || null
 
   const chain = matchingAssignments.map((assignment) => ({

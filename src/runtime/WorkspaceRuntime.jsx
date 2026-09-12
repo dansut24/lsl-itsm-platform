@@ -25,7 +25,6 @@ import {
   serviceDeskModules,
   viewMeta,
 } from './workspaceConfig.jsx'
-import { liveChatReplyOptions } from './workspaceConfig.jsx'
 import { createNotification } from './runtimeNotifications.js'
 import { buildLifecycleTransition } from '../lib/lifecycle.js'
 import { portalHomePath, portalRequestPath, portalRouteFromLocation, resolveTenantSurface, rmmPath } from '../lib/tenantSurface.js'
@@ -94,8 +93,7 @@ import { RotaView } from '../features/rota/RotaView.jsx'
 import { LiveChatView } from '../features/live-chat/LiveChatView.jsx'
 import { NotificationDrawer } from '../features/notifications/NotificationDrawer.jsx'
 import { PeopleView } from '../features/people/PeopleView.jsx'
-import { PortalLoginScreen, SelfServicePortalApp } from '../features/portal/SelfServicePortalApp.jsx'
-import { RmmLoginScreen, RmmPlatformApp } from '../features/rmm/RmmPlatformApp.jsx'
+import { RmmPlatformApp } from '../features/rmm/RmmPlatformApp.jsx'
 import {
   ChangesView,
   CmdbRecordView,
@@ -1358,11 +1356,9 @@ function WorkspaceRuntime() {
 
   function sendLiveChatMessage(conversationId, body) {
     const timestamp = liveChatTimestamp()
-    let replyIndex = 0
 
     setLiveChatConversations((current) => current.map((conversation) => {
       if (conversation.id !== conversationId) return conversation
-      replyIndex = conversation.messages.length % liveChatReplyOptions.length
       const claimMessage = conversation.status === 'Waiting'
         ? [{
             id: `MSG-${Date.now()}-claim`,
@@ -1392,41 +1388,6 @@ function WorkspaceRuntime() {
       }
     }))
 
-    if (liveChatReplyOptions.length) window.setTimeout(() => {
-      const incomingText = liveChatReplyOptions[replyIndex]
-      const incomingTime = liveChatTimestamp()
-      setLiveChatConversations((current) => current.map((conversation) => {
-        if (conversation.id !== conversationId || conversation.status === 'Closed') return conversation
-        return {
-          ...conversation,
-          unread: (Number(conversation.unread) || 0) + 1,
-          updatedAt: 'Now',
-          lastMessage: incomingText,
-          messages: [
-            ...conversation.messages,
-            {
-              id: `MSG-${Date.now()}-reply`,
-              sender: 'requester',
-              text: incomingText,
-              time: incomingTime,
-            },
-          ],
-        }
-      }))
-
-      const incomingConversation = liveChatConversations.find((conversation) => conversation.id === conversationId)
-      if (incomingConversation) {
-        const viewingConversation = activeTabKey === LIVE_CHAT_TAB_KEY && selectedLiveChatId === conversationId
-        pushNotification({
-          source: 'livechat',
-          title: `New message from ${incomingConversation.participant.name}`,
-          detail: incomingText,
-          target: { type: 'livechat', conversationId },
-          tone: 'info',
-          read: viewingConversation,
-        })
-      }
-    }, 1400)
   }
 
   function pushOrganisationAudit(entry) {

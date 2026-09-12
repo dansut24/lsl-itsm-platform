@@ -1,13 +1,13 @@
 import { useEffect } from 'react'
-import './ProductionLegacyBoundary.css'
+import './ProductionSessionBoundary.css'
 
 const API_BASE = window.__HI5_API_BASE__
 const PRODUCTION_SESSION_KEY = 'hi5central-production-session-v1'
-const LEGACY_SESSION_KEYS = ['hi5central-session', 'lsl-itsm-session']
+const DEPRECATED_SESSION_KEYS = ['hi5central-session', 'lsl-itsm-session']
 const SETTINGS_RECOVERY_KEY = 'hi5central-production-settings-recovery-v1'
 
-function clearLegacyWorkspaceSessions() {
-  for (const key of LEGACY_SESSION_KEYS) {
+function clearDeprecatedSessionKeys() {
+  for (const key of DEPRECATED_SESSION_KEYS) {
     try { window.localStorage.removeItem(key) } catch { /* best effort */ }
   }
 }
@@ -27,14 +27,9 @@ function settingsPath() {
   return window.location.pathname === '/settings' || window.location.pathname.startsWith('/settings/')
 }
 
-function legacyLoginVisible() {
-  const login = document.querySelector('.login-shell')
-  return login instanceof HTMLElement && login.getClientRects().length > 0
-}
-
-export function ProductionLegacyBoundary() {
+export function ProductionSessionBoundary() {
   useEffect(() => {
-    clearLegacyWorkspaceSessions()
+    clearDeprecatedSessionKeys()
     document.documentElement.dataset.hi5ProductionBoundary = 'true'
     document.body.dataset.hi5ProductionBoundary = 'true'
 
@@ -44,10 +39,7 @@ export function ProductionLegacyBoundary() {
     function protectSettingsSurface() {
       const frame = document.querySelector('.content-frame')
       const inSettings = settingsPath()
-
-      if (frame instanceof HTMLElement) {
-        frame.classList.toggle('hi5-production-settings-route', inSettings)
-      }
+      if (frame instanceof HTMLElement) frame.classList.toggle('hi5-production-settings-route', inSettings)
 
       if (!inSettings) {
         settingsMissingSince = 0
@@ -63,35 +55,26 @@ export function ProductionLegacyBoundary() {
       }
 
       if (!productionSessionExists()) return
-      if (!settingsMissingSince) {
-        settingsMissingSince = Date.now()
-        return
-      }
+      if (!settingsMissingSince) { settingsMissingSince = Date.now(); return }
       if (Date.now() - settingsMissingSince < 1800) return
 
       try {
         if (window.sessionStorage.getItem(SETTINGS_RECOVERY_KEY) === '1') return
         window.sessionStorage.setItem(SETTINGS_RECOVERY_KEY, '1')
-      } catch {
-        return
-      }
+      } catch { return }
       window.location.reload()
     }
 
     async function signOutFromProduction() {
       if (signingOut) return
       signingOut = true
-
       try {
-        await fetch(`${API_BASE}/api/v1/auth/logout`, {
-          method: 'POST',
-          credentials: 'include',
-        })
+        await fetch(`${API_BASE}/api/v1/auth/logout`, { method: 'POST', credentials: 'include' })
       } catch {
-        // Continue to the production login screen even if the network is unavailable.
+        // Continue to sign-in even when the network is unavailable.
       } finally {
         try { window.localStorage.removeItem(PRODUCTION_SESSION_KEY) } catch { /* best effort */ }
-        clearLegacyWorkspaceSessions()
+        clearDeprecatedSessionKeys()
         try { window.sessionStorage.removeItem(SETTINGS_RECOVERY_KEY) } catch { /* best effort */ }
         window.location.replace('/login')
       }
@@ -100,7 +83,6 @@ export function ProductionLegacyBoundary() {
     function handleSignOut(event) {
       const button = event.target instanceof Element ? event.target.closest('button') : null
       if (!(button instanceof HTMLButtonElement)) return
-
       const isSignOut = button.classList.contains('chrome-logout')
         || button.getAttribute('aria-label') === 'Sign out'
         || button.getAttribute('title') === 'Sign out'
@@ -125,22 +107,12 @@ export function ProductionLegacyBoundary() {
       window.setTimeout(protectSettingsSurface, 0)
     }
 
-    function recoverLegacyLogin() {
-      if (!legacyLoginVisible()) return
-      if (!productionSessionExists()) return
-      window.location.replace('/login')
-    }
-
     document.addEventListener('click', handleSignOut, true)
     window.addEventListener('popstate', routeChanged)
     window.addEventListener('hi5-routechange', routeChanged)
 
-    const observer = new MutationObserver(() => {
-      protectSettingsSurface()
-      recoverLegacyLogin()
-    })
+    const observer = new MutationObserver(protectSettingsSurface)
     observer.observe(document.body, { childList: true, subtree: true })
-
     const interval = window.setInterval(protectSettingsSurface, 450)
     protectSettingsSurface()
 

@@ -120,7 +120,7 @@ export function resolveTenantSurface(location = window.location) {
   }
 
   // Keep /signup testable on localhost/Vercel without changing the default
-  // prototype surface for those hosts.
+  // development surface for those hosts.
   if (pathname === '/signup' && !hostname.endsWith(`.${rootHost}`)) {
     return {
       kind: 'marketing',

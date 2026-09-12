@@ -91,7 +91,7 @@ function SiteEditor({ organisation, onClose, onSave, site }) {
     onSave({ ...draft, id: draft.id || `SITE-${Date.now()}`, code })
   }
 
-  const linked = draft.rmmSite?.status === 'linked_demo'
+  const linked = draft.rmmSite?.status === 'linked'
 
   return (
     <div className="org-site-drawer-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
@@ -135,16 +135,8 @@ function SiteEditor({ organisation, onClose, onSave, site }) {
             <div className="org-site-section-heading"><span>RMM</span><strong>Site linkage</strong></div>
             <div className={`org-site-rmm-link ${linked ? 'is-linked' : ''}`}>
               <Server size={20} />
-              <div><strong>{linked ? 'Demo RMM site linked' : 'No RMM site linked'}</strong><span>{linked ? draft.rmmSite?.label || draft.name : 'Link this organisation site to its RMM scope later without changing the organisation record.'}</span></div>
-              <button
-                onClick={() => setDraft((current) => ({
-                  ...current,
-                  rmmSite: linked
-                    ? { status: 'not_linked', id: '', label: '' }
-                    : { status: 'linked_demo', id: `RMM-${current.code || 'SITE'}`, label: current.name || 'Demo RMM site' },
-                }))}
-                type="button"
-              >{linked ? 'Unlink demo' : 'Link demo'}</button>
+              <div><strong>{linked ? 'RMM site linked' : 'No RMM site linked'}</strong><span>{linked ? draft.rmmSite?.label || draft.name : 'RMM linkage is managed by the production RMM service and cannot be simulated from the organisation editor.'}</span></div>
+              <button disabled type="button">{linked ? 'Managed by RMM' : 'Configure in RMM'}</button>
             </div>
           </section>
 
@@ -284,7 +276,7 @@ export function OrganisationSitesEnhancer() {
               const counts = siteCounts(site, organisation)
               const contact = organisation.people.find((person) => person.id === site.primaryContactId)
               const supportTeam = organisation.teams.find((team) => team.id === site.supportTeamId)
-              const linked = site.rmmSite?.status === 'linked_demo'
+              const linked = site.rmmSite?.status === 'linked'
               return (
                 <article className={`org-site-card ${site.active === false ? 'is-inactive' : ''}`} key={site.id}>
                   <header>
@@ -301,7 +293,7 @@ export function OrganisationSitesEnhancer() {
                     <div><dt>Primary contact</dt><dd>{contact?.name || 'Not assigned'}</dd></div>
                     <div><dt>Support team</dt><dd>{supportTeam?.name || 'Not assigned'}</dd></div>
                     <div><dt>Time zone</dt><dd><Globe2 size={15} /> {site.timezone}</dd></div>
-                    <div><dt>RMM</dt><dd className={linked ? 'org-site-linked' : ''}><Link2 size={14} /> {linked ? 'Demo linked' : 'Not linked'}</dd></div>
+                    <div><dt>RMM</dt><dd className={linked ? 'org-site-linked' : ''}><Link2 size={14} /> {linked ? 'Linked' : 'Not linked'}</dd></div>
                   </dl>
                   <footer><MapPin size={15} /><span>{[site.address1, site.city, site.postcode].filter(Boolean).join(', ') || 'Virtual / no physical address'}</span></footer>
                 </article>

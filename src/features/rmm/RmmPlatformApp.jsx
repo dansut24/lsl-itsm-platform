@@ -18,7 +18,6 @@ import {
   HardDrive,
   History,
   GitBranch,
-  KeyRound,
   Laptop,
   LayoutDashboard,
   ListChecks,
@@ -47,7 +46,6 @@ import {
   X,
   Zap,
 } from 'lucide-react'
-import { workspaceLoginProfiles } from '../../runtime/workspaceConfig.jsx'
 import {
   rmmActivity,
   rmmAlerts,
@@ -157,65 +155,6 @@ function securityTone(value = '') {
   if (normalized.includes('warning') || normalized.includes('attention')) return 'warning'
   if (normalized.includes('protected') || normalized.includes('healthy') || normalized.includes('enabled') || normalized.includes('ready') || normalized.includes('onboarded') || normalized.includes('full security')) return 'healthy'
   return 'neutral'
-}
-
-export function RmmLoginScreen({ accent, fillCredentials, loginError, loginForm, onLogin, setLoginForm, setTheme, tenantName, theme }) {
-  const profile = workspaceLoginProfiles.rmm
-  return (
-    <main className="rmm-login" data-accent={accent} data-theme={theme}>
-      <section className="rmm-login-panel">
-        <div className="rmm-login-brand"><img src={`${import.meta.env.BASE_URL}hi5central-logo.png`} alt="Hi5Central" /><span>RMM</span></div>
-        <div className="rmm-login-copy"><span className="rmm-eyebrow">{tenantName}</span><h1>Remote Monitoring & Management</h1><p>Sign in to monitor devices, resolve alerts, deploy software, patch systems and start secure remote support sessions.</p></div>
-        <form className="rmm-login-form" onSubmit={onLogin}>
-          <label>Email address<input autoComplete="username" value={loginForm.username} onChange={(event) => setLoginForm({ ...loginForm, username: event.target.value })} placeholder={profile.username} /></label>
-          <label>Password<input autoComplete="current-password" type="password" value={loginForm.password} onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })} placeholder="Enter your password" /></label>
-          {loginError && <div className="rmm-login-error"><AlertTriangle size={16} />{loginError}</div>}
-          <button className="rmm-primary" type="submit"><LogIn size={17} /> Sign in to RMM</button>
-        </form>
-        <button className="rmm-demo-login" onClick={() => fillCredentials('rmm')} type="button"><KeyRound size={17} /><span><strong>Use demo RMM account</strong><small>{profile.username} · {profile.password}</small></span></button>
-      </section>
-      <aside className="rmm-login-visual">
-        <div className="rmm-login-visual-head"><button onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} type="button">{theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}</button></div>
-        <div className="rmm-login-preview">
-          <span className="rmm-eyebrow">Live estate preview</span><h2>One operational view of every managed device.</h2>
-          <div className="rmm-login-preview-grid"><div><Monitor size={21} /><strong>184</strong><span>Managed devices</span></div><div><CheckCircle2 size={21} /><strong>96%</strong><span>Patch compliance</span></div><div><AlertTriangle size={21} /><strong>2</strong><span>Critical alerts</span></div><div><Zap size={21} /><strong>5</strong><span>Active jobs</span></div></div>
-        </div>
-      </aside>
-    </main>
-  )
-}
-
-function RmmSidebar({ activeView, mobileOpen, navigate, onClose, tenantName }) {
-  const sections = [...new Set(navigation.map((item) => item.section))]
-  return (
-    <>
-      {mobileOpen && <button className="rmm-sidebar-backdrop" aria-label="Close navigation" onClick={onClose} type="button" />}
-      <aside className={`rmm-sidebar ${mobileOpen ? 'mobile-open' : ''}`}>
-        <div className="rmm-sidebar-brand"><img src={`${import.meta.env.BASE_URL}hi5central-logo.png`} alt="Hi5Central" /><div><strong>{tenantName}</strong><span>RMM</span></div><button className="rmm-mobile-close" onClick={onClose} type="button"><X size={19} /></button></div>
-        <div className="rmm-estate-chip"><span><Wifi size={15} /></span><div><strong>Estate connected</strong><small>181 / 184 devices online</small></div></div>
-        <nav className="rmm-nav">
-          {sections.map((section) => <div className="rmm-nav-section" key={section}><span>{section}</span>{navigation.filter((item) => item.section === section).map(({ id, label, icon: Icon }) => <button className={activeView === id ? 'active' : ''} key={id} onClick={() => navigate(id)} type="button"><Icon size={17} /><span>{label}</span>{id === 'alerts' && <b>{rmmAlerts.filter((alert) => alert.status === 'Open').length}</b>}</button>)}</div>)}
-        </nav>
-        <div className="rmm-sidebar-footer"><div><span>HC</span><div><strong>Hi5Central Agent</strong><small>Stable channel · 1.6.2</small></div></div></div>
-      </aside>
-    </>
-  )
-}
-
-function RmmTopbar({ activeView, currentUser, navigate, onLogout, onMenu, query, setQuery, setTheme, theme }) {
-  const [, title] = pageMeta[activeView] || pageMeta.dashboard
-  return (
-    <header className="rmm-topbar">
-      <div className="rmm-topbar-title"><button className="rmm-menu-button" onClick={onMenu} type="button"><Menu size={19} /></button><div><span>RMM</span><strong>{title}</strong></div></div>
-      <label className="rmm-global-search"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search devices, users, sites, groups, alerts…" /></label>
-      <div className="rmm-topbar-actions"><button onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} type="button">{theme === 'light' ? <Moon size={17} /> : <Sun size={17} />}</button><button className="rmm-notification-button" onClick={() => navigate('alerts')} type="button"><Bell size={17} /><b>{rmmAlerts.filter((alert) => alert.status === 'Open').length}</b></button><button className="rmm-user" onClick={onLogout} type="button"><span>{currentUser.initials}</span><div><strong>{currentUser.name}</strong><small>Sign out</small></div><LogOut size={14} /></button></div>
-    </header>
-  )
-}
-
-function PageHeading({ activeView, action }) {
-  const [eyebrow, title, description] = pageMeta[activeView] || pageMeta.dashboard
-  return <div className="rmm-page-heading"><div><span className="rmm-eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{action}</div>
 }
 
 function RmmDashboard({ navigate, openDevice }) {
@@ -347,7 +286,7 @@ function DeviceHardware({ device }) {
 function DeviceSoftware({ device }) {
   return (
     <section className="rmm-table-card">
-      <div className="rmm-device-section-heading"><div><span className="rmm-eyebrow">Inventory</span><h2>Installed software</h2><p>{device.installedSoftware?.length || 0} applications are shown in this prototype inventory.</p></div><button className="rmm-primary compact" type="button"><PackageCheck size={14} /> Deploy software</button></div>
+      <div className="rmm-device-section-heading"><div><span className="rmm-eyebrow">Inventory</span><h2>Installed software</h2><p>{device.installedSoftware?.length || 0} applications are reported by the device inventory.</p></div><button className="rmm-primary compact" type="button"><PackageCheck size={14} /> Deploy software</button></div>
       <div className="rmm-table rmm-device-software-table">
         <div className="rmm-table-head"><span>Application</span><span>Version</span><span>Publisher</span><span>Installed</span><span>Management</span></div>
         {(device.installedSoftware || []).map((app) => <div className="rmm-table-row" key={`${app.name}-${app.version}`}><span className="rmm-device-cell"><span className="rmm-device-icon neutral"><Package size={16} /></span><span><strong>{app.name}</strong><small>{app.managed ? 'Managed application' : 'Observed software'}</small></span></span><span><strong>{app.version}</strong></span><span><strong>{app.publisher}</strong></span><span><strong>{app.installed}</strong></span><span><StatusPill tone={app.managed ? 'healthy' : 'neutral'}>{app.managed ? 'Managed' : 'Observed'}</StatusPill></span></div>)}
@@ -387,7 +326,7 @@ function DeviceItsm({ relatedTickets, onCreateIncident }) {
   return (
     <div className="rmm-device-itsm-layout">
       <section className="rmm-card rmm-itsm-bridge-intro"><span className="rmm-itsm-logo"><Database size={24} /></span><span className="rmm-eyebrow">Native product bridge</span><h2>RMM device ↔ ITSM service context</h2><p>Keep Hi5Central RMM and Hi5Central ITSM as separate products while sharing device identity, requester context and operational history when both modules are licensed.</p><div><span><CheckCircle2 size={15} /> Create an ITSM incident directly from a device or alert</span><span><CheckCircle2 size={15} /> Carry hostname, device ID and alert metadata into the incident</span><span><CheckCircle2 size={15} /> Open related ITSM records without putting ITSM navigation inside RMM</span><span><CheckCircle2 size={15} /> Open the originating RMM device again from the ITSM record</span></div><button className="rmm-primary" onClick={() => onCreateIncident()} type="button"><AlertTriangle size={15} /> Create incident for this device</button></section>
-      <section className="rmm-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">Related records</span><h2>ITSM history</h2></div></div><div className="rmm-device-itsm-records">{relatedTickets.length ? relatedTickets.map((ticket) => <a href={itsmRecordHref(ticket)} key={ticket.id} target="_blank" rel="noreferrer"><span className={`rmm-itsm-record-type ${String(ticket.type).toLowerCase().replace(/\s+/g, '-')}`}>{ticket.type}</span><span><strong>{ticket.id} · {ticket.title}</strong><small>{ticket.status} · {ticket.team || 'Unassigned group'} · Updated {ticket.updated}</small></span><ExternalLink size={15} /></a>) : <div className="rmm-empty"><Database size={24} /><strong>No ITSM history for this device yet</strong><span>Create an incident to demonstrate the explicit cross-product relationship.</span></div>}</div></section>
+      <section className="rmm-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">Related records</span><h2>ITSM history</h2></div></div><div className="rmm-device-itsm-records">{relatedTickets.length ? relatedTickets.map((ticket) => <a href={itsmRecordHref(ticket)} key={ticket.id} target="_blank" rel="noreferrer"><span className={`rmm-itsm-record-type ${String(ticket.type).toLowerCase().replace(/\s+/g, '-')}`}>{ticket.type}</span><span><strong>{ticket.id} · {ticket.title}</strong><small>{ticket.status} · {ticket.team || 'Unassigned group'} · Updated {ticket.updated}</small></span><ExternalLink size={15} /></a>) : <div className="rmm-empty"><Database size={24} /><strong>No ITSM history for this device yet</strong><span>Create an incident to link support history to this device.</span></div>}</div></section>
     </div>
   )
 }

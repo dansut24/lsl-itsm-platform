@@ -325,7 +325,7 @@ export function NewTabView({ navItems, openNewRecord, openRecordTab, openTab, ti
   )
 }
 
-const DASHBOARD_STORAGE_KEY = 'hi5central-demo-dashboards-v3'
+const DASHBOARD_STORAGE_KEY = 'hi5central-dashboards-v3'
 const DASHBOARD_MAX_WIDGETS = 12
 
 const DASHBOARD_WIDGET_LIBRARY = [
@@ -1015,7 +1015,7 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
     try {
       window.localStorage.setItem(DASHBOARD_STORAGE_KEY, JSON.stringify(dashboards))
     } catch {
-      // Demo persistence is best-effort only.
+      // Browser persistence is best-effort only.
     }
   }, [dashboards])
 
@@ -1397,13 +1397,13 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
           <button className="dashboard-modal-backdrop" aria-label="Close sharing" onClick={() => setShareOpen(false)} type="button" />
           <section className="dashboard-modal" role="dialog" aria-modal="true" aria-label="Share dashboard">
             <header><div><span className="eyebrow">Sharing</span><h2>{activeDashboard.name}</h2></div><button onClick={() => setShareOpen(false)} type="button"><X size={17} /></button></header>
-            <p>Share this dashboard with teams or individual users. Permissions here are demo-only until the backend is connected.</p>
+            <p>Dashboard sharing requires the server-side sharing service. Local-only sharing changes are disabled.</p>
             {activeDashboard.canEdit ? (
               <div className="dashboard-share-add">
                 <label>Share with<select value={shareKind} onChange={(event) => setShareKind(event.target.value)}><option value="team">Team</option><option value="user">User</option></select></label>
                 <label>{shareKind === 'team' ? 'Team' : 'User'}<select value={shareTarget} onChange={(event) => setShareTarget(event.target.value)}>{(shareKind === 'team' ? teams : workspaceUsers.map((user) => user.name)).map((item) => <option key={item}>{item}</option>)}</select></label>
                 <label>Permission<select value={sharePermission} onChange={(event) => setSharePermission(event.target.value)}>{['Can view', 'Can edit', 'Can manage'].map((item) => <option key={item}>{item}</option>)}</select></label>
-                <button onClick={addShare} type="button">Add</button>
+                <button disabled type="button">Server sharing required</button>
               </div>
             ) : (
               <div className="dashboard-share-readonly">You can view this dashboard's sharing membership. Make a copy to create and manage your own version.</div>
@@ -3691,7 +3691,7 @@ export function CmdbRecordView({ asset, openRecordTab, tickets }) {
               <small>{ticket.status} - {ticket.team}</small>
             </button>
           )) : (
-            <div className="empty-inline-state">No records are linked to this CI in the prototype data.</div>
+            <div className="empty-inline-state">No records are linked to this CI yet.</div>
           )}
         </div>
       </section>
@@ -3980,7 +3980,7 @@ export function SettingsView({
           <div className="credential-readout">
             <span>{workspaceLoginProfiles[session.profile].label}</span>
             <strong>{session.username}</strong>
-            <small>Prototype authentication is backed by baked-in credentials only.</small>
+            <small>Authentication is provided by the tenant identity service.</small>
           </div>
         </section>
       )}

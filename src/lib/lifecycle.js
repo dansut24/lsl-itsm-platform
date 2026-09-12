@@ -215,7 +215,7 @@ export function getTransitionRequirements(ticket, targetStatus, values = {}) {
   if (type === 'Service Request') {
     if (targetStatus === 'Approved') {
       return [
-        checkboxRequirement('approvalConfirmation', 'Confirm required approvals have been received', values, 'Pending demo approvals will be marked approved and recorded in the activity timeline.'),
+        checkboxRequirement('approvalConfirmation', 'Confirm required approvals have been received', values, 'Pending approvals will be marked approved and recorded in the activity timeline.'),
         textRequirement('approvalNote', 'Approval note', ticket, values, { type: 'text', placeholder: 'Optional approval reference or note' }),
       ]
     }

@@ -14,7 +14,7 @@ import { ProductionSecurityCenterEnhancer } from './features/security/Production
 import { ProductionAccessControl } from './production/ProductionAccessControl.jsx'
 import { ProductionAccessGuard } from './production/ProductionAccessGuard.jsx'
 import { ProductionAssignmentExperience } from './production/ProductionAssignmentExperience.jsx'
-import { ProductionLegacyBoundary } from './production/ProductionLegacyBoundary.jsx'
+import { ProductionSessionBoundary } from './production/ProductionSessionBoundary.jsx'
 import { ProductionFirstLoginExperience } from './production/ProductionFirstLoginExperience.jsx'
 import { ProductionFirstLoginRouteBridge } from './production/ProductionFirstLoginRouteBridge.jsx'
 import { ProductionItsmWorkspace } from './production/ProductionItsmWorkspace.jsx'
@@ -100,7 +100,7 @@ createRoot(rootElement).render(
     {initialSurface.kind === 'workspace' && !productionOnboarding ? <OrganisationSitesEnhancer /> : null}
     {initialSurface.kind === 'workspace' && !productionOnboarding ? <ServiceCatalogueSettingsEnhancer /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionAccessGuard /> : null}
-    {productionWorkspace && !productionOnboarding ? <ProductionLegacyBoundary /> : null}
+    {productionWorkspace && !productionOnboarding ? <ProductionSessionBoundary /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionAccessControl /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionOrganisationWriteThrough /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionItsmWorkspace /> : null}

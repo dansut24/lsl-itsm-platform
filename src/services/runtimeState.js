@@ -32,7 +32,7 @@ function isLegacyOrganisationRecord(item) {
 function enforceProductionRuntimeBoundary() {
   if (readJson(RUNTIME_BOUNDARY_KEY, '') === RUNTIME_BOUNDARY_VERSION) return
 
-  // One-time cleanup of the historical prototype browser stores. Canonical
+  // One-time cleanup of the historical browser stores. Canonical
   // tenant data is rehydrated from PostgreSQL/API state after authentication.
   for (const key of [
     'hi5central-session',

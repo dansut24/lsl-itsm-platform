@@ -68,10 +68,6 @@
 .rmm-login-form input { width: 100%; min-height: 44px; border: 1px solid var(--rmm-border); border-radius: 9px; padding: 0 11px; background: var(--rmm-surface); color: var(--rmm-text); font: inherit; outline: 0; }
 .rmm-login-form input:focus { border-color: var(--rmm-accent); box-shadow: 0 0 0 3px var(--rmm-accent-soft); }
 .rmm-login-error { display: flex; align-items: center; gap: 7px; color: #c83f50; font-size: 11px; font-weight: 700; }
-.rmm-demo-login { max-width: 450px; display: flex; align-items: center; gap: 10px; border: 1px dashed var(--rmm-border); border-radius: 10px; padding: 11px 12px; background: var(--rmm-soft); color: var(--rmm-muted); text-align: left; cursor: pointer; }
-.rmm-demo-login span { display: grid; gap: 2px; }
-.rmm-demo-login strong { color: var(--rmm-text); font-size: 10px; }
-.rmm-demo-login small { font-size: 9px; }
 .rmm-login-visual { position: relative; overflow: hidden; display: flex; flex-direction: column; background: radial-gradient(circle at 80% 15%, rgba(255,255,255,.13), transparent 26%), linear-gradient(145deg, #081b3d, #0d2d66 52%, #2459a7); color: #fff; }
 .rmm-login-visual::after { content: ''; position: absolute; width: 520px; height: 520px; right: -180px; bottom: -190px; border: 90px solid rgba(255,255,255,.045); border-radius: 50%; }
 .rmm-login-visual-head { display: flex; justify-content: flex-end; padding: 26px; }
