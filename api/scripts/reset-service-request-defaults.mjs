@@ -27,42 +27,23 @@ async function resetTenant(slug) {
 
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1::text))', [`service-request-reset:${tenantId}`])
 
-      const requestResult = await client.query(
-        `SELECT reference
-         FROM service_requests
-         WHERE tenant_id = $1`,
+      const notificationsDeleted = (await client.query(
+        `DELETE FROM platform_notifications
+         WHERE tenant_id = $1 AND target_type = 'Service Request'`,
         [tenantId],
-      )
-      const references = requestResult.rows.map((row) => row.reference)
+      )).rowCount
 
-      let notificationsDeleted = 0
-      let eventsDeleted = 0
-      let workflowApprovalsDeleted = 0
-      if (references.length) {
-        const notificationResult = await client.query(
-          `DELETE FROM platform_notifications
-           WHERE tenant_id = $1
-             AND (target_type = 'Service Request' OR target_reference = ANY($2::text[]))`,
-          [tenantId, references],
-        )
-        notificationsDeleted = notificationResult.rowCount
+      const eventsDeleted = (await client.query(
+        `DELETE FROM domain_events
+         WHERE tenant_id = $1 AND aggregate_type = 'Service Request'`,
+        [tenantId],
+      )).rowCount
 
-        const eventResult = await client.query(
-          `DELETE FROM domain_events
-           WHERE tenant_id = $1
-             AND (aggregate_type = 'Service Request' OR aggregate_reference = ANY($2::text[]))`,
-          [tenantId, references],
-        )
-        eventsDeleted = eventResult.rowCount
-
-        const workflowApprovalResult = await client.query(
-          `DELETE FROM workflow_approvals
-           WHERE tenant_id = $1
-             AND (record_type = 'Service Request' OR record_reference = ANY($2::text[]))`,
-          [tenantId, references],
-        )
-        workflowApprovalsDeleted = workflowApprovalResult.rowCount
-      }
+      const workflowApprovalsDeleted = (await client.query(
+        `DELETE FROM workflow_approvals
+         WHERE tenant_id = $1 AND record_type = 'Service Request'`,
+        [tenantId],
+      )).rowCount
 
       const requestsDeleted = (await client.query(
         'DELETE FROM service_requests WHERE tenant_id = $1',
