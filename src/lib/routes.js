@@ -39,6 +39,16 @@ const LIST_ROUTES = {
     filter: { ...ALL_TICKET_FILTERS, type: 'Service Request' },
     query: '',
   },
+  '/tasks': {
+    kind: 'workspace',
+    path: '/tasks',
+    viewId: 'tickets',
+    key: 'tasks',
+    title: 'Tasks',
+    navId: 'tasks',
+    filter: ALL_TICKET_FILTERS,
+    query: '',
+  },
   '/problems': {
     kind: 'workspace',
     path: '/problems',
@@ -246,6 +256,21 @@ export function routeFromLocation(location = window.location) {
     }
   }
 
+  const taskMatch = pathname.match(/^\/tasks\/([^/]+)$/i)
+  if (taskMatch) {
+    const taskKey = decodeURIComponent(taskMatch[1]).toUpperCase()
+    return {
+      kind: 'workspace',
+      path: `/tasks/${encodeURIComponent(taskKey)}`,
+      viewId: 'tickets',
+      key: `task-${taskKey}`,
+      title: taskKey,
+      recordId: `TASK:${taskKey}`,
+      navId: 'tasks',
+      query: '',
+    }
+  }
+
   const cmdbMatch = pathname.match(/^\/cmdb\/([^/]+)$/i)
   if (cmdbMatch) {
     const assetId = decodeURIComponent(cmdbMatch[1]).toUpperCase()
@@ -384,6 +409,10 @@ export function pathForTab(tab, tickets = []) {
     return `/${newRecordPrefix(tab.newRecordType)}/new`
   }
 
+  if (tab.recordId?.startsWith('TASK:')) {
+    return `/tasks/${encodeURIComponent(tab.recordId.slice(5))}`
+  }
+
   if (tab.recordId) {
     const ticket = tickets.find((item) => item.id === tab.recordId)
     return `/${recordPrefixFromTicket(ticket, tab.recordId)}/${encodeURIComponent(tab.recordId)}`
@@ -393,6 +422,7 @@ export function pathForTab(tab, tickets = []) {
     return `/settings/${tab.settingsSection}`
   }
 
+  if (tab.key === 'tasks') return '/tasks'
   if (tab.viewId === 'incidents' || tab.key === 'incidents') return '/incidents'
   if (tab.viewId === 'requests' || tab.key === 'requests') return '/requests'
   if (tab.viewId === 'problems' || tab.key === 'problems') return '/problems'
