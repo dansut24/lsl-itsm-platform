@@ -216,6 +216,12 @@ export function getBreadcrumbs(activeTab, selectedTicket, selectedAsset, selecte
   ]
 }
 
+function recordLabFromKey(key = '') {
+  const match = String(key).match(/^record-lab-(incidents|requests|problems|changes)-(.+)$/)
+  if (!match) return undefined
+  return { section: match[1], reference: match[2] }
+}
+
 export function makeTab(viewId, overrides = {}) {
   return {
     key: overrides.key || viewId,
@@ -223,7 +229,7 @@ export function makeTab(viewId, overrides = {}) {
     title: overrides.title || viewMeta[viewId]?.label || 'Workspace',
     pinned: overrides.pinned || false,
     recordId: overrides.recordId,
-    recordLab: overrides.recordLab,
+    recordLab: overrides.recordLab || recordLabFromKey(overrides.key),
     assetId: overrides.assetId,
     articleSlug: overrides.articleSlug,
     projectId: overrides.projectId,
