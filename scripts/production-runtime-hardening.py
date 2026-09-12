@@ -326,7 +326,7 @@ for (const file of walk(path.join(root, 'src'))) {
     if (content.includes(token)) failures.push(`${relative} contains forbidden runtime token: ${token}`)
   }
   if (/(^|[^a-z])demo([^a-z]|$)/i.test(content)) failures.push(`${relative} still contains demo vocabulary`)
-  const withoutPrototypeMembers = content.replace(/\.prototype\b/g, '.__prototype_member__')
+  const withoutPrototypeMembers = content.replace(/\.prototype\b/g, '.__member__')
   if (/(^|[^a-z])prototype([^a-z]|$)/i.test(withoutPrototypeMembers)) failures.push(`${relative} still contains prototype vocabulary`)
   if (content.includes('archive/')) failures.push(`${relative} imports archived code`)
 }
