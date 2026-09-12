@@ -61,6 +61,12 @@ jobs:
       - name: Commit extracted runtime
         shell: bash
         run: |
+          # The extraction script adds the permanent CI check to ci.yml, but the
+          # GitHub Actions token is not permitted to update workflow files.
+          # Publish the source/archive migration first; ci.yml is updated through
+          # the normal GitHub connection after this commit lands.
+          git checkout -- .github/workflows/ci.yml
+
           if git diff --quiet && git diff --cached --quiet; then
             echo "No runtime changes to commit."
             exit 0
