@@ -1,0 +1,50 @@
+name: Task requester notification E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  task-requester-notification:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: hi5central
+          POSTGRES_USER: hi5central
+          POSTGRES_PASSWORD: hi5central-ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hi5central -d hi5central"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install API dependencies
+        working-directory: api
+        run: npm install --omit=dev
+
+      - name: Run database migrations
+        working-directory: api
+        env:
+          DATABASE_URL: postgresql://hi5central:hi5central-ci@127.0.0.1:5432/hi5central
+        run: npm run migrate
+
+      - name: Verify requester notification boundary
+        working-directory: api
+        env:
+          DATABASE_URL: postgresql://hi5central:hi5central-ci@127.0.0.1:5432/hi5central
+        run: node scripts/task-requester-notification-e2e.mjs
