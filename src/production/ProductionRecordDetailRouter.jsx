@@ -3,6 +3,7 @@ import { ProductionActivityActionRecord } from './ProductionActivityActionRecord
 import { ProductionServiceRequestActivityRecord } from './ProductionServiceRequestActivityRecord.jsx'
 import { ProductionServiceRequestWorkflowInspectorEnhancer } from './ProductionServiceRequestWorkflowInspectorEnhancer.jsx'
 import { ProductionTaskExperience } from './ProductionTaskExperience.jsx'
+import { ProductionTaskNavigationBridge } from './ProductionTaskNavigationBridge.jsx'
 
 function detailRoute(pathname = window.location.pathname) {
   const parts = String(pathname || '').split('/').filter(Boolean)
@@ -41,7 +42,8 @@ export function ProductionRecordDetailRouter() {
     }
   }, [])
 
-  if (route === 'service-request') return <><ProductionServiceRequestActivityRecord /><ProductionServiceRequestWorkflowInspectorEnhancer /><ProductionTaskExperience /></>
-  if (route === 'generic') return <><ProductionActivityActionRecord /><ProductionTaskExperience /></>
-  return <ProductionTaskExperience />
+  const taskLayer = <><ProductionTaskExperience /><ProductionTaskNavigationBridge /></>
+  if (route === 'service-request') return <><ProductionServiceRequestActivityRecord /><ProductionServiceRequestWorkflowInspectorEnhancer />{taskLayer}</>
+  if (route === 'generic') return <><ProductionActivityActionRecord />{taskLayer}</>
+  return taskLayer
 }
