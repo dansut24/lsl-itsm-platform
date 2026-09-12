@@ -16,9 +16,12 @@
   order: 5;
 }
 
-.production-task-nav.is-active {
-  color: var(--accent-ink, var(--ink));
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+.production-task-nav:not(.production-task-nav-bridge) {
+  display: none !important;
+}
+
+.production-awaiting-approval-view:not(.production-awaiting-approval-bridge) {
+  display: none !important;
 }
 
 .production-awaiting-approval-view {
