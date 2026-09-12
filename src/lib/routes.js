@@ -315,6 +315,29 @@ export function routeFromLocation(location = window.location) {
     }
   }
 
+  const recordLabMatch = pathname.match(/^\/record-lab\/(incidents|requests|problems|changes)\/([^/]+)$/i)
+  if (recordLabMatch) {
+    const section = recordLabMatch[1].toLowerCase()
+    const id = decodeURIComponent(recordLabMatch[2]).toUpperCase()
+    const type = {
+      incidents: 'Incident',
+      requests: 'Service Request',
+      problems: 'Problem',
+      changes: 'Change',
+    }[section]
+    return {
+      kind: 'workspace',
+      path: `/record-lab/${section}/${encodeURIComponent(id)}`,
+      viewId: 'tickets',
+      key: `record-lab-${section}-${id}`,
+      title: `${id} · Lab`,
+      recordId: id,
+      recordLab: { section, reference: id },
+      filter: { ...ALL_TICKET_FILTERS, type },
+      query: '',
+    }
+  }
+
   const recordMatch = pathname.match(
     /^\/(incidents|requests|problems|changes|tickets)\/([^/]+)$/i,
   )
@@ -400,6 +423,10 @@ export function pathForTab(tab, tickets = []) {
 
   if (tab.newRecordType) {
     return `/${newRecordPrefix(tab.newRecordType)}/new`
+  }
+
+  if (tab.recordLab?.section && tab.recordLab?.reference) {
+    return `/record-lab/${encodeURIComponent(tab.recordLab.section)}/${encodeURIComponent(tab.recordLab.reference)}`
   }
 
   if (tab.recordId?.startsWith('TASK:')) {
