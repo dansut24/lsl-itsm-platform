@@ -104,17 +104,18 @@ import {
   NewTabView,
   RecordCreateMenu,
   ReportsView,
-  SettingsView,
   TicketRecordView,
   TicketsView,
 } from '../features/workspace/WorkspaceViews.jsx'
 import './WorkspaceRuntime.css'
 
-const settingsSectionTitles = {
-  appearance: 'Appearance',
-  workspace: 'Workspace',
-  profile: 'Profile',
+function sessionHasPermission(session, permission) {
+  const effective = session?.access?.effectivePermissions || []
+  const grants = session?.access?.permissions || []
+  if (effective.includes(permission) || grants.includes('*') || grants.includes(permission)) return true
+  return grants.some((grant) => grant.endsWith('*') && permission.startsWith(grant.slice(0, -1)))
 }
+
 
 function workspaceTabModule(tab) {
   if (tab?.navId) return tab.navId
@@ -947,11 +948,15 @@ function WorkspaceRuntime() {
         && (session?.role !== 'requester' || ticket.requester === session.name || (ticket.requesterEmail && ticket.requesterEmail === session.username))
       ))
     : undefined
-  const navItems = analystNavIds.map((id) => viewMeta[id])
-  const navGroups = analystNavGroups.map((group) => ({
-    ...group,
-    items: group.items.map((id) => viewMeta[id]),
-  }))
+  const canViewSettings = sessionHasPermission(session, 'settings.view')
+  const visibleNavIds = analystNavIds.filter((id) => id !== 'settings' || canViewSettings)
+  const navItems = visibleNavIds.map((id) => viewMeta[id])
+  const navGroups = analystNavGroups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((id) => id !== 'settings' || canViewSettings).map((id) => viewMeta[id]),
+    }))
+    .filter((group) => group.items.length)
   const activeNavId =
     activeView === 'tickets' && activeTab?.recordId
       ? {
@@ -1089,7 +1094,7 @@ function WorkspaceRuntime() {
       normalizedOverrides = {
         ...overrides,
         key: 'settings-appearance',
-        title: 'Appearance',
+        title: 'Settings',
         settingsSection: 'appearance',
       }
     } else if (viewId === 'tickets' && !overrides.recordId && !overrides.filter && !overrides.key) {
@@ -1503,13 +1508,6 @@ function WorkspaceRuntime() {
     setToast('Calendar event removed')
   }
 
-  function openSettingsSection(section) {
-    openTab('settings', {
-      key: `settings-${section}`,
-      title: settingsSectionTitles[section] || 'Settings',
-      settingsSection: section,
-    })
-  }
 
   function openPortalRequest(ticket) {
     const tab = makeTab('portal', {
@@ -2729,24 +2727,12 @@ function WorkspaceRuntime() {
       return <ReportsView metrics={metrics} tickets={tickets} />
     }
 
-    return (
-      <SettingsView
-        accent={accent}
-        density={density}
-        liveChatEnabled={liveChatPreferences.enabled}
-        onSetLiveChatEnabled={setLiveChatEnabled}
-        openSettingsSection={openSettingsSection}
-        resolvedTheme={resolvedTheme}
-        session={session}
-        setAccent={setAccent}
-        setDensity={setDensity}
-        setSidebarMode={setSidebarMode}
-        setTheme={setTheme}
-        settingsSection={activeTab?.settingsSection || 'appearance'}
-        sidebarMode={sidebarMode}
-        theme={theme}
-      />
-    )
+    // Tenant Settings and personal Profile are production-owned surfaces.
+    // Their components are mounted by ProductionWorkspaceBootstrap so this
+    // runtime must never fall back to an older workspace implementation.
+    if (activeView === 'settings' || activeView === 'profile') return null
+
+    return null
   }
 
   if (!session || session.role !== 'analyst') return null

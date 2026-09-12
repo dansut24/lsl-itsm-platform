@@ -98,12 +98,14 @@ export async function resolveSession(c) {
   const result = await pool.query(
     `SELECT s.id AS session_id,s.tenant_id,s.user_id,s.expires_at,s.created_at AS session_created_at,s.mfa_verified_at,
             t.slug,t.company_name,t.status AS tenant_status,u.email,u.name,m.role AS tenant_role,m.status AS membership_status,
-            ts.modules,ts.onboarding_step,ts.onboarding_completed_at,ts.onboarding_data,ts.configuration,ts.tenant_url,ts.portal_url,ts.rmm_url
+            ts.modules,ts.onboarding_step,ts.onboarding_completed_at,ts.onboarding_data,ts.configuration,ts.tenant_url,ts.portal_url,ts.rmm_url,
+            up.preferences AS user_preferences
      FROM auth_sessions s
      JOIN tenants t ON t.id=s.tenant_id
      JOIN users u ON u.id=s.user_id
      JOIN tenant_memberships m ON m.tenant_id=s.tenant_id AND m.user_id=s.user_id
      JOIN tenant_settings ts ON ts.tenant_id=s.tenant_id
+     LEFT JOIN user_preferences up ON up.tenant_id=s.tenant_id AND up.user_id=s.user_id
      WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>now()
      LIMIT 1`,
     [tokenHash],
@@ -162,6 +164,7 @@ export function sessionPayload(session) {
     },
     onboarding: { step: session.onboarding_step, completedAt: session.onboarding_completed_at, data: session.onboarding_data || {} },
     security: { mfaVerified: Boolean(session.mfa_verified_at) },
+    preferences: session.user_preferences || null,
     settings: configuration,
   }
 }

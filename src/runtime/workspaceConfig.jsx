@@ -44,6 +44,7 @@ export const viewMeta = {
   livechat: { id: 'livechat', label: 'Live Chat', icon: MessageCircle },
   reports: { id: 'reports', label: 'Reports', icon: BarChart3 },
   settings: { id: 'settings', label: 'Settings', icon: Settings },
+  profile: { id: 'profile', label: 'Profile', icon: Users },
 }
 
 export const serviceDeskModules = {

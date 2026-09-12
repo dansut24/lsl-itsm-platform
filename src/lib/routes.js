@@ -121,6 +121,13 @@ const LIST_ROUTES = {
     key: 'reports',
     title: 'Reports',
   },
+  '/profile': {
+    kind: 'workspace',
+    path: '/profile',
+    viewId: 'profile',
+    key: 'profile',
+    title: 'Profile',
+  },
   '/settings': {
     kind: 'workspace',
     path: '/settings/appearance',
@@ -136,22 +143,6 @@ const LIST_ROUTES = {
     key: 'settings-appearance',
     title: 'Settings',
     settingsSection: 'appearance',
-  },
-  '/settings/workspace': {
-    kind: 'workspace',
-    path: '/settings/workspace',
-    viewId: 'settings',
-    key: 'settings-appearance',
-    title: 'Settings',
-    settingsSection: 'workspace',
-  },
-  '/settings/profile': {
-    kind: 'workspace',
-    path: '/settings/profile',
-    viewId: 'settings',
-    key: 'settings-appearance',
-    title: 'Settings',
-    settingsSection: 'profile',
   },
   '/portal': {
     kind: 'workspace',
@@ -172,6 +163,8 @@ const LIST_ROUTES = {
 const ALIASES = {
   '/home': '/dashboard',
   '/self-service': '/portal',
+  '/settings/workspace': '/profile',
+  '/settings/profile': '/profile',
 }
 
 const NEW_RECORD_ROUTES = {
@@ -441,6 +434,7 @@ export function pathForTab(tab, tickets = []) {
     knowledge: '/knowledge',
     reports: '/reports',
     settings: '/settings/appearance',
+    profile: '/profile',
     newtab: tab.key && tab.key !== 'newtab' ? `/new-tab/${encodeURIComponent(tab.key)}` : '/new-tab',
   }[tab.viewId] || '/dashboard'
 }
