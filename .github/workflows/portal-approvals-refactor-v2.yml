@@ -1,0 +1,123 @@
+name: Portal Approvals Refactor Gate v2
+
+on:
+  push:
+    branches: [portal-my-approvals-request-ownership]
+    paths:
+      - 'scripts/apply-portal-approval-session-entitlement.mjs'
+      - '.github/workflows/portal-approvals-refactor-v2.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply-test-publish:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: hi5central
+          POSTGRES_USER: hi5central
+          POSTGRES_PASSWORD: hi5central-ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hi5central -d hi5central"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: portal-my-approvals-request-ownership
+          fetch-depth: 0
+
+      - name: Use Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Apply production refactor
+        run: |
+          node scripts/apply-portal-approvals-routing.mjs
+          node scripts/apply-portal-approval-session-entitlement.mjs
+
+      - name: Parse changed API and scripts
+        run: |
+          node --check api/src/session.js
+          node --check api/src/portalAuth.js
+          node --check api/src/portalApprovals.js
+          node --check api/src/serviceRequests.js
+          node --check api/src/accessGate.js
+          node --check api/src/itsmWorkflows.js
+          node --check api/scripts/portal-approvals-e2e.mjs
+
+      - name: Install web dependencies
+        run: npm ci
+
+      - name: Production boundary
+        run: npm run check:production-runtime
+
+      - name: Build production web
+        run: npm run build
+
+      - name: Install API dependencies
+        working-directory: api
+        run: npm install --omit=dev
+
+      - name: Run migrations
+        working-directory: api
+        env:
+          DATABASE_URL: postgresql://hi5central:hi5central-ci@127.0.0.1:5432/hi5central
+        run: npm run migrate
+
+      - name: Run Portal approvals E2E
+        working-directory: api
+        env:
+          NODE_ENV: test
+          PORT: 3001
+          DATABASE_URL: postgresql://hi5central:hi5central-ci@127.0.0.1:5432/hi5central
+          REDIS_URL: redis://127.0.0.1:6379/0
+          API_URL: http://127.0.0.1:3001
+          MARKETING_URL: https://hi5central.com
+        run: |
+          export MFA_ENCRYPTION_KEY="$(openssl rand -hex 32)"
+          npm start > /tmp/hi5central-api.log 2>&1 &
+          API_PID=$!
+          trap 'kill $API_PID 2>/dev/null || true; echo "--- API log ---"; cat /tmp/hi5central-api.log' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3001/live >/dev/null; then break; fi
+            sleep 1
+          done
+          node scripts/portal-approvals-e2e.mjs
+
+      - name: Commit generated production changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git reset -- \
+            scripts/apply-portal-approvals-routing.mjs \
+            scripts/apply-portal-approval-session-entitlement.mjs \
+            .github/workflows/portal-approvals-refactor.yml \
+            .github/workflows/portal-approvals-refactor-v2.yml
+          if git diff --cached --quiet; then
+            echo "No generated changes to commit."
+            exit 0
+          fi
+          git commit -m "Add Portal My Approvals and decouple request ownership"
+          git push origin HEAD:portal-my-approvals-request-ownership
