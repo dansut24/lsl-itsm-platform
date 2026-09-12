@@ -48,8 +48,15 @@ async function seed() {
       [tenantId, userId],
     )
     await db.query(
-      `INSERT INTO tenant_settings (tenant_id, modules, onboarding_step, onboarding_completed_at, onboarding_data, configuration)
-       VALUES ($1,'{"itsm":true}'::jsonb,'complete',now(),'{}'::jsonb,'{}'::jsonb)`,
+      `INSERT INTO tenant_settings (
+         tenant_id, modules, onboarding_step, onboarding_completed_at,
+         tenant_url, portal_url, onboarding_data, configuration
+       ) VALUES (
+         $1,'{"itsm":true}'::jsonb,'complete',now(),
+         'https://ci-service-request-reset.hi5central.test',
+         'https://ci-service-request-reset-portal.hi5central.test',
+         '{}'::jsonb,'{}'::jsonb
+       )`,
       [tenantId],
     )
     await db.query(
