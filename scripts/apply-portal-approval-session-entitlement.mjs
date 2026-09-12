@@ -27,4 +27,13 @@ replaceOnce(
 )
 
 fs.writeFileSync(path, text)
-console.log('Approval-only Portal session entitlement applied.')
+
+const e2ePath = 'api/scripts/portal-approvals-e2e.mjs'
+let e2e = fs.readFileSync(e2ePath, 'utf8')
+const oldExpectation = "assert(finalState.rows[0]?.status === 'New', `Approved parent request should enter New queue, got ${finalState.rows[0]?.status}`)"
+const newExpectation = "assert(finalState.rows[0]?.status === 'Approved', `Approved parent request should remain in Approved queue, got ${finalState.rows[0]?.status}`)"
+if (!e2e.includes(oldExpectation)) throw new Error('Missing transform anchor: Approved lifecycle E2E expectation')
+e2e = e2e.replace(oldExpectation, newExpectation)
+fs.writeFileSync(e2ePath, e2e)
+
+console.log('Approval-only Portal session entitlement and Approved lifecycle expectation applied.')
