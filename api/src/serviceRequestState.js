@@ -288,7 +288,11 @@ export function registerServiceRequestStateRoutes(app) {
     const offset = Math.max(0, Number(c.req.query('offset') || 0))
     const values = [auth.session.tenant_id]
     const clauses = ['t.tenant_id = $1', "t.status <> 'Waiting'"]
-    const add = (sql, value) => { values.push(value); clauses.push(sql.replace('?', `$${values.length}`)) }
+    const add = (sql, value) => {
+      values.push(value)
+      const parameter = `$${values.length}`
+      clauses.push(sql.replace(/\?/g, parameter))
+    }
 
     if (status && status !== 'All') add('t.status = ?', status)
     else clauses.push("t.status IN ('Ready','In Progress','Blocked')")
