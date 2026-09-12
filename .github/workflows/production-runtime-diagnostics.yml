@@ -1,0 +1,42 @@
+name: Production Runtime Cleanup Diagnostics
+
+on:
+  push:
+    branches:
+      - production-runtime-demo-cleanup
+    paths:
+      - .github/workflows/production-runtime-diagnostics.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: production-runtime-demo-cleanup
+      - name: Repair finaliser template escaping
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/finalise-production-runtime-cleanup.mjs')
+          text = path.read_text()
+          old = r"await fetch(\`${API_BASE}/api/v1/auth/logout\`,"
+          new = r"await fetch(\`\${API_BASE}/api/v1/auth/logout\`,"
+          if old in text:
+              path.write_text(text.replace(old, new, 1))
+          PY
+      - name: Apply final cleanup in diagnostics workspace
+        run: node scripts/finalise-production-runtime-cleanup.mjs
+      - name: Show remaining production-boundary vocabulary
+        shell: bash
+        run: |
+          echo '=== demo/prototype vocabulary ==='
+          grep -RniE --include='*.js' --include='*.jsx' --include='*.mjs' --include='*.css' --include='*.html' 'demo|prototype' src || true
+          echo '=== simulated live chat token ==='
+          grep -Rni 'liveChatReplyOptions' src || true
+          echo '=== forbidden demo login class ==='
+          grep -Rni 'rmm-demo-login' src || true
