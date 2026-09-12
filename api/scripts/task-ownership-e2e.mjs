@@ -124,11 +124,12 @@ try {
   await db.query(
     `INSERT INTO service_request_tasks (
        tenant_id,request_id,external_key,title,status,team_id,team_snapshot,
-       assignee_person_id,assignee_snapshot,dependencies,instructions
-     ) VALUES (
-       $1,$2,'REQ-OWNERSHIP-0001-T01','Review access requirement','Ready',$3,$4::jsonb,
-       NULL,'{}'::jsonb,'[]'::jsonb,'Review and validate the access requirement.'
-     )`,
+       assignee_person_id,assignee_snapshot,dependencies,instructions,due_at
+     ) VALUES
+       ($1,$2,'REQ-OWNERSHIP-0001-T01','Review access requirement','Ready',$3,$4::jsonb,
+        NULL,'{}'::jsonb,'[]'::jsonb,'Review and validate the access requirement.',now() - interval '1 hour'),
+       ($1,$2,'REQ-OWNERSHIP-0001-T02','Resolve fulfilment blocker','Blocked',$3,$4::jsonb,
+        NULL,'{}'::jsonb,'[]'::jsonb,'Resolve the blocker before fulfilment can continue.',now() + interval '2 days')`,
     [tenantId, request.rows[0].id, team.rows[0].id, JSON.stringify({ id: 'TEAM-SERVICE-DESK', name: 'Service Desk' })],
   )
 
@@ -137,13 +138,38 @@ try {
   const tech2Cookie = await login(tech2Email)
   const outsiderCookie = await login(outsiderEmail)
 
-  console.log('1. Reject an analyst who is not in the task assignment group')
+  console.log('1. Verify server-authoritative technician work queue views and due filters')
+  const teamQueue = await json('/api/v1/task-work-queue?scope=team', { cookie: tech1Cookie })
+  assert(teamQueue.response.ok, `Team Queue failed: ${teamQueue.payload.error || teamQueue.response.status}`)
+  assert(teamQueue.payload.total === 2, `Team Queue should contain 2 active Service Desk tasks, got ${teamQueue.payload.total}`)
+  assert(teamQueue.payload.views?.team === 2, `Team Queue count should be 2, got ${teamQueue.payload.views?.team}`)
+  assert(teamQueue.payload.views?.unassigned === 2, `Unassigned count should be 2, got ${teamQueue.payload.views?.unassigned}`)
+  assert(teamQueue.payload.views?.blocked === 1, `Blocked count should be 1, got ${teamQueue.payload.views?.blocked}`)
+  assert(teamQueue.payload.views?.overdue === 1, `Overdue count should be 1, got ${teamQueue.payload.views?.overdue}`)
+  assert(teamQueue.payload.viewer?.teams?.includes('Service Desk'), 'Viewer team metadata does not include Service Desk')
+
+  const outsiderTeamQueue = await json('/api/v1/task-work-queue?scope=team', { cookie: outsiderCookie })
+  assert(outsiderTeamQueue.response.ok, 'Outsider Team Queue request failed')
+  assert(outsiderTeamQueue.payload.total === 0, `Analyst with no team should have empty Team Queue, got ${outsiderTeamQueue.payload.total}`)
+
+  const myTasksBeforeClaim = await json('/api/v1/task-work-queue?scope=mine', { cookie: tech1Cookie })
+  assert(myTasksBeforeClaim.response.ok && myTasksBeforeClaim.payload.total === 0, 'My Tasks should be empty before a task is claimed')
+
+  const blockedQueue = await json('/api/v1/task-work-queue?scope=blocked', { cookie: tech1Cookie })
+  assert(blockedQueue.response.ok && blockedQueue.payload.total === 1, 'Blocked view should expose exactly one blocked task')
+  assert(blockedQueue.payload.items?.[0]?.id === 'REQ-OWNERSHIP-0001-T02', 'Blocked view exposed the wrong task')
+
+  const overdueQueue = await json('/api/v1/task-work-queue?scope=team&due=Overdue', { cookie: tech1Cookie })
+  assert(overdueQueue.response.ok && overdueQueue.payload.total === 1, 'Overdue filter should expose exactly one task')
+  assert(overdueQueue.payload.items?.[0]?.id === 'REQ-OWNERSHIP-0001-T01', 'Overdue filter exposed the wrong task')
+
+  console.log('2. Reject an analyst who is not in the task assignment group')
   const outsiderTake = await json('/api/v1/tasks/REQ-OWNERSHIP-0001-T01/take', {
     method: 'POST', cookie: outsiderCookie,
   })
   assert(outsiderTake.response.status === 403, `Non-team analyst take should be 403, got ${outsiderTake.response.status}`)
 
-  console.log('2. Race two Service Desk technicians for the same Ready task')
+  console.log('3. Race two Service Desk technicians for the same Ready task')
   const [take1, take2] = await Promise.all([
     json('/api/v1/tasks/REQ-OWNERSHIP-0001-T01/take', { method: 'POST', cookie: tech1Cookie }),
     json('/api/v1/tasks/REQ-OWNERSHIP-0001-T01/take', { method: 'POST', cookie: tech2Cookie }),
@@ -171,6 +197,10 @@ try {
   assert(claimed.rows[0]?.team_id === team.rows[0].id, 'Taking a task changed its assignment group')
   assert(claimed.rows[0]?.assignee_email === winner.technician.email, 'Database owner does not match race winner')
 
+  const winnerMine = await json('/api/v1/task-work-queue?scope=mine', { cookie: winner.cookie })
+  assert(winnerMine.response.ok, 'Race winner could not load My Tasks')
+  assert(winnerMine.payload.items?.some((item) => item.id === 'REQ-OWNERSHIP-0001-T01'), 'Claimed task did not appear in winner My Tasks')
+
   const parentAfterTake = await db.query(
     `SELECT fulfilment_team_id,assigned_person_id FROM service_requests WHERE id=$1`,
     [request.rows[0].id],
@@ -186,7 +216,7 @@ try {
   )
   assert(takenEvents.rows[0].count === 1, 'Task race created an incorrect number of taken activities')
 
-  console.log('3. Only the current owner can release the Ready task')
+  console.log('4. Only the current owner can release the Ready task')
   const wrongRelease = await json('/api/v1/tasks/REQ-OWNERSHIP-0001-T01/release', {
     method: 'POST', cookie: loser.cookie,
   })
@@ -208,13 +238,16 @@ try {
   assert(released.rows[0]?.assignee_person_id === null, 'Released task still has an assignee')
   assert(Object.keys(released.rows[0]?.assignee_snapshot || {}).length === 0, 'Released task retained an assignee snapshot')
 
-  console.log('4. The other Service Desk technician can take the released task')
+  console.log('5. The other Service Desk technician can take the released task')
   const secondTake = await json('/api/v1/tasks/REQ-OWNERSHIP-0001-T01/take', {
     method: 'POST', cookie: loser.cookie,
   })
   assert(secondTake.response.ok, `Released task could not be retaken: ${secondTake.payload.error || secondTake.response.status}`)
 
-  console.log('5. Starting fulfilment is server-gated to the current task owner')
+  const secondOwnerMine = await json('/api/v1/task-work-queue?scope=mine', { cookie: loser.cookie })
+  assert(secondOwnerMine.response.ok && secondOwnerMine.payload.items?.some((item) => item.id === 'REQ-OWNERSHIP-0001-T01'), 'Retaken task did not move into the new owner My Tasks view')
+
+  console.log('6. Starting fulfilment is server-gated to the current task owner')
   const formerOwnerStart = await json('/api/v1/tasks/REQ-OWNERSHIP-0001-T01', {
     method: 'PATCH', cookie: winner.cookie, body: { status: 'In Progress' },
   })
@@ -241,7 +274,7 @@ try {
   )
   assert(releasedEvents.rows[0].count === 1, 'Task release activity was not recorded exactly once')
 
-  console.log('Task ownership E2E passed')
+  console.log('Task ownership and work queue E2E passed')
 } finally {
   if (tenantId) await db.query('DELETE FROM tenants WHERE id=$1', [tenantId]).catch(() => {})
   for (const userId of userIds) await db.query('DELETE FROM users WHERE id=$1', [userId]).catch(() => {})
