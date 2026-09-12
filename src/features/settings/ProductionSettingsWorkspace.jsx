@@ -23,6 +23,7 @@ import {
   Users,
   Wrench,
 } from 'lucide-react'
+import { ProductionTenantSecurityAudit } from './ProductionTenantSecurityAudit.jsx'
 import './ProductionSettingsWorkspace.css'
 
 const API_BASE = window.__HI5_API_BASE__
@@ -51,7 +52,7 @@ const sections = {
   directory: { path: '/settings/people-directory', group: 'General', label: 'People & directory', icon: Users, area: 'users' },
   teams: { path: '/settings/teams-departments', group: 'General', label: 'Teams & departments', icon: GitBranch, area: 'groups' },
   roles: { path: '/settings/roles-permissions', group: 'General', label: 'Roles & permissions', icon: FileKey2, area: 'permissions' },
-  security: { path: '/settings/security-mfa', group: 'General', label: 'Security & MFA', icon: ShieldCheck, area: 'security' },
+  security: { path: '/settings/security-mfa', group: 'General', label: 'Security policy', icon: ShieldCheck, area: 'security' },
 
   'itsm-numbering': { path: '/settings/itsm/record-numbering', group: 'ITSM', label: 'Record numbering', icon: ListChecks, area: 'itsm' },
   'itsm-slas': { path: '/settings/itsm/slas', group: 'ITSM', label: 'SLAs', icon: Gauge, area: 'itsm' },
@@ -437,7 +438,26 @@ function TeamsDepartments({ config, update }) { return <Panel title="Teams & dep
 
 function RolesPermissions({ config, update }) { return <><Panel title="Roles & permissions" description="Tenant-wide RBAC starting model."><div className="production-settings-grid"><Field label="Permission preset"><select value={config.preset || 'balanced'} onChange={(e) => update('preset', e.target.value)}><option value="balanced">Balanced</option><option value="restricted">Restricted</option><option value="open">Open collaboration</option></select></Field><Field label="Requester access"><select value={config.requesterAccess || 'portal'} onChange={(e) => update('requesterAccess', e.target.value)}><option value="portal">Portal only</option><option value="portal-approvals">Portal + approvals</option></select></Field><Field label="Change approval role"><select value={config.changeApprovalRole || 'admin-change'} onChange={(e) => update('changeApprovalRole', e.target.value)}><option value="admin-change">Admins + change managers</option><option value="change-only">Change managers only</option><option value="cab">CAB members</option></select></Field></div></Panel><Panel title="Role model"><div className="production-role-cards"><div><strong>Owner</strong><span>Tenant, subscription and security control</span></div><div><strong>Administrator</strong><span>Platform configuration without ownership transfer</span></div><div><strong>Analyst</strong><span>Operational ITSM work according to assigned permissions</span></div><div><strong>Requester</strong><span>Portal, own requests and assigned approvals</span></div></div></Panel></> }
 
-function Security({ config, update }) { return <><Panel title="Security & MFA" description="Authentication defaults stored at tenant level."><div className="production-settings-toggle-list"><Toggle checked={Boolean(config.requireMfa)} onChange={(v) => update('requireMfa', v)} title="Require administrator MFA" description="Preference is stored now; MFA challenge enforcement is a later backend step." /></div><div className="production-settings-grid"><Field label="Session length"><select value={config.sessionHours || '12'} onChange={(e) => update('sessionHours', e.target.value)}><option value="8">8 hours</option><option value="12">12 hours</option><option value="24">24 hours</option></select></Field><Field label="Password policy"><select value={config.passwordPolicy || 'strong'} onChange={(e) => update('passwordPolicy', e.target.value)}><option value="strong">Strong</option><option value="standard">Standard</option></select></Field><Field label="Audit retention"><select value={config.auditRetention || '365'} onChange={(e) => update('auditRetention', e.target.value)}><option value="90">90 days</option><option value="365">365 days</option><option value="730">730 days</option></select></Field></div></Panel></> }
+function Security({ config, update }) {
+  return <>
+    <Panel title="Security policy" description="Tenant-wide authentication, session, password and audit controls. Personal account security is managed from Profile.">
+      <div className="production-settings-toggle-list">
+        <Toggle
+          checked={Boolean(config.requireMfa)}
+          onChange={(value) => update('requireMfa', value)}
+          title="Require administrator MFA"
+          description="Require tenant owners and administrators to complete authenticator MFA. This policy is enforced by the production authentication service."
+        />
+      </div>
+      <div className="production-settings-grid">
+        <Field label="Session length"><select value={config.sessionHours || '12'} onChange={(event) => update('sessionHours', event.target.value)}><option value="8">8 hours</option><option value="12">12 hours</option><option value="24">24 hours</option></select></Field>
+        <Field label="Password policy"><select value={config.passwordPolicy || 'strong'} onChange={(event) => update('passwordPolicy', event.target.value)}><option value="strong">Strong</option><option value="standard">Standard</option></select></Field>
+        <Field label="Audit retention"><select value={config.auditRetention || '365'} onChange={(event) => update('auditRetention', event.target.value)}><option value="90">90 days</option><option value="365">365 days</option><option value="730">730 days</option></select></Field>
+      </div>
+    </Panel>
+    <ProductionTenantSecurityAudit />
+  </>
+}
 
 function ItsmNumbering({ config, update, updateNested }) { return <Panel title="Record numbering" description="Control the prefix and numeric length used when Hi5Central creates new service records."><div className="production-settings-grid"><Field label="Numbering mode"><select value={config.numberingMode || 'default'} onChange={(e) => update('numberingMode', e.target.value)}><option value="default">Hi5Central defaults</option><option value="custom">Custom prefixes</option></select></Field><Field label="Numeric digits"><select value={config.recordDigits || '5'} onChange={(e) => update('recordDigits', e.target.value)}>{['4','5','6','7','8'].map((d) => <option key={d} value={d}>{d} digits</option>)}</select></Field>{[['incident','Incident'],['serviceRequest','Service Request'],['problem','Problem'],['change','Change']].map(([key,label]) => <Field key={key} label={`${label} prefix`}><input disabled={config.numberingMode !== 'custom'} value={config.numberingMode === 'custom' ? config.recordPrefixes?.[key] || defaultPrefixes[key] : defaultPrefixes[key]} onChange={(e) => updateNested('recordPrefixes', key, e.target.value)} /></Field>)}</div><div className="production-number-preview"><span>Preview</span><strong>{config.numberingMode === 'custom' ? config.recordPrefixes?.incident || 'INC-' : 'INC-'}{String(1).padStart(Number(config.recordDigits || 5), '0')}</strong></div></Panel> }
 

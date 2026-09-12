@@ -8,9 +8,7 @@ import { KnowledgeContextEnhancer } from './features/knowledge/KnowledgeContextE
 import { OrganisationSitesEnhancer } from './features/people/OrganisationSitesEnhancer.jsx'
 import { OnboardingMfaEnhancer } from './features/security/OnboardingMfaEnhancer.jsx'
 import { ProductionMfaLoginEnhancer } from './features/security/ProductionMfaLoginEnhancer.jsx'
-import { ProductionMfaSettingsEnhancer } from './features/security/ProductionMfaSettingsEnhancer.jsx'
 import { ProductionPasswordRecoveryEnhancer } from './features/security/ProductionPasswordRecoveryEnhancer.jsx'
-import { ProductionSecurityCenterEnhancer } from './features/security/ProductionSecurityCenterEnhancer.jsx'
 import { ProductionAccessControl } from './production/ProductionAccessControl.jsx'
 import { ProductionAccessGuard } from './production/ProductionAccessGuard.jsx'
 import { ProductionAssignmentExperience } from './production/ProductionAssignmentExperience.jsx'
@@ -127,9 +125,7 @@ createRoot(rootElement).render(
     {productionWorkspace && !productionOnboarding ? <ProductionFirstLoginRouteBridge /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionFirstLoginExperience /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionMfaLoginEnhancer /> : null}
-    {productionWorkspace && !productionOnboarding ? <ProductionMfaSettingsEnhancer /> : null}
     {productionWorkspace && productionOnboarding ? <OnboardingMfaEnhancer /> : null}
-    {productionWorkspace && !productionOnboarding ? <ProductionSecurityCenterEnhancer /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionPasswordRecoveryEnhancer /> : null}
     {productionPortal ? <ProductionPortalKnowledgeChat /> : null}
     {productionPortal ? <ProductionPortalLiveChatOperations /> : null}

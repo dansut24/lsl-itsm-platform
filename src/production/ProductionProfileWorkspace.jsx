@@ -13,6 +13,7 @@ import {
   UserRound,
   Users,
 } from 'lucide-react'
+import { ProductionProfileSecurity } from './ProductionProfileSecurity.jsx'
 import './ProductionProfileWorkspace.css'
 
 const API_BASE = window.__HI5_API_BASE__
@@ -171,7 +172,7 @@ export function ProductionProfileWorkspace({ session }) {
             <div>
               <span>Personal account</span>
               <h1>Profile</h1>
-              <p>Your signed-in identity, organisation details and personal workspace preferences.</p>
+              <p>Your signed-in identity, personal security and workspace preferences.</p>
             </div>
           </header>
 
@@ -215,6 +216,8 @@ export function ProductionProfileWorkspace({ session }) {
                   </div>
                 </div>
               </Section>
+
+              <ProductionProfileSecurity />
 
               <Section title="Personal appearance" description="These settings affect only your account. Tenant branding remains under tenant Settings.">
                 <div className="production-profile-form-grid">

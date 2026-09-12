@@ -38,27 +38,74 @@ expectFile('src/production/ProductionWorkspaceBootstrap.jsx', [
   "currentPath === '/settings/workspace'",
 ])
 expectFile('src/production/ProductionIdentityBridge.jsx', [
-  "openProfile()",
+  'openProfile()',
   "'/profile'",
-  "settings.view",
+  'settings.view',
   'production-account-chip',
 ])
 expectFile('src/production/ProductionProfileWorkspace.jsx', [
   '/api/v1/profile',
   '/api/v1/user-preferences',
+  'ProductionProfileSecurity',
   'Signed in as',
   'Assigned access roles',
   'Personal appearance',
   'Workspace preferences',
 ])
+expectFile('src/production/ProductionProfileSecurity.jsx', [
+  "'/api/v1/mfa/status'",
+  "'/api/v1/mfa/setup'",
+  "'/api/v1/mfa/confirm'",
+  "'/api/v1/mfa/recovery-codes'",
+  "'/api/v1/security/password/change'",
+  "'/api/v1/security/sessions'",
+  "'/api/v1/security/sessions/revoke-others'",
+  "'/api/v1/security/mfa/remove'",
+  'Personal security',
+  'My multi-factor authentication',
+  'My password',
+  'My active sessions',
+], [
+  '/api/v1/security/audit',
+  '/settings/security-mfa',
+])
+expectFile('src/features/settings/ProductionSettingsWorkspace.jsx', [
+  'ProductionTenantSecurityAudit',
+  "label: 'Security policy'",
+  'Tenant-wide authentication, session, password and audit controls.',
+  'Require administrator MFA',
+], [
+  'Your multi-factor authentication',
+  'Password & account security',
+  'Active sessions',
+  '/api/v1/mfa/setup',
+  '/api/v1/security/password/change',
+  '/api/v1/security/sessions/revoke-others',
+  '/api/v1/security/mfa/remove',
+])
+expectFile('src/features/settings/ProductionTenantSecurityAudit.jsx', [
+  '/api/v1/security/audit?limit=80',
+  'Tenant security audit',
+], [
+  '/api/v1/mfa/setup',
+  '/api/v1/security/password/change',
+])
+expectFile('src/main.jsx', [], [
+  'ProductionMfaSettingsEnhancer',
+  'ProductionSecurityCenterEnhancer',
+])
 expectFile('api/src/settings.js', [
-  "registerProfileRoutes",
+  'registerProfileRoutes',
   'registerProfileRoutes(app)',
 ])
 expectFile('api/src/profile.js', [
   "app.get('/api/v1/profile'",
   'organisation_people',
   'organisation_team_memberships',
+])
+expectFile('api/src/security.js', [
+  "hasPermission(session.access, permission)",
+  "requireSession(c, 'settings.security.manage')",
 ])
 expectFile('scripts/check-production-runtime-boundary.mjs', [
   "'export function SettingsView('",
