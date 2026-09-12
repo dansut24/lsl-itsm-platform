@@ -1,0 +1,164 @@
+.service-request-workflow-enhancement {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.service-request-workflow-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--ac-radius-sm);
+  background: var(--surface-soft);
+}
+
+.service-request-workflow-summary > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.service-request-workflow-summary span,
+.service-request-workflow-summary small,
+.service-request-workflow-step-copy small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.service-request-workflow-summary span {
+  font-weight: 850;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.service-request-workflow-summary strong {
+  font-size: 11px;
+}
+
+.service-request-workflow-summary b {
+  flex: 0 0 auto;
+  color: var(--brand);
+  font-size: 12px;
+}
+
+.service-request-workflow-progress {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--line) 72%, transparent);
+}
+
+.service-request-workflow-progress i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: rgb(var(--accent-rgb));
+  transition: width .2s ease;
+}
+
+.service-request-workflow-steps {
+  display: grid;
+  gap: 6px;
+}
+
+.service-request-workflow-step {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--ac-radius-sm);
+  background: var(--surface-soft);
+}
+
+.service-request-workflow-step-index {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 850;
+}
+
+.service-request-workflow-step-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.service-request-workflow-step-title {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.service-request-workflow-step-title strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.service-request-workflow-step-title span {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 850;
+}
+
+.service-request-workflow-step-title span.is-completed {
+  background: rgba(48, 136, 94, .09);
+  color: #26754f;
+}
+
+.service-request-workflow-step-title span.is-in-progress,
+.service-request-workflow-step-title span.is-ready {
+  background: rgba(var(--accent-rgb), .09);
+  color: var(--brand);
+}
+
+.service-request-workflow-step-title span.is-blocked {
+  background: rgba(198, 52, 52, .08);
+  color: #b62c2c;
+}
+
+.service-request-workflow-step-copy p,
+.service-request-workflow-step-copy em {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.service-request-workflow-step-copy p {
+  color: var(--ink);
+}
+
+.service-request-workflow-step-copy em {
+  color: var(--muted);
+  font-style: normal;
+}
+
+@media (max-width: 700px) {
+  .service-request-workflow-step {
+    grid-template-columns: 22px minmax(0, 1fr);
+  }
+
+  .service-request-workflow-step-index {
+    width: 22px;
+    height: 22px;
+  }
+}
