@@ -11,13 +11,16 @@ const required = [
   'production-record-content',
   'production-record-pagination',
   'production-record-table production-record-table-enhanced',
-  'activity-canvas-shell production-motion-enter',
-  'activity-canvas-top',
-  'activity-canvas-ribbon',
-  'activity-canvas-body',
-  'activity-canvas-inspector',
-  'activity-canvas-activity',
-  'Open primary request',
+  'task-work-item production-motion-enter',
+  'task-work-item-masthead',
+  'task-work-item-body',
+  'task-work-item-inspector',
+  'task-work-item-primary',
+  'task-work-item-tabs',
+  'task-work-item-content',
+  'task-work-item-activity',
+  'Hi5EntityTypeahead',
+  'Open parent',
 ]
 
 for (const token of required) {

@@ -9,13 +9,17 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleStop,
+  Clock3,
+  FileText,
   Columns3,
   ExternalLink,
   Filter,
   LayoutGrid,
   List,
   ListChecks,
+  PanelLeftClose,
   PanelLeftOpen,
+  Paperclip,
   PlayCircle,
   RefreshCw,
   Search,
@@ -28,6 +32,7 @@ import './ProductionItsmWorkspace.css'
 import './ProductionItsmWorkspaceEnhancements.css'
 import './ProductionActivityCanvasRecord.css'
 import './ProductionActivityActionRecord.css'
+import { Hi5EntityTypeahead } from './Hi5EntityTypeahead.jsx'
 import './ProductionTaskExperience.css'
 
 const API_BASE = window.__HI5_API_BASE__
@@ -380,27 +385,32 @@ function InspectorRow({ label, value, meta, onClick }) {
 
 function TaskDetail({ taskKey }) {
   const [task, setTask] = useState(null)
-  const [organisation, setOrganisation] = useState({ people: [], teams: [] })
+  const [directory, setDirectory] = useState({ people: [], teams: [] })
+  const [parentRequest, setParentRequest] = useState(null)
   const [team, setTeam] = useState('')
   const [assignee, setAssignee] = useState('Unassigned')
   const [completionNotes, setCompletionNotes] = useState('')
+  const [completionOpen, setCompletionOpen] = useState(false)
+  const [assignmentEditing, setAssignmentEditing] = useState(false)
+  const [tab, setTab] = useState('activity')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
-  const [inspectorView, setInspectorView] = useState('home')
-  const [mobileDetails, setMobileDetails] = useState(false)
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(() => window.localStorage.getItem('hi5central-task-inspector-collapsed') === '1')
 
   async function load({ quiet = false } = {}) {
     if (!quiet) setLoading(true)
     setError('')
     try {
-      const [nextTask, nextOrganisation] = await Promise.all([
-        apiJson(`/api/v1/tasks/${encodeURIComponent(taskKey)}`),
-        apiJson('/api/v1/organisation').catch(() => ({ people: [], teams: [] })),
+      const nextTask = await apiJson(`/api/v1/tasks/${encodeURIComponent(taskKey)}`)
+      const [nextDirectory, nextParent] = await Promise.all([
+        apiJson('/api/v1/assignment/options?recordType=Service%20Request').catch(() => ({ people: [], teams: [] })),
+        nextTask.primaryRequest?.id ? apiJson(`/api/v1/service-requests/${encodeURIComponent(nextTask.primaryRequest.id)}`).catch(() => null) : null,
       ])
       setTask(nextTask)
-      setOrganisation(nextOrganisation)
+      setDirectory(nextDirectory || { people: [], teams: [] })
+      setParentRequest(nextParent)
       setTeam(nextTask.team || '')
       setAssignee(nextTask.assignee || 'Unassigned')
       setCompletionNotes(nextTask.completionNotes || '')
@@ -408,12 +418,15 @@ function TaskDetail({ taskKey }) {
   }
 
   useEffect(() => { void load() }, [taskKey])
+  useEffect(() => { window.localStorage.setItem('hi5central-task-inspector-collapsed', inspectorCollapsed ? '1' : '0') }, [inspectorCollapsed])
 
   async function patch(body, success) {
     setSaving(true); setError(''); setNotice('')
     try {
-      const next = await apiJson(`/api/v1/tasks/${encodeURIComponent(taskKey)}`, { method: 'PATCH', body: JSON.stringify(body) })
-      setTask(next); setTeam(next.team || ''); setAssignee(next.assignee || 'Unassigned'); setCompletionNotes(next.completionNotes || '')
+      await apiJson(`/api/v1/tasks/${encodeURIComponent(taskKey)}`, { method: 'PATCH', body: JSON.stringify(body) })
+      await load({ quiet: true })
+      setCompletionOpen(false)
+      setAssignmentEditing(false)
       if (success) setNotice(success)
       return true
     } catch (saveError) { setError(saveError.message); return false } finally { setSaving(false) }
@@ -429,13 +442,9 @@ function TaskDetail({ taskKey }) {
     } catch (ownershipError) { setError(ownershipError.message) } finally { setSaving(false) }
   }
 
-  if (loading) return <section className="production-task-experience activity-canvas-shell is-loading" aria-label="Loading task"><header className="activity-canvas-top"><div className="activity-canvas-skeleton is-heading" /><div className="activity-canvas-skeleton is-actions" /></header><div className="activity-canvas-skeleton is-ribbon" /><div className="activity-canvas-body"><aside><div className="activity-canvas-skeleton is-inspector" /></aside><main><div className="activity-canvas-skeleton is-activity-head" /><div className="activity-canvas-skeleton is-message" /><div className="activity-canvas-skeleton is-message" /><div className="activity-canvas-skeleton is-action-dock" /></main></div></section>
-  if (!task) return <section className="production-task-experience activity-canvas-shell"><div className="activity-canvas-failure"><strong>Could not open this task</strong><span>{error}</span><button type="button" onClick={() => load()}>Retry</button></div></section>
-
-  const people = organisation.people || []
-  const teams = organisation.teams || []
+  if (loading) return <section className="production-task-experience task-work-item is-loading"><div className="activity-canvas-skeleton is-heading" /><div className="activity-canvas-skeleton is-ribbon" /></section>
+  if (!task) return <section className="production-task-experience task-work-item"><div className="activity-canvas-failure"><strong>Could not open this task</strong><span>{error}</span><button type="button" onClick={() => load()}>Retry</button></div></section>
   const completed = task.status === 'Completed'
-  const assignmentDirty = team !== (task.team || '') || assignee !== (task.assignee || 'Unassigned')
   const parent = task.primaryRequest || {}
   const session = readSession()
   const taskUnassigned = !task.assignee || task.assignee === 'Unassigned'
@@ -446,54 +455,98 @@ function TaskDetail({ taskKey }) {
   const canTake = task.status === 'Ready' && taskUnassigned
   const canRelease = task.status === 'Ready' && taskIsMine
   const detailDue = dueMeta(task.dueAt, task.status)
+  const teams = directory.teams || []
+  const selectedTeam = teams.find((item) => item.name === team) || null
+  const allPeople = directory.people || []
+  const teamPeople = selectedTeam ? (selectedTeam.members || []) : allPeople
+  const selectedAssignee = allPeople.find((person) => person.name === assignee) || null
+  const assignmentDirty = team !== (task.team || '') || assignee !== (task.assignee || 'Unassigned')
+  const taskEvents = (parentRequest?.activities || []).filter((activity) => activity?.metadata?.taskKey === task.id)
+  const taskAttachments = taskEvents.flatMap((activity) => (activity.attachments || []).map((item, index) => ({ ...item, eventId: activity.id, _key: item.id || `${activity.id}-${index}` })))
+  const tabs = [
+    ['activity', `Activity${taskEvents.length ? ` ${taskEvents.length + 1}` : ''}`],
+    ['attachments', `Attachments${taskAttachments.length ? ` ${taskAttachments.length}` : ''}`],
+    ['audit', 'Audit Log'],
+  ]
 
-  function inspectorContent() {
-    if (inspectorView === 'home') return <>
-      <div className="activity-canvas-inspector-facts">
-        <InspectorRow label="Primary request" value={parent.id} meta={parent.title} onClick={() => setInspectorView('parent')} />
-        <InspectorRow label="Requester" value={parent.requester || 'Not recorded'} meta={parent.requesterEmail} onClick={() => setInspectorView('parent')} />
-        <InspectorRow label="Service" value={parent.service || 'Not recorded'} onClick={() => setInspectorView('parent')} />
-        <InspectorRow label="Assignment" value={task.team || 'Unassigned'} meta={task.assignee || 'Unassigned'} onClick={() => setInspectorView('assignment')} />
-      </div>
-      <InspectorRow label="Dependencies" value={task.dependencies?.length ? `${task.dependencies.length} prerequisite${task.dependencies.length === 1 ? '' : 's'}` : 'No prerequisites'} onClick={() => setInspectorView('dependencies')} />
-      <InspectorRow label="Completion" value={completed ? 'Completed' : 'Work in progress'} meta={completed ? formatDate(task.completedAt) : task.dueAt ? `${detailDue.label} · ${formatDate(task.dueAt)}` : 'No due date'} onClick={() => setInspectorView('completion')} />
-    </>
-
-    const back = <button type="button" className="activity-canvas-inspector-back" onClick={() => setInspectorView('home')}><ArrowLeft size={16} />Task details</button>
-    if (inspectorView === 'assignment') return <>{back}<div className="activity-canvas-inspector-form"><Field label="Assignment group"><select disabled={completed || saving} value={team} onChange={(event) => setTeam(event.target.value)}><option value="">Unassigned team</option>{teams.map((item) => <option key={item.id || item.name} value={item.name}>{item.name}</option>)}</select></Field><Field label="Assignee"><select disabled={completed || saving} value={assignee} onChange={(event) => setAssignee(event.target.value)}><option>Unassigned</option>{people.map((person) => <option key={person.id || person.email} value={person.name}>{person.name}{person.email ? ` · ${person.email}` : ''}</option>)}</select></Field>{assignmentDirty && !completed ? <button className="activity-canvas-primary" type="button" disabled={saving} onClick={() => patch({ team, assignee }, 'Assignment saved')}><Check size={16} />Save assignment</button> : null}</div></>
-    if (inspectorView === 'dependencies') return <>{back}<div className="activity-canvas-mini-list">{task.dependencies?.length ? task.dependencies.map((dependency) => <div key={dependency}><ListChecks size={17} /><span><strong>{dependency}</strong><small>Completed before this task became available</small></span></div>) : <div className="activity-canvas-empty">This task has no prerequisites.</div>}</div></>
-    if (inspectorView === 'parent') return <>{back}<div className="activity-canvas-inspector-facts"><InspectorRow label="Request" value={parent.id} meta={parent.title} onClick={() => navigate(`/requests/${encodeURIComponent(parent.id)}`)} /><InspectorRow label="Status" value={parent.status} meta={`${parent.priority || 'Medium'} priority`} /><InspectorRow label="Requester" value={parent.requester || 'Not recorded'} meta={parent.requesterEmail} /><InspectorRow label="Service" value={parent.service || 'Not recorded'} meta={parent.team || 'Unassigned team'} /></div></>
-    if (inspectorView === 'completion') return <>{back}<div className="activity-canvas-inspector-form"><Field label="Completion notes" hint={completed ? `Completed ${formatDate(task.completedAt)}` : 'Required before completing this task'}><textarea rows="8" disabled={completed || saving || !taskIsMine} value={completionNotes} onChange={(event) => setCompletionNotes(event.target.value)} placeholder="Record what was completed and any relevant outcome…" /></Field>{completed ? null : <button className="activity-canvas-primary" type="button" disabled={saving || !taskIsMine || !completionNotes.trim()} onClick={() => patch({ status: 'Completed', completionNotes }, 'Task completed')}><CheckCircle2 size={16} />Complete task</button>}</div></>
-    return null
+  const personMatches = (left, right) => {
+    if (!left || !right) return false
+    return Boolean(
+      (left.databaseId && right.databaseId && left.databaseId === right.databaseId)
+      || (left.id && right.id && left.id === right.id)
+      || (left.email && right.email && left.email.toLowerCase() === right.email.toLowerCase())
+      || (left.name && right.name && left.name === right.name)
+    )
   }
 
-  return <section className="production-task-experience activity-canvas-shell production-motion-enter">
-    <header className="activity-canvas-top">
-      <div className="activity-canvas-title"><div><strong>{task.id}</strong><span className={`activity-canvas-pill ${statusClass(task.status)}`}>{task.status}</span><span className={`activity-canvas-pill ${priorityClass(parent.priority || 'Medium')}`}>{parent.priority || 'Medium'}</span></div><input aria-label="Summary" value={task.title} readOnly /></div>
-      <div className="activity-canvas-commands">
-        <button type="button" className="activity-canvas-mobile-details" onClick={() => setMobileDetails(true)}><PanelLeftOpen size={17} />Details</button>
-        {canTake ? <button type="button" className="activity-canvas-primary production-task-take-primary" disabled={saving} onClick={() => ownershipAction('take', 'Task taken')}><UserPlus size={16} />Take task</button> : null}
-        {canRelease ? <button type="button" className="production-task-release-button" disabled={saving} onClick={() => ownershipAction('release', 'Task released to team queue')}><UserMinus size={16} />Release task</button> : null}
-        <label><span>Status</span><select value={task.status} disabled={saving || completed || !taskIsMine} onChange={(event) => { const value = event.target.value; if (value === 'In Progress') void patch({ status: value }, 'Task started'); else if (value === 'Blocked') void patch({ status: value }, 'Task blocked'); else if (value === 'Ready') void patch({ status: value }, 'Task returned to Ready') }}><option>Ready</option><option>In Progress</option><option>Blocked</option>{completed ? <option>Completed</option> : null}</select></label>
-        <button type="button" className="activity-canvas-icon" title="Reload latest" onClick={() => load({ quiet: true })}><RefreshCw size={17} /></button>
-        <button type="button" className="activity-canvas-primary production-task-open-primary" onClick={() => navigate(`/requests/${encodeURIComponent(parent.id)}`)}><ExternalLink size={16} />Open primary request</button>
-      </div>
-    </header>
+  const chooseAssignee = (person) => {
+    if (!person) { setAssignee('Unassigned'); return }
+    setAssignee(person.name || 'Unassigned')
+    const compatible = teams.filter((candidate) => (candidate.members || []).some((member) => personMatches(member, person)))
+    if (selectedTeam && compatible.some((candidate) => candidate.name === selectedTeam.name)) return
+    const preferred = compatible.find((candidate) => (candidate.members || []).some((member) => personMatches(member, person) && member.isPrimary)) || compatible[0]
+    if (preferred) setTeam(preferred.name)
+  }
 
-    <div className="activity-canvas-ribbon"><span><b>Primary request</b>{parent.id || '—'}</span><span><b>Requester</b>{parent.requester || 'Not recorded'}</span><span><b>Service</b>{parent.service || '—'}</span><span><b>Assignment</b>{task.team || 'Unassigned'} / {task.assignee || 'Unassigned'}</span><span><b>Priority</b>{parent.priority || 'Medium'}</span><span className={`production-task-detail-due ${detailDue.className}`}><b>Due / target</b>{task.dueAt ? formatDate(task.dueAt) : 'No due date'}<em>{detailDue.label}</em></span></div>
+  const changeTeam = (nextTeam) => {
+    const nextName = nextTeam?.name || ''
+    setTeam(nextName)
+    if (!nextTeam) { setAssignee('Unassigned'); return }
+    const stillEligible = selectedAssignee && (nextTeam.members || []).some((member) => personMatches(member, selectedAssignee))
+    if (!stillEligible) setAssignee('Unassigned')
+  }
+
+  const renderInspector = () => inspectorCollapsed
+    ? null
+    : <aside className="task-work-item-inspector">
+      <section className="task-work-item-panel task-work-item-context">
+        <header><div><span>Task details</span><h2>Context</h2></div><button type="button" onClick={() => setInspectorCollapsed(true)} title="Collapse task details"><PanelLeftClose size={17} /></button></header>
+        <div className="task-work-item-facts">
+          <button type="button" onClick={() => navigate(`/requests/${encodeURIComponent(parent.id)}`)}><span>Primary request</span><strong>{parent.id || '—'}</strong><small>{parent.title || 'Open parent request'}</small></button>
+          <div><span>Requester</span><strong>{parent.requester || 'Not recorded'}</strong><small>{parent.requesterEmail || ''}</small></div>
+          <div><span>Service</span><strong>{parent.service || 'Not recorded'}</strong></div>
+          <div><span>Due / target</span><strong>{task.dueAt ? formatDate(task.dueAt) : 'No due date'}</strong><small>{detailDue.label}</small></div>
+          <div><span>Dependencies</span><strong>{task.dependencies?.length ? `${task.dependencies.length} prerequisite${task.dependencies.length === 1 ? '' : 's'}` : 'None'}</strong></div>
+        </div>
+        <div className="task-work-item-assignment">
+          <button type="button" className="task-work-item-assignment-toggle" onClick={() => setAssignmentEditing((value) => !value)}><span>Assignment</span><strong>{task.team || 'Unassigned'}</strong><small>{task.assignee || 'Unassigned'}</small></button>
+          {assignmentEditing ? <div className="task-work-item-assignment-editor"><label><span>Assignment group</span><Hi5EntityTypeahead items={teams} value={selectedTeam} disabled={completed || saving} onSelect={changeTeam} placeholder="Type at least 2 characters…" minimumCharacters={2} emptyLabel="No matching assignment groups" getSearchText={(item) => item.name || ''} getMeta={(item) => `${(item.members || []).length} eligible technician${(item.members || []).length === 1 ? '' : 's'}`} /></label><label><span>Assignee</span><Hi5EntityTypeahead items={teamPeople} value={selectedAssignee} disabled={completed || saving} onSelect={chooseAssignee} placeholder="Type at least 2 characters…" minimumCharacters={2} emptyLabel={team ? `No matching eligible users in ${team}` : 'No matching eligible technicians'} /></label>{assignmentDirty && !completed ? <button type="button" disabled={saving} onClick={() => patch({ team, assignee }, 'Assignment saved')}><Check size={15} />Save assignment</button> : null}</div> : null}
+        </div>
+      </section>
+    </aside>
+
+  const renderActivity = () => <section className="task-work-item-panel task-work-item-activity">
+    <div className="task-work-item-actions">
+      {canTake ? <button type="button" disabled={saving} onClick={() => ownershipAction('take', 'Task taken')}><UserPlus size={15} />Take task</button> : null}
+      {canRelease ? <button type="button" disabled={saving} onClick={() => ownershipAction('release', 'Task released to team queue')}><UserMinus size={15} />Release task</button> : null}
+      {!completed ? <><button type="button" className={task.status === 'In Progress' ? 'is-active' : ''} disabled={saving || completed || !taskIsMine} onClick={() => patch({ status: 'In Progress' }, 'Task started')}><PlayCircle size={15} />Start</button><button type="button" className={task.status === 'Blocked' ? 'is-active' : ''} disabled={saving || completed || !taskIsMine} onClick={() => patch({ status: 'Blocked' }, 'Task blocked')}><CircleStop size={15} />Block</button><button type="button" className={completionOpen ? 'is-active' : ''} disabled={saving || completed || !taskIsMine} onClick={() => setCompletionOpen((value) => !value)}><CheckCircle2 size={15} />Complete</button></> : null}
+    </div>
+    {completionOpen && !completed ? <div className="task-work-item-composer"><label><span>Completion notes</span><textarea rows="3" value={completionNotes} disabled={saving || !taskIsMine} onChange={(event) => setCompletionNotes(event.target.value)} placeholder="Record what was completed and any relevant outcome…" /></label><button type="button" disabled={saving || !taskIsMine || !completionNotes.trim()} onClick={() => patch({ status: 'Completed', completionNotes }, 'Task completed')}><CheckCircle2 size={15} />Complete task</button></div> : null}
+    <header><div><span>Timeline</span><h2>Activity</h2><small>Task work and lifecycle events</small></div></header>
+    <div className="task-work-item-scroll"><article className="task-work-item-message"><span className="task-work-item-message-icon"><ListChecks size={17} /></span><div><header><strong>Task instructions</strong><time>{formatDate(task.createdAt)}</time></header><p>{task.instructions || 'No additional instructions were supplied for this task.'}</p></div></article>{taskEvents.map((event) => <div className="task-work-item-event" key={event.id}><i /><div><strong>{event.text || event.message || 'Task updated'}</strong><small>{event.actor || 'Hi5Central'} · {formatDate(event.createdAt)}</small></div></div>)}{completed && !taskEvents.length ? <div className="task-work-item-event"><i /><div><strong>Task completed</strong><small>{task.completionNotes || 'No completion notes'} · {formatDate(task.completedAt)}</small></div></div> : null}</div>
+  </section>
+  const renderAttachments = () => <section className="task-work-item-panel task-work-item-tab-panel"><header><div><span>Evidence</span><h2>Attachments</h2></div></header><div className="task-work-item-scroll">{taskAttachments.length ? taskAttachments.map((item, index) => <div className="task-work-item-attachment" key={item.id || item._key || index}><span><Paperclip size={17} /></span><div><strong>{item.name || item.fileName || 'Attachment'}</strong><small>{item.size ? `${Math.max(1, Math.round(Number(item.size) / 1024))} KB` : 'Attached to task activity'}</small></div></div>) : <div className="activity-canvas-empty">No attachments are linked to this task yet.</div>}</div></section>
+
+  const renderAudit = () => <section className="task-work-item-panel task-work-item-tab-panel"><header><div><span>Forensic history</span><h2>Audit Log</h2></div></header><div className="task-work-item-scroll">{taskEvents.length ? taskEvents.map((event) => <div className="task-work-item-audit" key={event.id}><time>{formatDate(event.createdAt)}</time><div><strong>{event.text || event.message || event.metadata?.event || 'Task updated'}</strong><small>{event.actor || 'Hi5Central'}{event.metadata?.event ? ` · ${event.metadata.event}` : ''}</small></div></div>) : <div className="activity-canvas-empty">No task-specific audit events have been recorded yet.</div>}</div></section>
+
+  const activeContent = tab === 'attachments' ? renderAttachments() : tab === 'audit' ? renderAudit() : renderActivity()
+
+  return <section className={`production-task-experience task-work-item production-motion-enter${inspectorCollapsed ? ' is-inspector-collapsed' : ''}`}>
+    <header className="task-work-item-masthead">
+      <div className="task-work-item-leading"><button type="button" className="task-work-item-back" onClick={() => navigate('/tasks')} title="Back to Tasks"><ArrowLeft size={19} /></button>{inspectorCollapsed ? <button type="button" className="task-work-item-details-restore" onClick={() => setInspectorCollapsed(false)} title="Show task details"><PanelLeftOpen size={17} /><span>Details</span></button> : null}</div>
+      <div className="task-work-item-title"><div><strong>{task.id}</strong><span className={`activity-canvas-pill ${statusClass(task.status)}`}>{task.status}</span><span className={`activity-canvas-pill ${priorityClass(parent.priority || 'Medium')}`}>{parent.priority || 'Medium'}</span></div><h1>{task.title}</h1><p>{task.team || 'Unassigned'} / {task.assignee || 'Unassigned'} · Parent {parent.id || 'not recorded'}</p></div>
+      <div className="task-work-item-masthead-actions"><button type="button" className={`task-work-item-due ${detailDue.className}`}><Clock3 size={17} /><span><small>Due / target</small><strong>{task.dueAt ? formatDate(task.dueAt) : 'No due date'}</strong><em>{detailDue.label}</em></span></button><button type="button" className="task-work-item-parent" onClick={() => navigate(`/requests/${encodeURIComponent(parent.id)}`)}><ExternalLink size={16} />Open parent</button></div>
+    </header>
 
     {error ? <div className="activity-canvas-banner is-error"><AlertTriangle size={17} /><span>{error}</span><button type="button" onClick={() => setError('')}><X size={15} /></button></div> : null}
     {notice ? <div className="activity-canvas-banner is-success"><CheckCircle2 size={17} /><span>{notice}</span><button type="button" onClick={() => setNotice('')}><X size={15} /></button></div> : null}
 
-    <div className="activity-canvas-body">
-      {mobileDetails ? <button type="button" className="activity-canvas-drawer-backdrop" aria-label="Close details" onClick={() => setMobileDetails(false)} /> : null}
-      <aside className={`activity-canvas-inspector${mobileDetails ? ' is-mobile-open' : ''}`}><header><div><span>Record inspector</span><h2>{inspectorView === 'home' ? 'Task details' : inspectorView.replace(/^./, (value) => value.toUpperCase())}</h2></div><button type="button" className="activity-canvas-drawer-close" onClick={() => setMobileDetails(false)}><X size={17} /></button></header><div className="activity-canvas-inspector-scroll">{inspectorContent()}</div></aside>
-
-      <main className="activity-canvas-activity production-task-workspace"><header><div><span>Work</span><h2>Task activity</h2></div></header><div className="activity-canvas-list production-task-work-list"><article className="activity-canvas-message is-internal"><div className="activity-canvas-avatar"><ListChecks size={17} /></div><div className="activity-canvas-message-card"><header><div><strong>Task instructions</strong><span>{formatDate(task.createdAt)}</span></div><div><em>Internal fulfilment</em></div></header><p>{task.instructions || 'No additional instructions were supplied for this task.'}</p></div></article>{completed ? <div className="activity-canvas-system-event"><i /><div><span>Task completed.</span>{task.completionNotes ? <small>{task.completionNotes}</small> : null}</div><time>{formatDate(task.completedAt)}</time></div> : null}</div>
-
-        {!completed && !taskIsMine ? <div className="production-task-ownership-note"><UserPlus size={16} /><span>{taskUnassigned ? 'Take this task before starting work.' : `This task is currently assigned to ${task.assignee}. Reassign it in Record Inspector if ownership needs to change.`}</span></div> : null}
-        {!completed ? <div className="activity-action-dock production-task-action-dock"><div className="activity-action-strip"><button type="button" className={task.status === 'In Progress' ? 'is-active' : ''} disabled={saving || !taskIsMine} onClick={() => patch({ status: 'In Progress' }, 'Task started')}><PlayCircle size={15} />Start</button><button type="button" className={task.status === 'Blocked' ? 'is-active' : ''} disabled={saving || !taskIsMine} onClick={() => patch({ status: 'Blocked' }, 'Task blocked')}><CircleStop size={15} />Block</button><i /><button type="button" disabled={saving || !taskIsMine || !completionNotes.trim()} onClick={() => patch({ status: 'Completed', completionNotes }, 'Task completed')}><CheckCircle2 size={15} />Complete</button></div><div className="production-task-completion-composer"><Field label="Completion notes" hint="Technician-only fulfilment detail; completing the task does not email the requester."><textarea rows="3" value={completionNotes} disabled={saving || !taskIsMine} onChange={(event) => setCompletionNotes(event.target.value)} placeholder="Record the completed work before finishing this task…" /></Field></div></div> : null}
-      </main>
+    <div className="task-work-item-body">
+      {renderInspector()}
+      <section className="task-work-item-primary">
+        <nav className="task-work-item-tabs">{tabs.map(([value, label]) => <button type="button" key={value} className={tab === value ? 'is-active' : ''} onClick={() => { setCompletionOpen(false); setTab(value) }}>{label}</button>)}<button type="button" className="task-work-item-refresh" onClick={() => load({ quiet: true })}><RefreshCw size={15} />Refresh</button></nav>
+        <main className="task-work-item-content">{activeContent}</main>
+      </section>
     </div>
   </section>
 }
