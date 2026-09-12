@@ -1,0 +1,87 @@
+name: Hi5Central Portal Approvals E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  portal-approvals-e2e:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: hi5central
+          POSTGRES_USER: hi5central
+          POSTGRES_PASSWORD: hi5central-ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hi5central -d hi5central"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install API dependencies
+        working-directory: api
+        run: npm install --omit=dev
+
+      - name: Parse API and approval E2E
+        working-directory: api
+        run: |
+          for file in src/*.js scripts/*.mjs; do
+            node --check "$file"
+          done
+
+      - name: Run database migrations
+        working-directory: api
+        env:
+          DATABASE_URL: postgresql://hi5central:hi5central-ci@127.0.0.1:5432/hi5central
+        run: npm run migrate
+
+      - name: Boot API and run Portal approval E2E
+        working-directory: api
+        env:
+          NODE_ENV: test
+          PORT: 3001
+          DATABASE_URL: postgresql://hi5central:hi5central-ci@127.0.0.1:5432/hi5central
+          REDIS_URL: redis://127.0.0.1:6379/0
+          API_URL: http://127.0.0.1:3001
+          MARKETING_URL: https://hi5central.com
+        run: |
+          export MFA_ENCRYPTION_KEY="$(openssl rand -hex 32)"
+          npm start > /tmp/hi5central-api.log 2>&1 &
+          API_PID=$!
+          trap 'kill $API_PID 2>/dev/null || true; echo "--- API log ---"; cat /tmp/hi5central-api.log' EXIT
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3001/live >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          curl -fsS http://127.0.0.1:3001/health
+          echo
+          node scripts/portal-approvals-e2e.mjs

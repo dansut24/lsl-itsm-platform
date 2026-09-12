@@ -322,7 +322,7 @@ jobs:
 
           grep -q '"status":"Closed"' /tmp/service-request-state.json
           grep -q '"priority":"High"' /tmp/service-request-state.json
-          grep -q '"assignee":"CI Owner"' /tmp/service-request-state.json
+          grep -q '"assignee":"Unassigned"' /tmp/service-request-state.json
           grep -q 'CI request fulfilment completed and verified' /tmp/service-request-state.json
 
           curl -fsS \

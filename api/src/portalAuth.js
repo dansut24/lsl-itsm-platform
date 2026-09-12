@@ -4,6 +4,7 @@ import { pool, withTransaction } from './db.js'
 import { sendPortalActivationEmail } from './mailer.js'
 import { hashPassword, passwordPolicyResult, verifyPassword } from './password.js'
 import { registerPortalRequestViewRoutes } from './portalRequestViews.js'
+import { hasAssignedPortalApproval, portalApprovalCapabilities, registerPortalApprovalRoutes } from './portalApprovals.js'
 import { ensureRedisConnected } from './redis.js'
 import { recordSecurityEvent, requestIp, requestUserAgent } from './securityAudit.js'
 import { securitySettings, sessionTtlSeconds } from './securityPolicy.js'
@@ -66,27 +67,29 @@ async function requesterPerson(tenantSlug, email) {
   return result.rows[0] || null
 }
 
-function portalSessionPayload(session) {
+function portalSessionPayload(session, capabilities = { requests: true, approvals: false }) {
   const payload = sessionPayload(session)
-  return { ...payload, portal: true, user: { ...payload.user, role: 'requester' } }
+  return { ...payload, portal: true, portalCapabilities: capabilities, user: { ...payload.user, role: 'requester' } }
 }
 
 async function requirePortalSession(c) {
   const session = await resolveSession(c)
   if (!session) return { error: c.json({ error: 'Authentication required.' }, 401) }
   if (!portalOrigin(c, session.slug)) return { error: c.json({ error: 'Portal session mismatch.' }, 403) }
-  if (!hasPermission(session.access, 'portal.access')) return { error: c.json({ error: 'Requester Portal access is required.' }, 403) }
   if (!session.onboarding_completed_at) return { error: c.json({ error: 'This tenant has not completed setup.' }, 403) }
-  return { session }
+  const capabilities = await portalApprovalCapabilities(session)
+  if (!capabilities.requests && !capabilities.approvals) return { error: c.json({ error: 'Requester Portal or approval access is required.' }, 403) }
+  return { session, capabilities }
 }
 
 export function registerPortalAuthRoutes(app) {
   registerPortalRequestViewRoutes(app)
+  registerPortalApprovalRoutes(app)
 
   app.get('/api/v1/portal/auth/session', async (c) => {
     const auth = await requirePortalSession(c)
     if (auth.error) return auth.error
-    return c.json(portalSessionPayload(auth.session))
+    return c.json(portalSessionPayload(auth.session, auth.capabilities))
   })
 
   app.post('/api/v1/portal/auth/login', async (c) => {
@@ -111,7 +114,8 @@ export function registerPortalAuthRoutes(app) {
     }
 
     const access = await effectiveAccessForUser(pool, account.tenant_id, account.user_id, account.tenant_role)
-    if (!access.portalAccess) {
+    const assignedApprovalAccess = await hasAssignedPortalApproval(pool, account.tenant_id, account.user_id)
+    if (!access.portalAccess && !assignedApprovalAccess) {
       await recordSecurityEvent({
         tenantId: account.tenant_id,
         actorUserId: account.user_id,
@@ -122,10 +126,14 @@ export function registerPortalAuthRoutes(app) {
         metadata: { reason: 'portal_access_denied' },
       })
       return c.json({
-        error: 'This account does not have access to the requester portal. Sign in to the Hi5Central workspace instead, or ask an administrator to add a Portal-enabled role.',
+        error: 'This account does not have access to the requester portal and has no approvals assigned to it.',
       }, 403)
     }
     const resolvedAccount = attachAccess(account, access, 'portal')
+    const capabilities = {
+      requests: access.portalAccess,
+      approvals: hasPermission(access, 'portal.approvals.view') || assignedApprovalAccess,
+    }
 
     const token = await withTransaction(async (client) => {
       const sessionToken = await createSession(client, { tenantId: account.tenant_id, userId: account.user_id, surface: 'portal' })
@@ -138,7 +146,7 @@ export function registerPortalAuthRoutes(app) {
     })
 
     setPortalSessionCookie(c, token, sessionTtlSeconds(account))
-    return c.json(portalSessionPayload(resolvedAccount))
+    return c.json(portalSessionPayload(resolvedAccount, capabilities))
   })
 
   app.post('/api/v1/portal/auth/logout', async (c) => {

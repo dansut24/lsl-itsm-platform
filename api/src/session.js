@@ -40,6 +40,22 @@ async function sessionPolicy(client, tenantId, userId) {
   return result.rows[0] || null
 }
 
+async function hasPortalApprovalAssignment(client, tenantId, userId) {
+  const result = await client.query(
+    `SELECT 1
+     FROM service_request_approvals a
+     LEFT JOIN organisation_people p
+       ON p.tenant_id = a.tenant_id
+      AND p.id = a.approver_person_id
+      AND p.active = true
+     WHERE a.tenant_id = $1
+       AND (a.approver_user_id = $2 OR p.user_id = $2)
+     LIMIT 1`,
+    [tenantId, userId],
+  )
+  return result.rowCount > 0
+}
+
 export async function createSession(client, {
   tenantId,
   userId,
@@ -51,7 +67,10 @@ export async function createSession(client, {
   if (!policy) throw new Error('Could not resolve the tenant session policy.')
 
   const access = await effectiveAccessForUser(client, tenantId, userId, policy.tenant_role)
-  const accessAllowed = surface === 'portal' ? access.portalAccess : access.workspaceAccess
+  const approvalPortalAccess = surface === 'portal' && !access.portalAccess
+    ? await hasPortalApprovalAssignment(client, tenantId, userId)
+    : false
+  const accessAllowed = surface === 'portal' ? (access.portalAccess || approvalPortalAccess) : access.workspaceAccess
   if (!accessAllowed) {
     const error = new Error(surface === 'portal'
       ? 'Your Hi5Central roles do not include access to the requester portal.'
@@ -119,7 +138,7 @@ export async function resolveSession(c) {
   }
   const surface = portalRequest(c) ? 'portal' : 'workspace'
   const access = await effectiveAccessForUser(pool, session.tenant_id, session.user_id, session.tenant_role)
-  if (surface === 'portal' && !access.portalAccess) return null
+  if (surface === 'portal' && !access.portalAccess && !await hasPortalApprovalAssignment(pool, session.tenant_id, session.user_id)) return null
   if (surface === 'workspace' && !access.workspaceAccess) return null
   const resolved = attachAccess(session, access, surface)
   pool.query('UPDATE auth_sessions SET last_seen_at=now() WHERE id=$1', [session.session_id]).catch(() => {})

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowLeft,
   CheckCircle2,
+  ClipboardCheck,
   ChevronRight,
   CircleDollarSign,
   Clock3,
@@ -22,6 +23,7 @@ import {
   UserPlus,
   X,
 } from 'lucide-react'
+import { ProductionPortalApprovals } from './ProductionPortalApprovals.jsx'
 import './ProductionRequesterPortal.css'
 
 const API_BASE = window.__HI5_API_BASE__
@@ -362,7 +364,10 @@ function Requests({ selectedReference, onSelect, refreshKey }) {
 export function ProductionRequesterPortal({ catalogue, tenant }) {
   const [session, setSession] = useState(null)
   const [checking, setChecking] = useState(true)
-  const [section, setSection] = useState('home')
+  const [section, setSection] = useState(() => {
+    const route = window.location.pathname.split('/').filter(Boolean)[0] || 'home'
+    return ['incident', 'catalogue', 'requests', 'approvals'].includes(route) ? route : 'home'
+  })
   const [selectedRequest, setSelectedRequest] = useState('')
   const [refreshKey, setRefreshKey] = useState(0)
   const [mobileNav, setMobileNav] = useState(false)
@@ -385,9 +390,60 @@ export function ProductionRequesterPortal({ catalogue, tenant }) {
   if (!session) return <PortalAuth tenant={tenant} onAuthenticated={setSession} />
 
   const user = session.user || {}
+  const capabilities = session.portalCapabilities || { requests: true, approvals: false }
+  const canRequest = capabilities.requests !== false
+  const canApprove = Boolean(capabilities.approvals)
+  const activeSection = !canRequest && ['incident', 'catalogue', 'requests'].includes(section)
+    ? (canApprove ? 'approvals' : 'home')
+    : section
   const serviceItems = (catalogue.items || []).filter((item) => item.requestType !== 'Incident')
   const navigate = (next) => { setSection(next); setSelectedRequest(''); setMobileNav(false); window.history.replaceState({}, '', next === 'home' ? '/' : `/${next}`) }
   const submitted = (request) => { setSelectedRequest(request.reference || request.id); setSection('requests'); setRefreshKey((value) => value + 1) }
 
-  return <div className="prp-shell"><header className="prp-header"><div className="prp-brand"><img src="/hi5central-logo.png" alt="" /><span><strong>{tenant.companyName}</strong><small>Help Centre</small></span></div><nav><button className={section === 'home' ? 'active' : ''} onClick={() => navigate('home')}><Home size={17} /> Home</button><button className={section === 'incident' ? 'active' : ''} onClick={() => navigate('incident')}><LifeBuoy size={17} /> Raise incident</button><button className={section === 'catalogue' ? 'active' : ''} onClick={() => navigate('catalogue')}><PackageOpen size={17} /> Services</button><button className={section === 'requests' ? 'active' : ''} onClick={() => navigate('requests')}><Inbox size={17} /> My Requests</button></nav><div className="prp-user"><span>{initials(user.name)}</span><div><strong>{user.name}</strong><small>{user.email}</small></div><button title="Sign out" onClick={signOut}><LogOut size={17} /></button></div><button className="prp-mobile-menu" onClick={() => setMobileNav(true)}><Menu size={21} /></button></header>{mobileNav ? <div className="prp-mobile-nav"><div><strong>{tenant.companyName}</strong><button onClick={() => setMobileNav(false)}><X size={20} /></button></div><button onClick={() => navigate('home')}><Home size={18} /> Home</button><button onClick={() => navigate('incident')}><LifeBuoy size={18} /> Raise incident</button><button onClick={() => navigate('catalogue')}><PackageOpen size={18} /> Services</button><button onClick={() => navigate('requests')}><Inbox size={18} /> My Requests</button><button onClick={signOut}><LogOut size={18} /> Sign out</button></div> : null}<main className="prp-content">{section === 'incident' ? <RaiseIncident onSubmitted={submitted} /> : section === 'catalogue' ? <Catalogue items={serviceItems} onSubmitted={submitted} /> : section === 'requests' ? <Requests selectedReference={selectedRequest} onSelect={setSelectedRequest} refreshKey={refreshKey} /> : <section className="prp-home"><div className="prp-hero"><span>Hi {user.name?.split(' ')[0] || 'there'}</span><h1>What can IT help you with?</h1><p>Report incidents, request services, follow progress and keep every customer-visible update in one place.</p><div><button className="prp-primary" onClick={() => navigate('incident')}><LifeBuoy size={17} /> Raise incident</button><button className="prp-secondary" onClick={() => navigate('catalogue')}><Plus size={17} /> Request a service</button></div></div><div className="prp-home-grid"><button onClick={() => navigate('incident')}><span className="prp-icon"><LifeBuoy size={20} /></span><strong>Raise incident</strong><p>Tell the Service Desk when something is broken or stopping you from working.</p><ChevronRight size={17} /></button><button onClick={() => navigate('catalogue')}><span className="prp-icon"><PackageOpen size={20} /></span><strong>Service catalogue</strong><p>Browse the services and products your organisation has published.</p><ChevronRight size={17} /></button><button onClick={() => navigate('requests')}><span className="prp-icon"><Inbox size={20} /></span><strong>My Requests</strong><p>See incidents, service requests, fulfilment and customer updates.</p><ChevronRight size={17} /></button><div><span className="prp-icon"><ShieldCheck size={20} /></span><strong>Private by default</strong><p>You can only see requests associated with your authenticated account.</p></div></div></section>}</main></div>
+  const requestNav = canRequest ? <>
+    <button className={activeSection === 'incident' ? 'active' : ''} onClick={() => navigate('incident')}><LifeBuoy size={17} /> Raise incident</button>
+    <button className={activeSection === 'catalogue' ? 'active' : ''} onClick={() => navigate('catalogue')}><PackageOpen size={17} /> Services</button>
+    <button className={activeSection === 'requests' ? 'active' : ''} onClick={() => navigate('requests')}><Inbox size={17} /> My Requests</button>
+  </> : null
+
+  const mobileRequestNav = canRequest ? <>
+    <button onClick={() => navigate('incident')}><LifeBuoy size={18} /> Raise incident</button>
+    <button onClick={() => navigate('catalogue')}><PackageOpen size={18} /> Services</button>
+    <button onClick={() => navigate('requests')}><Inbox size={18} /> My Requests</button>
+  </> : null
+
+  return (
+    <div className="prp-shell">
+      <header className="prp-header">
+        <div className="prp-brand"><img src="/hi5central-logo.png" alt="" /><span><strong>{tenant.companyName}</strong><small>Help Centre</small></span></div>
+        <nav>
+          <button className={activeSection === 'home' ? 'active' : ''} onClick={() => navigate('home')}><Home size={17} /> Home</button>
+          {requestNav}
+          {canApprove ? <button className={activeSection === 'approvals' ? 'active' : ''} onClick={() => navigate('approvals')}><ClipboardCheck size={17} /> My Approvals</button> : null}
+        </nav>
+        <div className="prp-user"><span>{initials(user.name)}</span><div><strong>{user.name}</strong><small>{user.email}</small></div><button title="Sign out" onClick={signOut}><LogOut size={17} /></button></div>
+        <button className="prp-mobile-menu" onClick={() => setMobileNav(true)}><Menu size={21} /></button>
+      </header>
+      {mobileNav ? <div className="prp-mobile-nav"><div><strong>{tenant.companyName}</strong><button onClick={() => setMobileNav(false)}><X size={20} /></button></div><button onClick={() => navigate('home')}><Home size={18} /> Home</button>{mobileRequestNav}{canApprove ? <button onClick={() => navigate('approvals')}><ClipboardCheck size={18} /> My Approvals</button> : null}<button onClick={signOut}><LogOut size={18} /> Sign out</button></div> : null}
+      <main className="prp-content">
+        {activeSection === 'approvals' && canApprove ? <ProductionPortalApprovals />
+          : activeSection === 'incident' && canRequest ? <RaiseIncident onSubmitted={submitted} />
+            : activeSection === 'catalogue' && canRequest ? <Catalogue items={serviceItems} onSubmitted={submitted} />
+              : activeSection === 'requests' && canRequest ? <Requests selectedReference={selectedRequest} onSelect={setSelectedRequest} refreshKey={refreshKey} />
+                : <section className="prp-home">
+                    <div className="prp-hero">
+                      <span>Hi {user.name?.split(' ')[0] || 'there'}</span>
+                      <h1>{canRequest ? 'What can IT help you with?' : 'Approvals waiting for your review.'}</h1>
+                      <p>{canRequest ? 'Report incidents, request services, follow progress and keep every customer-visible update in one place.' : 'Review Service Requests assigned to you without needing Service Desk workspace access.'}</p>
+                      <div>{canRequest ? <><button className="prp-primary" onClick={() => navigate('incident')}><LifeBuoy size={17} /> Raise incident</button><button className="prp-secondary" onClick={() => navigate('catalogue')}><Plus size={17} /> Request a service</button></> : null}{canApprove ? <button className={canRequest ? 'prp-secondary' : 'prp-primary'} onClick={() => navigate('approvals')}><ClipboardCheck size={17} /> My Approvals</button> : null}</div>
+                    </div>
+                    <div className="prp-home-grid">
+                      {canRequest ? <><button onClick={() => navigate('incident')}><span className="prp-icon"><LifeBuoy size={20} /></span><strong>Raise incident</strong><p>Tell the Service Desk when something is broken or stopping you from working.</p><ChevronRight size={17} /></button><button onClick={() => navigate('catalogue')}><span className="prp-icon"><PackageOpen size={20} /></span><strong>Service catalogue</strong><p>Browse the services and products your organisation has published.</p><ChevronRight size={17} /></button><button onClick={() => navigate('requests')}><span className="prp-icon"><Inbox size={20} /></span><strong>My Requests</strong><p>See incidents, service requests, fulfilment and customer updates.</p><ChevronRight size={17} /></button></> : null}
+                      {canApprove ? <button onClick={() => navigate('approvals')}><span className="prp-icon"><ClipboardCheck size={20} /></span><strong>My Approvals</strong><p>Review requests assigned to you and approve or reject them securely.</p><ChevronRight size={17} /></button> : null}
+                      <div><span className="prp-icon"><ShieldCheck size={20} /></span><strong>Private by default</strong><p>{canRequest ? 'You can only see requests associated with your authenticated account.' : 'You can only see approvals explicitly assigned to your account.'}</p></div>
+                    </div>
+                  </section>}
+      </main>
+    </div>
+  )
 }

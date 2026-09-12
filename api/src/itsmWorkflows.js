@@ -195,10 +195,10 @@ async function relationships(db, tenantId, recordId) {
   return result.rows.map((row) => ({ reference: row.target_reference, type: row.target_type, relationshipType: row.relationship_type }))
 }
 
-async function serviceRequestWorkflow(db, row) {
+async function serviceRequestWorkflow(db, row, session) {
   const [approvals, tasks] = await Promise.all([
     db.query(
-      `SELECT id, label, status, approver_snapshot, decision_note, decided_at, sequence
+      `SELECT id, label, status, approver_user_id, approver_person_id, approver_snapshot, decision_note, decided_at, sequence
        FROM service_request_approvals WHERE request_id = $1 ORDER BY sequence, created_at`,
       [row.id],
     ),
@@ -215,6 +215,7 @@ async function serviceRequestWorkflow(db, row) {
     approver: object(item.approver_snapshot).name || 'Unassigned approver',
     note: item.decision_note,
     decidedAt: item.decided_at,
+    canDecide: item.status === 'Pending' && (item.approver_user_id === session?.user_id || ['owner', 'admin'].includes(session?.tenant_role)),
   }))
   const mappedTasks = tasks.rows.map((task) => ({
     id: task.external_key,
@@ -232,11 +233,12 @@ async function serviceRequestWorkflow(db, row) {
   const readyForCompletion = mappedTasks.length === 0
     ? ['In Progress', 'Approved'].includes(row.status)
     : completedTasks === mappedTasks.length
+  const approvalComplete = mappedApprovals.length > 0 && mappedApprovals.every((item) => item.status === 'Approved')
   const stage = row.status === 'Rejected' ? 'Rejected'
     : row.status === 'Closed' ? 'Closed'
       : row.status === 'Completed' ? 'Completion'
         : pending > 0 || row.status === 'Pending Approval' ? 'Approval'
-          : ['Approved', 'In Progress'].includes(row.status) ? 'Fulfilment'
+          : approvalComplete || ['Approved', 'In Progress'].includes(row.status) ? 'Fulfilment'
             : 'Submitted'
   const blockers = []
   if (pending) blockers.push(`${pending} approval${pending === 1 ? '' : 's'} pending.`)
@@ -255,7 +257,7 @@ async function serviceRequestWorkflow(db, row) {
     approvals: mappedApprovals,
     tasks: mappedTasks,
     metrics: { pendingApprovals: pending, rejectedApprovals: rejected, taskTotal: mappedTasks.length, taskComplete: completedTasks, taskBlocked: blockedTasks },
-    actions: SERVICE_REQUEST_TRANSITIONS[row.status] || [],
+    actions: approvalComplete && row.status === 'New' ? ['In Progress'] : (SERVICE_REQUEST_TRANSITIONS[row.status] || []),
   }
 }
 
@@ -304,9 +306,9 @@ async function genericWorkflow(db, row, tenantId) {
   }
 }
 
-async function workflowPayload(db, found, tenantId) {
+async function workflowPayload(db, found, tenantId, session = null) {
   return found.kind === 'request'
-    ? serviceRequestWorkflow(db, found.row)
+    ? serviceRequestWorkflow(db, found.row, session)
     : genericWorkflow(db, found.row, tenantId)
 }
 
@@ -434,7 +436,7 @@ export function registerWorkflowRoutes(app) {
     if (auth.error) return auth.error
     const found = await findRecord(pool, auth.session.tenant_id, c.req.param('reference'))
     if (!found) return c.json({ error: 'ITSM record not found.' }, 404)
-    return c.json(await workflowPayload(pool, found, auth.session.tenant_id))
+    return c.json(await workflowPayload(pool, found, auth.session.tenant_id, auth.session))
   })
 
   app.patch('/api/v1/workflows/:reference/data', async (c) => {
@@ -466,7 +468,7 @@ export function registerWorkflowRoutes(app) {
 
     if (result.notFound) return c.json({ error: 'ITSM record not found.' }, 404)
     if (result.unsupported) return c.json({ error: 'Workflow data is available for Problems and Changes.' }, 400)
-    return c.json(await workflowPayload(pool, result.found, auth.session.tenant_id))
+    return c.json(await workflowPayload(pool, result.found, auth.session.tenant_id, auth.session))
   })
 
   app.post('/api/v1/workflows/:reference/transition', async (c) => {
@@ -588,7 +590,7 @@ export function registerWorkflowRoutes(app) {
       if (result.notFound) return c.json({ error: 'ITSM record not found.' }, 404)
       if (result.unsupported) return c.json({ error: 'This workflow is not available for this record type.' }, 400)
       if (result.invalid) return c.json({ error: result.invalid, blockers: result.blockers || [result.invalid] }, 409)
-      return c.json(await workflowPayload(pool, result.found, auth.session.tenant_id))
+      return c.json(await workflowPayload(pool, result.found, auth.session.tenant_id, auth.session))
     } catch (error) {
       if (error?.status) return c.json({ error: error.message }, error.status)
       throw error
@@ -659,6 +661,6 @@ export function registerWorkflowRoutes(app) {
     if (result.approvalMissing) return c.json({ error: 'Approval not found.' }, 404)
     if (result.alreadyDecided) return c.json({ error: 'This approval has already been decided.' }, 409)
     if (result.forbidden) return c.json({ error: 'This approval is assigned to another approver.' }, 403)
-    return c.json(await workflowPayload(pool, result.found, auth.session.tenant_id))
+    return c.json(await workflowPayload(pool, result.found, auth.session.tenant_id, auth.session))
   })
 }
