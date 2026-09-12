@@ -10,7 +10,9 @@ import { resolveTenantSurface } from '../lib/tenantSurface.js'
 import {
   clearProductionSession,
   saveAccent,
+  saveDensity,
   saveProductionSession,
+  saveSidebarMode,
   saveTheme,
 } from '../services/runtimeState.js'
 import { hydrateProductionServiceRequests } from '../services/productionServiceRequests.js'
@@ -65,6 +67,7 @@ function toWorkspaceSession(apiSession) {
     user: apiSession.user,
     access: apiSession.access,
     security: apiSession.security,
+    preferences: apiSession.preferences || null,
     onboarding: apiSession.onboarding,
     settings: effectiveSettings(apiSession),
   }
@@ -74,9 +77,22 @@ function applyTenantPreferences(apiSession) {
   const configuration = effectiveSettings(apiSession)
   const theme = configuration.theme || {}
   const itsm = configuration.itsm || {}
+  const preferences = apiSession?.preferences || {}
+  const appearance = preferences.appearance || {}
+  const navigation = preferences.navigation || {}
 
-  if (['system', 'light', 'dark'].includes(theme.mode)) saveTheme(theme.mode)
-  if (['amber', 'cyan', 'blue', 'violet', 'emerald', 'rose'].includes(theme.accent)) saveAccent(theme.accent)
+  const resolvedTheme = ['system', 'light', 'dark'].includes(appearance.theme)
+    ? appearance.theme
+    : theme.mode
+  const resolvedAccent = appearance.accentMode === 'personal'
+    && ['amber', 'cyan', 'blue', 'violet', 'emerald', 'rose'].includes(appearance.accent)
+      ? appearance.accent
+      : theme.accent
+
+  if (['system', 'light', 'dark'].includes(resolvedTheme)) saveTheme(resolvedTheme)
+  if (['amber', 'cyan', 'blue', 'violet', 'emerald', 'rose'].includes(resolvedAccent)) saveAccent(resolvedAccent)
+  if (['comfortable', 'compact'].includes(appearance.density)) saveDensity(appearance.density)
+  if (['expanded', 'collapsed', 'hidden'].includes(navigation.sidebarMode)) saveSidebarMode(navigation.sidebarMode)
 
   try {
     window.localStorage.setItem(TENANT_RUNTIME_CONFIG_KEY, JSON.stringify({
@@ -514,7 +530,15 @@ export function ProductionWorkspaceBootstrap() {
     const settingsOpen = canViewSettings && (currentPath === '/settings' || currentPath.startsWith('/settings/'))
     const profileOpen = currentPath === '/profile'
     const themeKey = effectiveSettings(serverSession)?.theme || {}
-    const workspaceKey = `${themeKey.mode || 'system'}:${themeKey.accent || 'amber'}`
+    const preferenceKey = serverSession?.preferences || {}
+    const appearanceKey = preferenceKey.appearance || {}
+    const navigationKey = preferenceKey.navigation || {}
+    const workspaceKey = [
+      appearanceKey.theme || themeKey.mode || 'system',
+      appearanceKey.accentMode === 'personal' ? (appearanceKey.accent || 'amber') : (themeKey.accent || 'amber'),
+      appearanceKey.density || 'comfortable',
+      navigationKey.sidebarMode || 'expanded',
+    ].join(':')
 
     return (
       <>
