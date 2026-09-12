@@ -29,6 +29,25 @@ jobs:
       - name: Extract production runtime
         run: node scripts/refactor-production-runtime.mjs
 
+      - name: Normalise generated boundary checker
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          checker = Path('scripts/check-production-runtime-boundary.mjs')
+          lines = checker.read_text().splitlines()
+          fixed = []
+
+          for line in lines:
+              if 'imports archived code' in line:
+                  fixed.append("  if (content.includes('archive/')) failures.push(`${relative} imports archived code`)")
+              else:
+                  fixed.append(line)
+
+          checker.write_text('\n'.join(fixed) + '\n')
+          PY
+
       - name: Verify production boundary
         run: node scripts/check-production-runtime-boundary.mjs
 
