@@ -211,7 +211,7 @@ function SlaPanel({ detail }) {
   if (!response && !resolution && detail?.slaLabel) {
     return <section className="record-lab-sla-card is-neutral">
       <Metric label="SLA" value={detail.slaLabel} sub="Service Request SLA preview" icon={<Clock3 size={18} />} />
-      <div className="record-lab-sla-note">This prototype is ready to surface response and resolution timers as soon as the Service Request SLA engine supplies them.</div>
+      <div className="record-lab-sla-note">This lab is ready to surface response and resolution timers as soon as the Service Request SLA engine supplies them.</div>
     </section>
   }
 
@@ -339,7 +339,7 @@ function RecordWorkspace({ route }) {
     }
   }, 'Record placed on hold')
 
-  if (loading) return <div className="record-lab-loading"><div /><span>Opening record workspace prototype…</span></div>
+  if (loading) return <div className="record-lab-loading"><div /><span>Opening record workspace lab…</span></div>
   if (!detail) return <div className="record-lab-failure"><AlertTriangle size={22} /><strong>Could not load this record</strong><span>{error}</span><button type="button" onClick={() => load()}>Retry</button></div>
 
   const activities = Array.isArray(detail.activities) ? [...detail.activities] : []
@@ -457,7 +457,7 @@ function RecordWorkspace({ route }) {
                 : renderAudit()
 
   return <div className="record-lab-shell" ref={scrollRef}>
-    <div className="record-lab-test-banner"><span>Record Workspace Lab</span><strong>Prototype only — current record pages are unchanged</strong><button type="button" onClick={() => { window.history.pushState({}, '', backPath); window.dispatchEvent(new PopStateEvent('popstate')); window.dispatchEvent(new CustomEvent('hi5-routechange', { detail: { path: backPath } })) }}><ArrowLeft size={15} />Open current page</button></div>
+    <div className="record-lab-test-banner"><span>Record Workspace Lab</span><strong>Test page — current record pages are unchanged</strong><button type="button" onClick={() => { window.history.pushState({}, '', backPath); window.dispatchEvent(new PopStateEvent('popstate')); window.dispatchEvent(new CustomEvent('hi5-routechange', { detail: { path: backPath } })) }}><ArrowLeft size={15} />Open current page</button></div>
 
     <section className="record-lab-masthead">
       <div className="record-lab-heading"><div><strong>{detail.id || detail.reference}</strong><LabPill tone="accent">{detail.type || route.type}</LabPill><LabPill tone={['Resolved','Closed','Completed'].includes(detail.status) ? 'good' : 'neutral'}>{detail.status}</LabPill><LabPill tone={detail.priority === 'Critical' || detail.priority === 'High' ? 'danger' : detail.priority === 'Medium' ? 'warning' : 'good'}>{detail.priority}</LabPill></div><h1>{detail.title}</h1><p>{detail.requester || 'Requester not recorded'} · {detail.team || 'Unassigned'} / {detail.assignee || 'Unassigned'} · Updated {relativeTime(detail.updatedAt)}</p></div>
