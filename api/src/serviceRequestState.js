@@ -413,6 +413,13 @@ export function registerServiceRequestStateRoutes(app) {
           throw error
         }
 
+        const actor = await actorSnapshot(client, auth.session)
+        if ((changeStatus || changeCompletion) && (!actor.person?.id || task.assignee_person_id !== actor.person.id)) {
+          const error = new Error('Take this task before starting, blocking or completing work.')
+          error.status = 409
+          throw error
+        }
+
         const team = changeTeam ? await resolveTaskTeam(client, auth.session.tenant_id, body.teamId ?? body.team) : null
         const assignee = changeAssignee ? await resolveTaskAssignee(client, auth.session.tenant_id, body.assigneeId ?? body.assignee) : null
         const completionNotes = changeCompletion ? text(body.completionNotes, 10_000) : task.completion_notes
@@ -449,7 +456,6 @@ export function registerServiceRequestStateRoutes(app) {
         )
         await client.query('UPDATE service_requests SET updated_at = now() WHERE id = $1', [task.request_id])
 
-        const actor = await actorSnapshot(client, auth.session)
         await client.query(
           `INSERT INTO service_request_activities (
              tenant_id, request_id, actor_user_id, actor_person_id, actor_snapshot,

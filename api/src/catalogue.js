@@ -11,6 +11,7 @@ import { registerServiceRequestFulfilmentRoutes } from './serviceRequestFulfilme
 import { registerServiceRequestOperationRoutes } from './serviceRequestOperations.js'
 import { registerServiceRequestRoutes } from './serviceRequests.js'
 import { registerServiceRequestStateRoutes } from './serviceRequestState.js'
+import { registerTaskOwnershipRoutes } from './taskOwnership.js'
 import { resolveSession } from './session.js'
 import { originMatchesPortalTenant, originMatchesTenant } from './deploymentConfig.js'
 
@@ -471,6 +472,7 @@ export function registerCatalogueRoutes(app) {
   registerServiceRequestRoutes(app)
   registerServiceRequestOperationRoutes(app)
   registerServiceRequestStateRoutes(app)
+  registerTaskOwnershipRoutes(app)
   registerItsmRecordRoutes(app)
   registerItsmLifecycleRoutes(app)
   registerItsmQueueRoutes(app)

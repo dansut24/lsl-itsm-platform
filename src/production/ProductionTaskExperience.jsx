@@ -20,6 +20,8 @@ import {
   RefreshCw,
   Search,
   TableProperties,
+  UserMinus,
+  UserPlus,
   X,
 } from 'lucide-react'
 import './ProductionItsmWorkspace.css'
@@ -44,6 +46,7 @@ const COLUMNS = [
   { key: 'service', label: 'Service', width: 145 },
   { key: 'assignment', label: 'Assignment', width: 190 },
   { key: 'updated', label: 'Updated', width: 150 },
+  { key: 'actions', label: 'Action', width: 132, locked: true },
 ]
 const DEFAULT_FILTERS = { status: 'All', priority: 'All', team: 'All', assignee: 'All', service: 'All', __view: 'all' }
 
@@ -82,8 +85,12 @@ function formatDate(value) {
   return new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short' }).format(date)
 }
 
+function readSession() {
+  try { return JSON.parse(window.localStorage.getItem('hi5central-production-session-v1') || '{}') || {} } catch { return {} }
+}
+
 function readSessionName() {
-  try { return JSON.parse(window.localStorage.getItem('hi5central-production-session-v1') || '{}')?.name || '' } catch { return '' }
+  return readSession().name || ''
 }
 
 function statusClass(value = '') {
@@ -104,6 +111,7 @@ function taskRecord(task) {
     service: task.primaryRequest?.service || 'Unclassified',
     team: task.team || 'Unassigned team',
     assignee: task.assignee || 'Unassigned',
+    assigneeEmail: task.assigneeEmail || '',
     updatedAt: task.updatedAt,
     primaryRequest: task.primaryRequest?.id || '',
     dueAt: task.dueAt,
@@ -230,16 +238,26 @@ function renderCell(record, key) {
   return null
 }
 
-function TaskTable({ items, columns, onOpen }) {
-  return <div className="production-record-table-wrap"><table className="production-record-table production-record-table-enhanced"><colgroup>{columns.map((column) => <col key={column.key} style={{ width: `${column.width}px` }} />)}</colgroup><thead><tr>{columns.map((column) => <th key={column.key}><span>{column.label}</span></th>)}</tr></thead><tbody>{items.map((record) => <tr key={record.id} onClick={() => onOpen(record)}>{columns.map((column) => <td key={column.key}>{renderCell(record, column.key)}</td>)}</tr>)}</tbody></table></div>
+function taskCanBeTaken(record) {
+  return record.status === 'Ready' && (!record.assignee || record.assignee === 'Unassigned')
 }
 
-function TaskCompactList({ items, onOpen }) {
-  return <div className="production-record-compact-list">{items.map((record) => <button key={record.id} onClick={() => onOpen(record)} type="button"><strong>{record.id}</strong><span>{record.title}</span><span className={`production-record-priority ${priorityClass(record.priority)}`}>{record.priority}</span><span className={`production-record-status ${statusClass(record.status)}`}>{record.status}</span><small>{record.team} · {record.assignee}</small><small>{formatDate(record.updatedAt)}</small><ChevronRight size={15} /></button>)}</div>
+function TaskOwnershipButton({ record, onTake, busyTask }) {
+  if (!taskCanBeTaken(record)) return <span className="production-task-ownership-state">{record.status === 'Ready' ? record.assignee : '—'}</span>
+  const busy = busyTask === record.id
+  return <button type="button" className="production-task-ownership-button" disabled={busy} onClick={(event) => { event.stopPropagation(); void onTake(record) }}><UserPlus size={14} />{busy ? 'Taking…' : 'Take task'}</button>
 }
 
-function TaskCardList({ items, onOpen }) {
-  return <div className="production-record-card-list">{items.map((record) => <article className="production-record-card production-record-card-enhanced" key={record.id}><button className="production-record-card-open" type="button" onClick={() => onOpen(record)}><div><strong>{record.id}</strong><span className={`production-record-priority ${priorityClass(record.priority)}`}>{record.priority}</span></div><h3>{record.title}</h3><div className="production-record-card-state"><span className={`production-record-status ${statusClass(record.status)}`}>{record.status}</span><span>{record.service}</span></div><dl><div><dt>Requester</dt><dd>{record.requester}</dd></div><div><dt>Assignment</dt><dd>{record.team} · {record.assignee}</dd></div></dl><footer><span>{record.primaryRequest ? `Primary ${record.primaryRequest}` : `Updated ${formatDate(record.updatedAt)}`}</span><ChevronRight size={16} /></footer></button></article>)}</div>
+function TaskTable({ items, columns, onOpen, onTake, busyTask }) {
+  return <div className="production-record-table-wrap"><table className="production-record-table production-record-table-enhanced"><colgroup>{columns.map((column) => <col key={column.key} style={{ width: `${column.width}px` }} />)}</colgroup><thead><tr>{columns.map((column) => <th key={column.key}><span>{column.label}</span></th>)}</tr></thead><tbody>{items.map((record) => <tr key={record.id} onClick={() => onOpen(record)}>{columns.map((column) => <td key={column.key}>{column.key === 'actions' ? <TaskOwnershipButton record={record} onTake={onTake} busyTask={busyTask} /> : renderCell(record, column.key)}</td>)}</tr>)}</tbody></table></div>
+}
+
+function TaskCompactList({ items, onOpen, onTake, busyTask }) {
+  return <div className="production-record-compact-list">{items.map((record) => <div className="production-task-compact-row" key={record.id}><button className="production-task-compact-open" onClick={() => onOpen(record)} type="button"><strong>{record.id}</strong><span>{record.title}</span><span className={`production-record-priority ${priorityClass(record.priority)}`}>{record.priority}</span><span className={`production-record-status ${statusClass(record.status)}`}>{record.status}</span><small>{record.team} · {record.assignee}</small><small>{formatDate(record.updatedAt)}</small><ChevronRight size={15} /></button><TaskOwnershipButton record={record} onTake={onTake} busyTask={busyTask} /></div>)}</div>
+}
+
+function TaskCardList({ items, onOpen, onTake, busyTask }) {
+  return <div className="production-record-card-list">{items.map((record) => <article className="production-record-card production-record-card-enhanced" key={record.id}><button className="production-record-card-open" type="button" onClick={() => onOpen(record)}><div><strong>{record.id}</strong><span className={`production-record-priority ${priorityClass(record.priority)}`}>{record.priority}</span></div><h3>{record.title}</h3><div className="production-record-card-state"><span className={`production-record-status ${statusClass(record.status)}`}>{record.status}</span><span>{record.service}</span></div><dl><div><dt>Requester</dt><dd>{record.requester}</dd></div><div><dt>Assignment</dt><dd>{record.team} · {record.assignee}</dd></div></dl><footer><span>{record.primaryRequest ? `Primary ${record.primaryRequest}` : `Updated ${formatDate(record.updatedAt)}`}</span><ChevronRight size={16} /></footer></button>{taskCanBeTaken(record) ? <div className="production-record-card-actions"><TaskOwnershipButton record={record} onTake={onTake} busyTask={busyTask} /></div> : null}</article>)}</div>
 }
 
 function TaskQueue() {
@@ -254,6 +272,8 @@ function TaskQueue() {
   const [revision, setRevision] = useState(0)
   const [mobileFilters, setMobileFilters] = useState(false)
   const [hiddenColumns, setHiddenColumns] = useState([])
+  const [ownershipBusy, setOwnershipBusy] = useState('')
+  const [ownershipError, setOwnershipError] = useState('')
 
   useEffect(() => {
     let active = true
@@ -281,6 +301,21 @@ function TaskQueue() {
   const changeFilters = (next) => { setFilters(next); setPage(0) }
   const clearFilters = () => { setFilters({ ...DEFAULT_FILTERS }); setPage(0) }
 
+  async function takeTask(record) {
+    if (!taskCanBeTaken(record) || ownershipBusy) return
+    setOwnershipBusy(record.id)
+    setOwnershipError('')
+    try {
+      await apiJson(`/api/v1/tasks/${encodeURIComponent(record.id)}/take`, { method: 'POST' })
+      setRevision((value) => value + 1)
+    } catch (takeError) {
+      setOwnershipError(takeError.message)
+      setRevision((value) => value + 1)
+    } finally {
+      setOwnershipBusy('')
+    }
+  }
+
   return <section className="production-task-experience production-record-shell production-motion-enter production-record-shell-enhanced">
     <aside className="production-record-filter-rail"><div className="production-record-filter-heading"><span>Queue</span><strong>Tasks</strong></div><TaskFilters payload={payload} filters={filters} onChange={changeFilters} onClear={clearFilters} /></aside>
 
@@ -294,12 +329,13 @@ function TaskQueue() {
       </div>
 
       <div className="production-record-result-line"><span><strong>{total}</strong> {total === 1 ? 'task' : 'tasks'}</span><span>{start}–{end} of {total}</span></div>
+      {ownershipError ? <div className="production-task-ownership-error"><AlertTriangle size={15} /><span>{ownershipError}</span><button type="button" aria-label="Dismiss" onClick={() => setOwnershipError('')}><X size={14} /></button></div> : null}
 
       <div className="production-record-content">
         {loading ? <div className="production-record-state"><strong>Loading tasks…</strong><span>Checking the ready work queue.</span></div> : null}
         {!loading && error ? <div className="production-record-state is-error"><strong>Could not load this queue</strong><span>{error}</span><button type="button" onClick={() => setRevision((value) => value + 1)}>Retry</button></div> : null}
         {!loading && !error && !records.length ? <div className="production-record-state"><strong>No tasks in this view</strong><span>Waiting workflow steps stay hidden until their dependencies are complete.</span></div> : null}
-        {!loading && !error && records.length ? <div className="production-motion-enter production-motion-enter-fast">{viewStyle === 'compact' ? <TaskCompactList items={records} onOpen={(record) => navigate(`/tasks/${encodeURIComponent(record.id)}`)} /> : viewStyle === 'cards' ? <TaskCardList items={records} onOpen={(record) => navigate(`/tasks/${encodeURIComponent(record.id)}`)} /> : <TaskTable items={records} columns={columns} onOpen={(record) => navigate(`/tasks/${encodeURIComponent(record.id)}`)} />}</div> : null}
+        {!loading && !error && records.length ? <div className="production-motion-enter production-motion-enter-fast">{viewStyle === 'compact' ? <TaskCompactList items={records} onOpen={(record) => navigate(`/tasks/${encodeURIComponent(record.id)}`)} onTake={takeTask} busyTask={ownershipBusy} /> : viewStyle === 'cards' ? <TaskCardList items={records} onOpen={(record) => navigate(`/tasks/${encodeURIComponent(record.id)}`)} onTake={takeTask} busyTask={ownershipBusy} /> : <TaskTable items={records} columns={columns} onOpen={(record) => navigate(`/tasks/${encodeURIComponent(record.id)}`)} onTake={takeTask} busyTask={ownershipBusy} />}</div> : null}
       </div>
 
       <footer className="production-record-pagination"><label>Rows <select value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setPage(0) }}>{PAGE_SIZES.map((size) => <option key={size}>{size}</option>)}</select></label><span>Page {Math.min(page + 1, pageCount)} of {pageCount}</span><div><button disabled={page === 0} onClick={() => setPage((value) => Math.max(0, value - 1))} type="button"><ChevronLeft size={15} /></button><button disabled={page >= pageCount - 1} onClick={() => setPage((value) => Math.min(pageCount - 1, value + 1))} type="button"><ChevronRight size={15} /></button></div></footer>
@@ -358,6 +394,16 @@ function TaskDetail({ taskKey }) {
     } catch (saveError) { setError(saveError.message); return false } finally { setSaving(false) }
   }
 
+  async function ownershipAction(action, success) {
+    if (saving) return
+    setSaving(true); setError(''); setNotice('')
+    try {
+      await apiJson(`/api/v1/tasks/${encodeURIComponent(taskKey)}/${action}`, { method: 'POST' })
+      await load({ quiet: true })
+      setNotice(success)
+    } catch (ownershipError) { setError(ownershipError.message) } finally { setSaving(false) }
+  }
+
   if (loading) return <section className="production-task-experience activity-canvas-shell is-loading" aria-label="Loading task"><header className="activity-canvas-top"><div className="activity-canvas-skeleton is-heading" /><div className="activity-canvas-skeleton is-actions" /></header><div className="activity-canvas-skeleton is-ribbon" /><div className="activity-canvas-body"><aside><div className="activity-canvas-skeleton is-inspector" /></aside><main><div className="activity-canvas-skeleton is-activity-head" /><div className="activity-canvas-skeleton is-message" /><div className="activity-canvas-skeleton is-message" /><div className="activity-canvas-skeleton is-action-dock" /></main></div></section>
   if (!task) return <section className="production-task-experience activity-canvas-shell"><div className="activity-canvas-failure"><strong>Could not open this task</strong><span>{error}</span><button type="button" onClick={() => load()}>Retry</button></div></section>
 
@@ -366,6 +412,14 @@ function TaskDetail({ taskKey }) {
   const completed = task.status === 'Completed'
   const assignmentDirty = team !== (task.team || '') || assignee !== (task.assignee || 'Unassigned')
   const parent = task.primaryRequest || {}
+  const session = readSession()
+  const taskUnassigned = !task.assignee || task.assignee === 'Unassigned'
+  const taskIsMine = !taskUnassigned && (
+    (task.assigneeEmail && session.email && task.assigneeEmail.toLowerCase() === String(session.email).toLowerCase())
+    || (task.assignee && session.name && task.assignee === session.name)
+  )
+  const canTake = task.status === 'Ready' && taskUnassigned
+  const canRelease = task.status === 'Ready' && taskIsMine
 
   function inspectorContent() {
     if (inspectorView === 'home') return <>
@@ -383,7 +437,7 @@ function TaskDetail({ taskKey }) {
     if (inspectorView === 'assignment') return <>{back}<div className="activity-canvas-inspector-form"><Field label="Assignment group"><select disabled={completed || saving} value={team} onChange={(event) => setTeam(event.target.value)}><option value="">Unassigned team</option>{teams.map((item) => <option key={item.id || item.name} value={item.name}>{item.name}</option>)}</select></Field><Field label="Assignee"><select disabled={completed || saving} value={assignee} onChange={(event) => setAssignee(event.target.value)}><option>Unassigned</option>{people.map((person) => <option key={person.id || person.email} value={person.name}>{person.name}{person.email ? ` · ${person.email}` : ''}</option>)}</select></Field>{assignmentDirty && !completed ? <button className="activity-canvas-primary" type="button" disabled={saving} onClick={() => patch({ team, assignee }, 'Assignment saved')}><Check size={16} />Save assignment</button> : null}</div></>
     if (inspectorView === 'dependencies') return <>{back}<div className="activity-canvas-mini-list">{task.dependencies?.length ? task.dependencies.map((dependency) => <div key={dependency}><ListChecks size={17} /><span><strong>{dependency}</strong><small>Completed before this task became available</small></span></div>) : <div className="activity-canvas-empty">This task has no prerequisites.</div>}</div></>
     if (inspectorView === 'parent') return <>{back}<div className="activity-canvas-inspector-facts"><InspectorRow label="Request" value={parent.id} meta={parent.title} onClick={() => navigate(`/requests/${encodeURIComponent(parent.id)}`)} /><InspectorRow label="Status" value={parent.status} meta={`${parent.priority || 'Medium'} priority`} /><InspectorRow label="Requester" value={parent.requester || 'Not recorded'} meta={parent.requesterEmail} /><InspectorRow label="Service" value={parent.service || 'Not recorded'} meta={parent.team || 'Unassigned team'} /></div></>
-    if (inspectorView === 'completion') return <>{back}<div className="activity-canvas-inspector-form"><Field label="Completion notes" hint={completed ? `Completed ${formatDate(task.completedAt)}` : 'Required before completing this task'}><textarea rows="8" disabled={completed || saving} value={completionNotes} onChange={(event) => setCompletionNotes(event.target.value)} placeholder="Record what was completed and any relevant outcome…" /></Field>{completed ? null : <button className="activity-canvas-primary" type="button" disabled={saving || !completionNotes.trim()} onClick={() => patch({ status: 'Completed', completionNotes }, 'Task completed')}><CheckCircle2 size={16} />Complete task</button>}</div></>
+    if (inspectorView === 'completion') return <>{back}<div className="activity-canvas-inspector-form"><Field label="Completion notes" hint={completed ? `Completed ${formatDate(task.completedAt)}` : 'Required before completing this task'}><textarea rows="8" disabled={completed || saving || !taskIsMine} value={completionNotes} onChange={(event) => setCompletionNotes(event.target.value)} placeholder="Record what was completed and any relevant outcome…" /></Field>{completed ? null : <button className="activity-canvas-primary" type="button" disabled={saving || !taskIsMine || !completionNotes.trim()} onClick={() => patch({ status: 'Completed', completionNotes }, 'Task completed')}><CheckCircle2 size={16} />Complete task</button>}</div></>
     return null
   }
 
@@ -392,7 +446,9 @@ function TaskDetail({ taskKey }) {
       <div className="activity-canvas-title"><div><strong>{task.id}</strong><span className={`activity-canvas-pill ${statusClass(task.status)}`}>{task.status}</span><span className={`activity-canvas-pill ${priorityClass(parent.priority || 'Medium')}`}>{parent.priority || 'Medium'}</span></div><input aria-label="Summary" value={task.title} readOnly /></div>
       <div className="activity-canvas-commands">
         <button type="button" className="activity-canvas-mobile-details" onClick={() => setMobileDetails(true)}><PanelLeftOpen size={17} />Details</button>
-        <label><span>Status</span><select value={task.status} disabled={saving || completed} onChange={(event) => { const value = event.target.value; if (value === 'In Progress') void patch({ status: value }, 'Task started'); else if (value === 'Blocked') void patch({ status: value }, 'Task blocked'); else if (value === 'Ready') void patch({ status: value }, 'Task returned to Ready') }}><option>Ready</option><option>In Progress</option><option>Blocked</option>{completed ? <option>Completed</option> : null}</select></label>
+        {canTake ? <button type="button" className="activity-canvas-primary production-task-take-primary" disabled={saving} onClick={() => ownershipAction('take', 'Task taken')}><UserPlus size={16} />Take task</button> : null}
+        {canRelease ? <button type="button" className="production-task-release-button" disabled={saving} onClick={() => ownershipAction('release', 'Task released to team queue')}><UserMinus size={16} />Release task</button> : null}
+        <label><span>Status</span><select value={task.status} disabled={saving || completed || !taskIsMine} onChange={(event) => { const value = event.target.value; if (value === 'In Progress') void patch({ status: value }, 'Task started'); else if (value === 'Blocked') void patch({ status: value }, 'Task blocked'); else if (value === 'Ready') void patch({ status: value }, 'Task returned to Ready') }}><option>Ready</option><option>In Progress</option><option>Blocked</option>{completed ? <option>Completed</option> : null}</select></label>
         <button type="button" className="activity-canvas-icon" title="Reload latest" onClick={() => load({ quiet: true })}><RefreshCw size={17} /></button>
         <button type="button" className="activity-canvas-primary production-task-open-primary" onClick={() => navigate(`/requests/${encodeURIComponent(parent.id)}`)}><ExternalLink size={16} />Open primary request</button>
       </div>
@@ -409,7 +465,8 @@ function TaskDetail({ taskKey }) {
 
       <main className="activity-canvas-activity production-task-workspace"><header><div><span>Work</span><h2>Task activity</h2></div></header><div className="activity-canvas-list production-task-work-list"><article className="activity-canvas-message is-internal"><div className="activity-canvas-avatar"><ListChecks size={17} /></div><div className="activity-canvas-message-card"><header><div><strong>Task instructions</strong><span>{formatDate(task.createdAt)}</span></div><div><em>Internal fulfilment</em></div></header><p>{task.instructions || 'No additional instructions were supplied for this task.'}</p></div></article>{completed ? <div className="activity-canvas-system-event"><i /><div><span>Task completed.</span>{task.completionNotes ? <small>{task.completionNotes}</small> : null}</div><time>{formatDate(task.completedAt)}</time></div> : null}</div>
 
-        {!completed ? <div className="activity-action-dock production-task-action-dock"><div className="activity-action-strip"><button type="button" className={task.status === 'In Progress' ? 'is-active' : ''} disabled={saving} onClick={() => patch({ status: 'In Progress' }, 'Task started')}><PlayCircle size={15} />Start</button><button type="button" className={task.status === 'Blocked' ? 'is-active' : ''} disabled={saving} onClick={() => patch({ status: 'Blocked' }, 'Task blocked')}><CircleStop size={15} />Block</button><i /><button type="button" disabled={saving || !completionNotes.trim()} onClick={() => patch({ status: 'Completed', completionNotes }, 'Task completed')}><CheckCircle2 size={15} />Complete</button></div><div className="production-task-completion-composer"><Field label="Completion notes" hint="Technician-only fulfilment detail; completing the task does not email the requester."><textarea rows="3" value={completionNotes} disabled={saving} onChange={(event) => setCompletionNotes(event.target.value)} placeholder="Record the completed work before finishing this task…" /></Field></div></div> : null}
+        {!completed && !taskIsMine ? <div className="production-task-ownership-note"><UserPlus size={16} /><span>{taskUnassigned ? 'Take this task before starting work.' : `This task is currently assigned to ${task.assignee}. Reassign it in Record Inspector if ownership needs to change.`}</span></div> : null}
+        {!completed ? <div className="activity-action-dock production-task-action-dock"><div className="activity-action-strip"><button type="button" className={task.status === 'In Progress' ? 'is-active' : ''} disabled={saving || !taskIsMine} onClick={() => patch({ status: 'In Progress' }, 'Task started')}><PlayCircle size={15} />Start</button><button type="button" className={task.status === 'Blocked' ? 'is-active' : ''} disabled={saving || !taskIsMine} onClick={() => patch({ status: 'Blocked' }, 'Task blocked')}><CircleStop size={15} />Block</button><i /><button type="button" disabled={saving || !taskIsMine || !completionNotes.trim()} onClick={() => patch({ status: 'Completed', completionNotes }, 'Task completed')}><CheckCircle2 size={15} />Complete</button></div><div className="production-task-completion-composer"><Field label="Completion notes" hint="Technician-only fulfilment detail; completing the task does not email the requester."><textarea rows="3" value={completionNotes} disabled={saving || !taskIsMine} onChange={(event) => setCompletionNotes(event.target.value)} placeholder="Record the completed work before finishing this task…" /></Field></div></div> : null}
       </main>
     </div>
   </section>
