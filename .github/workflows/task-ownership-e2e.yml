@@ -46,6 +46,9 @@ jobs:
       - name: Verify task ownership contract
         run: node scripts/check-task-ownership-contract.mjs
 
+      - name: Verify task queue polish contract
+        run: node scripts/check-task-queue-contract.mjs
+
       - name: Install API dependencies
         working-directory: api
         run: npm install --omit=dev

@@ -37,18 +37,25 @@ const VIEW_STYLES = [
   { id: 'compact', label: 'Compact', icon: List },
   { id: 'cards', label: 'Cards', icon: LayoutGrid },
 ]
-const COLUMNS = [
-  { key: 'reference', label: 'Reference', width: 150, locked: true },
-  { key: 'summary', label: 'Summary', width: 260, locked: true },
-  { key: 'priority', label: 'Priority / risk', width: 120 },
-  { key: 'status', label: 'Status', width: 140 },
-  { key: 'requester', label: 'Requester', width: 160 },
-  { key: 'service', label: 'Service', width: 145 },
-  { key: 'assignment', label: 'Assignment', width: 190 },
-  { key: 'updated', label: 'Updated', width: 150 },
-  { key: 'actions', label: 'Action', width: 132, locked: true },
+const WORK_VIEWS = [
+  { id: 'mine', label: 'My Tasks', description: 'Work currently assigned to you' },
+  { id: 'team', label: 'Team Queue', description: 'Active work routed to your teams' },
+  { id: 'unassigned', label: 'Unassigned', description: 'Ready work waiting to be taken' },
+  { id: 'blocked', label: 'Blocked', description: 'Work that needs attention' },
 ]
-const DEFAULT_FILTERS = { status: 'All', priority: 'All', team: 'All', assignee: 'All', service: 'All', __view: 'all' }
+const COLUMNS = [
+  { key: 'reference', label: 'Reference', width: 140, locked: true },
+  { key: 'summary', label: 'Summary', width: 245, locked: true },
+  { key: 'priority', label: 'Priority / risk', width: 110 },
+  { key: 'status', label: 'Status', width: 125 },
+  { key: 'requester', label: 'Requester', width: 150 },
+  { key: 'service', label: 'Service', width: 140 },
+  { key: 'assignment', label: 'Assignment', width: 180 },
+  { key: 'due', label: 'Due / target', width: 155 },
+  { key: 'updated', label: 'Updated', width: 145 },
+  { key: 'actions', label: 'Action', width: 125, locked: true },
+]
+const DEFAULT_FILTERS = { scope: 'team', status: 'All', priority: 'All', team: 'All', assignee: 'All', service: 'All', due: 'All' }
 
 function routeFromPath(pathname = window.location.pathname) {
   if (pathname === '/tasks' || pathname === '/tasks/') return { kind: 'list' }
@@ -89,16 +96,25 @@ function readSession() {
   try { return JSON.parse(window.localStorage.getItem('hi5central-production-session-v1') || '{}') || {} } catch { return {} }
 }
 
-function readSessionName() {
-  return readSession().name || ''
-}
-
 function statusClass(value = '') {
   return `is-${String(value).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
 }
 
 function priorityClass(value = '') {
   return `is-${String(value).toLowerCase().replace(/\s+/g, '-')}`
+}
+
+function dueMeta(value, status = '') {
+  if (status === 'Completed') return { className: 'is-complete', label: 'Completed', overdue: false }
+  if (!value) return { className: 'is-none', label: 'No due date', overdue: false }
+  const due = new Date(value)
+  if (Number.isNaN(due.getTime())) return { className: 'is-none', label: 'No due date', overdue: false }
+  const now = new Date()
+  if (due.getTime() < now.getTime()) return { className: 'is-overdue', label: 'Overdue', overdue: true }
+  const sameDay = due.getFullYear() === now.getFullYear() && due.getMonth() === now.getMonth() && due.getDate() === now.getDate()
+  if (sameDay) return { className: 'is-today', label: 'Due today', overdue: false }
+  if (due.getTime() - now.getTime() <= 7 * 24 * 60 * 60 * 1000) return { className: 'is-soon', label: 'Due soon', overdue: false }
+  return { className: 'is-scheduled', label: 'Scheduled', overdue: false }
 }
 
 function taskRecord(task) {
@@ -116,6 +132,11 @@ function taskRecord(task) {
     primaryRequest: task.primaryRequest?.id || '',
     dueAt: task.dueAt,
   }
+}
+
+function TaskDue({ record, compact = false }) {
+  const meta = dueMeta(record.dueAt, record.status)
+  return <span className={`production-task-due ${meta.className}${compact ? ' is-compact' : ''}`}><strong>{meta.label}</strong><small>{record.dueAt ? formatDate(record.dueAt) : 'No target set'}</small></span>
 }
 
 function TaskNavButton({ target }) {
@@ -189,41 +210,41 @@ function FilterSelect({ label, value, options, onChange }) {
 }
 
 function TaskFilters({ payload, filters, onChange, onClear }) {
-  const sessionName = readSessionName()
+  const counts = payload.views || {}
   const quickViews = [
-    ['all', 'All active'],
-    ['mine', 'Assigned to me'],
-    ['unassigned', 'Unassigned'],
-    ['blocked', 'Blocked'],
-    ['completed', 'Completed'],
+    ...WORK_VIEWS,
+    { id: 'all', label: 'All active' },
+    { id: 'completed', label: 'Completed' },
   ]
+  const options = payload.filters || {}
 
   function quick(id) {
-    if (id === 'mine') onChange({ ...DEFAULT_FILTERS, __view: id, assignee: sessionName || 'All' })
-    else if (id === 'unassigned') onChange({ ...DEFAULT_FILTERS, __view: id, assignee: 'Unassigned' })
-    else if (id === 'blocked') onChange({ ...DEFAULT_FILTERS, __view: id, status: 'Blocked' })
-    else if (id === 'completed') onChange({ ...DEFAULT_FILTERS, __view: id, status: 'Completed' })
-    else onChange({ ...DEFAULT_FILTERS })
+    onChange({ ...DEFAULT_FILTERS, scope: id })
   }
 
-  const options = payload.filters || {}
   return <div className="production-record-filter-content">
     <section>
       <span className="production-record-filter-label">Views</span>
-      <div className="production-record-view-list">
-        {quickViews.map(([id, label]) => <button type="button" key={id} className={filters.__view === id ? 'is-active' : ''} onClick={() => quick(id)}>{label}</button>)}
+      <div className="production-record-view-list production-task-view-list">
+        {quickViews.map((view) => <button type="button" key={view.id} className={filters.scope === view.id ? 'is-active' : ''} onClick={() => quick(view.id)}><span>{view.label}</span>{Number.isFinite(Number(counts[view.id])) ? <b>{Number(counts[view.id])}</b> : null}</button>)}
       </div>
     </section>
     <section>
       <span className="production-record-filter-label">Filters</span>
-      <FilterSelect label="Status" value={filters.status} options={options.statuses} onChange={(value) => onChange({ ...filters, status: value, __view: 'custom' })} />
-      <FilterSelect label="Priority / risk" value={filters.priority} options={options.priorities} onChange={(value) => onChange({ ...filters, priority: value, __view: 'custom' })} />
-      <FilterSelect label="Assignment group" value={filters.team} options={options.teams} onChange={(value) => onChange({ ...filters, team: value, __view: 'custom' })} />
-      <FilterSelect label="Assignee" value={filters.assignee} options={options.assignees} onChange={(value) => onChange({ ...filters, assignee: value, __view: 'custom' })} />
-      <FilterSelect label="Service" value={filters.service} options={options.services} onChange={(value) => onChange({ ...filters, service: value, __view: 'custom' })} />
-      <button className="production-record-clear" type="button" onClick={onClear}>Clear filters</button>
+      <FilterSelect label="Status" value={filters.status} options={options.statuses} onChange={(value) => onChange({ ...filters, status: value })} />
+      <FilterSelect label="Priority / risk" value={filters.priority} options={options.priorities} onChange={(value) => onChange({ ...filters, priority: value })} />
+      <FilterSelect label="Assignment group" value={filters.team} options={options.teams} onChange={(value) => onChange({ ...filters, team: value })} />
+      <FilterSelect label="Assignee" value={filters.assignee} options={options.assignees} onChange={(value) => onChange({ ...filters, assignee: value })} />
+      <FilterSelect label="Service" value={filters.service} options={options.services} onChange={(value) => onChange({ ...filters, service: value })} />
+      <FilterSelect label="Due / target" value={filters.due} options={options.due} onChange={(value) => onChange({ ...filters, due: value })} />
+      <button className="production-record-clear" type="button" onClick={onClear}>Reset to Team Queue</button>
     </section>
   </div>
+}
+
+function TaskWorkViews({ payload, active, onChange }) {
+  const counts = payload.views || {}
+  return <nav className="production-task-work-views" aria-label="Task work queues">{WORK_VIEWS.map((view) => <button key={view.id} type="button" className={active === view.id ? 'is-active' : ''} onClick={() => onChange(view.id)}><span><strong>{view.label}</strong><small>{view.description}</small></span><b>{Number(counts[view.id] || 0)}</b></button>)}</nav>
 }
 
 function renderCell(record, key) {
@@ -234,6 +255,7 @@ function renderCell(record, key) {
   if (key === 'requester') return <span>{record.requester}</span>
   if (key === 'service') return <span>{record.service}</span>
   if (key === 'assignment') return <span className="production-task-assignment"><strong>{record.team}</strong><small>{record.assignee}</small></span>
+  if (key === 'due') return <TaskDue record={record} />
   if (key === 'updated') return <span>{formatDate(record.updatedAt)}</span>
   return null
 }
@@ -249,15 +271,15 @@ function TaskOwnershipButton({ record, onTake, busyTask }) {
 }
 
 function TaskTable({ items, columns, onOpen, onTake, busyTask }) {
-  return <div className="production-record-table-wrap"><table className="production-record-table production-record-table-enhanced"><colgroup>{columns.map((column) => <col key={column.key} style={{ width: `${column.width}px` }} />)}</colgroup><thead><tr>{columns.map((column) => <th key={column.key}><span>{column.label}</span></th>)}</tr></thead><tbody>{items.map((record) => <tr key={record.id} onClick={() => onOpen(record)}>{columns.map((column) => <td key={column.key}>{column.key === 'actions' ? <TaskOwnershipButton record={record} onTake={onTake} busyTask={busyTask} /> : renderCell(record, column.key)}</td>)}</tr>)}</tbody></table></div>
+  return <div className="production-record-table-wrap"><table className="production-record-table production-record-table-enhanced"><colgroup>{columns.map((column) => <col key={column.key} style={{ width: `${column.width}px` }} />)}</colgroup><thead><tr>{columns.map((column) => <th key={column.key}><span>{column.label}</span></th>)}</tr></thead><tbody>{items.map((record) => <tr key={record.id} className={dueMeta(record.dueAt, record.status).overdue ? 'is-task-overdue' : ''} onClick={() => onOpen(record)}>{columns.map((column) => <td key={column.key}>{column.key === 'actions' ? <TaskOwnershipButton record={record} onTake={onTake} busyTask={busyTask} /> : renderCell(record, column.key)}</td>)}</tr>)}</tbody></table></div>
 }
 
 function TaskCompactList({ items, onOpen, onTake, busyTask }) {
-  return <div className="production-record-compact-list">{items.map((record) => <div className="production-task-compact-row" key={record.id}><button className="production-task-compact-open" onClick={() => onOpen(record)} type="button"><strong>{record.id}</strong><span>{record.title}</span><span className={`production-record-priority ${priorityClass(record.priority)}`}>{record.priority}</span><span className={`production-record-status ${statusClass(record.status)}`}>{record.status}</span><small>{record.team} · {record.assignee}</small><small>{formatDate(record.updatedAt)}</small><ChevronRight size={15} /></button><TaskOwnershipButton record={record} onTake={onTake} busyTask={busyTask} /></div>)}</div>
+  return <div className="production-record-compact-list">{items.map((record) => <div className={`production-task-compact-row${dueMeta(record.dueAt, record.status).overdue ? ' is-task-overdue' : ''}`} key={record.id}><button className="production-task-compact-open" onClick={() => onOpen(record)} type="button"><strong>{record.id}</strong><span>{record.title}</span><span className={`production-record-priority ${priorityClass(record.priority)}`}>{record.priority}</span><span className={`production-record-status ${statusClass(record.status)}`}>{record.status}</span><small>{record.team} · {record.assignee}</small><TaskDue record={record} compact /><ChevronRight size={15} /></button><TaskOwnershipButton record={record} onTake={onTake} busyTask={busyTask} /></div>)}</div>
 }
 
 function TaskCardList({ items, onOpen, onTake, busyTask }) {
-  return <div className="production-record-card-list">{items.map((record) => <article className="production-record-card production-record-card-enhanced" key={record.id}><button className="production-record-card-open" type="button" onClick={() => onOpen(record)}><div><strong>{record.id}</strong><span className={`production-record-priority ${priorityClass(record.priority)}`}>{record.priority}</span></div><h3>{record.title}</h3><div className="production-record-card-state"><span className={`production-record-status ${statusClass(record.status)}`}>{record.status}</span><span>{record.service}</span></div><dl><div><dt>Requester</dt><dd>{record.requester}</dd></div><div><dt>Assignment</dt><dd>{record.team} · {record.assignee}</dd></div></dl><footer><span>{record.primaryRequest ? `Primary ${record.primaryRequest}` : `Updated ${formatDate(record.updatedAt)}`}</span><ChevronRight size={16} /></footer></button>{taskCanBeTaken(record) ? <div className="production-record-card-actions"><TaskOwnershipButton record={record} onTake={onTake} busyTask={busyTask} /></div> : null}</article>)}</div>
+  return <div className="production-record-card-list">{items.map((record) => <article className={`production-record-card production-record-card-enhanced${dueMeta(record.dueAt, record.status).overdue ? ' is-task-overdue' : ''}`} key={record.id}><button className="production-record-card-open" type="button" onClick={() => onOpen(record)}><div><strong>{record.id}</strong><span className={`production-record-priority ${priorityClass(record.priority)}`}>{record.priority}</span></div><h3>{record.title}</h3><div className="production-record-card-state"><span className={`production-record-status ${statusClass(record.status)}`}>{record.status}</span><span>{record.service}</span></div><dl><div><dt>Requester</dt><dd>{record.requester}</dd></div><div><dt>Assignment</dt><dd>{record.team} · {record.assignee}</dd></div><div className="production-task-card-due"><dt>Due / target</dt><dd><TaskDue record={record} /></dd></div></dl><footer><span>{record.primaryRequest ? `Primary ${record.primaryRequest}` : `Updated ${formatDate(record.updatedAt)}`}</span><ChevronRight size={16} /></footer></button>{taskCanBeTaken(record) ? <div className="production-record-card-actions"><TaskOwnershipButton record={record} onTake={onTake} busyTask={busyTask} /></div> : null}</article>)}</div>
 }
 
 function TaskQueue() {
@@ -266,12 +288,12 @@ function TaskQueue() {
   const [viewStyle, setViewStyle] = useState(window.matchMedia?.('(max-width: 720px)').matches ? 'cards' : 'table')
   const [pageSize, setPageSize] = useState(25)
   const [page, setPage] = useState(0)
-  const [payload, setPayload] = useState({ items: [], total: 0, filters: {} })
+  const [payload, setPayload] = useState({ items: [], total: 0, filters: {}, views: {}, viewer: {} })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [revision, setRevision] = useState(0)
   const [mobileFilters, setMobileFilters] = useState(false)
-  const [hiddenColumns, setHiddenColumns] = useState([])
+  const [hiddenColumns, setHiddenColumns] = useState(['updated'])
   const [ownershipBusy, setOwnershipBusy] = useState('')
   const [ownershipError, setOwnershipError] = useState('')
 
@@ -279,12 +301,12 @@ function TaskQueue() {
     let active = true
     setLoading(true)
     setError('')
-    const params = new URLSearchParams({ limit: String(pageSize), offset: String(page * pageSize) })
+    const params = new URLSearchParams({ limit: String(pageSize), offset: String(page * pageSize), scope: filters.scope })
     if (query.trim()) params.set('search', query.trim())
-    for (const key of ['status', 'priority', 'team', 'assignee', 'service']) {
+    for (const key of ['status', 'priority', 'team', 'assignee', 'service', 'due']) {
       if (filters[key] && filters[key] !== 'All') params.set(key, filters[key])
     }
-    apiJson(`/api/v1/tasks?${params}`)
+    apiJson(`/api/v1/task-work-queue?${params}`)
       .then((next) => { if (active) setPayload(next) })
       .catch((loadError) => { if (active) setError(loadError.message) })
       .finally(() => { if (active) setLoading(false) })
@@ -300,6 +322,8 @@ function TaskQueue() {
   const ActiveViewIcon = VIEW_STYLES.find((item) => item.id === viewStyle)?.icon || TableProperties
   const changeFilters = (next) => { setFilters(next); setPage(0) }
   const clearFilters = () => { setFilters({ ...DEFAULT_FILTERS }); setPage(0) }
+  const selectScope = (scope) => changeFilters({ ...DEFAULT_FILTERS, scope })
+  const currentView = [...WORK_VIEWS, { id: 'all', label: 'All active' }, { id: 'completed', label: 'Completed' }].find((view) => view.id === filters.scope)
 
   async function takeTask(record) {
     if (!taskCanBeTaken(record) || ownershipBusy) return
@@ -317,24 +341,25 @@ function TaskQueue() {
   }
 
   return <section className="production-task-experience production-record-shell production-motion-enter production-record-shell-enhanced">
-    <aside className="production-record-filter-rail"><div className="production-record-filter-heading"><span>Queue</span><strong>Tasks</strong></div><TaskFilters payload={payload} filters={filters} onChange={changeFilters} onClear={clearFilters} /></aside>
+    <aside className="production-record-filter-rail"><div className="production-record-filter-heading"><span>Work queue</span><strong>Tasks</strong></div><TaskFilters payload={payload} filters={filters} onChange={changeFilters} onClear={clearFilters} /></aside>
 
     <main className="production-record-main">
+      <TaskWorkViews payload={payload} active={filters.scope} onChange={selectScope} />
       <div className="production-record-toolbar">
         <button className="production-record-filter-trigger" type="button" onClick={() => setMobileFilters(true)}><Filter size={15} />Filters</button>
-        <label className="production-record-search"><Search size={17} /><input type="search" value={query} onChange={(event) => { setQuery(event.target.value); setPage(0) }} placeholder="Search tasks..." /></label>
+        <label className="production-record-search"><Search size={17} /><input type="search" value={query} onChange={(event) => { setQuery(event.target.value); setPage(0) }} placeholder="Search tasks or parent requests..." /></label>
         <button className="production-record-refresh" type="button" title="Refresh" onClick={() => setRevision((value) => value + 1)}><RefreshCw size={16} /></button>
         <label className="production-record-view-select"><ActiveViewIcon size={15} /><select value={viewStyle} onChange={(event) => setViewStyle(event.target.value)}>{VIEW_STYLES.map((style) => <option key={style.id} value={style.id}>{style.label}</option>)}</select></label>
         {viewStyle === 'table' ? <details className="production-record-columns-menu"><summary><Columns3 size={15} /><span>Columns</span><ChevronDown size={13} /></summary><div><header><strong>Columns</strong><small>Choose visible fields</small></header>{COLUMNS.map((column) => { const visible = column.locked || !hiddenColumns.includes(column.key); return <button type="button" key={column.key} className={visible ? 'is-visible' : ''} disabled={column.locked} onClick={() => setHiddenColumns((current) => current.includes(column.key) ? current.filter((key) => key !== column.key) : [...current, column.key])}><span>{column.label}</span><i>{visible ? <Check size={13} /> : null}</i></button> })}</div></details> : null}
       </div>
 
-      <div className="production-record-result-line"><span><strong>{total}</strong> {total === 1 ? 'task' : 'tasks'}</span><span>{start}–{end} of {total}</span></div>
+      <div className="production-record-result-line"><span><strong>{currentView?.label || 'Tasks'}</strong> · {total} {total === 1 ? 'task' : 'tasks'}{payload.viewer?.teams?.length ? <small> · {payload.viewer.teams.join(', ')}</small> : null}</span><span>{start}–{end} of {total}</span></div>
       {ownershipError ? <div className="production-task-ownership-error"><AlertTriangle size={15} /><span>{ownershipError}</span><button type="button" aria-label="Dismiss" onClick={() => setOwnershipError('')}><X size={14} /></button></div> : null}
 
       <div className="production-record-content">
-        {loading ? <div className="production-record-state"><strong>Loading tasks…</strong><span>Checking the ready work queue.</span></div> : null}
+        {loading ? <div className="production-record-state"><strong>Loading tasks…</strong><span>Checking your current fulfilment queues.</span></div> : null}
         {!loading && error ? <div className="production-record-state is-error"><strong>Could not load this queue</strong><span>{error}</span><button type="button" onClick={() => setRevision((value) => value + 1)}>Retry</button></div> : null}
-        {!loading && !error && !records.length ? <div className="production-record-state"><strong>No tasks in this view</strong><span>Waiting workflow steps stay hidden until their dependencies are complete.</span></div> : null}
+        {!loading && !error && !records.length ? <div className="production-record-state"><strong>No tasks in {currentView?.label || 'this view'}</strong><span>Waiting workflow steps stay hidden until their dependencies are complete.</span></div> : null}
         {!loading && !error && records.length ? <div className="production-motion-enter production-motion-enter-fast">{viewStyle === 'compact' ? <TaskCompactList items={records} onOpen={(record) => navigate(`/tasks/${encodeURIComponent(record.id)}`)} onTake={takeTask} busyTask={ownershipBusy} /> : viewStyle === 'cards' ? <TaskCardList items={records} onOpen={(record) => navigate(`/tasks/${encodeURIComponent(record.id)}`)} onTake={takeTask} busyTask={ownershipBusy} /> : <TaskTable items={records} columns={columns} onOpen={(record) => navigate(`/tasks/${encodeURIComponent(record.id)}`)} onTake={takeTask} busyTask={ownershipBusy} />}</div> : null}
       </div>
 
@@ -420,6 +445,7 @@ function TaskDetail({ taskKey }) {
   )
   const canTake = task.status === 'Ready' && taskUnassigned
   const canRelease = task.status === 'Ready' && taskIsMine
+  const detailDue = dueMeta(task.dueAt, task.status)
 
   function inspectorContent() {
     if (inspectorView === 'home') return <>
@@ -430,7 +456,7 @@ function TaskDetail({ taskKey }) {
         <InspectorRow label="Assignment" value={task.team || 'Unassigned'} meta={task.assignee || 'Unassigned'} onClick={() => setInspectorView('assignment')} />
       </div>
       <InspectorRow label="Dependencies" value={task.dependencies?.length ? `${task.dependencies.length} prerequisite${task.dependencies.length === 1 ? '' : 's'}` : 'No prerequisites'} onClick={() => setInspectorView('dependencies')} />
-      <InspectorRow label="Completion" value={completed ? 'Completed' : 'Work in progress'} meta={completed ? formatDate(task.completedAt) : task.dueAt ? `Due ${formatDate(task.dueAt)}` : 'No due date'} onClick={() => setInspectorView('completion')} />
+      <InspectorRow label="Completion" value={completed ? 'Completed' : 'Work in progress'} meta={completed ? formatDate(task.completedAt) : task.dueAt ? `${detailDue.label} · ${formatDate(task.dueAt)}` : 'No due date'} onClick={() => setInspectorView('completion')} />
     </>
 
     const back = <button type="button" className="activity-canvas-inspector-back" onClick={() => setInspectorView('home')}><ArrowLeft size={16} />Task details</button>
@@ -454,7 +480,7 @@ function TaskDetail({ taskKey }) {
       </div>
     </header>
 
-    <div className="activity-canvas-ribbon"><span><b>Primary request</b>{parent.id || '—'}</span><span><b>Requester</b>{parent.requester || 'Not recorded'}</span><span><b>Service</b>{parent.service || '—'}</span><span><b>Assignment</b>{task.team || 'Unassigned'} / {task.assignee || 'Unassigned'}</span><span><b>Priority</b>{parent.priority || 'Medium'}</span><span><b>Due</b>{task.dueAt ? formatDate(task.dueAt) : 'No due date'}</span></div>
+    <div className="activity-canvas-ribbon"><span><b>Primary request</b>{parent.id || '—'}</span><span><b>Requester</b>{parent.requester || 'Not recorded'}</span><span><b>Service</b>{parent.service || '—'}</span><span><b>Assignment</b>{task.team || 'Unassigned'} / {task.assignee || 'Unassigned'}</span><span><b>Priority</b>{parent.priority || 'Medium'}</span><span className={`production-task-detail-due ${detailDue.className}`}><b>Due / target</b>{task.dueAt ? formatDate(task.dueAt) : 'No due date'}<em>{detailDue.label}</em></span></div>
 
     {error ? <div className="activity-canvas-banner is-error"><AlertTriangle size={17} /><span>{error}</span><button type="button" onClick={() => setError('')}><X size={15} /></button></div> : null}
     {notice ? <div className="activity-canvas-banner is-success"><CheckCircle2 size={17} /><span>{notice}</span><button type="button" onClick={() => setNotice('')}><X size={15} /></button></div> : null}

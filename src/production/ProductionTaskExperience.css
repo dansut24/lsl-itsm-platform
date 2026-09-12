@@ -106,7 +106,6 @@
   }
 }
 
-
 /* Task ownership: one-click claim/release without changing parent request ownership. */
 .production-task-ownership-button,
 .production-task-release-button {
@@ -187,7 +186,7 @@
   width: 100%;
   min-height: 44px;
   display: grid;
-  grid-template-columns: 92px minmax(180px, 1fr) 78px 110px minmax(150px, .8fr) 100px 18px;
+  grid-template-columns: 92px minmax(180px, 1fr) 78px 110px minmax(150px, .8fr) 128px 18px;
   gap: 9px;
   align-items: center;
   padding: 7px 10px;
@@ -205,18 +204,215 @@
 
 .production-record-card-actions .production-task-ownership-button { margin-left: 0; }
 
+/* Day-to-day task work views. */
+.production-task-work-views {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.production-task-work-views > button {
+  min-width: 0;
+  min-height: 50px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  color: var(--ink);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.production-task-work-views > button:hover {
+  border-color: rgba(var(--accent-rgb), .28);
+}
+
+.production-task-work-views > button.is-active {
+  border-color: rgba(var(--accent-rgb), .42);
+  background: rgba(var(--accent-rgb), .08);
+  box-shadow: inset 0 2px 0 var(--brand);
+}
+
+.production-task-work-views button > span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.production-task-work-views strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.production-task-work-views small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.production-task-work-views b,
+.production-task-view-list b {
+  min-width: 24px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 9px;
+  font-weight: 900;
+}
+
+.production-task-work-views > button.is-active b {
+  border-color: rgba(var(--accent-rgb), .22);
+  background: rgba(var(--accent-rgb), .11);
+  color: var(--brand);
+}
+
+.production-task-view-list button {
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.production-task-view-list button > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.production-record-result-line small {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* Due-date target visibility. A due_at timestamp is presented as an operational target,
+   not as a full SLA policy engine. */
+.production-task-due {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.production-task-due strong {
+  width: fit-content;
+  max-width: 100%;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 900;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.production-task-due small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.production-task-due.is-overdue strong,
+.production-task-detail-due.is-overdue em {
+  border-color: rgba(198, 52, 52, .28);
+  background: rgba(198, 52, 52, .09);
+  color: var(--danger);
+}
+
+.production-task-due.is-today strong,
+.production-task-due.is-soon strong,
+.production-task-detail-due.is-today em,
+.production-task-detail-due.is-soon em {
+  border-color: rgba(187, 119, 0, .28);
+  background: rgba(187, 119, 0, .08);
+  color: #8a5a00;
+}
+
+.production-task-due.is-scheduled strong {
+  border-color: rgba(var(--accent-rgb), .18);
+  background: rgba(var(--accent-rgb), .06);
+  color: var(--brand);
+}
+
+.production-task-due.is-complete strong {
+  opacity: .72;
+}
+
+.production-record-table tbody tr.is-task-overdue > td:first-child,
+.production-task-compact-row.is-task-overdue,
+.production-record-card.is-task-overdue {
+  box-shadow: inset 3px 0 0 var(--danger);
+}
+
+.production-task-card-due dd {
+  min-width: 0;
+}
+
+.production-task-detail-due em {
+  width: fit-content;
+  margin-top: 2px;
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 8px;
+  font-style: normal;
+  font-weight: 850;
+}
+
+@media (max-width: 1180px) {
+  .production-task-work-views {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 1050px) {
-  .production-task-compact-open { grid-template-columns: 82px minmax(170px, 1fr) 72px 100px minmax(130px, .7fr) 18px; }
-  .production-task-compact-open > small:last-of-type { display: none; }
+  .production-task-compact-open { grid-template-columns: 82px minmax(170px, 1fr) 72px 100px minmax(130px, .7fr) 118px 18px; }
 }
 
 @media (max-width: 760px) {
+  .production-task-work-views {
+    display: flex;
+    overflow-x: auto;
+    gap: 6px;
+    padding: 8px;
+    scrollbar-width: none;
+  }
+  .production-task-work-views::-webkit-scrollbar { display: none; }
+  .production-task-work-views > button {
+    flex: 0 0 145px;
+    min-height: 46px;
+  }
+  .production-task-work-views small { display: none; }
+
   .production-task-compact-row { grid-template-columns: 1fr; gap: 0; padding: 0 10px 9px; }
   .production-task-compact-open { grid-template-columns: 1fr auto; gap: 7px; padding-inline: 2px; }
   .production-task-compact-open > span:nth-child(2),
-  .production-task-compact-open > small { grid-column: 1 / -1; }
+  .production-task-compact-open > small,
+  .production-task-compact-open > .production-task-due { grid-column: 1 / -1; }
   .production-task-compact-row > .production-task-ownership-button { width: 100%; min-height: 36px; }
   .production-task-ownership-note { margin-inline: 10px; }
   .production-task-take-primary,
   .production-task-release-button { min-height: 36px; }
+  .production-task-due.is-compact { display: flex; align-items: center; gap: 6px; }
 }
