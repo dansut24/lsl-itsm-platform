@@ -1,0 +1,43 @@
+name: Temporary task ownership fine tune
+
+on:
+  push:
+    branches: [task-take-release-workflow]
+    paths:
+      - .github/workflows/_temp-task-ownership-fine-tune.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: task-take-release-workflow
+      - name: Fine tune ownership detection
+        shell: bash
+        run: |
+          python <<'PY'
+          from pathlib import Path
+          path = Path('src/production/ProductionTaskExperience.jsx')
+          text = path.read_text()
+          before = """    (task.assigneeEmail && session.email && task.assigneeEmail.toLowerCase() === String(session.email).toLowerCase())\n    || (!task.assigneeEmail && task.assignee === session.name)"""
+          after = """    (task.assigneeEmail && session.email && task.assigneeEmail.toLowerCase() === String(session.email).toLowerCase())\n    || (task.assignee && session.name && task.assignee === session.name)"""
+          if before not in text:
+              raise SystemExit('Ownership comparison block not found')
+          text = text.replace(before, after, 1)
+          text = text.replace('rows="8" disabled={completed || saving} value={completionNotes}', 'rows="8" disabled={completed || saving || !taskIsMine} value={completionNotes}', 1)
+          path.write_text(text)
+          PY
+          npm ci
+          npm run build
+      - name: Commit fine tune
+        shell: bash
+        run: |
+          git config user.name "Hi5Central CI"
+          git config user.email "actions@hi5central.com"
+          git add src/production/ProductionTaskExperience.jsx
+          git commit -m "Harden task ownership client guards"
+          git push origin HEAD:task-take-release-workflow
