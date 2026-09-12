@@ -1,175 +1,34 @@
-import { rmmDeviceGroups, rmmSites } from './rmmData.js'
-
-const siteMetadata = {
-  'SITE-LON-HQ': {
-    code: 'LON-HQ',
-    type: 'Office',
-    location: 'London, United Kingdom',
-    timeZone: 'Europe/London',
-    networkRanges: ['10.24.0.0/16'],
-    monitoringPolicy: 'Standard endpoint monitoring',
-    patchRing: 'Production endpoints',
-    maintenanceWindow: 'Wed 22:00–02:00',
-    contact: 'Service Desk',
-    critical: 0,
-    offline: 1,
-    description: 'Primary London office and user endpoint estate.',
-  },
-  'SITE-LON-DC': {
-    code: 'LON-DC',
-    type: 'Datacentre',
-    location: 'London, United Kingdom',
-    timeZone: 'Europe/London',
-    networkRanges: ['10.20.0.0/16'],
-    monitoringPolicy: 'Production server',
-    patchRing: 'Server ring A',
-    maintenanceWindow: 'Sun 01:00–05:00',
-    contact: 'Infrastructure',
-    critical: 1,
-    offline: 0,
-    description: 'Production infrastructure, server and core network workloads.',
-  },
-  'SITE-MAN': {
-    code: 'MAN',
-    type: 'Office',
-    location: 'Manchester, United Kingdom',
-    timeZone: 'Europe/London',
-    networkRanges: ['10.31.0.0/16'],
-    monitoringPolicy: 'Standard endpoint monitoring',
-    patchRing: 'Production endpoints',
-    maintenanceWindow: 'Thu 22:00–02:00',
-    contact: 'Manchester IT',
-    critical: 0,
-    offline: 1,
-    description: 'Manchester office endpoints and local infrastructure.',
-  },
-  'SITE-BHM': {
-    code: 'BHM',
-    type: 'Office',
-    location: 'Birmingham, United Kingdom',
-    timeZone: 'Europe/London',
-    networkRanges: ['10.48.0.0/16'],
-    monitoringPolicy: 'Standard endpoint monitoring',
-    patchRing: 'Production endpoints',
-    maintenanceWindow: 'Thu 22:00–02:00',
-    contact: 'Service Desk',
-    critical: 0,
-    offline: 1,
-    description: 'Birmingham office endpoints and shared devices.',
-  },
-  'SITE-REMOTE': {
-    code: 'REMOTE',
-    type: 'Remote',
-    location: 'Distributed workforce',
-    timeZone: 'Device local',
-    networkRanges: ['Internet managed'],
-    monitoringPolicy: 'Remote workforce',
-    patchRing: 'Remote endpoints',
-    maintenanceWindow: 'Device local · 20:00–02:00',
-    contact: 'Service Desk',
-    critical: 0,
-    offline: 0,
-    description: 'Internet-managed devices without a fixed corporate site.',
-  },
-}
-
-export const rmmManagedSites = rmmSites.map((site) => ({
-  ...site,
-  ...(siteMetadata[site.id] || {}),
-  source: 'Tenant',
-  status: Number(site.warning || 0) > 0 ? 'Attention' : 'Healthy',
-}))
-
-const groupMetadata = {
-  'GRP-FIN': {
-    mode: 'Static',
-    scope: 'All sites',
-    description: 'Finance-owned endpoints and shared finance devices.',
-    ruleText: 'Manually assigned primary group',
-    monitoringPolicy: 'Standard endpoint monitoring',
-    patchRing: 'Production endpoints',
-    softwareProfile: 'Finance baseline',
-    automationProfile: 'Endpoint maintenance',
-  },
-  'GRP-SALES': {
-    mode: 'Static',
-    scope: 'All sites',
-    description: 'Sales laptops and user endpoints.',
-    ruleText: 'Manually assigned primary group',
-    monitoringPolicy: 'Standard endpoint monitoring',
-    patchRing: 'Production endpoints',
-    softwareProfile: 'Sales productivity',
-    automationProfile: 'Endpoint maintenance',
-  },
-  'GRP-TECH': {
-    mode: 'Static',
-    scope: 'All sites',
-    description: 'Technology team workstations and engineering endpoints.',
-    ruleText: 'Manually assigned primary group',
-    monitoringPolicy: 'Technical workstation',
-    patchRing: 'Technical preview',
-    softwareProfile: 'Engineering workstation',
-    automationProfile: 'Technical maintenance',
-  },
-  'GRP-OPS': {
-    mode: 'Static',
-    scope: 'All sites',
-    description: 'Operations user devices across the managed estate.',
-    ruleText: 'Manually assigned primary group',
-    monitoringPolicy: 'Standard endpoint monitoring',
-    patchRing: 'Production endpoints',
-    softwareProfile: 'Operations baseline',
-    automationProfile: 'Endpoint maintenance',
-  },
-  'GRP-MKT': {
-    mode: 'Static',
-    scope: 'All sites',
-    description: 'Marketing endpoints and creative user devices.',
-    ruleText: 'Manually assigned primary group',
-    monitoringPolicy: 'Standard endpoint monitoring',
-    patchRing: 'Production endpoints',
-    softwareProfile: 'Marketing baseline',
-    automationProfile: 'Endpoint maintenance',
-  },
-  'GRP-SERVERS': {
-    mode: 'Static',
-    scope: 'Infrastructure sites',
-    description: 'Production and shared Windows server workloads.',
-    ruleText: 'Manually assigned infrastructure group',
-    monitoringPolicy: 'Production Windows Server',
-    patchRing: 'Server ring A',
-    softwareProfile: 'Server baseline',
-    automationProfile: 'Server maintenance',
-  },
-  'GRP-NETWORK': {
-    mode: 'Static',
-    scope: 'Infrastructure sites',
-    description: 'Switches, firewalls and monitored network appliances.',
-    ruleText: 'Manually assigned infrastructure group',
-    monitoringPolicy: 'Network monitoring',
-    patchRing: 'Vendor managed',
-    softwareProfile: 'Not applicable',
-    automationProfile: 'Network checks',
-  },
-}
-
-export const rmmManagedDeviceGroups = []
+export const rmmManagedSites = Object.freeze([])
+export const rmmManagedDeviceGroups = Object.freeze([])
 
 export function deviceMatchesManagedGroup(device, groupId) {
   if (!groupId || groupId === 'All') return true
   const group = rmmManagedDeviceGroups.find((item) => item.id === groupId)
   if (!group) return false
-  if (group.mode !== 'Dynamic') return device.groupId === group.id || device.group === group.name
+  if (group.mode !== 'Dynamic') return device?.groupId === group.id || device?.group === group.name
 
   const rule = group.rule || {}
-  if (rule.patchBelow != null && !(Number(device.patchCompliance) < Number(rule.patchBelow))) return false
-  if (rule.healthNot && device.health === rule.healthNot) return false
-  if (rule.platformIncludes && !String(device.platform || device.os || '').toLowerCase().includes(String(rule.platformIncludes).toLowerCase())) return false
-  if (rule.tag && !(device.tags || []).some((tag) => String(tag).toLowerCase() === String(rule.tag).toLowerCase())) return false
+  if (rule.patchBelow != null && !(Number(device?.patchCompliance) < Number(rule.patchBelow))) return false
+  if (rule.healthNot && device?.health === rule.healthNot) return false
+  if (rule.platformIncludes && !String(device?.platform || device?.os || '').toLowerCase().includes(String(rule.platformIncludes).toLowerCase())) return false
+  if (rule.tag && !(device?.tags || []).some((tag) => String(tag).toLowerCase() === String(rule.tag).toLowerCase())) return false
   return true
 }
 
-export const rmmDefaultSavedViews = []
+// Saved-view definitions are product UI configuration, not tenant estate data.
+export const rmmDefaultSavedViews = [
+  {
+    id: 'VIEW-ATTENTION',
+    name: 'Needs attention',
+    visibility: 'Shared',
+    owner: 'Hi5Central',
+    builtIn: true,
+    description: 'Warning, critical and offline devices.',
+    filters: { quickView: 'attention', siteId: 'All', groupId: 'All', platform: 'All', health: 'All', patchState: 'All' },
+    sort: { field: 'health', direction: 'desc' },
+    columns: ['device', 'user', 'siteGroup', 'health', 'resources', 'patch', 'lastSeen'],
+  },
+]
 
 export const RMM_SAVED_VIEWS_STORAGE_KEY = 'hi5central:rmm:saved-views:v1'
 export const RMM_CUSTOM_SITES_STORAGE_KEY = 'hi5central:rmm:custom-sites:v1'

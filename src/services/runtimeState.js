@@ -2,6 +2,8 @@ import { synchroniseProductionServiceRequestSnapshot } from './productionService
 import { synchroniseProductionItsmRecordSnapshot } from './productionItsmRecords.js'
 
 const PRODUCTION_SESSION_KEY = 'hi5central-production-session-v1'
+const RUNTIME_BOUNDARY_KEY = 'hi5central-production-runtime-boundary-v1'
+const RUNTIME_BOUNDARY_VERSION = '2026-09-12'
 const API_BASE = window.__HI5_API_BASE__
 const serviceRequestSyncQueues = new Map()
 const itsmRecordSyncQueues = new Map()
@@ -16,8 +18,55 @@ function readJson(key, fallback) {
 }
 
 function writeJson(key, value) {
-  window.localStorage.setItem(key, JSON.stringify(value))
+  try { window.localStorage.setItem(key, JSON.stringify(value)) } catch { /* best effort */ }
 }
+
+function removeKey(key) {
+  try { window.localStorage.removeItem(key) } catch { /* best effort */ }
+}
+
+function isLegacyOrganisationRecord(item) {
+  return /^(?:AGT|USR|TEAM|DEPT)-/i.test(String(item?.id || ''))
+}
+
+function enforceProductionRuntimeBoundary() {
+  if (readJson(RUNTIME_BOUNDARY_KEY, '') === RUNTIME_BOUNDARY_VERSION) return
+
+  // One-time cleanup of the historical prototype browser stores. Canonical
+  // tenant data is rehydrated from PostgreSQL/API state after authentication.
+  for (const key of [
+    'hi5central-session',
+    'lsl-itsm-session',
+    'lsl-itsm-tickets',
+    'hi5central-portal-session',
+    'hi5central-rmm-session',
+    'hi5central-projects-v1',
+    'hi5central-rota-v1',
+    'hi5central-calendar-v1',
+    'hi5central-live-chat-conversations-v1',
+    'hi5central-notifications-v1',
+    'hi5central-organisation-sites-v1',
+  ]) removeKey(key)
+
+  const tickets = readJson('hi5central-tickets', [])
+  writeJson(
+    'hi5central-tickets',
+    Array.isArray(tickets) ? tickets.filter((ticket) => ticket?.persistence === 'api') : [],
+  )
+
+  for (const key of [
+    'hi5central-organisation-people-v1',
+    'hi5central-organisation-teams-v1',
+    'hi5central-organisation-departments-v1',
+  ]) {
+    const current = readJson(key, [])
+    writeJson(key, Array.isArray(current) ? current.filter((item) => !isLegacyOrganisationRecord(item)) : [])
+  }
+
+  writeJson(RUNTIME_BOUNDARY_KEY, RUNTIME_BOUNDARY_VERSION)
+}
+
+enforceProductionRuntimeBoundary()
 
 function productionOrganisationEnabled() {
   const session = readJson(PRODUCTION_SESSION_KEY, null)
@@ -116,9 +165,9 @@ export function loadTickets() {
   const stored = readJson('hi5central-tickets', [])
   return Array.isArray(stored) ? stored.filter((ticket) => ticket?.persistence === 'api') : []
 }
-export function loadOrganisationPeople() { const value = readJson('hi5central-organisation-people-v1', []); return Array.isArray(value) ? value : [] }
-export function loadOrganisationTeams() { const value = readJson('hi5central-organisation-teams-v1', []); return Array.isArray(value) ? value : [] }
-export function loadOrganisationDepartments() { const value = readJson('hi5central-organisation-departments-v1', []); return Array.isArray(value) ? value : [] }
+export function loadOrganisationPeople() { const value = readJson('hi5central-organisation-people-v1', []); return Array.isArray(value) ? value.filter((item) => !isLegacyOrganisationRecord(item)) : [] }
+export function loadOrganisationTeams() { const value = readJson('hi5central-organisation-teams-v1', []); return Array.isArray(value) ? value.filter((item) => !isLegacyOrganisationRecord(item)) : [] }
+export function loadOrganisationDepartments() { const value = readJson('hi5central-organisation-departments-v1', []); return Array.isArray(value) ? value.filter((item) => !isLegacyOrganisationRecord(item)) : [] }
 export function loadOrganisationAudit() { const value = readJson('hi5central-organisation-audit-v1', []); return Array.isArray(value) ? value : [] }
 export function loadProjects() { const value = readJson('hi5central-projects-v1', []); return Array.isArray(value) ? value : [] }
 export function loadRotaEntries() { const value = readJson('hi5central-rota-v1', []); return Array.isArray(value) ? value : [] }
@@ -130,9 +179,9 @@ export function loadSession() { const session = readJson(PRODUCTION_SESSION_KEY,
 
 export function saveProductionSession(session) {
   if (session?.source === 'production' && session?.role === 'analyst') writeJson(PRODUCTION_SESSION_KEY, session)
-  else window.localStorage.removeItem(PRODUCTION_SESSION_KEY)
+  else removeKey(PRODUCTION_SESSION_KEY)
 }
-export function clearProductionSession() { window.localStorage.removeItem(PRODUCTION_SESSION_KEY) }
+export function clearProductionSession() { removeKey(PRODUCTION_SESSION_KEY) }
 export function loadTheme() { const value = readJson('hi5central-theme-mode', null); return ['system', 'light', 'dark'].includes(value) ? value : 'system' }
 export function loadAccent() { const value = readJson('hi5central-accent', 'amber'); return ['amber', 'cyan', 'blue', 'violet', 'emerald', 'rose'].includes(value) ? value : 'amber' }
 export function loadDensity() { const value = readJson('hi5central-density', 'comfortable'); return ['comfortable', 'compact'].includes(value) ? value : 'comfortable' }
@@ -153,9 +202,9 @@ export function saveTickets(value) {
   })
 }
 
-export function saveOrganisationPeople(value) { writeJson('hi5central-organisation-people-v1', Array.isArray(value) ? value : []) }
-export function saveOrganisationTeams(value) { writeJson('hi5central-organisation-teams-v1', Array.isArray(value) ? value : []) }
-export function saveOrganisationDepartments(value) { writeJson('hi5central-organisation-departments-v1', Array.isArray(value) ? value : []) }
+export function saveOrganisationPeople(value) { writeJson('hi5central-organisation-people-v1', Array.isArray(value) ? value.filter((item) => !isLegacyOrganisationRecord(item)) : []) }
+export function saveOrganisationTeams(value) { writeJson('hi5central-organisation-teams-v1', Array.isArray(value) ? value.filter((item) => !isLegacyOrganisationRecord(item)) : []) }
+export function saveOrganisationDepartments(value) { writeJson('hi5central-organisation-departments-v1', Array.isArray(value) ? value.filter((item) => !isLegacyOrganisationRecord(item)) : []) }
 export function saveOrganisationAudit(value) { writeJson('hi5central-organisation-audit-v1', Array.isArray(value) ? value.slice(0, 500) : []) }
 export function saveProjects(value) { writeJson('hi5central-projects-v1', Array.isArray(value) ? value : []) }
 export function saveRotaEntries(value) { writeJson('hi5central-rota-v1', Array.isArray(value) ? value : []) }
@@ -169,12 +218,14 @@ export function saveDensity(value) { writeJson('hi5central-density', value) }
 export function saveSidebarMode(value) { writeJson('hi5central-sidebar-mode', value) }
 
 export function loadPortalSession() { return null }
-export function savePortalSession() { window.localStorage.removeItem('hi5central-portal-session') }
+export function savePortalSession() { removeKey('hi5central-portal-session') }
 export function loadRmmSession() { return null }
-export function saveRmmSession() { window.localStorage.removeItem('hi5central-rmm-session') }
+export function saveRmmSession() { removeKey('hi5central-rmm-session') }
 export function saveSession(session) {
   if (session?.source === 'production') { saveProductionSession(session); return }
   const hadProductionSession = Boolean(readJson(PRODUCTION_SESSION_KEY, null))
-  window.localStorage.removeItem(PRODUCTION_SESSION_KEY)
+  removeKey(PRODUCTION_SESSION_KEY)
+  removeKey('hi5central-session')
+  removeKey('lsl-itsm-session')
   if (hadProductionSession) fetch(`${API_BASE}/api/v1/auth/logout`, { method: 'POST', credentials: 'include' }).catch(() => {})
 }
