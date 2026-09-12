@@ -41,12 +41,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: npm
-          cache-dependency-path: api/package-lock.json
 
       - name: Install API dependencies
         working-directory: api
-        run: npm ci
+        run: npm install --omit=dev
 
       - name: Run database migrations
         working-directory: api
