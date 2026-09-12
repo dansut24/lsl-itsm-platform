@@ -32,7 +32,7 @@ import { ProductionPortalKnowledgeChat } from './production/ProductionPortalKnow
 import { ProductionPortalThemeBridge } from './production/ProductionPortalThemeBridge.jsx'
 import { ProductionPremiumWorkspaceExperience } from './production/ProductionPremiumWorkspaceExperience.jsx'
 import { ProductionRecordDetailRouter } from './production/ProductionRecordDetailRouter.jsx'
-import { ProductionRecordWorkspaceLab } from './production/ProductionRecordWorkspaceLab.jsx'
+import { ProductionRecordWorkspace } from './production/ProductionRecordWorkspace.jsx'
 import { ProductionRecordExportEnhancer } from './production/ProductionRecordExportEnhancer.jsx'
 import { ProductionRecordListInteractionEnhancer } from './production/ProductionRecordListInteractionEnhancer.jsx'
 import { ProductionServiceRequestIntake } from './production/ProductionServiceRequestIntake.jsx'
@@ -112,7 +112,7 @@ createRoot(rootElement).render(
     {productionWorkspace && !productionOnboarding ? <ProductionLiveChatOperations /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionLiveChatCompactTools /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionRecordDetailRouter /> : null}
-    {productionWorkspace && !productionOnboarding ? <ProductionRecordWorkspaceLab /> : null}
+    {productionWorkspace && !productionOnboarding ? <ProductionRecordWorkspace /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionRecordExportEnhancer /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionRecordListInteractionEnhancer /> : null}
     {productionWorkspace && !productionOnboarding ? <ProductionServiceRequestIntake /> : null}
