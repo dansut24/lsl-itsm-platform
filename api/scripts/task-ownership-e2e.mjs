@@ -131,11 +131,10 @@ try {
     [tenantId, request.rows[0].id, team.rows[0].id, JSON.stringify({ id: 'TEAM-SERVICE-DESK', name: 'Service Desk' })],
   )
 
-  const [tech1Cookie, tech2Cookie, outsiderCookie] = await Promise.all([
-    login(tech1Email),
-    login(tech2Email),
-    login(outsiderEmail),
-  ])
+  // Seed/resolve default roles serially before the deliberate concurrent task-claim race.
+  const tech1Cookie = await login(tech1Email)
+  const tech2Cookie = await login(tech2Email)
+  const outsiderCookie = await login(outsiderEmail)
 
   console.log('1. Reject an analyst who is not in the task assignment group')
   const outsiderTake = await json('/api/v1/tasks/REQ-OWNERSHIP-0001-T01/take', {
