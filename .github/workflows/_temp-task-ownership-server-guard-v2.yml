@@ -1,0 +1,30 @@
+name: Temporary task ownership server guard v2
+
+on:
+  push:
+    branches: [task-take-release-workflow]
+    paths:
+      - .github/workflows/_temp-task-ownership-server-guard-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: task-take-release-workflow
+      - name: Apply server guard
+        run: node scripts/_temp-task-owner-guard.mjs
+      - name: Validate API syntax
+        run: node --check api/src/serviceRequestState.js && node --check api/src/taskOwnership.js
+      - name: Commit server guard
+        shell: bash
+        run: |
+          git config user.name "Hi5Central CI"
+          git config user.email "actions@hi5central.com"
+          git add api/src/serviceRequestState.js
+          git commit -m "Require task ownership before fulfilment work"
+          git push origin HEAD:task-take-release-workflow
