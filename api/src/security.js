@@ -1,3 +1,4 @@
+import { hasPermission } from './access.js'
 import { createHash, randomBytes } from 'node:crypto'
 import { pool, withTransaction } from './db.js'
 import { sendPasswordResetEmail } from './mailer.js'
@@ -42,12 +43,12 @@ function originMatchesTenant(c, slug) {
   return deploymentOriginMatchesTenant(c.req.header('origin'), slug)
 }
 
-async function requireSession(c, admin = false) {
+async function requireSession(c, permission = null) {
   const session = await resolveSession(c)
   if (!session) return { error: c.json({ error: 'Authentication required.' }, 401) }
   if (!originMatchesTenant(c, session.slug)) return { error: c.json({ error: 'Tenant session mismatch.' }, 403) }
-  if (admin && !['owner', 'admin'].includes(session.tenant_role)) {
-    return { error: c.json({ error: 'Tenant administrator access is required.' }, 403) }
+  if (permission && !hasPermission(session.access, permission)) {
+    return { error: c.json({ error: 'You do not have permission to view this tenant security information.', permission }, 403) }
   }
   return { session }
 }
@@ -292,7 +293,7 @@ export function registerSecurityRoutes(app) {
   })
 
   app.get('/api/v1/security/audit', async (c) => {
-    const auth = await requireSession(c, true)
+    const auth = await requireSession(c, 'settings.security.manage')
     if (auth.error) return auth.error
     const limit = Math.max(20, Math.min(200, Number(c.req.query('limit') || 60)))
     await pruneSecurityAuditForTenant(auth.session.tenant_id, securitySettings(auth.session).auditRetention)
