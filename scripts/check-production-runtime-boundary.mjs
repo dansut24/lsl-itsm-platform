@@ -19,6 +19,7 @@ const forbiddenTokens = [
   'Hi5Desk!2026', 'Hi5Portal!2026', 'Hi5RMM!2026',
   'Dana Sinclair', 'Eleanor Shaw', 'AGT-DANA', 'PRJ-0042', 'SITE-LON-HQ', 'KB5074211',
   'portal-demo-credentials', 'rmm-demo-login', 'Use demo employee', 'Use demo RMM account',
+  'export function SettingsView(',
 ]
 
 const failures = []
@@ -57,6 +58,9 @@ for (const required of [
   'src/runtime/workspaceConfig.jsx',
   'src/services/runtimeState.js',
   'src/production/ProductionSessionBoundary.jsx',
+  'src/production/ProductionProfileWorkspace.jsx',
+  'src/production/ProductionIdentityBridge.jsx',
+  'api/src/profile.js',
   'archive/demo-runtime/src/App.jsx',
   'archive/demo-runtime/src/data/demoData.jsx',
   'archive/demo-runtime/src/services/demoStore.js',

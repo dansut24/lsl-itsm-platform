@@ -8,6 +8,7 @@ import { registerLiveChatPresenceRoutes } from './liveChatPresence.js'
 import { registerLiveChatRoutes } from './liveChat.js'
 import { registerMfaRoutes } from './mfa.js'
 import { registerNotificationRoutes } from './notifications.js'
+import { registerProfileRoutes } from './profile.js'
 import { registerSecurityRoutes } from './security.js'
 import { registerSecurityInstrumentation } from './securityInstrumentation.js'
 import {
@@ -167,6 +168,7 @@ export function registerSettingsRoutes(app) {
   })
 
   registerAccessRoutes(app)
+  registerProfileRoutes(app)
   registerUserPreferenceRoutes(app)
   registerWorkflowRoutes(app)
   registerNotificationRoutes(app)

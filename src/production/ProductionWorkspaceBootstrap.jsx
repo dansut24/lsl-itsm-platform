@@ -4,13 +4,13 @@ import { ArrowRight, CheckCircle2, LockKeyhole, ShieldCheck } from 'lucide-react
 import WorkspaceRuntime from '../runtime/WorkspaceRuntime.jsx'
 import { OnboardingWizard } from '../features/onboarding/OnboardingWizard.jsx'
 import { ProductionSettingsWorkspace } from '../features/settings/ProductionSettingsWorkspace.jsx'
+import { ProductionIdentityBridge } from './ProductionIdentityBridge.jsx'
+import { ProductionProfileWorkspace } from './ProductionProfileWorkspace.jsx'
 import { resolveTenantSurface } from '../lib/tenantSurface.js'
 import {
   clearProductionSession,
-  loadSidebarMode,
   saveAccent,
   saveProductionSession,
-  saveSidebarMode,
   saveTheme,
 } from '../services/runtimeState.js'
 import { hydrateProductionServiceRequests } from '../services/productionServiceRequests.js'
@@ -43,6 +43,13 @@ function effectiveSettings(apiSession) {
     : apiSession?.onboarding?.data || {}
 }
 
+function sessionHasPermission(apiSession, permission) {
+  const effective = apiSession?.access?.effectivePermissions || []
+  const grants = apiSession?.access?.permissions || []
+  if (effective.includes(permission) || grants.includes('*') || grants.includes(permission)) return true
+  return grants.some((grant) => grant.endsWith('*') && permission.startsWith(grant.slice(0, -1)))
+}
+
 function toWorkspaceSession(apiSession) {
   return {
     role: 'analyst',
@@ -56,6 +63,8 @@ function toWorkspaceSession(apiSession) {
     username: apiSession.user.email,
     tenant: apiSession.tenant,
     user: apiSession.user,
+    access: apiSession.access,
+    security: apiSession.security,
     onboarding: apiSession.onboarding,
     settings: effectiveSettings(apiSession),
   }
@@ -248,72 +257,6 @@ function ProductionLogin({ tenant, onAuthenticated }) {
   )
 }
 
-function WorkspaceSidebarPreferenceCard() {
-  const [sidebarMode, setSidebarMode] = useState(loadSidebarMode)
-
-  function changeSidebarMode(event) {
-    const nextMode = event.target.value
-    if (!['expanded', 'collapsed', 'hidden'].includes(nextMode)) return
-    setSidebarMode(nextMode)
-    saveSidebarMode(nextMode)
-    window.location.reload()
-  }
-
-  return (
-    <section className="production-settings-panel">
-      <header>
-        <div>
-          <h2>Workspace navigation</h2>
-          <p>This is your personal workspace preference and does not change the tenant default for other users.</p>
-        </div>
-      </header>
-      <div className="production-settings-panel-body">
-        <div className="production-settings-grid">
-          <label className="production-settings-field">
-            <span>Primary sidebar</span>
-            <select value={sidebarMode} onChange={changeSidebarMode}>
-              <option value="expanded">Expanded</option>
-              <option value="collapsed">Collapsed</option>
-              <option value="hidden">Hidden</option>
-            </select>
-            <small>Choosing Hidden reloads the workspace without a vertical primary sidebar so you can test the in-content Settings navigation.</small>
-          </label>
-        </div>
-      </div>
-    </section>
-  )
-}
-
-function WorkspaceSidebarPreferenceLayer({ currentPath }) {
-  const [target, setTarget] = useState(null)
-  const appearanceOpen = currentPath === '/settings/appearance'
-
-  useEffect(() => {
-    if (!appearanceOpen) {
-      setTarget(null)
-      return undefined
-    }
-
-    const attach = () => {
-      const nextTarget = document.querySelector('.production-settings-content')
-      if (!(nextTarget instanceof HTMLElement)) return false
-      setTarget(nextTarget)
-      return true
-    }
-
-    if (attach()) return undefined
-
-    const observer = new MutationObserver(() => {
-      if (attach()) observer.disconnect()
-    })
-    observer.observe(document.body, { childList: true, subtree: true })
-    return () => observer.disconnect()
-  }, [appearanceOpen])
-
-  if (!appearanceOpen || !target) return null
-  return createPortal(<WorkspaceSidebarPreferenceCard />, target)
-}
-
 function ProductionSettingsLayer({ currentPath, session, onSessionChange }) {
   const [target, setTarget] = useState(null)
 
@@ -352,16 +295,40 @@ function ProductionSettingsLayer({ currentPath, session, onSessionChange }) {
   if (!target) return null
 
   return createPortal(
-    <>
-      <ProductionSettingsWorkspace
-        currentPath={currentPath}
-        onSessionChange={onSessionChange}
-        session={session}
-      />
-      <WorkspaceSidebarPreferenceLayer currentPath={currentPath} />
-    </>,
+    <ProductionSettingsWorkspace
+      currentPath={currentPath}
+      onSessionChange={onSessionChange}
+      session={session}
+    />,
     target,
   )
+}
+
+function ProductionProfileLayer({ session }) {
+  const [target, setTarget] = useState(null)
+
+  useEffect(() => {
+    let mountedTarget = null
+    const attach = () => {
+      const nextTarget = document.querySelector('.content-frame')
+      if (!(nextTarget instanceof HTMLElement)) return false
+      if (mountedTarget && mountedTarget !== nextTarget) mountedTarget.classList.remove('production-profile-mounted')
+      mountedTarget = nextTarget
+      mountedTarget.classList.add('production-profile-mounted')
+      setTarget(nextTarget)
+      return true
+    }
+    if (attach()) return () => mountedTarget?.classList.remove('production-profile-mounted')
+    const observer = new MutationObserver(() => { if (attach()) observer.disconnect() })
+    observer.observe(document.body, { childList: true, subtree: true })
+    return () => {
+      observer.disconnect()
+      mountedTarget?.classList.remove('production-profile-mounted')
+    }
+  }, [])
+
+  if (!target) return null
+  return createPortal(<ProductionProfileWorkspace session={session} />, target)
 }
 
 export function ProductionWorkspaceBootstrap() {
@@ -475,6 +442,18 @@ export function ProductionWorkspaceBootstrap() {
   }, [serverSession])
 
   useEffect(() => {
+    if (!serverSession?.onboarding?.completedAt) return
+    const oldPersonalSettings = currentPath === '/settings/profile' || currentPath === '/settings/workspace'
+    const deniedTenantSettings = currentPath.startsWith('/settings') && !sessionHasPermission(serverSession, 'settings.view')
+    if (!oldPersonalSettings && !deniedTenantSettings) return
+    if (window.location.pathname === '/profile') return
+    window.history.replaceState({}, '', '/profile')
+    setCurrentPath('/profile')
+    window.dispatchEvent(new PopStateEvent('popstate'))
+    window.dispatchEvent(new CustomEvent('hi5-routechange', { detail: { path: '/profile', replace: true } }))
+  }, [currentPath, serverSession])
+
+  useEffect(() => {
     if (!serverSession?.onboarding?.completedAt) return undefined
 
     let closing = false
@@ -531,13 +510,16 @@ export function ProductionWorkspaceBootstrap() {
   }
 
   if (serverSession?.onboarding?.completedAt) {
-    const settingsOpen = currentPath === '/settings' || currentPath.startsWith('/settings/')
+    const canViewSettings = sessionHasPermission(serverSession, 'settings.view')
+    const settingsOpen = canViewSettings && (currentPath === '/settings' || currentPath.startsWith('/settings/'))
+    const profileOpen = currentPath === '/profile'
     const themeKey = effectiveSettings(serverSession)?.theme || {}
     const workspaceKey = `${themeKey.mode || 'system'}:${themeKey.accent || 'amber'}`
 
     return (
       <>
         <WorkspaceRuntime key={workspaceKey} />
+        <ProductionIdentityBridge session={serverSession} />
         {settingsOpen ? (
           <ProductionSettingsLayer
             key={workspaceKey}
@@ -546,6 +528,7 @@ export function ProductionWorkspaceBootstrap() {
             session={serverSession}
           />
         ) : null}
+        {profileOpen ? <ProductionProfileLayer session={serverSession} /> : null}
       </>
     )
   }
