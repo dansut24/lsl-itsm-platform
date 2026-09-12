@@ -33,6 +33,9 @@ jobs:
         with:
           node-version: 24
 
+      - name: Verify Tasks shared-layout contract
+        run: node scripts/check-task-layout-contract.mjs
+
       - name: Install API dependencies
         working-directory: api
         run: npm install --omit=dev
