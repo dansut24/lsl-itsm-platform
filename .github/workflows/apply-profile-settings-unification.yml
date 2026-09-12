@@ -1,0 +1,38 @@
+name: Apply profile settings unification
+
+on:
+  push:
+    branches:
+      - profile-settings-unification
+    paths:
+      - scripts/apply-profile-settings-unification.mjs
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: profile-settings-unification
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node scripts/apply-profile-settings-unification.mjs
+      - run: npm ci
+      - run: npm run check:production-runtime
+      - run: npm run build
+      - name: Commit generated source changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add api/src/settings.js src/lib/routes.js src/runtime/workspaceConfig.jsx src/runtime/WorkspaceRuntime.jsx src/features/workspace/WorkspaceViews.jsx src/production/ProductionWorkspaceBootstrap.jsx scripts/check-production-runtime-boundary.mjs
+          if git diff --cached --quiet; then
+            echo "No generated changes to commit."
+            exit 0
+          fi
+          git commit -m "Unify profile and production settings routing"
+          git push origin HEAD:profile-settings-unification
