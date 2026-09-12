@@ -17,6 +17,13 @@ function statusClass(value) {
   return text(value).toLowerCase().replace(/[^a-z0-9]+/g, '-')
 }
 
+function element(tag, className = '', value = '') {
+  const node = document.createElement(tag)
+  if (className) node.className = className
+  if (value !== '') node.textContent = value
+  return node
+}
+
 async function requestDetail(reference) {
   const response = await fetch(`${API_BASE}/api/v1/service-requests/${encodeURIComponent(reference)}`, {
     credentials: 'include',
@@ -29,71 +36,77 @@ async function requestDetail(reference) {
 
 function taskMeta(task, taskById) {
   const dependencies = Array.isArray(task.dependencies) ? task.dependencies : []
-  const dependencyLabels = dependencies.map((id) => taskById.get(id)?.title || id).filter(Boolean)
   return {
-    dependencies: dependencyLabels,
+    dependencies: dependencies.map((id) => taskById.get(id)?.title || id).filter(Boolean),
     instructions: text(task.instructions),
     completionNotes: text(task.completionNotes),
   }
 }
 
+function workflowSignature(tasks) {
+  return tasks.map((task) => [
+    task.id,
+    task.title,
+    task.status,
+    task.team,
+    task.assignee,
+    (task.dependencies || []).join(','),
+    task.instructions,
+    task.completionNotes,
+  ].join('|')).join('::')
+}
+
 function buildEnhancement(detail) {
   const tasks = Array.isArray(detail.requestTasks) ? detail.requestTasks : []
-  const wrapper = document.createElement('section')
-  wrapper.className = 'service-request-workflow-enhancement'
+  const wrapper = element('section', 'service-request-workflow-enhancement')
   wrapper.dataset.hi5WorkflowEnhancement = 'true'
+  wrapper.dataset.workflowSignature = workflowSignature(tasks)
 
   const completed = tasks.filter((task) => task.status === 'Completed').length
   const active = tasks.find((task) => ['Ready', 'In Progress', 'Blocked'].includes(task.status))
   const percent = tasks.length ? Math.round((completed / tasks.length) * 100) : 0
 
-  const header = document.createElement('div')
-  header.className = 'service-request-workflow-summary'
-  header.innerHTML = `
-    <div>
-      <span>Task workflow</span>
-      <strong>${completed} of ${tasks.length} completed</strong>
-      <small>${active ? `Current: ${active.title}` : (tasks.length ? 'All workflow tasks completed' : 'No fulfilment workflow')}</small>
-    </div>
-    <b>${percent}%</b>
-  `
+  const header = element('div', 'service-request-workflow-summary')
+  const headerCopy = element('div')
+  headerCopy.append(
+    element('span', '', 'Task workflow'),
+    element('strong', '', `${completed} of ${tasks.length} completed`),
+    element('small', '', active ? `Current: ${active.title}` : (tasks.length ? 'All workflow tasks completed' : 'No fulfilment workflow')),
+  )
+  header.append(headerCopy, element('b', '', `${percent}%`))
   wrapper.appendChild(header)
 
-  const progress = document.createElement('div')
-  progress.className = 'service-request-workflow-progress'
+  const progress = element('div', 'service-request-workflow-progress')
   progress.setAttribute('aria-label', `${percent}% of fulfilment tasks completed`)
-  progress.innerHTML = `<i style="width:${percent}%"></i>`
+  const progressValue = element('i')
+  progressValue.style.width = `${percent}%`
+  progress.appendChild(progressValue)
   wrapper.appendChild(progress)
 
   if (!tasks.length) return wrapper
 
   const taskById = new Map(tasks.map((task) => [task.id, task]))
-  const list = document.createElement('div')
-  list.className = 'service-request-workflow-steps'
+  const list = element('div', 'service-request-workflow-steps')
 
   tasks.forEach((task, index) => {
     const meta = taskMeta(task, taskById)
-    const item = document.createElement('article')
-    item.className = `service-request-workflow-step is-${statusClass(task.status)}`
+    const item = element('article', `service-request-workflow-step is-${statusClass(task.status)}`)
+    const copy = element('div', 'service-request-workflow-step-copy')
+    const title = element('div', 'service-request-workflow-step-title')
+    title.append(
+      element('strong', '', text(task.title)),
+      element('span', `is-${statusClass(task.status)}`, text(task.status)),
+    )
 
     const dependencyText = meta.dependencies.length
       ? `After ${meta.dependencies.join(', ')}`
       : 'No prerequisite task'
     const routing = [task.team || 'Unassigned team', task.assignee || 'Unassigned'].filter(Boolean).join(' · ')
 
-    item.innerHTML = `
-      <div class="service-request-workflow-step-index">${index + 1}</div>
-      <div class="service-request-workflow-step-copy">
-        <div class="service-request-workflow-step-title">
-          <strong>${text(task.title)}</strong>
-          <span class="is-${statusClass(task.status)}">${text(task.status)}</span>
-        </div>
-        <small>${routing}</small>
-        <small>${dependencyText}</small>
-        ${meta.instructions ? `<p>${meta.instructions}</p>` : ''}
-        ${meta.completionNotes ? `<em>Completion: ${meta.completionNotes}</em>` : ''}
-      </div>
-    `
+    copy.append(title, element('small', '', routing), element('small', '', dependencyText))
+    if (meta.instructions) copy.appendChild(element('p', '', meta.instructions))
+    if (meta.completionNotes) copy.appendChild(element('em', '', `Completion: ${meta.completionNotes}`))
+    item.append(element('div', 'service-request-workflow-step-index', String(index + 1)), copy)
     list.appendChild(item)
   })
 
@@ -114,58 +127,71 @@ function taskListTarget() {
 export function ProductionServiceRequestWorkflowInspectorEnhancer() {
   useEffect(() => {
     let disposed = false
-    let currentReference = ''
-    let cached = null
-    let loading = null
-
-    async function detail(reference) {
-      if (cached && currentReference === reference) return cached
-      if (loading && currentReference === reference) return loading
-      currentReference = reference
-      loading = requestDetail(reference)
-        .then((payload) => {
-          if (currentReference === reference) cached = payload
-          return payload
-        })
-        .finally(() => { loading = null })
-      return loading
-    }
+    let timer = null
+    let lastReference = ''
+    let lastTarget = null
+    let forceReload = false
 
     async function render() {
-      if (disposed) return
+      if (disposed || !inspectorIsTasks()) return
       const reference = routeReference()
-      if (!reference || !inspectorIsTasks()) return
       const target = taskListTarget()
-      if (!target) return
-      target.parentElement?.querySelector('[data-hi5-workflow-enhancement="true"]')?.remove()
+      if (!reference || !target) return
+
+      const existing = target.parentElement?.querySelector('[data-hi5-workflow-enhancement="true"]')
+      if (!forceReload && reference === lastReference && target === lastTarget && existing) return
+
+      forceReload = false
+      lastReference = reference
+      lastTarget = target
+
       try {
-        const payload = await detail(reference)
+        const payload = await requestDetail(reference)
         if (disposed || reference !== routeReference() || !inspectorIsTasks()) return
         const latestTarget = taskListTarget()
         if (!latestTarget) return
-        latestTarget.parentElement?.querySelector('[data-hi5-workflow-enhancement="true"]')?.remove()
-        latestTarget.before(buildEnhancement(payload))
+        const next = buildEnhancement(payload)
+        const current = latestTarget.parentElement?.querySelector('[data-hi5-workflow-enhancement="true"]')
+        if (current?.dataset.workflowSignature === next.dataset.workflowSignature) return
+        current?.remove()
+        latestTarget.before(next)
       } catch {
         // The existing task inspector remains fully functional if enrichment cannot load.
       }
     }
 
-    const observer = new MutationObserver(() => { void render() })
-    observer.observe(document.body, { childList: true, subtree: true, characterData: true })
-    const onRoute = () => {
-      currentReference = ''
-      cached = null
-      void render()
+    function schedule({ reload = false } = {}) {
+      if (reload) forceReload = true
+      window.clearTimeout(timer)
+      timer = window.setTimeout(() => { void render() }, 60)
     }
+
+    const observer = new MutationObserver(() => schedule())
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+
+    const onRoute = () => {
+      lastReference = ''
+      lastTarget = null
+      schedule({ reload: true })
+    }
+    const onChange = (event) => {
+      if (event.target instanceof HTMLSelectElement && event.target.closest('.service-request-task-list')) {
+        schedule({ reload: true })
+      }
+    }
+
     window.addEventListener('popstate', onRoute)
     window.addEventListener('hi5-routechange', onRoute)
-    void render()
+    document.addEventListener('change', onChange)
+    schedule({ reload: true })
 
     return () => {
       disposed = true
+      window.clearTimeout(timer)
       observer.disconnect()
       window.removeEventListener('popstate', onRoute)
       window.removeEventListener('hi5-routechange', onRoute)
+      document.removeEventListener('change', onChange)
       document.querySelectorAll('[data-hi5-workflow-enhancement="true"]').forEach((node) => node.remove())
     }
   }, [])
