@@ -1,0 +1,59 @@
+name: Finalise Production Runtime Cleanup
+
+on:
+  push:
+    branches:
+      - production-runtime-demo-cleanup
+    paths:
+      - scripts/finalise-production-runtime-cleanup.mjs
+      - .github/workflows/production-runtime-finalise.yml
+
+permissions:
+  contents: write
+
+jobs:
+  finalise:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout cleanup branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: production-runtime-demo-cleanup
+
+      - name: Use Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply final cleanup
+        run: node scripts/finalise-production-runtime-cleanup.mjs
+
+      - name: Verify production boundary
+        run: npm run check:production-runtime
+
+      - name: Build production web
+        run: npm run build
+
+      - name: Commit cleanup result
+        shell: bash
+        run: |
+          git checkout -- .github/workflows/production-runtime-finalise.yml
+
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "No production cleanup changes to commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Remove remaining prototype runtime scaffolding"
+          git push origin HEAD:production-runtime-demo-cleanup
