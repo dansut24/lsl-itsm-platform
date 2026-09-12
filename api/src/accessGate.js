@@ -94,6 +94,7 @@ async function requiredAccess(c, session) {
   }
 
   if (path.startsWith('/api/v1/service-requests')) {
+    if (method === 'POST' && /\/approvals\/[^/]+\/decision\/?$/i.test(path)) return null
     if (method === 'GET') return rule(['itsm.requests.view','itsm.records.view_all'])
     if (path.includes('/approval') || path.includes('/decision') || path.includes('/complete')) return rule([], ['itsm.requests.fulfil'])
     if (path.includes('/assign') || path.includes('/reassign')) return rule([], ['itsm.requests.assign'])

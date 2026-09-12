@@ -208,7 +208,7 @@ try {
      FROM service_requests WHERE tenant_id=$1 AND reference=$2`,
     [tenantId, reference],
   )
-  assert(finalState.rows[0]?.status === 'New', `Approved parent request should enter New queue, got ${finalState.rows[0]?.status}`)
+  assert(finalState.rows[0]?.status === 'Approved', `Approved parent request should remain in Approved queue, got ${finalState.rows[0]?.status}`)
   assert(finalState.rows[0]?.fulfilment_team_id === null, 'Approved parent request was automatically team-owned')
   assert(finalState.rows[0]?.assigned_person_id === null, 'Approved parent request was automatically person-owned')
 

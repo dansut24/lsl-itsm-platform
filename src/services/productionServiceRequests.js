@@ -68,7 +68,7 @@ export function serviceRequestForWorkspace(request) {
     requesterDepartment: request.requesterDepartment || '',
     requesterSite: request.requesterSite || '',
     service: request.service || 'Service Catalogue',
-    team: request.team || 'Service Desk',
+    team: request.team || 'Unassigned',
     assignee: request.assignee || 'Unassigned',
     assigneeId: request.assigneeId || '',
     assigneeEmail: request.assigneeEmail || '',

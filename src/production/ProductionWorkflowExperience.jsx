@@ -50,7 +50,7 @@ function Field({ label, children, hint }) {
   return <label className="hi5-workflow-field"><span>{label}</span>{children}{hint ? <small>{hint}</small> : null}</label>
 }
 
-function ServiceRequestWorkflow({ workflow, busy, onTransition }) {
+function ServiceRequestWorkflow({ workflow, busy, onTransition, onDecision }) {
   const metrics = workflow.metrics || {}
   return <>
     <div className="hi5-workflow-metrics">
@@ -60,7 +60,7 @@ function ServiceRequestWorkflow({ workflow, busy, onTransition }) {
     </div>
     {workflow.readyForCompletion && workflow.status === 'In Progress' ? <div className="hi5-workflow-ready"><CheckCircle2 size={16} /><span><strong>Ready for completion</strong><small>All required fulfilment tasks are complete.</small></span></div> : null}
     {workflow.tasks?.length ? <details className="hi5-workflow-details"><summary>Fulfilment tasks <b>{metrics.taskComplete || 0}/{metrics.taskTotal || 0}</b></summary><div>{workflow.tasks.map((task) => <div className="hi5-workflow-task" key={task.id}><span><strong>{task.title}</strong><small>{task.assignee || task.team || 'Unassigned'}{task.dependencies?.length ? ` · after ${task.dependencies.join(', ')}` : ''}</small></span><em className={`is-${String(task.status).toLowerCase().replace(/\s+/g, '-')}`}>{task.status}</em></div>)}</div></details> : null}
-    {workflow.approvals?.length ? <details className="hi5-workflow-details"><summary>Approval chain <b>{workflow.approvals.length}</b></summary><div>{workflow.approvals.map((approval) => <div className="hi5-workflow-task" key={approval.id}><span><strong>{approval.label || 'Approval'}</strong><small>{approval.approver}</small></span><em>{approval.status}</em></div>)}</div></details> : null}
+    {workflow.approvals?.length ? <div className="hi5-workflow-approvals"><div className="hi5-workflow-subheading"><ShieldCheck size={15} /><span>Approvals</span></div>{workflow.approvals.map((approval) => <div className="hi5-workflow-approval" key={approval.id}><span><strong>{approval.label || 'Approval'}</strong><small>{approval.approver}{approval.note ? ` · ${approval.note}` : ''}</small></span><em>{approval.status}</em>{approval.canDecide ? <div><button disabled={busy} onClick={() => onDecision(approval.id, 'Approved')} type="button">Approve</button><button className="is-danger" disabled={busy} onClick={() => onDecision(approval.id, 'Rejected')} type="button">Reject</button></div> : null}</div>)}</div> : null}
     <WorkflowActions workflow={workflow} busy={busy} onTransition={onTransition} />
   </>
 }
@@ -173,8 +173,14 @@ function WorkflowPanel({ reference }) {
     const note = window.prompt(`${decision} note (optional)`) || ''
     setBusy(true); setError(''); setNotice('')
     try {
-      const next = await apiJson(`/api/v1/workflows/${encodeURIComponent(reference)}/approvals/${encodeURIComponent(approvalId)}/decision`, { method: 'POST', body: JSON.stringify({ decision, note }) })
-      setWorkflow(next); setDraft(next.data || draft); setNotice(`Approval ${decision.toLowerCase()}`)
+      if (workflow?.type === 'Service Request') {
+        await apiJson(`/api/v1/service-requests/${encodeURIComponent(reference)}/approvals/${encodeURIComponent(approvalId)}/decision`, { method: 'POST', body: JSON.stringify({ decision, note }) })
+        await load()
+        setNotice(`Approval ${decision.toLowerCase()}`)
+      } else {
+        const next = await apiJson(`/api/v1/workflows/${encodeURIComponent(reference)}/approvals/${encodeURIComponent(approvalId)}/decision`, { method: 'POST', body: JSON.stringify({ decision, note }) })
+        setWorkflow(next); setDraft(next.data || draft); setNotice(`Approval ${decision.toLowerCase()}`)
+      }
     } catch (decisionError) { setError(decisionError.message) } finally { setBusy(false) }
   }
 
@@ -187,7 +193,7 @@ function WorkflowPanel({ reference }) {
     {workflow.blockers?.length ? <div className="hi5-workflow-blockers"><AlertTriangle size={15} /><span><strong>Workflow gates</strong>{workflow.blockers.map((item) => <small key={item}>{item}</small>)}</span></div> : null}
     {notice ? <div className="hi5-workflow-notice"><Sparkles size={14} />{notice}</div> : null}
     {error ? <div className="hi5-workflow-error"><AlertTriangle size={15} />{error}</div> : null}
-    {workflow.type === 'Service Request' ? <ServiceRequestWorkflow workflow={workflow} busy={busy} onTransition={transition} /> : null}
+    {workflow.type === 'Service Request' ? <ServiceRequestWorkflow workflow={workflow} busy={busy} onTransition={transition} onDecision={decide} /> : null}
     {workflow.type === 'Problem' ? <ProblemEditor workflow={workflow} draft={draft} setDraft={setDraft} busy={busy} onSave={saveData} onTransition={transition} /> : null}
     {workflow.type === 'Change' ? <ChangeEditor workflow={workflow} draft={draft} setDraft={setDraft} busy={busy} onSave={saveData} onTransition={transition} onDecision={decide} /> : null}
   </section>
