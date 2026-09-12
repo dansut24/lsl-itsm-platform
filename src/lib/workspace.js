@@ -223,6 +223,7 @@ export function makeTab(viewId, overrides = {}) {
     title: overrides.title || viewMeta[viewId]?.label || 'Workspace',
     pinned: overrides.pinned || false,
     recordId: overrides.recordId,
+    recordLab: overrides.recordLab,
     assetId: overrides.assetId,
     articleSlug: overrides.articleSlug,
     projectId: overrides.projectId,
