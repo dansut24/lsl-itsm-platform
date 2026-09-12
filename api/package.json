@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "migrate": "node src/migrate.js",
+    "reset:service-requests": "node scripts/reset-service-request-defaults.mjs",
     "start": "node src/index.js"
   },
   "dependencies": {
