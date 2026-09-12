@@ -126,7 +126,7 @@ export function registerPortalAuthRoutes(app) {
         metadata: { reason: 'portal_access_denied' },
       })
       return c.json({
-        error: 'This account does not currently have requester Portal access or any assigned approvals.',
+        error: 'This account does not have access to the requester portal and has no approvals assigned to it.',
       }, 403)
     }
     const resolvedAccount = attachAccess(account, access, 'portal')
