@@ -45,6 +45,15 @@ if (fs.existsSync(archivedWorkspaceViews)) {
   fs.writeFileSync(file('src/features/workspace/WorkspaceViews.jsx'), source)
 }
 
+// The production workspace may start empty while API hydration occurs. It must
+// never import or fall back to the prototype ticket collection.
+update('src/runtime/WorkspaceRuntime.jsx', (value) => {
+  let next = value
+    .replace(/\s*seedTickets,\s*/g, ' ')
+    .replace(/\s*\|\|\s*seedTickets\[0\]\.id/g, '')
+  return next
+})
+
 update('src/features/knowledge/KnowledgeContextEnhancer.jsx', (value) =>
   value.replace("from '../../data/demoData.jsx'", "from '../../runtime/workspaceConfig.jsx'"))
 
