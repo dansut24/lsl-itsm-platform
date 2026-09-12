@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { ProductionActivityActionRecord } from './ProductionActivityActionRecord.jsx'
 import { ProductionServiceRequestActivityRecord } from './ProductionServiceRequestActivityRecord.jsx'
 import { ProductionServiceRequestWorkflowInspectorEnhancer } from './ProductionServiceRequestWorkflowInspectorEnhancer.jsx'
+import { ProductionTaskExperience } from './ProductionTaskExperience.jsx'
 
 function detailRoute(pathname = window.location.pathname) {
   const parts = String(pathname || '').split('/').filter(Boolean)
@@ -40,7 +41,7 @@ export function ProductionRecordDetailRouter() {
     }
   }, [])
 
-  if (route === 'service-request') return <><ProductionServiceRequestActivityRecord /><ProductionServiceRequestWorkflowInspectorEnhancer /></>
-  if (route === 'generic') return <ProductionActivityActionRecord />
-  return null
+  if (route === 'service-request') return <><ProductionServiceRequestActivityRecord /><ProductionServiceRequestWorkflowInspectorEnhancer /><ProductionTaskExperience /></>
+  if (route === 'generic') return <><ProductionActivityActionRecord /><ProductionTaskExperience /></>
+  return <ProductionTaskExperience />
 }
