@@ -1,0 +1,50 @@
+name: Production Runtime Extraction
+
+on:
+  push:
+    branches:
+      - production-runtime-demo-cleanup
+    paths:
+      - scripts/refactor-production-runtime.mjs
+      - .github/workflows/production-runtime-refactor.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: production-runtime-demo-cleanup
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Extract production runtime
+        run: node scripts/refactor-production-runtime.mjs
+
+      - name: Verify production boundary
+        run: node scripts/check-production-runtime-boundary.mjs
+
+      - name: Build production web
+        run: npm run build
+
+      - name: Commit extracted runtime
+        shell: bash
+        run: |
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "No runtime changes to commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Extract production runtime from archived demo implementation"
+          git push origin HEAD:production-runtime-demo-cleanup
