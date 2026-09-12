@@ -1,0 +1,57 @@
+name: Temporary task ownership refactor v2
+
+on:
+  push:
+    branches: [task-take-release-workflow]
+    paths:
+      - .github/workflows/_temp-task-ownership-refactor-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: task-take-release-workflow
+          fetch-depth: 0
+
+      - name: Extract and run corrected source transformer
+        shell: bash
+        run: |
+          python <<'PY'
+          from pathlib import Path
+          text = Path('.github/workflows/_temp-task-ownership-refactor.yml').read_text()
+          start = text.index("          node <<'NODE'\n") + len("          node <<'NODE'\n")
+          end = text.index("\n          NODE\n", start)
+          lines = text[start:end].splitlines()
+          code = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines) + '\n'
+          bad = "return `${'${content}'}\\n\\n/* Task ownership"
+          good = "return content + `\\n\\n/* Task ownership"
+          if bad not in code:
+              raise SystemExit('Expected CSS transformer defect was not found')
+          code = code.replace(bad, good, 1)
+          Path('/tmp/task-ownership-refactor.cjs').write_text(code)
+          PY
+          node /tmp/task-ownership-refactor.cjs
+
+      - name: Validate frontend build
+        run: npm ci && npm run build
+
+      - name: Validate API syntax
+        run: node --check api/src/taskOwnership.js && node --check api/src/catalogue.js
+
+      - name: Commit source changes
+        shell: bash
+        run: |
+          git config user.name "Hi5Central CI"
+          git config user.email "actions@hi5central.com"
+          git add api/src/catalogue.js src/production/ProductionTaskExperience.jsx src/production/ProductionTaskExperience.css
+          if git diff --cached --quiet; then
+            echo "No source changes required."
+            exit 0
+          fi
+          git commit -m "Integrate one-click task take and release"
+          git push origin HEAD:task-take-release-workflow
