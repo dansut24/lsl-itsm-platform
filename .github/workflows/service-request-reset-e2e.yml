@@ -1,0 +1,61 @@
+name: Service Request Reset E2E
+
+on:
+  pull_request:
+    paths:
+      - 'api/scripts/reset-service-request-defaults.mjs'
+      - 'api/scripts/service-request-reset-e2e.mjs'
+      - 'src/data/defaultCatalogueV2.js'
+      - '.github/workflows/service-request-reset-e2e.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'api/scripts/reset-service-request-defaults.mjs'
+      - 'api/scripts/service-request-reset-e2e.mjs'
+      - 'src/data/defaultCatalogueV2.js'
+      - '.github/workflows/service-request-reset-e2e.yml'
+
+jobs:
+  reset-e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: hi5central
+          POSTGRES_USER: hi5central
+          POSTGRES_PASSWORD: hi5central-ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hi5central -d hi5central"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+
+      - name: Install API dependencies
+        working-directory: api
+        run: npm ci
+
+      - name: Run database migrations
+        working-directory: api
+        env:
+          DATABASE_URL: postgresql://hi5central:hi5central-ci@127.0.0.1:5432/hi5central
+        run: npm run migrate
+
+      - name: Reset and verify Service Request defaults
+        working-directory: api
+        env:
+          DATABASE_URL: postgresql://hi5central:hi5central-ci@127.0.0.1:5432/hi5central
+        run: node scripts/service-request-reset-e2e.mjs
