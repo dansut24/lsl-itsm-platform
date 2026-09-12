@@ -106,3 +106,108 @@ AFTER UPDATE ON service_request_tasks
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW
 EXECUTE FUNCTION hi5_service_request_task_completion_activity();
+
+-- Upgrade untouched Hi5Central default forms to select real catalogue products/models.
+-- Customised tenant forms are deliberately not changed.
+UPDATE service_catalogue_items item
+SET form_schema = (
+      SELECT COALESCE(jsonb_agg(
+        CASE WHEN field->>'id' = 'equipmentType' THEN
+          field || jsonb_build_object(
+            'label', 'Equipment model / item',
+            'type', 'product',
+            'options', COALESCE((
+              SELECT jsonb_agg(
+                jsonb_build_object(
+                  'value', product.external_key,
+                  'label', product.title,
+                  'itemId', product.external_key,
+                  'category', COALESCE(category.name, 'Hardware')
+                )
+                ORDER BY CASE product.external_key
+                  WHEN 'CAT-HW-T14' THEN 1
+                  WHEN 'CAT-HW-MBA13' THEN 2
+                  WHEN 'CAT-HW-MON27' THEN 3
+                  WHEN 'CAT-HW-DOCK' THEN 4
+                  WHEN 'CAT-HW-HEADSET' THEN 5
+                  ELSE 99
+                END
+              )
+              FROM service_catalogue_items product
+              LEFT JOIN service_catalogue_categories category ON category.id = product.category_id
+              WHERE product.tenant_id = item.tenant_id
+                AND product.kind = 'product'
+                AND product.active = true
+                AND product.external_key = ANY(ARRAY['CAT-HW-T14','CAT-HW-MBA13','CAT-HW-MON27','CAT-HW-DOCK','CAT-HW-HEADSET'])
+            ), '[]'::jsonb)
+          )
+        ELSE field END
+        ORDER BY ordinal
+      ), '[]'::jsonb)
+      FROM jsonb_array_elements(item.form_schema) WITH ORDINALITY AS fields(field, ordinal)
+    ),
+    price_mode = 'calculated',
+    source = COALESCE(item.source, '{}'::jsonb) || jsonb_build_object('modelChoicesVersion', 1),
+    updated_at = now()
+WHERE item.external_key = 'CAT-EQUIPMENT'
+  AND item.kind = 'request-form'
+  AND item.request_type = 'Service Request'
+  AND item.source->>'provider' = 'hi5central'
+  AND COALESCE(item.source->>'customised', 'false') <> 'true'
+  AND EXISTS (
+    SELECT 1 FROM service_catalogue_items product
+    WHERE product.tenant_id = item.tenant_id
+      AND product.kind = 'product'
+      AND product.active = true
+      AND product.external_key = ANY(ARRAY['CAT-HW-T14','CAT-HW-MBA13'])
+  );
+
+UPDATE service_catalogue_items item
+SET form_schema = (
+      SELECT COALESCE(jsonb_agg(
+        CASE WHEN field->>'id' = 'deviceRequirement' THEN
+          field || jsonb_build_object(
+            'label', 'Primary device model',
+            'type', 'product',
+            'options', COALESCE((
+              SELECT jsonb_agg(
+                jsonb_build_object(
+                  'value', product.external_key,
+                  'label', product.title,
+                  'itemId', product.external_key,
+                  'category', COALESCE(category.name, 'Hardware')
+                )
+                ORDER BY CASE product.external_key
+                  WHEN 'CAT-HW-T14' THEN 1
+                  WHEN 'CAT-HW-MBA13' THEN 2
+                  ELSE 99
+                END
+              )
+              FROM service_catalogue_items product
+              LEFT JOIN service_catalogue_categories category ON category.id = product.category_id
+              WHERE product.tenant_id = item.tenant_id
+                AND product.kind = 'product'
+                AND product.active = true
+                AND product.external_key = ANY(ARRAY['CAT-HW-T14','CAT-HW-MBA13'])
+            ), '[]'::jsonb)
+          )
+        ELSE field END
+        ORDER BY ordinal
+      ), '[]'::jsonb)
+      FROM jsonb_array_elements(item.form_schema) WITH ORDINALITY AS fields(field, ordinal)
+    ),
+    price_mode = 'calculated',
+    source = COALESCE(item.source, '{}'::jsonb) || jsonb_build_object('modelChoicesVersion', 1),
+    updated_at = now()
+WHERE item.external_key = 'CAT-ONBOARDING'
+  AND item.kind = 'request-form'
+  AND item.request_type = 'Service Request'
+  AND item.source->>'provider' = 'hi5central'
+  AND COALESCE(item.source->>'customised', 'false') <> 'true'
+  AND EXISTS (
+    SELECT 1 FROM service_catalogue_items product
+    WHERE product.tenant_id = item.tenant_id
+      AND product.kind = 'product'
+      AND product.active = true
+      AND product.external_key = ANY(ARRAY['CAT-HW-T14','CAT-HW-MBA13'])
+  );
