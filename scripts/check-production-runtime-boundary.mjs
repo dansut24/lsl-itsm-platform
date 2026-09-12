@@ -47,6 +47,11 @@ for (const file of walk(path.join(root, 'src'))) {
   if (content.includes('archive/')) failures.push(`${relative} imports archived code`)
 }
 
+const workspaceRuntime = fs.readFileSync(path.join(root, 'src/runtime/WorkspaceRuntime.jsx'), 'utf8')
+for (const token of ['PortalLoginScreen', 'RmmLoginScreen', 'SelfServicePortalApp', '<RmmPlatformApp', '<LoginScreen']) {
+  if (workspaceRuntime.includes(token)) failures.push(`WorkspaceRuntime contains legacy surface reference: ${token}`)
+}
+
 for (const required of [
   'src/runtime/WorkspaceRuntime.jsx',
   'src/runtime/workspaceConfig.jsx',

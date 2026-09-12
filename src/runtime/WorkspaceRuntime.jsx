@@ -93,7 +93,6 @@ import { RotaView } from '../features/rota/RotaView.jsx'
 import { LiveChatView } from '../features/live-chat/LiveChatView.jsx'
 import { NotificationDrawer } from '../features/notifications/NotificationDrawer.jsx'
 import { PeopleView } from '../features/people/PeopleView.jsx'
-import { RmmPlatformApp } from '../features/rmm/RmmPlatformApp.jsx'
 import {
   ChangesView,
   CmdbRecordView,
@@ -101,7 +100,6 @@ import {
   DashboardView,
   KnowledgeArticleView,
   KnowledgeView,
-  LoginScreen,
   NewRecordView,
   NewTabView,
   RecordCreateMenu,
@@ -2751,103 +2749,7 @@ function WorkspaceRuntime() {
     )
   }
 
-  const expectedSurfaceRole = isPortalSurface ? 'requester' : isRmmSurface ? 'rmm' : 'analyst'
-  if (!session || session.role !== expectedSurfaceRole) {
-    if (isPortalSurface) {
-      return (
-        <PortalLoginScreen
-          accent={accent}
-          fillCredentials={fillCredentials}
-          loginError={loginError}
-          loginForm={loginForm}
-          onLogin={handleLogin}
-          setLoginForm={setLoginForm}
-          setTheme={setTheme}
-          tenantName={tenantSurface.tenantName}
-          theme={resolvedTheme}
-        />
-      )
-    }
-    if (isRmmSurface) {
-      return (
-        <RmmLoginScreen
-          accent={accent}
-          fillCredentials={fillCredentials}
-          loginError={loginError}
-          loginForm={loginForm}
-          onLogin={handleLogin}
-          setLoginForm={setLoginForm}
-          setTheme={setTheme}
-          tenantName={tenantSurface.tenantName}
-          theme={resolvedTheme}
-        />
-      )
-    }
-    return (
-      <LoginScreen
-        accent={accent}
-        allowedModes={['analyst']}
-        fillCredentials={fillCredentials}
-        loginError={loginError}
-        loginForm={loginForm}
-        loginMode={loginMode}
-        onLogin={handleLogin}
-        setLoginForm={setLoginForm}
-        setLoginMode={setLoginMode}
-        setTheme={setTheme}
-        theme={resolvedTheme}
-      />
-    )
-  }
-
-  if (isPortalSurface) {
-    return (
-      <SelfServicePortalApp
-        accent={accent}
-        activeRequest={selectedPortalRequest}
-        currentPerson={resolveCurrentPerson(session, people)}
-        currentUser={session}
-        departments={departments}
-        handleLogout={handleLogout}
-        handlePortalSubmit={handlePortalSubmit}
-        liveChatConversations={liveChatConversations}
-        onAddPortalComment={addPortalComment}
-        onPortalApprovalDecision={decidePortalApproval}
-        onPortalChatSend={sendPortalLiveChatMessage}
-        onPortalChatStart={startPortalLiveChat}
-        onUpdatePortalProfile={updatePortalProfile}
-        openPortalHome={openPortalHome}
-        openPortalRequest={openPortalRequest}
-        portalDraft={portalDraft}
-        portalQuery={portalQuery}
-        portalResults={Array.isArray(portalResults) ? portalResults : []}
-        serviceCatalog={serviceCatalog}
-        setPortalDraft={setPortalDraft}
-        setPortalQuery={setPortalQuery}
-        setTheme={setTheme}
-        teams={teams}
-        tenantName={tenantSurface.tenantName}
-        theme={resolvedTheme}
-        tickets={tickets}
-        toast={toast}
-      />
-    )
-  }
-
-  if (isRmmSurface) {
-    return (
-      <RmmPlatformApp
-        accent={accent}
-        currentUser={session}
-        handleLogout={handleLogout}
-        onCreateItsmIncident={createRmmIncident}
-        setTheme={setTheme}
-        tenantName={tenantSurface.tenantName}
-        theme={resolvedTheme}
-        tickets={tickets}
-      />
-    )
-  }
+  if (!session || session.role !== 'analyst') return null
 
   return (
     <div
