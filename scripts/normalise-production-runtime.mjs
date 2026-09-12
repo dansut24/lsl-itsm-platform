@@ -19,6 +19,32 @@ function replaceAll(value, pairs) {
   return pairs.reduce((working, [from, to]) => working.split(from).join(to), value)
 }
 
+// Rebuild the reusable workspace views from the archived source rather than
+// trying to cut the prototype LoginScreen out with a generic brace parser.
+const archivedWorkspaceViews = file('archive/demo-runtime/src/features/workspace/WorkspaceViews.jsx')
+if (fs.existsSync(archivedWorkspaceViews)) {
+  let source = fs.readFileSync(archivedWorkspaceViews, 'utf8')
+  const loginStart = source.indexOf('export function LoginScreen(')
+  const nextViewStart = source.indexOf('export function SelfServiceShell(')
+
+  if (loginStart < 0 || nextViewStart < 0 || nextViewStart <= loginStart) {
+    throw new Error('Could not isolate the archived prototype LoginScreen.')
+  }
+
+  source = `${source.slice(0, loginStart)}export function LoginScreen() {\n  return null\n}\n\n${source.slice(nextViewStart)}`
+  source = source
+    .replace("import { accentOptions, demoUsers, incidentServices, loginProfiles, priorities, statusOptions, teams, types } from '../../data/demoData.jsx'",
+      "import { accentOptions, workspaceUsers, incidentServices, workspaceLoginProfiles, priorities, statusOptions, teams, types } from '../../runtime/workspaceConfig.jsx'")
+    .split('demoUsers').join('workspaceUsers')
+    .split('loginProfiles').join('workspaceLoginProfiles')
+    .split('Demo access').join('Tenant access')
+    .split('demo credentials').join('tenant credentials')
+    .split('Dana Sinclair').join('Hi5Central User')
+    .split('Eleanor Shaw').join('Requester')
+
+  fs.writeFileSync(file('src/features/workspace/WorkspaceViews.jsx'), source)
+}
+
 update('src/features/knowledge/KnowledgeContextEnhancer.jsx', (value) =>
   value.replace("from '../../data/demoData.jsx'", "from '../../runtime/workspaceConfig.jsx'"))
 
@@ -36,16 +62,14 @@ update('src/lib/workspace.js', (value) =>
 
 update('src/services/productionServiceRequests.js', (value) => {
   let next = value.replace("import { seedTickets } from '../data/demoData.jsx'\n\n", '')
-  next = next.replace('const base = Array.isArray(stored) ? stored : seedTickets', 'const base = Array.isArray(stored) ? stored : []')
+  next = next.replaceAll('const base = Array.isArray(stored) ? stored : seedTickets', 'const base = Array.isArray(stored) ? stored : []')
   next = next.replace("const stored = readJson(TICKETS_KEY, seedTickets)", "const stored = readJson(TICKETS_KEY, [])")
-  next = next.replace('const base = Array.isArray(stored) ? stored : seedTickets', 'const base = Array.isArray(stored) ? stored : []')
   return next
 })
 
 for (const relativePath of [
   'src/features/projects/ProjectWorkspaceV2.jsx',
   'src/features/workspace/UnifiedRecordDetailView.jsx',
-  'src/features/workspace/WorkspaceViews.jsx',
   'src/lib/lifecycle.js',
 ]) {
   update(relativePath, (value) => replaceAll(value, [
