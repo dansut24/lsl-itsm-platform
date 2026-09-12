@@ -15,7 +15,7 @@ import {
 } from 'lucide-react'
 import { organisationDepartments, organisationPeople, organisationTeams } from '../../data/organisationData.js'
 import { organisationSites, siteTimezones, siteTypes } from '../../data/organisationSites.js'
-import { syncOrganisationCollection } from '../../services/demoStore.js'
+import { syncOrganisationCollection } from '../../services/runtimeState.js'
 import './OrganisationSitesEnhancer.css'
 
 const SITES_STORAGE_KEY = 'hi5central-organisation-sites-v1'

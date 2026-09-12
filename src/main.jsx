@@ -1,7 +1,6 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
-import App from './App.jsx'
 import { MarketingApp } from './features/marketing/MarketingApp.jsx'
 import { SignupPage } from './features/marketing/SignupPage.jsx'
 import { ServiceCatalogueSettingsEnhancer } from './features/catalogue/ServiceCatalogueSettingsEnhancer.jsx'
@@ -29,6 +28,7 @@ import { ProductionNotificationCenter } from './production/ProductionNotificatio
 import { ProductionOnboardingBootstrap } from './production/ProductionOnboardingBootstrap.jsx'
 import { ProductionOrganisationWriteThrough } from './production/ProductionOrganisationWriteThrough.jsx'
 import { ProductionPortalBootstrap } from './production/ProductionPortalBootstrap.jsx'
+import { ProductionRmmBootstrap } from './production/ProductionRmmBootstrap.jsx'
 import { ProductionPortalKnowledgeChat } from './production/ProductionPortalKnowledgeChat.jsx'
 import { ProductionPortalThemeBridge } from './production/ProductionPortalThemeBridge.jsx'
 import { ProductionPremiumWorkspaceExperience } from './production/ProductionPremiumWorkspaceExperience.jsx'
@@ -78,12 +78,12 @@ document.documentElement.dataset.hi5Surface = initialSurface.kind
 document.body.dataset.hi5Surface = initialSurface.kind
 if (rootElement) rootElement.dataset.hi5Surface = initialSurface.kind
 
-const productionWorkspace = initialSurface.kind === 'workspace' && initialSurface.canonical
-const productionPortal = initialSurface.kind === 'portal' && initialSurface.canonical
+const productionWorkspace = initialSurface.kind === 'workspace'
+const productionPortal = initialSurface.kind === 'portal'
 const productionOnboarding = productionWorkspace
   && (window.location.pathname === '/onboarding' || window.location.pathname.startsWith('/onboarding/'))
 
-let RootApp = App
+let RootApp = ProductionWorkspaceBootstrap
 if (initialSurface.kind === 'marketing') {
   RootApp = window.location.pathname === '/signup' || window.location.pathname.startsWith('/signup/')
     ? SignupPage
@@ -91,6 +91,7 @@ if (initialSurface.kind === 'marketing') {
 }
 if (productionWorkspace) RootApp = productionOnboarding ? ProductionOnboardingBootstrap : ProductionWorkspaceBootstrap
 if (productionPortal) RootApp = ProductionPortalBootstrap
+if (initialSurface.kind === 'rmm') RootApp = ProductionRmmBootstrap
 
 createRoot(rootElement).render(
   <StrictMode>

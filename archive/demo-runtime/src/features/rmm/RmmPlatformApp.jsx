@@ -47,7 +47,7 @@ import {
   X,
   Zap,
 } from 'lucide-react'
-import { workspaceLoginProfiles } from '../../runtime/workspaceConfig.jsx'
+import { loginProfiles } from '../../data/demoData.jsx'
 import {
   rmmActivity,
   rmmAlerts,
@@ -160,7 +160,7 @@ function securityTone(value = '') {
 }
 
 export function RmmLoginScreen({ accent, fillCredentials, loginError, loginForm, onLogin, setLoginForm, setTheme, tenantName, theme }) {
-  const profile = workspaceLoginProfiles.rmm
+  const profile = loginProfiles.rmm
   return (
     <main className="rmm-login" data-accent={accent} data-theme={theme}>
       <section className="rmm-login-panel">

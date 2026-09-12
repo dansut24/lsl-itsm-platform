@@ -1,5 +1,3 @@
-import { seedTickets } from '../data/demoData.jsx'
-
 const API_BASE = window.__HI5_API_BASE__
 const TICKETS_KEY = 'hi5central-tickets'
 
@@ -142,7 +140,7 @@ export async function fetchProductionServiceRequest(reference) {
 export function cacheProductionServiceRequests(requests) {
   const apiTickets = requests.map(serviceRequestForWorkspace)
   const stored = readJson(TICKETS_KEY, null)
-  const base = Array.isArray(stored) ? stored : seedTickets
+  const base = Array.isArray(stored) ? stored : []
   const nonServiceRequests = base.filter((ticket) => ticket.type !== 'Service Request')
   const next = [...apiTickets, ...nonServiceRequests]
   window.localStorage.setItem(TICKETS_KEY, JSON.stringify(next))
@@ -152,8 +150,8 @@ export function cacheProductionServiceRequests(requests) {
 
 export function cacheProductionServiceRequest(request) {
   const ticket = serviceRequestForWorkspace(request)
-  const stored = readJson(TICKETS_KEY, seedTickets)
-  const base = Array.isArray(stored) ? stored : seedTickets
+  const stored = readJson(TICKETS_KEY, [])
+  const base = Array.isArray(stored) ? stored : []
   const next = base.some((item) => item.id === ticket.id)
     ? base.map((item) => item.id === ticket.id ? ticket : item)
     : [ticket, ...base]

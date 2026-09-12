@@ -577,7 +577,7 @@ function TypeOverview({ ticket }) {
 function activityActor(comment) {
   if (/^system:/i.test(comment)) return 'System'
   if (/^customer comment:/i.test(comment)) return 'Requester'
-  if (/^work note:/i.test(comment)) return 'Dana Sinclair'
+  if (/^work note:/i.test(comment)) return 'Hi5Central User'
   return 'Service Desk'
 }
 
@@ -625,7 +625,7 @@ export function UnifiedRecordDetailView({
   const attachments = ticket.attachments || []
   const directoryPeople = Array.isArray(people) && people.length ? people : organisationPeople
   const directoryTeams = Array.isArray(teams) && teams.length ? teams : organisationTeams
-  const actorName = currentUser?.name || 'Dana Sinclair'
+  const actorName = currentUser?.name || 'Hi5Central User'
 
   const relatedRecords = useMemo(() => {
     const ids = relatedRecordIds(ticket, tickets)

@@ -153,7 +153,77 @@ const groupMetadata = {
   },
 }
 
-export const rmmManagedDeviceGroups = []
+export const rmmManagedDeviceGroups = [
+  ...rmmDeviceGroups.map((group) => ({
+    ...group,
+    ...(groupMetadata[group.id] || {}),
+    source: 'Tenant',
+  })),
+  {
+    id: 'GRP-DYN-PATCH-RISK',
+    name: 'Patch risk',
+    type: 'Smart group',
+    mode: 'Dynamic',
+    scope: 'All sites',
+    devices: 17,
+    description: 'Devices that fall below the estate patch compliance threshold.',
+    ruleText: 'Patch compliance < 90%',
+    rule: { patchBelow: 90 },
+    monitoringPolicy: 'Inherited',
+    patchRing: 'Remediation ring',
+    softwareProfile: 'Inherited',
+    automationProfile: 'Patch remediation',
+    source: 'Rule',
+  },
+  {
+    id: 'GRP-DYN-ATTENTION',
+    name: 'Needs attention',
+    type: 'Smart group',
+    mode: 'Dynamic',
+    scope: 'All sites',
+    devices: 8,
+    description: 'Endpoints with warning, critical or offline health.',
+    ruleText: 'Health is not Healthy',
+    rule: { healthNot: 'Healthy' },
+    monitoringPolicy: 'Inherited',
+    patchRing: 'Inherited',
+    softwareProfile: 'Inherited',
+    automationProfile: 'Health remediation',
+    source: 'Rule',
+  },
+  {
+    id: 'GRP-DYN-WIN-SERVERS',
+    name: 'All Windows servers',
+    type: 'Smart group',
+    mode: 'Dynamic',
+    scope: 'All sites',
+    devices: 18,
+    description: 'Every Windows Server endpoint regardless of physical site.',
+    ruleText: 'Platform contains Windows Server',
+    rule: { platformIncludes: 'Windows Server' },
+    monitoringPolicy: 'Production Windows Server',
+    patchRing: 'Server ring A',
+    softwareProfile: 'Server baseline',
+    automationProfile: 'Server maintenance',
+    source: 'Rule',
+  },
+  {
+    id: 'GRP-DYN-VIP',
+    name: 'VIP endpoints',
+    type: 'Smart group',
+    mode: 'Dynamic',
+    scope: 'All sites',
+    devices: 6,
+    description: 'Devices tagged for enhanced VIP monitoring and support.',
+    ruleText: 'Tag contains “VIP user”',
+    rule: { tag: 'VIP user' },
+    monitoringPolicy: 'VIP endpoint monitoring',
+    patchRing: 'Production endpoints',
+    softwareProfile: 'Role inherited',
+    automationProfile: 'Conservative remediation',
+    source: 'Rule',
+  },
+]
 
 export function deviceMatchesManagedGroup(device, groupId) {
   if (!groupId || groupId === 'All') return true
@@ -169,7 +239,52 @@ export function deviceMatchesManagedGroup(device, groupId) {
   return true
 }
 
-export const rmmDefaultSavedViews = []
+export const rmmDefaultSavedViews = [
+  {
+    id: 'VIEW-ATTENTION',
+    name: 'Needs attention',
+    visibility: 'Shared',
+    owner: 'Hi5Central',
+    builtIn: true,
+    description: 'Warning, critical and offline devices.',
+    filters: { quickView: 'attention', siteId: 'All', groupId: 'All', platform: 'All', health: 'All', patchState: 'All' },
+    sort: { field: 'health', direction: 'desc' },
+    columns: ['device', 'user', 'siteGroup', 'health', 'resources', 'patch', 'lastSeen'],
+  },
+  {
+    id: 'VIEW-CRITICAL-INFRA',
+    name: 'Critical infrastructure',
+    visibility: 'Shared',
+    owner: 'Infrastructure',
+    builtIn: true,
+    description: 'Server estate that needs operational attention.',
+    filters: { quickView: 'attention', siteId: 'All', groupId: 'GRP-DYN-WIN-SERVERS', platform: 'All', health: 'All', patchState: 'All' },
+    sort: { field: 'health', direction: 'desc' },
+    columns: ['device', 'siteGroup', 'health', 'resources', 'patch', 'lastSeen'],
+  },
+  {
+    id: 'VIEW-PATCH-RISK',
+    name: 'Patch risk',
+    visibility: 'Shared',
+    owner: 'Service Desk',
+    builtIn: true,
+    description: 'Devices below 90% patch compliance.',
+    filters: { quickView: 'all', siteId: 'All', groupId: 'GRP-DYN-PATCH-RISK', platform: 'All', health: 'All', patchState: 'At risk' },
+    sort: { field: 'patch', direction: 'asc' },
+    columns: ['device', 'user', 'siteGroup', 'health', 'patch', 'lastSeen'],
+  },
+  {
+    id: 'VIEW-VIP',
+    name: 'VIP endpoints',
+    visibility: 'Private',
+    owner: 'You',
+    builtIn: true,
+    description: 'VIP-tagged endpoints for priority support.',
+    filters: { quickView: 'all', siteId: 'All', groupId: 'GRP-DYN-VIP', platform: 'All', health: 'All', patchState: 'All' },
+    sort: { field: 'name', direction: 'asc' },
+    columns: ['device', 'user', 'siteGroup', 'health', 'lastSeen'],
+  },
+]
 
 export const RMM_SAVED_VIEWS_STORAGE_KEY = 'hi5central:rmm:saved-views:v1'
 export const RMM_CUSTOM_SITES_STORAGE_KEY = 'hi5central:rmm:custom-sites:v1'

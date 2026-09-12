@@ -5,8 +5,8 @@ export const organisationDepartments = []
 export const organisationTeams = []
 export const organisationPeople = []
 
-export const availabilityOptions = []
+export const availabilityOptions = ['Available', 'Busy', 'Away', 'On Leave', 'Offline']
 
 // These are UI suggestions only; they are not organisation records and are never
 // persisted unless an administrator explicitly selects one for a real Person.
-export const organisationLocations = []
+export const organisationLocations = ['London HQ', 'Manchester', 'Birmingham', 'Remote']

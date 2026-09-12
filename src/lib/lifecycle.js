@@ -339,7 +339,7 @@ function transitionSummary(ticket, targetStatus, values) {
   return values.reopenReason || values.reworkReason || ''
 }
 
-export function buildLifecycleTransition(ticket, targetStatus, values = {}, actor = 'Dana Sinclair') {
+export function buildLifecycleTransition(ticket, targetStatus, values = {}, actor = 'Hi5Central User') {
   const validation = canTransition(ticket, targetStatus, values)
   if (!validation.ok) return { ok: false, blockers: validation.blockers, updates: null }
 

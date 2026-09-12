@@ -37,7 +37,7 @@ import {
   UserRound,
   X,
 } from 'lucide-react'
-import { workspaceLoginProfiles } from '../../runtime/workspaceConfig.jsx'
+import { loginProfiles } from '../../data/demoData.jsx'
 import {
   portalCatalogueCost,
   portalFieldVisible,
@@ -345,7 +345,7 @@ export function PortalLoginScreen({
   tenantName,
   theme,
 }) {
-  const profile = workspaceLoginProfiles.requester
+  const profile = loginProfiles.requester
 
   return (
     <main className="portal-login" data-accent={accent} data-theme={theme}>
@@ -869,7 +869,7 @@ export function SelfServicePortalApp({
   accent,
   activeRequest,
   currentPerson,
-  currentUser = workspaceLoginProfiles.requester,
+  currentUser = loginProfiles.requester,
   departments = [],
   handleLogout,
   handlePortalSubmit,

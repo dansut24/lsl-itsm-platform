@@ -450,7 +450,7 @@ function ProjectDetailView({ onOpenRecord, onUpdateProject, people, project, tic
 
   const addActivity = (action) => ({
     id: `ACT-${project.id}-${activityItems.length + 1}-${Date.now()}`,
-    actor: 'Dana Sinclair',
+    actor: 'Hi5Central User',
     action,
     meta: 'Just now',
   })

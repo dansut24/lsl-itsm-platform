@@ -11,7 +11,8 @@
     "check:deployment": "node scripts/check-deployment-portability.mjs",
     "check:itsm": "node scripts/check-itsm-end-to-end.mjs",
     "check:catalogue-v2": "node scripts/check-default-catalogue-v2.mjs",
-    "preview": "vite preview --configLoader native"
+    "preview": "vite preview --configLoader native",
+    "check:production-runtime": "node scripts/check-production-runtime-boundary.mjs"
   },
   "dependencies": {
     "@tanstack/react-table": "^9.2.4",

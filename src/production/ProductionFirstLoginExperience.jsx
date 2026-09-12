@@ -27,7 +27,7 @@ import {
   saveDensity,
   saveSidebarMode,
   saveTheme,
-} from '../services/demoStore.js'
+} from '../services/runtimeState.js'
 import './ProductionFirstLoginExperience.css'
 
 const API_BASE = window.__HI5_API_BASE__
