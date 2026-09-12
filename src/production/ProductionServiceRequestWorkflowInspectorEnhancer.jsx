@@ -128,6 +128,7 @@ export function ProductionServiceRequestWorkflowInspectorEnhancer() {
   useEffect(() => {
     let disposed = false
     let timer = null
+    const taskRefreshTimers = new Set()
     let lastReference = ''
     let lastTarget = null
     let forceReload = false
@@ -160,10 +161,18 @@ export function ProductionServiceRequestWorkflowInspectorEnhancer() {
       }
     }
 
-    function schedule({ reload = false } = {}) {
+    function schedule({ reload = false, delay = 60 } = {}) {
       if (reload) forceReload = true
       window.clearTimeout(timer)
-      timer = window.setTimeout(() => { void render() }, 60)
+      timer = window.setTimeout(() => { void render() }, delay)
+    }
+
+    function scheduleTaskRefresh(delay) {
+      const refreshTimer = window.setTimeout(() => {
+        taskRefreshTimers.delete(refreshTimer)
+        schedule({ reload: true })
+      }, delay)
+      taskRefreshTimers.add(refreshTimer)
     }
 
     const observer = new MutationObserver(() => schedule())
@@ -176,7 +185,8 @@ export function ProductionServiceRequestWorkflowInspectorEnhancer() {
     }
     const onChange = (event) => {
       if (event.target instanceof HTMLSelectElement && event.target.closest('.service-request-task-list')) {
-        schedule({ reload: true })
+        scheduleTaskRefresh(350)
+        scheduleTaskRefresh(1400)
       }
     }
 
@@ -188,6 +198,8 @@ export function ProductionServiceRequestWorkflowInspectorEnhancer() {
     return () => {
       disposed = true
       window.clearTimeout(timer)
+      taskRefreshTimers.forEach((refreshTimer) => window.clearTimeout(refreshTimer))
+      taskRefreshTimers.clear()
       observer.disconnect()
       window.removeEventListener('popstate', onRoute)
       window.removeEventListener('hi5-routechange', onRoute)
