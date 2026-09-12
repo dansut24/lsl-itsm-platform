@@ -6,6 +6,7 @@ on:
       - production-runtime-demo-cleanup
     paths:
       - scripts/refactor-production-runtime.mjs
+      - scripts/normalise-production-runtime.mjs
       - .github/workflows/production-runtime-refactor.yml
 
 permissions:
@@ -28,6 +29,9 @@ jobs:
 
       - name: Extract production runtime
         run: node scripts/refactor-production-runtime.mjs
+
+      - name: Normalise active production runtime
+        run: node scripts/normalise-production-runtime.mjs
 
       - name: Normalise generated boundary checker
         shell: bash
