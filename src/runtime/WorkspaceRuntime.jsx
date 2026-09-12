@@ -2727,6 +2727,11 @@ function WorkspaceRuntime() {
       return <ReportsView metrics={metrics} tickets={tickets} />
     }
 
+    // Tenant Settings and personal Profile are production-owned surfaces.
+    // Their components are mounted by ProductionWorkspaceBootstrap so this
+    // runtime must never fall back to an older workspace implementation.
+    if (activeView === 'settings' || activeView === 'profile') return null
+
     return null
   }
 
