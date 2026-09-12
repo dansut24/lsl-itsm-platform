@@ -38,7 +38,7 @@ try {
 
   await db.query(
     `INSERT INTO tenant_memberships (tenant_id, user_id, role, status)
-     VALUES ($1,$2,'requester','active'), ($1,$3,'agent','active')`,
+     VALUES ($1,$2,'requester','active'), ($1,$3,'analyst','active')`,
     [tenantId, requesterUserId, assigneeUserId],
   )
 
@@ -64,7 +64,7 @@ try {
     `INSERT INTO organisation_people (
        tenant_id, external_key, user_id, primary_team_id, department_id,
        name, email, job_title, access_profile, active
-     ) VALUES ($1,'USR-NOTIFY-TECH',$2,$3,$4,'CI Technician',$5,'Technician','agent',true)
+     ) VALUES ($1,'USR-NOTIFY-TECH',$2,$3,$4,'CI Technician',$5,'Technician','analyst',true)
      RETURNING id`,
     [tenantId, assigneeUserId, team.rows[0].id, department.rows[0].id, `technician-${suffix}@hi5central.test`],
   )
