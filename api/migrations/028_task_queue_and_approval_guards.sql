@@ -12,7 +12,20 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
   IF NEW.status = 'Pending Approval' THEN
+    IF NEW.assigned_person_id IS NOT NULL THEN
+      NEW.operational_data := COALESCE(NEW.operational_data, '{}'::jsonb)
+        || jsonb_build_object('pendingAssigneePersonId', NEW.assigned_person_id::text);
+    END IF;
     NEW.assigned_person_id := NULL;
+  ELSIF TG_OP = 'UPDATE' AND OLD.status = 'Pending Approval' THEN
+    IF NEW.status = 'Approved' AND NEW.assigned_person_id IS NULL THEN
+      BEGIN
+        NEW.assigned_person_id := NULLIF(NEW.operational_data->>'pendingAssigneePersonId', '')::uuid;
+      EXCEPTION WHEN invalid_text_representation THEN
+        NEW.assigned_person_id := NULL;
+      END;
+    END IF;
+    NEW.operational_data := COALESCE(NEW.operational_data, '{}'::jsonb) - 'pendingAssigneePersonId';
   END IF;
   RETURN NEW;
 END;
@@ -53,6 +66,7 @@ BEGIN
   ORDER BY a.created_at DESC
   LIMIT 1;
 
+  actor_name := COALESCE(NULLIF(actor_name, ''), 'Hi5Central');
   completion_body := 'Task ' || NEW.external_key || ' "' || NEW.title || '" completed by ' || actor_name;
   IF NULLIF(btrim(NEW.completion_notes), '') IS NOT NULL THEN
     completion_body := completion_body || ' — ' || NEW.completion_notes;
