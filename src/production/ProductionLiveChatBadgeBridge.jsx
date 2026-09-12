@@ -48,7 +48,7 @@ export function ProductionLiveChatBadgeBridge() {
       applyCount(Number.isFinite(value) ? value : 0)
     }
 
-    // Hide historical local/demo unread state immediately; the asynchronous
+    // Hide historical local unread state immediately; the asynchronous
     // refresh below then paints only the PostgreSQL-backed unread count.
     applyCount(0)
     refresh()

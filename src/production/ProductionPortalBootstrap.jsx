@@ -1,15 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import App from '../App.jsx'
-import { portalServiceCatalog } from '../data/portalData.js'
 import { resolveTenantSurface } from '../lib/tenantSurface.js'
 import { ProductionRequesterPortalV2 } from './ProductionRequesterPortalV2.jsx'
 import './ProductionPortalBootstrap.css'
 
 const API_BASE = window.__HI5_API_BASE__
-
-function replaceCatalogue(items) {
-  portalServiceCatalog.splice(0, portalServiceCatalog.length, ...items)
-}
 
 function normalizeFieldOption(option) {
   if (option && typeof option === 'object' && !Array.isArray(option)) return option
@@ -78,7 +72,6 @@ export function ProductionPortalBootstrap() {
         if (!Array.isArray(payload.items)) throw new Error('The service catalogue response was invalid.')
 
         const catalogue = normalizeCatalogue(payload)
-        replaceCatalogue(catalogue.items)
         if (active) setState((current) => ({ ...current, status: 'ready', managed: true, catalogue, error: '' }))
       } catch (error) {
         if (active) setState((current) => ({ ...current, status: 'error', error: error.message || 'The service catalogue is temporarily unavailable.' }))
@@ -99,7 +92,7 @@ export function ProductionPortalBootstrap() {
     )
   }
 
-  if (!state.managed) return <App />
+  if (!state.managed) return <PortalBootstrapState error="This Help Centre is not configured for this tenant." onRetry={() => setState((current) => ({ ...current, attempt: current.attempt + 1 }))} tenantName={surface.tenantName || surface.tenantSlug} />
 
   return (
     <ProductionRequesterPortalV2

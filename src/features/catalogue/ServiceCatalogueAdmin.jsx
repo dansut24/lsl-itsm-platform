@@ -220,7 +220,7 @@ function ItemEditor({ categories, item, onClose, onSave, production }) {
     formSchema: [],
     options: [],
     optionsCount: 0,
-    source: 'local-demo',
+    source: 'local',
     active: true,
   })
   const [workflowTasks, setWorkflowTasks] = useState(() => Array.isArray(item?.workflowTasks) ? item.workflowTasks : [])
@@ -309,7 +309,7 @@ export function ServiceCatalogueAdmin() {
   const [editorItem, setEditorItem] = useState(undefined)
   const [categoryDraftOpen, setCategoryDraftOpen] = useState(false)
   const [categoryDraft, setCategoryDraft] = useState('')
-  const [syncState, setSyncState] = useState(productionCatalogueEnabled() ? 'loading' : 'demo')
+  const [syncState, setSyncState] = useState(productionCatalogueEnabled() ? 'loading' : 'local')
 
   useEffect(() => {
     if (!productionCatalogueEnabled()) return undefined
@@ -415,7 +415,7 @@ export function ServiceCatalogueAdmin() {
 
       <section className="catalogue-content-surface">
         <header className="catalogue-page-heading">
-          <div><span className="eyebrow">ITSM administration</span><h2>Service catalogue</h2><p>One tenant-scoped catalogue for request experiences, products, pricing, approvals and fulfilment.</p>{syncState !== 'demo' ? <small className={`catalogue-sync-state is-${syncState}`}>{syncState === 'loading' ? 'Loading PostgreSQL catalogue…' : syncState === 'saving' ? 'Saving to PostgreSQL…' : syncState === 'error' ? 'Catalogue sync needs attention' : 'PostgreSQL catalogue synced'}</small> : null}</div>
+          <div><span className="eyebrow">ITSM administration</span><h2>Service catalogue</h2><p>One tenant-scoped catalogue for request experiences, products, pricing, approvals and fulfilment.</p>{syncState !== 'local' ? <small className={`catalogue-sync-state is-${syncState}`}>{syncState === 'loading' ? 'Loading PostgreSQL catalogue…' : syncState === 'saving' ? 'Saving to PostgreSQL…' : syncState === 'error' ? 'Catalogue sync needs attention' : 'PostgreSQL catalogue synced'}</small> : null}</div>
           <button className="primary-action" onClick={() => setEditorItem(null)} type="button"><Plus size={18} /> New item</button>
         </header>
 

@@ -15,7 +15,7 @@ import {
   Users,
   X,
 } from 'lucide-react'
-import { CALENDAR_DEMO_TODAY, calendarEventTypes } from '../../data/calendarData.js'
+import { CALENDAR_TODAY, calendarEventTypes } from '../../data/calendarData.js'
 import './CalendarView.css'
 
 const SOURCE_META = {
@@ -52,7 +52,7 @@ function addDays(value, amount) {
 
 function startOfWeek(value) {
   const date = typeof value === 'string' ? parseIsoDate(value) : new Date(value)
-  if (!date) return CALENDAR_DEMO_TODAY
+  if (!date) return CALENDAR_TODAY
   const day = date.getDay()
   date.setDate(date.getDate() + (day === 0 ? -6 : 1 - day))
   return isoDate(date)
@@ -60,13 +60,13 @@ function startOfWeek(value) {
 
 function startOfMonth(value) {
   const date = typeof value === 'string' ? parseIsoDate(value) : new Date(value)
-  if (!date) return CALENDAR_DEMO_TODAY
+  if (!date) return CALENDAR_TODAY
   return isoDate(new Date(date.getFullYear(), date.getMonth(), 1))
 }
 
 function endOfMonth(value) {
   const date = typeof value === 'string' ? parseIsoDate(value) : new Date(value)
-  if (!date) return CALENDAR_DEMO_TODAY
+  if (!date) return CALENDAR_TODAY
   return isoDate(new Date(date.getFullYear(), date.getMonth() + 1, 0))
 }
 
@@ -114,11 +114,11 @@ function parseSla(value) {
 
   const weekday = String(value).match(/^(Sun|Mon|Tue|Wed|Thu|Fri|Sat)\s+(\d{1,2}):(\d{2})$/i)
   if (!weekday) return null
-  const base = parseIsoDate(CALENDAR_DEMO_TODAY)
+  const base = parseIsoDate(CALENDAR_TODAY)
   const wanted = WEEKDAY_LOOKUP[weekday[1].slice(0, 3).toLowerCase()]
   let delta = wanted - base.getDay()
   if (delta < 0) delta += 7
-  return { date: addDays(CALENDAR_DEMO_TODAY, delta), time: `${pad(weekday[2])}:${weekday[3]}` }
+  return { date: addDays(CALENDAR_TODAY, delta), time: `${pad(weekday[2])}:${weekday[3]}` }
 }
 
 function compareEvents(a, b) {
@@ -306,7 +306,7 @@ function EventListItem({ event, conflicts, onOpen }) {
   )
 }
 
-function emptyDraft(date = CALENDAR_DEMO_TODAY) {
+function emptyDraft(date = CALENDAR_TODAY) {
   return { id: '', title: '', date, start: '09:00', end: '09:30', allDay: false, type: 'Meeting', team: 'Service Desk', personId: '', description: '' }
 }
 
@@ -389,7 +389,7 @@ export function CalendarView({
   tickets,
 }) {
   const [view, setView] = useState('month')
-  const [selectedDate, setSelectedDate] = useState(CALENDAR_DEMO_TODAY)
+  const [selectedDate, setSelectedDate] = useState(CALENDAR_TODAY)
   const [sourceFilter, setSourceFilter] = useState('all')
   const [teamFilter, setTeamFilter] = useState('all')
   const [personFilter, setPersonFilter] = useState('all')
@@ -524,7 +524,7 @@ export function CalendarView({
       <section className="calendar-toolbar">
         <div className="calendar-period-nav">
           <button aria-label="Previous period" onClick={() => movePeriod(-1)} type="button"><ChevronLeft size={17} /></button>
-          <button className="calendar-today-button" onClick={() => setSelectedDate(CALENDAR_DEMO_TODAY)} type="button">Today</button>
+          <button className="calendar-today-button" onClick={() => setSelectedDate(CALENDAR_TODAY)} type="button">Today</button>
           <button aria-label="Next period" onClick={() => movePeriod(1)} type="button"><ChevronRight size={17} /></button>
           <strong>{periodLabel()}</strong>
         </div>
@@ -555,7 +555,7 @@ export function CalendarView({
               const dateEvents = eventsByDate.get(date) || []
               const inMonth = date >= period.start && date <= period.end
               return (
-                <div className={`calendar-month-day ${inMonth ? '' : 'outside-month'} ${date === CALENDAR_DEMO_TODAY ? 'is-today' : ''} ${date === selectedDate ? 'is-selected' : ''}`} key={date}>
+                <div className={`calendar-month-day ${inMonth ? '' : 'outside-month'} ${date === CALENDAR_TODAY ? 'is-today' : ''} ${date === selectedDate ? 'is-selected' : ''}`} key={date}>
                   <button className="calendar-day-add-target" aria-label={`Add event on ${date}`} onClick={() => { setSelectedDate(date); createEvent(date) }} type="button" />
                   <span className="calendar-day-number">{formatDate(date, { day: 'numeric' })}<small>{formatDate(date, { month: 'short' })}</small></span>
                   <div className="calendar-day-events">{dateEvents.slice(0, 4).map((event) => <CalendarEventChip conflicts={conflicts} event={event} key={event.id} onOpen={openEvent} />)}{dateEvents.length > 4 && <span className="calendar-more-events">+{dateEvents.length - 4} more</span>}</div>
@@ -573,7 +573,7 @@ export function CalendarView({
       {view === 'week' && (
         <section className="calendar-week-shell">
           <div className="calendar-week-grid">
-            {period.days.map((date) => <section className={date === CALENDAR_DEMO_TODAY ? 'is-today' : ''} key={date}><header><span>{formatDate(date, { weekday: 'short' })}</span><strong>{formatDate(date, { day: 'numeric', month: 'short' })}</strong><button aria-label={`Add event on ${date}`} onClick={() => createEvent(date)} type="button"><Plus size={14} /></button></header><div>{(eventsByDate.get(date) || []).map((event) => <CalendarEventChip compact conflicts={conflicts} event={event} key={event.id} onOpen={openEvent} />)}{!(eventsByDate.get(date) || []).length && <span className="calendar-no-events">No events</span>}</div></section>)}
+            {period.days.map((date) => <section className={date === CALENDAR_TODAY ? 'is-today' : ''} key={date}><header><span>{formatDate(date, { weekday: 'short' })}</span><strong>{formatDate(date, { day: 'numeric', month: 'short' })}</strong><button aria-label={`Add event on ${date}`} onClick={() => createEvent(date)} type="button"><Plus size={14} /></button></header><div>{(eventsByDate.get(date) || []).map((event) => <CalendarEventChip compact conflicts={conflicts} event={event} key={event.id} onOpen={openEvent} />)}{!(eventsByDate.get(date) || []).length && <span className="calendar-no-events">No events</span>}</div></section>)}
           </div>
           <div className="calendar-mobile-days">{period.days.map((date) => <section key={date}><header><strong>{formatDate(date, { weekday: 'long', day: 'numeric', month: 'short' })}</strong><button onClick={() => createEvent(date)} type="button"><Plus size={14} />Add</button></header>{(eventsByDate.get(date) || []).map((event) => <EventListItem conflicts={conflicts} event={event} key={event.id} onOpen={openEvent} />)}{!(eventsByDate.get(date) || []).length && <div className="calendar-mobile-empty">No events</div>}</section>)}</div>
         </section>
@@ -589,7 +589,7 @@ export function CalendarView({
       {view === 'agenda' && (
         <section className="calendar-agenda-shell">
           <header><div><span className="eyebrow">Agenda</span><h3>Next 31 days</h3></div><span>{periodEvents.length} visible event{periodEvents.length === 1 ? '' : 's'}</span></header>
-          <div>{Array.from(new Set(periodEvents.map((event) => event.date))).map((date) => <section className="calendar-agenda-day" key={date}><header><strong>{formatDate(date, { weekday: 'long', day: 'numeric', month: 'long' })}</strong>{date === CALENDAR_DEMO_TODAY && <span>Today</span>}</header>{(eventsByDate.get(date) || []).map((event) => <EventListItem conflicts={conflicts} event={event} key={event.id} onOpen={openEvent} />)}</section>)}{!periodEvents.length && <div className="calendar-empty-state"><CircleDot size={26} /><strong>No matching events</strong><span>Adjust the filters or add a calendar event.</span></div>}</div>
+          <div>{Array.from(new Set(periodEvents.map((event) => event.date))).map((date) => <section className="calendar-agenda-day" key={date}><header><strong>{formatDate(date, { weekday: 'long', day: 'numeric', month: 'long' })}</strong>{date === CALENDAR_TODAY && <span>Today</span>}</header>{(eventsByDate.get(date) || []).map((event) => <EventListItem conflicts={conflicts} event={event} key={event.id} onOpen={openEvent} />)}</section>)}{!periodEvents.length && <div className="calendar-empty-state"><CircleDot size={26} /><strong>No matching events</strong><span>Adjust the filters or add a calendar event.</span></div>}</div>
         </section>
       )}
 

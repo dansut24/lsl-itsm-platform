@@ -15,8 +15,8 @@ import {
   X,
 } from 'lucide-react'
 import {
-  ROTA_DEMO_TODAY,
-  ROTA_DEMO_WEEK_START,
+  ROTA_TODAY,
+  ROTA_WEEK_START,
   rotaCoverageRules,
   rotaEntryTypes,
 } from '../../data/rotaData.js'
@@ -124,7 +124,7 @@ function RotaEntryPanel({ entry, initialValues, onClose, onDelete, onSave, peopl
   const [draft, setDraft] = useState({
     id: entry?.id || '',
     personId: entry?.personId || initialValues.personId || people[0]?.id || '',
-    date: entry?.date || initialValues.date || ROTA_DEMO_TODAY,
+    date: entry?.date || initialValues.date || ROTA_TODAY,
     type: initialType,
     start: entry?.start ?? preset?.start ?? '',
     end: entry?.end ?? preset?.end ?? '',
@@ -208,11 +208,11 @@ function RotaEntryPanel({ entry, initialValues, onClose, onDelete, onSave, peopl
 }
 
 export function RotaView({ entries, onCopyEntries, onDeleteEntry, onSaveEntry, people, teams }) {
-  const eligibleTeams = useMemo(() => teams.filter((team) => rotaCoverageRules[team.name]), [teams])
+  const eligibleTeams = useMemo(() => teams, [teams])
   const [selectedTeam, setSelectedTeam] = useState(
     eligibleTeams.some((team) => team.name === 'Service Desk') ? 'Service Desk' : eligibleTeams[0]?.name,
   )
-  const [weekStart, setWeekStart] = useState(ROTA_DEMO_WEEK_START)
+  const [weekStart, setWeekStart] = useState(ROTA_WEEK_START)
   const [editor, setEditor] = useState(null)
   const [notice, setNotice] = useState('')
 
@@ -241,8 +241,8 @@ export function RotaView({ entries, onCopyEntries, onDeleteEntry, onSaveEntry, p
   const capacityPercent = availableHours ? Math.round((scheduledHours / availableHours) * 100) : 0
   const absenceEntries = weekEntries.filter((entry) => TYPE_BY_ID.get(entry.type)?.category === 'absence')
   const onCallEntries = weekEntries.filter((entry) => entry.type === 'On Call')
-  const currentOnCall = onCallEntries.find((entry) => entry.date === ROTA_DEMO_TODAY)
-    || onCallEntries.find((entry) => entry.date >= ROTA_DEMO_TODAY)
+  const currentOnCall = onCallEntries.find((entry) => entry.date === ROTA_TODAY)
+    || onCallEntries.find((entry) => entry.date >= ROTA_TODAY)
     || onCallEntries[0]
   const currentOnCallPerson = personById(people, currentOnCall?.personId)
 
@@ -306,7 +306,7 @@ export function RotaView({ entries, onCopyEntries, onDeleteEntry, onSaveEntry, p
           <label><span>Team</span><select onChange={(event) => setSelectedTeam(event.target.value)} value={selectedTeam}>{eligibleTeams.map((team) => <option key={team.id}>{team.name}</option>)}</select></label>
           <div className="rota-week-picker" aria-label="Select rota week">
             <button aria-label="Previous week" onClick={() => setWeekStart(addDays(weekStart, -7))} type="button"><ChevronLeft size={17} /></button>
-            <button className="rota-week-label" onClick={() => setWeekStart(ROTA_DEMO_WEEK_START)} type="button"><CalendarDays size={15} /><span><small>Week of</small><strong>{formatWeekRange(weekStart)}</strong></span></button>
+            <button className="rota-week-label" onClick={() => setWeekStart(ROTA_WEEK_START)} type="button"><CalendarDays size={15} /><span><small>Week of</small><strong>{formatWeekRange(weekStart)}</strong></span></button>
             <button aria-label="Next week" onClick={() => setWeekStart(addDays(weekStart, 7))} type="button"><ChevronRight size={17} /></button>
           </div>
           <button className="rota-secondary-action" onClick={copyPreviousWeek} type="button"><Copy size={15} />Copy previous week</button>
@@ -338,7 +338,7 @@ export function RotaView({ entries, onCopyEntries, onDeleteEntry, onSaveEntry, p
 
         <div className="rota-table-wrap">
           <table className="rota-table">
-            <thead><tr><th>Team member</th>{weekDays.map((date) => <th className={date === ROTA_DEMO_TODAY ? 'is-today' : ''} key={date}><span>{formatDate(date, { weekday: 'short' })}</span><strong>{formatDate(date, { day: 'numeric', month: 'short' })}</strong>{gapsByDate.has(date) && <small>{gapsByDate.get(date).join(' · ')} gap</small>}</th>)}</tr></thead>
+            <thead><tr><th>Team member</th>{weekDays.map((date) => <th className={date === ROTA_TODAY ? 'is-today' : ''} key={date}><span>{formatDate(date, { weekday: 'short' })}</span><strong>{formatDate(date, { day: 'numeric', month: 'short' })}</strong>{gapsByDate.has(date) && <small>{gapsByDate.get(date).join(' · ')} gap</small>}</th>)}</tr></thead>
             <tbody>{teamPeople.map((person) => {
               const personEntries = weekEntries.filter((entry) => entry.personId === person.id)
               const hours = personEntries.reduce((total, entry) => total + entryHours(entry), 0)
@@ -348,7 +348,7 @@ export function RotaView({ entries, onCopyEntries, onDeleteEntry, onSaveEntry, p
                   <th><div className="rota-person"><RotaAvatar person={person} /><span><strong>{person.name}</strong><small>{person.role}</small><span className="rota-capacity-mini"><i><b style={{ width: `${Math.min(percent, 100)}%` }} /></i>{hours}/{person.capacityHours}h</span></span></div></th>
                   {weekDays.map((date) => {
                     const dayEntries = entriesForPersonDate(weekEntries, person.id, date)
-                    return <td className={`${date === ROTA_DEMO_TODAY ? 'is-today' : ''} ${gapsByDate.has(date) ? 'has-team-gap' : ''}`} key={date}><div className="rota-cell-entries">{dayEntries.map((entry) => <RotaEntryChip entry={entry} key={entry.id} onClick={() => setEditor({ entry, initialValues: {} })} people={people} />)}<button aria-label={`Add entry for ${person.name} on ${date}`} className="rota-cell-add" onClick={() => openAdd({ personId: person.id, date })} type="button"><Plus size={14} />Add</button></div></td>
+                    return <td className={`${date === ROTA_TODAY ? 'is-today' : ''} ${gapsByDate.has(date) ? 'has-team-gap' : ''}`} key={date}><div className="rota-cell-entries">{dayEntries.map((entry) => <RotaEntryChip entry={entry} key={entry.id} onClick={() => setEditor({ entry, initialValues: {} })} people={people} />)}<button aria-label={`Add entry for ${person.name} on ${date}`} className="rota-cell-add" onClick={() => openAdd({ personId: person.id, date })} type="button"><Plus size={14} />Add</button></div></td>
                   })}
                 </tr>
               )
@@ -358,7 +358,7 @@ export function RotaView({ entries, onCopyEntries, onDeleteEntry, onSaveEntry, p
 
         <div className="rota-mobile-list">{weekDays.map((date) => {
           const dayEntries = weekEntries.filter((entry) => entry.date === date).sort((a, b) => (TYPE_ORDER.get(a.type) ?? 99) - (TYPE_ORDER.get(b.type) ?? 99))
-          return <article className={date === ROTA_DEMO_TODAY ? 'is-today' : ''} key={date}><header><div><span>{formatDate(date, { weekday: 'long' })}</span><strong>{formatDate(date, { day: 'numeric', month: 'long' })}</strong></div>{gapsByDate.has(date) && <small><AlertTriangle size={13} />{gapsByDate.get(date).join(' · ')} gap</small>}</header><div>{dayEntries.length ? dayEntries.map((entry) => { const person = personById(people, entry.personId); return <button className="rota-mobile-entry" key={entry.id} onClick={() => setEditor({ entry, initialValues: {} })} type="button"><RotaAvatar person={person} /><span><strong>{person?.name}</strong><small>{TYPE_BY_ID.get(entry.type)?.label || entry.type}{entry.start ? ` · ${entry.start}–${entry.end}` : ' · All day'}</small>{entry.isOverride && <em>Temporary cover</em>}</span><ChevronRight size={16} /></button> }) : <p>No scheduled entries</p>}</div><button className="rota-mobile-add" onClick={() => openAdd({ date })} type="button"><Plus size={15} />Add entry</button></article>
+          return <article className={date === ROTA_TODAY ? 'is-today' : ''} key={date}><header><div><span>{formatDate(date, { weekday: 'long' })}</span><strong>{formatDate(date, { day: 'numeric', month: 'long' })}</strong></div>{gapsByDate.has(date) && <small><AlertTriangle size={13} />{gapsByDate.get(date).join(' · ')} gap</small>}</header><div>{dayEntries.length ? dayEntries.map((entry) => { const person = personById(people, entry.personId); return <button className="rota-mobile-entry" key={entry.id} onClick={() => setEditor({ entry, initialValues: {} })} type="button"><RotaAvatar person={person} /><span><strong>{person?.name}</strong><small>{TYPE_BY_ID.get(entry.type)?.label || entry.type}{entry.start ? ` · ${entry.start}–${entry.end}` : ' · All day'}</small>{entry.isOverride && <em>Temporary cover</em>}</span><ChevronRight size={16} /></button> }) : <p>No scheduled entries</p>}</div><button className="rota-mobile-add" onClick={() => openAdd({ date })} type="button"><Plus size={15} />Add entry</button></article>
         })}</div>
       </section>
 
@@ -367,7 +367,7 @@ export function RotaView({ entries, onCopyEntries, onDeleteEntry, onSaveEntry, p
           <header><span><Headphones size={18} /></span><div><strong>On-call coverage</strong><small>Named technician for each day</small></div></header>
           <div>{weekDays.map((date) => {
             const assignments = onCallEntries.filter((entry) => entry.date === date)
-            return <button className={date === ROTA_DEMO_TODAY ? 'is-current' : ''} key={date} onClick={() => assignments[0] ? setEditor({ entry: assignments[0], initialValues: {} }) : openAdd({ date, type: 'On Call' })} type="button"><span><small>{formatDate(date, { weekday: 'short' })}</small><strong>{formatDate(date, { day: 'numeric', month: 'short' })}</strong></span>{assignments.length ? <span className="rota-oncall-person">{assignments.map((entry) => { const person = personById(people, entry.personId); return <span key={entry.id}><RotaAvatar person={person} />{person?.name}</span> })}</span> : <em>Unassigned</em>}<ChevronRight size={15} /></button>
+            return <button className={date === ROTA_TODAY ? 'is-current' : ''} key={date} onClick={() => assignments[0] ? setEditor({ entry: assignments[0], initialValues: {} }) : openAdd({ date, type: 'On Call' })} type="button"><span><small>{formatDate(date, { weekday: 'short' })}</small><strong>{formatDate(date, { day: 'numeric', month: 'short' })}</strong></span>{assignments.length ? <span className="rota-oncall-person">{assignments.map((entry) => { const person = personById(people, entry.personId); return <span key={entry.id}><RotaAvatar person={person} />{person?.name}</span> })}</span> : <em>Unassigned</em>}<ChevronRight size={15} /></button>
           })}</div>
         </article>
 

@@ -65,8 +65,8 @@ function makeHost(anchor, key, mode = 'after') {
 
 function setControlledValue(element, value) {
   if (!(element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement)) return
-  const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
-  const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set
+  const elementPrototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
+  const setter = Object.getOwnPropertyDescriptor(elementPrototype, 'value')?.set
   if (setter) setter.call(element, value)
   else element.value = value
   element.dispatchEvent(new Event('input', { bubbles: true }))

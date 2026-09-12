@@ -1,5 +1,5 @@
 const DEFAULT_ROOT_DOMAIN = 'hi5central.com'
-const DEFAULT_PRIMARY_TENANT = 'demo-tenant'
+const DEFAULT_PRIMARY_TENANT = ''
 
 function runtimeSource() {
   if (typeof window === 'undefined') return {}

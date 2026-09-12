@@ -309,7 +309,7 @@
 .is-spinning { animation: onboarding-spin .8s linear infinite; }
 @keyframes onboarding-spin { to { transform: rotate(360deg); } }
 
-.onboarding-demo-note {
+.onboarding-integration-note {
   display: flex;
   gap: 9px;
   align-items: flex-start;
@@ -321,7 +321,7 @@
   line-height: 1.5;
 }
 
-.onboarding-demo-note svg { flex: 0 0 auto; margin-top: 1px; }
+.onboarding-integration-note svg { flex: 0 0 auto; margin-top: 1px; }
 .onboarding-finish-note { max-width: 700px; margin: 22px auto 0; text-align: left; }
 
 .onboarding-toggle-grid {

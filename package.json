@@ -5,12 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite --configLoader native",
-    "build": "vite build --configLoader native",
+    "build": "npm run check:production-runtime && vite build --configLoader native",
     "lint": "oxlint",
     "check:responsive": "node scripts/check-responsive-contract.mjs",
     "check:deployment": "node scripts/check-deployment-portability.mjs",
     "check:itsm": "node scripts/check-itsm-end-to-end.mjs",
     "check:catalogue-v2": "node scripts/check-default-catalogue-v2.mjs",
+    "check:production-runtime": "node scripts/check-production-runtime-boundary.mjs",
     "preview": "vite preview --configLoader native"
   },
   "dependencies": {

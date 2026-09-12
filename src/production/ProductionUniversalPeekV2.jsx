@@ -9,7 +9,7 @@ import {
   UsersRound,
   X,
 } from 'lucide-react'
-import { assets, knowledgeArticles } from '../data/demoData.jsx'
+import { assets, knowledgeArticles } from '../runtime/workspaceConfig.jsx'
 import { ProductionRecordWorkingPeek } from './ProductionRecordWorkingPeek.jsx'
 
 const PEEK_EVENT = 'hi5-universal-peek'

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { BookOpen, ChevronLeft, ChevronRight } from 'lucide-react'
-import { knowledgeArticles } from '../../data/demoData.jsx'
+import { knowledgeArticles } from '../../runtime/workspaceConfig.jsx'
 
 const KNOWLEDGE_RAIL_VISIBLE_KEY = 'hi5central-knowledge-category-rail-visible-v1'
 const ALL_ARTICLES = 'All articles'

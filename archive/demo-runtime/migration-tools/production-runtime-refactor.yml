@@ -1,0 +1,79 @@
+name: Production Runtime Extraction
+
+on:
+  push:
+    branches:
+      - production-runtime-demo-cleanup
+    paths:
+      - scripts/refactor-production-runtime.mjs
+      - scripts/normalise-production-runtime.mjs
+      - .github/workflows/production-runtime-refactor.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: production-runtime-demo-cleanup
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Extract production runtime
+        run: node scripts/refactor-production-runtime.mjs
+
+      - name: Normalise active production runtime
+        run: node scripts/normalise-production-runtime.mjs
+
+      - name: Normalise generated boundary checker
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          checker = Path('scripts/check-production-runtime-boundary.mjs')
+          lines = checker.read_text().splitlines()
+          fixed = []
+
+          for line in lines:
+              if 'imports archived code' in line:
+                  fixed.append("  if (content.includes('archive/')) failures.push(`${relative} imports archived code`)")
+              else:
+                  fixed.append(line)
+
+          checker.write_text('\n'.join(fixed) + '\n')
+          PY
+
+      - name: Verify production boundary
+        run: node scripts/check-production-runtime-boundary.mjs
+
+      - name: Build production web
+        run: npm run build
+
+      - name: Commit extracted runtime
+        shell: bash
+        run: |
+          # The extraction script adds the permanent CI check to ci.yml, but the
+          # GitHub Actions token is not permitted to update workflow files.
+          # Publish the source/archive migration first; ci.yml is updated through
+          # the normal GitHub connection after this commit lands.
+          git checkout -- .github/workflows/ci.yml
+
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "No runtime changes to commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Extract production runtime from archived demo implementation"
+          git push origin HEAD:production-runtime-demo-cleanup

@@ -49,120 +49,12 @@ import {
   Wrench,
   X
 } from 'lucide-react'
-import { accentOptions, demoUsers, incidentServices, loginProfiles, priorities, statusOptions, teams, types } from '../../data/demoData.jsx'
+import { accentOptions, workspaceUsers, incidentServices, workspaceLoginProfiles, priorities, statusOptions, teams, types } from '../../runtime/workspaceConfig.jsx'
 import { priorityClass, statusClass } from '../../lib/workspace.js'
 import { UnifiedRecordDetailView } from './UnifiedRecordDetailView.jsx'
 
-export function LoginScreen({
-  accent,
-  fillCredentials,
-  loginError,
-  loginForm,
-  loginMode,
-  onLogin,
-  setLoginForm,
-  setLoginMode,
-  setTheme,
-  theme,
-  allowedModes = Object.keys(loginProfiles),
-}) {
-  const availableProfiles = Object.entries(loginProfiles).filter(([mode]) => allowedModes.includes(mode))
-  const activeMode = allowedModes.includes(loginMode) ? loginMode : allowedModes[0]
-  const activeProfile = loginProfiles[activeMode]
-
-  return (
-    <main className="login-shell" data-accent={accent} data-theme={theme}>
-      <section className="login-panel">
-        <div className="login-brand">
-          <img src={`${import.meta.env.BASE_URL}hi5central-logo.png`} alt="Hi5Central" />
-          <button
-            className="icon-button"
-            onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
-            title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
-            type="button"
-          >
-            {theme === 'light' ? <Moon size={17} /> : <Sun size={17} />}
-          </button>
-        </div>
-
-        <div>
-          <span className="eyebrow">Demo access</span>
-          <h1>Sign in to Hi5Central</h1>
-          <p className="login-copy">{activeProfile.helper}</p>
-        </div>
-
-        <div className="login-mode-switch" aria-label="Choose login area">
-          {availableProfiles.map(([mode, profile]) => (
-            <button
-              className={loginMode === mode ? 'active' : ''}
-              key={mode}
-              onClick={() => {
-                setLoginMode(mode)
-                setLoginForm({ username: '', password: '' })
-              }}
-              type="button"
-            >
-              {mode === 'analyst' ? <UserCheck size={16} /> : <LifeBuoy size={16} />}
-              {profile.label}
-            </button>
-          ))}
-        </div>
-
-        <form className="login-form" onSubmit={onLogin}>
-          <label>
-            Username
-            <input
-              autoComplete="username"
-              onChange={(event) => setLoginForm({ ...loginForm, username: event.target.value })}
-              placeholder={activeProfile.username}
-              value={loginForm.username}
-            />
-          </label>
-          <label>
-            Password
-            <input
-              autoComplete="current-password"
-              onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })}
-              placeholder="Enter demo password"
-              type="password"
-              value={loginForm.password}
-            />
-          </label>
-          {loginError && <p className="login-error">{loginError}</p>}
-          <button className="primary-action" type="submit">
-            <LogIn size={17} aria-hidden="true" />
-            Sign in
-          </button>
-        </form>
-
-        <div className="mobile-credential-strip">
-          <span>Baked-in credentials</span>
-          {availableProfiles.map(([mode, profile]) => (
-            <button key={mode} onClick={() => fillCredentials(mode)} type="button">
-              <strong>{profile.label}</strong>
-              <small>{profile.username}</small>
-              <code>{profile.password}</code>
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <section className="credential-panel">
-        <span className="eyebrow">Baked-in credentials</span>
-        <h2>No database needed for this prototype.</h2>
-        <div className="credential-stack">
-          {availableProfiles.map(([mode, profile]) => (
-            <button className="credential-card" key={mode} onClick={() => fillCredentials(mode)} type="button">
-              <KeyRound size={18} aria-hidden="true" />
-              <span>{profile.label}</span>
-              <strong>{profile.username}</strong>
-              <code>{profile.password}</code>
-            </button>
-          ))}
-        </div>
-      </section>
-    </main>
-  )
+export function LoginScreen() {
+  return null
 }
 
 export function SelfServiceShell({
@@ -433,7 +325,7 @@ export function NewTabView({ navItems, openNewRecord, openRecordTab, openTab, ti
   )
 }
 
-const DASHBOARD_STORAGE_KEY = 'hi5central-demo-dashboards-v3'
+const DASHBOARD_STORAGE_KEY = 'hi5central-dashboards-v3'
 const DASHBOARD_MAX_WIDGETS = 12
 
 const DASHBOARD_WIDGET_LIBRARY = [
@@ -531,7 +423,7 @@ function seedDashboards() {
     {
       id: 'DB-MY-WORK',
       name: 'My Work',
-      owner: 'Dana Sinclair',
+      owner: 'Hi5Central User',
       scope: 'mine',
       isDefault: true,
       canEdit: true,
@@ -1025,7 +917,7 @@ function DashboardWidgetContent({ dashboardMetrics, filters, mobile = false, ope
   const riskTickets = [...workingTickets]
     .filter((ticket) => ticket.status !== 'Resolved')
     .sort((a, b) => b.slaPercent - a.slaPercent)
-  const myWork = activeTickets.filter((ticket) => ['Dana Sinclair', 'Priya Raman', 'Noah Williams'].includes(ticket.assignee))
+  const myWork = activeTickets.filter((ticket) => ['Hi5Central User', 'Priya Raman', 'Noah Williams'].includes(ticket.assignee))
   const needsAttention = activeTickets.filter((ticket) =>
     ['Critical', 'High'].includes(ticket.priority) || ticket.slaPercent >= 60 || !ticket.assignee || ticket.assignee === 'Unassigned',
   )
@@ -1117,13 +1009,13 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
   const { width: gridWidth, containerRef: gridContainerRef, mounted: gridMounted } = useContainerWidth({ initialWidth: 1200 })
   const activeDashboard = dashboards.find((item) => item.id === activeDashboardId) || dashboards[0]
   const configuredWidget = activeDashboard?.widgets.find((widget) => widget.id === configureWidgetId)
-  const currentUserName = currentUser?.name || 'Dana Sinclair'
+  const currentUserName = currentUser?.name || 'Hi5Central User'
 
   useEffect(() => {
     try {
       window.localStorage.setItem(DASHBOARD_STORAGE_KEY, JSON.stringify(dashboards))
     } catch {
-      // Demo persistence is best-effort only.
+      // Browser persistence is best-effort only.
     }
   }, [dashboards])
 
@@ -1505,13 +1397,13 @@ export function DashboardView({ currentUser, openRecordTab, openTab, sidebarMode
           <button className="dashboard-modal-backdrop" aria-label="Close sharing" onClick={() => setShareOpen(false)} type="button" />
           <section className="dashboard-modal" role="dialog" aria-modal="true" aria-label="Share dashboard">
             <header><div><span className="eyebrow">Sharing</span><h2>{activeDashboard.name}</h2></div><button onClick={() => setShareOpen(false)} type="button"><X size={17} /></button></header>
-            <p>Share this dashboard with teams or individual users. Permissions here are demo-only until the backend is connected.</p>
+            <p>Dashboard sharing requires the server-side sharing service. Local-only sharing changes are disabled.</p>
             {activeDashboard.canEdit ? (
               <div className="dashboard-share-add">
                 <label>Share with<select value={shareKind} onChange={(event) => setShareKind(event.target.value)}><option value="team">Team</option><option value="user">User</option></select></label>
-                <label>{shareKind === 'team' ? 'Team' : 'User'}<select value={shareTarget} onChange={(event) => setShareTarget(event.target.value)}>{(shareKind === 'team' ? teams : demoUsers.map((user) => user.name)).map((item) => <option key={item}>{item}</option>)}</select></label>
+                <label>{shareKind === 'team' ? 'Team' : 'User'}<select value={shareTarget} onChange={(event) => setShareTarget(event.target.value)}>{(shareKind === 'team' ? teams : workspaceUsers.map((user) => user.name)).map((item) => <option key={item}>{item}</option>)}</select></label>
                 <label>Permission<select value={sharePermission} onChange={(event) => setSharePermission(event.target.value)}>{['Can view', 'Can edit', 'Can manage'].map((item) => <option key={item}>{item}</option>)}</select></label>
-                <button onClick={addShare} type="button">Add</button>
+                <button disabled type="button">Server sharing required</button>
               </div>
             ) : (
               <div className="dashboard-share-readonly">You can view this dashboard's sharing membership. Make a copy to create and manage your own version.</div>
@@ -1808,7 +1700,7 @@ function IncidentRecordWorkspace({
               <label>
                 Assigned to
                 <select value={ticket.assignee} onChange={(event) => updateTicket(ticket.id, { assignee: event.target.value })}>
-                  {['Unassigned', 'Dana Sinclair', 'Priya Raman', 'Noah Williams', 'Amara Okafor', 'Sam Taylor', 'Maya Ford'].map((assignee) => (
+                  {['Unassigned', 'Hi5Central User', 'Priya Raman', 'Noah Williams', 'Amara Okafor', 'Sam Taylor', 'Maya Ford'].map((assignee) => (
                     <option key={assignee}>{assignee}</option>
                   ))}
                 </select>
@@ -1861,7 +1753,7 @@ function IncidentRecordWorkspace({
       ...ticket.comments.map((comment, index) => ({
         id: `comment-${index}`,
         kind: comment.toLowerCase().startsWith('customer comment:') ? 'customer' : 'work',
-        actor: comment.toLowerCase().startsWith('customer comment:') ? 'Dana Sinclair · Customer comment' : 'Dana Sinclair · Work note',
+        actor: comment.toLowerCase().startsWith('customer comment:') ? 'Hi5Central User · Customer comment' : 'Hi5Central User · Work note',
         time: index === 0 ? 'Just now' : `${index * 12 + 6} min ago`,
         text: comment.replace(/^Customer comment:\s*/i, '').replace(/^Work note:\s*/i, '').replace(/\s*-\s*added now$/i, ''),
       })),
@@ -2070,7 +1962,7 @@ function IncidentRecordWorkspace({
         </div>
 
         <div className="incident-record-actions" aria-label="Incident actions">
-          <button onClick={() => updateTicket(ticket.id, { assignee: 'Dana Sinclair' })} type="button">
+          <button onClick={() => updateTicket(ticket.id, { assignee: 'Hi5Central User' })} type="button">
             <UserCheck size={16} aria-hidden="true" />
             Assign to me
           </button>
@@ -2476,7 +2368,7 @@ function UnifiedRecordQueue({
 
   const records = tickets.filter((ticket) => ticket.type === recordType)
   const openRecords = records.filter((ticket) => !['Resolved', 'Closed', 'Cancelled'].includes(ticket.status))
-  const mineCount = openRecords.filter((ticket) => ticket.assignee === 'Dana Sinclair').length
+  const mineCount = openRecords.filter((ticket) => ticket.assignee === 'Hi5Central User').length
   const unassignedCount = openRecords.filter((ticket) => !ticket.assignee || ticket.assignee === 'Unassigned').length
   const attentionCount = records.filter((ticket) => unifiedAttention(ticket, recordType)).length
 
@@ -2487,7 +2379,7 @@ function UnifiedRecordQueue({
 
   const normalizedQuery = searchValue.trim().toLowerCase()
   const quickMatch = (ticket) => {
-    if (quickView === 'mine') return ticket.assignee === 'Dana Sinclair' && !['Resolved', 'Closed', 'Cancelled'].includes(ticket.status)
+    if (quickView === 'mine') return ticket.assignee === 'Hi5Central User' && !['Resolved', 'Closed', 'Cancelled'].includes(ticket.status)
     if (quickView === 'mygroup') return ticket.team === 'Service Desk' && !['Resolved', 'Closed', 'Cancelled'].includes(ticket.status)
     if (quickView === 'unassigned') return (!ticket.assignee || ticket.assignee === 'Unassigned') && !['Resolved', 'Closed', 'Cancelled'].includes(ticket.status)
     if (quickView === 'priority') return ['Critical', 'High'].includes(unifiedPriority(ticket, recordType)) && !['Resolved', 'Closed', 'Cancelled'].includes(ticket.status)
@@ -2648,7 +2540,7 @@ function UnifiedRecordQueue({
           <div className="unified-record-bulk-bar">
             <strong>{selectedIds.length} selected</strong>
             <div>
-              <button onClick={() => bulkUpdate({ assignee: 'Dana Sinclair' })} type="button">Assign to me</button>
+              <button onClick={() => bulkUpdate({ assignee: 'Hi5Central User' })} type="button">Assign to me</button>
                             <button onClick={() => setSelectedIds([])} type="button">Clear</button>
             </div>
           </div>
@@ -3002,12 +2894,12 @@ function UnifiedNewRecordForm({
   const [userQuery, setUserQuery] = useState('')
   const recordType = ticketDraft.type || 'Incident'
   const selectedTemplate = serviceRequestCatalogTemplates.find((template) => template.id === ticketDraft.requestTemplateId)
-  const selectedUser = ticketDraft.requesterId ? demoUsers.find((user) => user.id === ticketDraft.requesterId) : null
+  const selectedUser = ticketDraft.requesterId ? workspaceUsers.find((user) => user.id === ticketDraft.requesterId) : null
   const requestCost = (ticketDraft.requestedItems || []).reduce((sum, item) => sum + Number(item.unitCost || 0) * Number(item.quantity || 1), 0)
   const meta = unifiedRecordMeta[recordType] || unifiedRecordMeta.Incident
   const normalizedQuery = userQuery.trim().toLowerCase()
   const userResults = normalizedQuery
-    ? demoUsers
+    ? workspaceUsers
         .filter((user) =>
           [
             user.name,
@@ -3364,7 +3256,7 @@ const serviceRequestCatalogTemplates = [
     ],
     approvals: [],
     tasks: [
-      { id: 'TASK-1', title: 'Validate mailbox owner approval', team: 'Service Desk', assignee: 'Dana Sinclair', status: 'Ready', dependsOn: [], due: 'Within 2 hr', instructions: 'Confirm the request references the approved shared mailbox and owner.' },
+      { id: 'TASK-1', title: 'Validate mailbox owner approval', team: 'Service Desk', assignee: 'Hi5Central User', status: 'Ready', dependsOn: [], due: 'Within 2 hr', instructions: 'Confirm the request references the approved shared mailbox and owner.' },
       { id: 'TASK-2', title: 'Apply mailbox permissions', team: 'Collaboration', assignee: 'Unassigned', status: 'Waiting', dependsOn: ['TASK-1'], due: 'Within 4 hr', instructions: 'Apply the requested mailbox permissions and allow time for replication.' },
       { id: 'TASK-3', title: 'Validate access with requester', team: 'Service Desk', assignee: 'Unassigned', status: 'Waiting', dependsOn: ['TASK-2'], due: 'Within SLA', instructions: 'Confirm the mailbox is visible and the requested permissions are working.' },
     ],
@@ -3523,7 +3415,7 @@ export function SelfServicePortal({
 }) {
   const isRequester = currentUser?.role === 'requester' || currentUser?.profile === 'requester'
   const requesterName = isRequester ? currentUser.name : portalDraft.requester
-  const requesterEmail = portalDraft.email || currentUser?.username || loginProfiles.requester.username
+  const requesterEmail = portalDraft.email || currentUser?.username || workspaceLoginProfiles.requester.username
   const myRequests = tickets.filter((ticket) => ticket.requester === requesterName).slice(0, 3)
   const visibleRequests = myRequests.length ? myRequests : tickets.filter((ticket) => ticket.type === 'Service Request').slice(0, 3)
 
@@ -3799,7 +3691,7 @@ export function CmdbRecordView({ asset, openRecordTab, tickets }) {
               <small>{ticket.status} - {ticket.team}</small>
             </button>
           )) : (
-            <div className="empty-inline-state">No records are linked to this CI in the prototype data.</div>
+            <div className="empty-inline-state">No records are linked to this CI yet.</div>
           )}
         </div>
       </section>
@@ -4086,9 +3978,9 @@ export function SettingsView({
             <span className="avatar-large">{session.initials}</span>
           </div>
           <div className="credential-readout">
-            <span>{loginProfiles[session.profile].label}</span>
+            <span>{workspaceLoginProfiles[session.profile].label}</span>
             <strong>{session.username}</strong>
-            <small>Prototype authentication is backed by baked-in credentials only.</small>
+            <small>Authentication is provided by the tenant identity service.</small>
           </div>
         </section>
       )}

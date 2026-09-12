@@ -1,4 +1,4 @@
-import { viewMeta } from '../data/demoData.jsx'
+import { viewMeta } from '../runtime/workspaceConfig.jsx'
 
 const TENANT_RUNTIME_CONFIG_KEY = 'hi5central-tenant-runtime-config-v1'
 

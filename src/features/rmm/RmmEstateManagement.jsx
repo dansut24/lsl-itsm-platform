@@ -60,7 +60,7 @@ function writeStoredList(key, value) {
   try {
     window.localStorage.setItem(key, JSON.stringify(value))
   } catch {
-    // Demo state remains usable in-memory if storage is unavailable.
+    // Local state remains usable in-memory if storage is unavailable.
   }
 }
 

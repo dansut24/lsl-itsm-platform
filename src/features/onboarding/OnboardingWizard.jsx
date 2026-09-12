@@ -5,12 +5,10 @@ import {
   Check,
   CheckCircle2,
   Cloud,
-  KeyRound,
   LockKeyhole,
   Mail,
   MonitorCog,
   Palette,
-  RefreshCw,
   ShieldCheck,
   Sparkles,
   Users,
@@ -45,7 +43,7 @@ const stepMeta = {
   security: { label: 'Security', icon: ShieldCheck, description: 'Set tenant-wide authentication and session defaults.' },
   itsm: { label: 'ITSM setup', icon: Wrench, description: 'Configure records, service desk defaults, portal and notifications.' },
   rmm: { label: 'RMM setup', icon: MonitorCog, description: 'Set the first device-management defaults.' },
-  billing: { label: 'Plan', icon: Check, description: 'Choose how this demo tenant should start.' },
+  billing: { label: 'Plan', icon: Check, description: 'Choose the initial subscription state for this tenant.' },
   finish: { label: 'Review', icon: Sparkles, description: 'Review the tenant before opening Hi5Central.' },
 }
 
@@ -212,7 +210,6 @@ export function OnboardingWizard({ session, onSessionChange }) {
   const [data, setData] = useState(() => defaultData(step, session))
   const [activeStep, setActiveStep] = useState(step)
   const [saving, setSaving] = useState(false)
-  const [connecting365, setConnecting365] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -243,31 +240,6 @@ export function OnboardingWizard({ session, onSessionChange }) {
       },
     }))
     setError('')
-  }
-
-  function connectMicrosoft365Demo() {
-    setConnecting365(true)
-    setError('')
-    window.setTimeout(() => {
-      const companyName = session?.tenant?.companyName || 'Hi5Central demo tenant'
-      update('microsoft365', {
-        status: 'connected_demo',
-        tenantName: `${companyName} Microsoft 365`,
-        directoryUsers: 128,
-        directoryGroups: 24,
-        lastSync: 'Ready for demo synchronisation',
-      })
-      setConnecting365(false)
-    }, 650)
-  }
-
-  function disconnectMicrosoft365Demo() {
-    update('microsoft365', {
-      status: 'not_connected',
-      tenantName: '',
-      directoryUsers: 0,
-      directoryGroups: 0,
-    })
   }
 
   async function saveStep() {
@@ -394,27 +366,23 @@ export function OnboardingWizard({ session, onSessionChange }) {
 
           {step === 'users' ? (
             <>
-              <Section title="Microsoft 365" description="For this demo, the connection is simulated. Later this button becomes the real Microsoft OAuth / Graph consent flow.">
-                <div className={`onboarding-integration-card ${data.microsoft365?.status === 'connected_demo' ? 'is-connected' : ''}`}>
+              <Section title="Microsoft 365" description="Directory connections are established through the production Microsoft connector.">
+                <div className={`onboarding-integration-card ${data.microsoft365?.status === 'connected' ? 'is-connected' : ''}`}>
                   <div className="onboarding-integration-logo"><Cloud size={24} /></div>
                   <div className="onboarding-integration-copy">
                     <div className="onboarding-integration-title">
                       <strong>Microsoft 365 directory</strong>
-                      {data.microsoft365?.status === 'connected_demo' ? <span><CheckCircle2 size={14} /> Demo connected</span> : <span>Not connected</span>}
+                      {data.microsoft365?.status === 'connected' ? <span><CheckCircle2 size={14} /> Connected</span> : <span>Not connected</span>}
                     </div>
-                    {data.microsoft365?.status === 'connected_demo' ? (
-                      <p>{data.microsoft365.tenantName} · {data.microsoft365.directoryUsers} users · {data.microsoft365.directoryGroups} groups discovered.</p>
+                    {data.microsoft365?.status === 'connected' ? (
+                      <p>{data.microsoft365.tenantName || 'Microsoft 365'} · {data.microsoft365.directoryUsers || 0} users · {data.microsoft365.directoryGroups || 0} groups discovered.</p>
                     ) : (
-                      <p>Bring users, groups and basic organisation data into Hi5Central during setup.</p>
+                      <p>Configure Microsoft 365 from Settings → Integrations after onboarding. No directory data is created locally.</p>
                     )}
                   </div>
-                  {data.microsoft365?.status === 'connected_demo' ? (
-                    <button className="onboarding-secondary" type="button" onClick={disconnectMicrosoft365Demo}>Disconnect demo</button>
-                  ) : (
-                    <button className="onboarding-secondary" type="button" disabled={connecting365} onClick={connectMicrosoft365Demo}>{connecting365 ? <><RefreshCw size={15} className="is-spinning" /> Connecting…</> : <><KeyRound size={15} /> Connect demo tenant</>}</button>
-                  )}
+                  <button className="onboarding-secondary" disabled type="button">{data.microsoft365?.status === 'connected' ? 'Managed by connector' : 'Configure after onboarding'}</button>
                 </div>
-                <div className="onboarding-demo-note"><ShieldCheck size={16} /><span><strong>Demo only:</strong> no Microsoft credentials, OAuth tokens or Graph permissions are requested yet.</span></div>
+                <div className="onboarding-integration-note"><ShieldCheck size={16} /><span>Hi5Central only treats Microsoft 365 as connected after the production OAuth and Microsoft Graph connector reports a successful connection.</span></div>
               </Section>
 
               <Section title="User provisioning" description="Choose what a future live Microsoft 365 sync should manage.">
@@ -423,7 +391,7 @@ export function OnboardingWizard({ session, onSessionChange }) {
                   <Toggle checked={Boolean(data.syncGroups)} onChange={(value) => update('syncGroups', value)} title="Synchronise groups" description="Use selected Microsoft 365 groups as managed team membership sources." />
                 </div>
                 <div className="onboarding-form-grid onboarding-form-grid-one">
-                  <Field label="Additional invites" hint="Optional for the demo. Separate email addresses with commas."><textarea value={data.invites || ''} onChange={(event) => update('invites', event.target.value)} rows={3} placeholder="alex@example.com, jamie@example.com" /></Field>
+                  <Field label="Additional invites" hint="Optional. Separate email addresses with commas."><textarea value={data.invites || ''} onChange={(event) => update('invites', event.target.value)} rows={3} placeholder="alex@example.com, jamie@example.com" /></Field>
                 </div>
               </Section>
             </>
@@ -462,7 +430,7 @@ export function OnboardingWizard({ session, onSessionChange }) {
 
           {step === 'security' ? (
             <>
-              <Section title="Authentication & sessions" description="These are tenant defaults. MFA is still demo configuration until the enforcement service is connected.">
+              <Section title="Authentication & sessions" description="These are tenant defaults and are enforced by the tenant security service where supported.">
                 <div className="onboarding-form-grid">
                   <Field label="Administrator MFA"><select value={data.requireMfa ? 'required' : 'optional'} onChange={(event) => update('requireMfa', event.target.value === 'required')}><option value="required">Require MFA</option><option value="optional">Optional initially</option></select></Field>
                   <Field label="Maximum session length"><select value={data.sessionHours || '12'} onChange={(event) => update('sessionHours', event.target.value)}><option value="8">8 hours</option><option value="12">12 hours</option><option value="24">24 hours</option></select></Field>
@@ -475,7 +443,7 @@ export function OnboardingWizard({ session, onSessionChange }) {
 
           {step === 'itsm' ? (
             <>
-              <Section title="Record numbering" description="Use Hi5Central defaults or choose your own prefixes. These demo prefixes now apply when you create records in the workspace.">
+              <Section title="Record numbering" description="Use Hi5Central defaults or choose your own prefixes for records created in this tenant.">
                 <div className="onboarding-segmented">
                   <button className={data.numberingMode !== 'custom' ? 'is-selected' : ''} onClick={() => update('numberingMode', 'default')} type="button">Use defaults</button>
                   <button className={data.numberingMode === 'custom' ? 'is-selected' : ''} onClick={() => update('numberingMode', 'custom')} type="button">Custom prefixes</button>
@@ -501,7 +469,7 @@ export function OnboardingWizard({ session, onSessionChange }) {
                     )
                   })}
                 </div>
-                <Field label="Number length" hint="Demo record IDs use a timestamp-derived numeric suffix; this controls how many digits are displayed."><select value={data.recordDigits || '5'} onChange={(event) => update('recordDigits', event.target.value)}><option value="4">4 digits</option><option value="5">5 digits</option><option value="6">6 digits</option><option value="7">7 digits</option><option value="8">8 digits</option></select></Field>
+                <Field label="Number length" hint="This controls how many numeric digits are displayed in generated record IDs."><select value={data.recordDigits || '5'} onChange={(event) => update('recordDigits', event.target.value)}><option value="4">4 digits</option><option value="5">5 digits</option><option value="6">6 digits</option><option value="7">7 digits</option><option value="8">8 digits</option></select></Field>
               </Section>
 
               <Section title="Service desk defaults" description="Starting values for new incidents, requests and service routing.">
@@ -517,7 +485,7 @@ export function OnboardingWizard({ session, onSessionChange }) {
                 <div className="onboarding-form-grid">
                   <Field label="P1 response (minutes)"><input type="number" min="1" value={data.p1ResponseMinutes || '15'} onChange={(event) => update('p1ResponseMinutes', event.target.value)} /></Field>
                   <Field label="P1 resolution target (minutes)"><input type="number" min="1" value={data.p1ResolutionMinutes || '240'} onChange={(event) => update('p1ResolutionMinutes', event.target.value)} /></Field>
-                  <Field label="Manager approval threshold (£)" hint="Used as a demo default for catalogue cost approvals."><input type="number" min="0" value={data.managerApprovalThreshold || '500'} onChange={(event) => update('managerApprovalThreshold', event.target.value)} /></Field>
+                  <Field label="Manager approval threshold (£)" hint="Used as the default threshold for catalogue cost approvals."><input type="number" min="0" value={data.managerApprovalThreshold || '500'} onChange={(event) => update('managerApprovalThreshold', event.target.value)} /></Field>
                   <Field label="CAB name"><input value={data.cabName || ''} onChange={(event) => update('cabName', event.target.value)} /></Field>
                 </div>
                 <div className="onboarding-toggle-grid onboarding-toggle-grid-spaced">
@@ -536,7 +504,7 @@ export function OnboardingWizard({ session, onSessionChange }) {
                   <Toggle checked={Boolean(data.requesterComments)} onChange={(value) => update('requesterComments', value)} title="Requester comments" description="Allow two-way updates on portal requests." />
                   <Toggle checked={Boolean(data.liveChat)} onChange={(value) => update('liveChat', value)} title="Live chat" description="Enable the existing Hi5Central live-chat experience." />
                   <Toggle checked={Boolean(data.requesterNotifications)} onChange={(value) => update('requesterNotifications', value)} title="Requester notifications" description="Send lifecycle updates when outbound notifications are connected." />
-                  <Toggle checked={Boolean(data.aiAssistant)} onChange={(value) => update('aiAssistant', value)} title="AI assistant" description="Store AI as enabled for the demo; the production AI service is not connected yet." />
+                  <Toggle checked={Boolean(data.aiAssistant)} onChange={(value) => update('aiAssistant', value)} title="AI assistant" description="Enable the tenant AI preference. AI features remain unavailable until the production AI service is configured." />
                 </div>
               </Section>
             </>
@@ -562,10 +530,10 @@ export function OnboardingWizard({ session, onSessionChange }) {
 
           {step === 'billing' ? (
             <>
-              <Section title="Demo plan" description="No payment details are collected during this test phase.">
+              <Section title="Plan" description="Choose the tenant subscription state. Payment activation is handled by the production billing service.">
                 <div className="onboarding-choice-grid">
-                  <button type="button" onClick={() => update('plan', 'trial')} className={data.plan === 'trial' ? 'is-selected' : ''}><strong>Start trial</strong><span>Continue with the complete demo environment while we build the commercial billing service.</span></button>
-                  <button type="button" onClick={() => update('plan', 'internal-demo')} className={data.plan === 'internal-demo' ? 'is-selected' : ''}><strong>Internal demo</strong><span>Mark this tenant as a non-billable internal test workspace.</span></button>
+                  <button type="button" onClick={() => update('plan', 'trial')} className={data.plan === 'trial' ? 'is-selected' : ''}><strong>Start trial</strong><span>Use the enabled Hi5Central products during the evaluation period.</span></button>
+                  <button type="button" onClick={() => update('plan', 'internal')} className={data.plan === 'internal' ? 'is-selected' : ''}><strong>Internal test tenant</strong><span>Mark this tenant as a non-billable controlled validation environment.</span></button>
                 </div>
                 <div className="onboarding-form-grid onboarding-form-grid-spaced">
                   <Field label="Expected technicians"><input type="number" min="1" value={data.expectedTechnicians || '5'} onChange={(event) => update('expectedTechnicians', event.target.value)} /></Field>
@@ -584,11 +552,11 @@ export function OnboardingWizard({ session, onSessionChange }) {
                 <div><span>Tenant</span><strong>{session.tenant.slug}.hi5central.com</strong></div>
                 <div><span>Owner</span><strong>{session.user.email}</strong></div>
                 <div><span>Products</span><strong>{[modules.itsm ? 'ITSM' : null, modules.rmm ? 'RMM' : null].filter(Boolean).join(' + ')}</strong></div>
-                <div><span>Microsoft 365</span><strong>{saved365.status === 'connected_demo' ? 'Demo connected' : 'Not connected'}</strong></div>
+                <div><span>Microsoft 365</span><strong>{saved365.status === 'connected' ? 'Connected' : 'Not connected'}</strong></div>
                 {modules.itsm ? <div><span>Record IDs</span><strong>{Object.values(savedItsm.recordPrefixes || defaultPrefixes).join(' · ')}</strong></div> : null}
                 {modules.itsm ? <div><span>Portal</span><strong>{savedItsm.portalName || 'IT Help Centre'}</strong></div> : null}
               </div>
-              <div className="onboarding-demo-note onboarding-finish-note"><Mail size={16} /><span>All settings in this onboarding pass are persisted to the tenant. Microsoft 365, MFA enforcement, inbound email and billing remain demo configuration until their production integrations are connected.</span></div>
+              <div className="onboarding-integration-note onboarding-finish-note"><Mail size={16} /><span>All settings in this onboarding pass are persisted to the tenant. Microsoft 365, inbound email, AI and billing features remain unavailable until their production integrations are connected.</span></div>
             </div>
           ) : null}
 

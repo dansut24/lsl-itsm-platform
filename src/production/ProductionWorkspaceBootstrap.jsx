@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ArrowRight, CheckCircle2, LockKeyhole, ShieldCheck } from 'lucide-react'
-import App from '../App.jsx'
+import WorkspaceRuntime from '../runtime/WorkspaceRuntime.jsx'
 import { OnboardingWizard } from '../features/onboarding/OnboardingWizard.jsx'
 import { ProductionSettingsWorkspace } from '../features/settings/ProductionSettingsWorkspace.jsx'
 import { resolveTenantSurface } from '../lib/tenantSurface.js'
@@ -12,7 +12,7 @@ import {
   saveProductionSession,
   saveSidebarMode,
   saveTheme,
-} from '../services/demoStore.js'
+} from '../services/runtimeState.js'
 import { hydrateProductionServiceRequests } from '../services/productionServiceRequests.js'
 import { takeProductionAuthHandoff } from './productionSessionBridge.js'
 import './ProductionWorkspaceBootstrap.css'
@@ -86,7 +86,7 @@ function applyTenantPreferences(apiSession) {
       rmm: configuration.rmm || {},
     }))
   } catch {
-    // Local runtime preferences are a bridge for the current demo UI.
+    // Local runtime preferences bridge server settings into the workspace shell.
   }
 }
 
@@ -537,7 +537,7 @@ export function ProductionWorkspaceBootstrap() {
 
     return (
       <>
-        <App key={workspaceKey} />
+        <WorkspaceRuntime key={workspaceKey} />
         {settingsOpen ? (
           <ProductionSettingsLayer
             key={workspaceKey}
@@ -554,5 +554,13 @@ export function ProductionWorkspaceBootstrap() {
     return <ProductionLogin tenant={tenantState} onAuthenticated={acceptSession} />
   }
 
-  return <App />
+  return (
+    <div className="production-auth-shell">
+      <div className="production-auth-card production-auth-loading">
+        <img src="/hi5central-logo.png" alt="" />
+        <strong>Tenant unavailable</strong>
+        <span>This tenant could not be loaded from the Hi5Central service.</span>
+      </div>
+    </div>
+  )
 }

@@ -57,7 +57,7 @@ html[data-hi5-surface='workspace'] .tabbar {
 }
 
 /* The production Notification Centre is authoritative for unread state.
-   The underlying workspace still contains its historical local/demo counter,
+   The underlying workspace still contains its historical local counter,
    so keep that legacy badge hidden even when the real server count is zero.
    A real non-zero count is rendered by ProductionNotificationCenter via the
    hi5-has-server-notifications pseudo-element. */
