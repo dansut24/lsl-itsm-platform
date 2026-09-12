@@ -1,14 +1,9 @@
-# Record Workspace Lab
+# Record Workspace
 
-This branch contains an isolated prototype of the proposed analyst record workspace. It does not replace the current record detail implementation.
+Hi5Central uses a shared activity-first work-item workspace for Incident, Service Request, Problem, Change and Task detail experiences.
 
-Use these routes on a deployment of this branch:
+The workspace mounts on the normal production record routes and provides a compact masthead, contextual/collapsible Details rail, full-height Activity workspace, searchable assignment, record-specific tabs, attachments, SLA context, related records and audit history.
 
-- `/record-lab/incidents/<INC-reference>`
-- `/record-lab/requests/<REQ-reference>`
-- `/record-lab/problems/<PRB-reference>`
-- `/record-lab/changes/<CHG-reference>`
+Activity is the primary analyst work surface. Human updates are prioritised, system events remain available through the activity filter, and the original request is retained as the first meaningful activity entry.
 
-The prototype mounts only when the URL matches `/record-lab/...`. Existing `/incidents/...`, `/requests/...`, `/problems/...`, and `/changes/...` routes continue to use the existing production record experience.
-
-The prototype intentionally uses the live record APIs so analysts can evaluate notes, customer updates, assignment, resolution/completion and SLA presentation with real record data. The UI itself remains isolated to this branch until explicitly approved for production.
+The Details rail is designed as an extensible contextual surface for requester information, Assets/CIs, related work and evidence-based insights. Future Microsoft Intune/RMM device context and AI-assisted insights can be added there without changing the core record workspace layout.
