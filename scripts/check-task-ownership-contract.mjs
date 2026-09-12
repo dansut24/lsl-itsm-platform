@@ -18,12 +18,13 @@ assert(api.includes('task.assignee_person_id'), 'Task ownership must be stored o
 assert(!api.includes('SET fulfilment_team_id'), 'Task ownership must not assign the parent Service Request team')
 assert(!api.includes('SET assigned_person_id'), 'Task ownership must not assign the parent Service Request person')
 
-assert(catalogue.includes("registerTaskOwnershipRoutes(app)"), 'Task ownership routes are not registered')
-assert(state.includes("Take this task before starting, blocking or completing work."), 'Server-side task owner work guard is missing')
+assert(catalogue.includes('registerTaskOwnershipRoutes(app)'), 'Task ownership routes are not registered')
+assert(state.includes('Take this task before starting, blocking or completing work.'), 'Server-side task owner work guard is missing')
 assert(state.includes('task.assignee_person_id !== actor.person.id'), 'Task work must be restricted to the current task owner')
 
-assert(ui.includes("/take`"), 'Tasks UI does not call the take route')
-assert(ui.includes("/release`"), 'Tasks UI does not call the release route')
+assert(ui.includes('${encodeURIComponent(taskKey)}/${action}'), 'Tasks UI ownership helper is not wired to the task action endpoint')
+assert(ui.includes("ownershipAction('take', 'Task taken')"), 'Tasks UI does not invoke the take action')
+assert(ui.includes("ownershipAction('release', 'Task released to team queue')"), 'Tasks UI does not invoke the release action')
 assert(ui.includes('Take task'), 'Tasks UI is missing the Take task action')
 assert(ui.includes('Release task'), 'Tasks UI is missing the Release task action')
 assert(ui.includes('const taskIsMine'), 'Tasks UI is missing current-owner detection')
