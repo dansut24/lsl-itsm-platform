@@ -9,6 +9,7 @@ const suffix = `${Date.now().toString(36)}${randomBytes(3).toString('hex')}`
 const slug = `ci-task-owner-${suffix}`.slice(0, 42)
 const password = `TaskOwner-${randomBytes(12).toString('base64url')}Aa1`
 const tenantOrigin = `https://${slug}.hi5central.com`
+const portalOrigin = `https://${slug}-portal.hi5central.com`
 const tech1Email = `tech-one-${suffix}@hi5central.test`
 const tech2Email = `tech-two-${suffix}@hi5central.test`
 const outsiderEmail = `outsider-${suffix}@hi5central.test`
@@ -93,8 +94,8 @@ try {
   await db.query(
     `INSERT INTO tenant_settings (
        tenant_id,modules,onboarding_step,onboarding_completed_at,onboarding_data,configuration,tenant_url,portal_url,rmm_url
-     ) VALUES ($1,'{"itsm":true,"rmm":false}'::jsonb,'complete',now(),'{}'::jsonb,'{}'::jsonb,$2,NULL,NULL)`,
-    [tenantId, tenantOrigin],
+     ) VALUES ($1,'{"itsm":true,"rmm":false}'::jsonb,'complete',now(),'{}'::jsonb,'{}'::jsonb,$2,$3,NULL)`,
+    [tenantId, tenantOrigin, portalOrigin],
   )
 
   const team = await db.query(
