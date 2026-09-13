@@ -199,16 +199,13 @@ function ProductionLogin({ tenant, onAuthenticated }) {
   const [passwordStep, setPasswordStep] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
-  const [microsoftSso, setMicrosoftSso] = useState({ checked: false, enabled: false })
+  const [authMethod, setAuthMethod] = useState('')
 
   useEffect(() => {
-    let active = true
-    fetch(`${API_BASE}/api/v1/auth/microsoft/status/${encodeURIComponent(tenant.slug)}`, { credentials: 'include' })
-      .then(async (response) => ({ response, payload: await response.json().catch(() => ({})) }))
-      .then(({ response, payload }) => { if (active) setMicrosoftSso({ checked: true, enabled: Boolean(response.ok && payload.configured && payload.connected && payload.ssoEnabled) }) })
-      .catch(() => { if (active) setMicrosoftSso({ checked: true, enabled: false }) })
-    return () => { active = false }
-  }, [tenant.slug])
+    const reason = new URLSearchParams(window.location.search).get('microsoft')
+    if (reason === 'not_assigned') setError('That Microsoft account is not linked to a Hi5Central user with workspace access.')
+    else if (reason && reason !== 'connected') setError('Microsoft sign-in could not be completed. Try again or use your Hi5Central password.')
+  }, [])
 
   async function submit(event) {
     event.preventDefault()
@@ -220,19 +217,26 @@ function ProductionLogin({ tenant, onAuthenticated }) {
     }
 
     if (!passwordStep) {
-      if (!microsoftSso.checked) return
-      if (microsoftSso.enabled) {
-        setSubmitting(true)
-        const params = new URLSearchParams({
-          tenantSlug: tenant.slug,
-          returnTo: window.location.pathname || '/',
-          loginHint: email,
-        })
-        window.location.href = `${API_BASE}/api/v1/auth/microsoft/start?${params.toString()}`
-        return
+      setSubmitting(true)
+      setAuthMethod('checking')
+      try {
+        const response = await fetch(`${API_BASE}/api/v1/auth/microsoft/discover/${encodeURIComponent(tenant.slug)}?email=${encodeURIComponent(email)}`, { credentials: 'include' })
+        const payload = await response.json().catch(() => ({}))
+        if (response.ok && payload.method === 'microsoft') {
+          setAuthMethod('microsoft')
+          const params = new URLSearchParams({ tenantSlug: tenant.slug, returnTo: window.location.pathname || '/', loginHint: email })
+          window.location.href = `${API_BASE}/api/v1/auth/microsoft/start?${params.toString()}`
+          return
+        }
+        setForm((current) => ({ ...current, email }))
+        setPasswordStep(true)
+        setAuthMethod('password')
+      } catch {
+        setPasswordStep(true)
+        setAuthMethod('password')
+      } finally {
+        setSubmitting(false)
       }
-      setForm((current) => ({ ...current, email }))
-      setPasswordStep(true)
       return
     }
 
@@ -291,8 +295,8 @@ function ProductionLogin({ tenant, onAuthenticated }) {
 
           {error ? <div className="production-auth-error">{error}</div> : null}
 
-          <button type="submit" disabled={submitting || tenant.status !== 'active' || (!passwordStep && !microsoftSso.checked)}>
-            {submitting ? (microsoftSso.enabled && !passwordStep ? 'Opening Microsoft…' : 'Signing in…') : passwordStep ? 'Sign in' : microsoftSso.checked ? 'Continue' : 'Checking sign-in…'}
+          <button type="submit" disabled={submitting || tenant.status !== 'active'}>
+            {submitting ? (authMethod === 'microsoft' ? 'Opening Microsoft…' : passwordStep ? 'Signing in…' : 'Checking sign-in…') : passwordStep ? 'Sign in' : 'Continue'}
             {!submitting ? <ArrowRight size={17} /> : null}
           </button>
           {passwordStep ? <button className="production-auth-secondary-action" type="button" onClick={() => { setPasswordStep(false); setForm((current) => ({ ...current, password: '' })); setError('') }}>Use a different email</button> : null}

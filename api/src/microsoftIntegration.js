@@ -440,6 +440,74 @@ async function handleSsoCallback(c, state, query) {
   return c.redirect(`${tenantUrl}${returnTo}`, 302)
 }
 
+async function discoverMicrosoftLogin(tenantSlug, email) {
+  const principal = normaliseEmail(email)
+  if (!principal || !connectorConfigured()) return false
+  const result = await pool.query(
+    `SELECT EXISTS (
+       SELECT 1
+       FROM user_external_identities x
+       JOIN tenant_memberships m ON m.tenant_id=x.tenant_id AND m.user_id=x.user_id AND m.status='active'
+       JOIN tenant_microsoft_connections c ON c.tenant_id=x.tenant_id AND c.directory_tenant_id=x.issuer_tenant_id
+       JOIN tenants t ON t.id=x.tenant_id
+       WHERE t.slug=$1 AND t.status='active' AND x.provider=$2
+         AND c.status='connected' AND c.sso_enabled=true
+         AND lower(x.principal_name)=lower($3)
+     ) AS enabled`,
+    [tenantSlug, MICROSOFT_PROVIDER, principal],
+  )
+  return Boolean(result.rows[0]?.enabled)
+}
+
+async function handleLinkUserCallback(c, state, query) {
+  const tenantUrl = state.tenantUrl || `https://${state.tenantSlug}.${deployment.rootDomain}`
+  if (query.error) return c.redirect(`${tenantUrl}/settings/integrations?microsoft=link_error`, 302)
+  const code = clean(query.code)
+  if (!code) return c.redirect(`${tenantUrl}/settings/integrations?microsoft=link_missing_code`, 302)
+  const tokenBody = new URLSearchParams({
+    client_id: CLIENT_ID, client_secret: CLIENT_SECRET, grant_type: 'authorization_code', code,
+    redirect_uri: CALLBACK_URI, code_verifier: state.codeVerifier, scope: 'openid profile email',
+  })
+  const tokenResponse = await fetch('https://login.microsoftonline.com/organizations/oauth2/v2.0/token', {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: tokenBody,
+  })
+  const tokenPayload = await tokenResponse.json().catch(() => ({}))
+  if (!tokenResponse.ok || !tokenPayload.id_token) return c.redirect(`${tenantUrl}/settings/integrations?microsoft=link_token_error`, 302)
+  const jwks = createRemoteJWKSet(new URL('https://login.microsoftonline.com/organizations/discovery/v2.0/keys'))
+  const verified = await jwtVerify(tokenPayload.id_token, jwks, { audience: CLIENT_ID })
+  const claims = verified.payload
+  const directoryTenantId = clean(claims.tid)
+  const oid = clean(claims.oid)
+  const subject = clean(claims.sub)
+  const principalName = normaliseEmail(claims.preferred_username || claims.email)
+  if (!isGuid(directoryTenantId) || !subject || !principalName) return c.redirect(`${tenantUrl}/settings/integrations?microsoft=link_identity_missing`, 302)
+  if (clean(claims.iss).toLowerCase() !== `https://login.microsoftonline.com/${directoryTenantId}/v2.0`.toLowerCase()) {
+    return c.redirect(`${tenantUrl}/settings/integrations?microsoft=link_issuer_mismatch`, 302)
+  }
+  const connection = await pool.query(
+    `SELECT id FROM tenant_microsoft_connections
+     WHERE id=$1 AND tenant_id=$2 AND directory_tenant_id=$3 AND status='connected' AND sso_enabled=true LIMIT 1`,
+    [state.connectionId, state.tenantId, directoryTenantId],
+  )
+  if (!connection.rowCount) return c.redirect(`${tenantUrl}/settings/integrations?microsoft=link_tenant_mismatch`, 302)
+  const existingIdentity = await pool.query(
+    `SELECT user_id FROM user_external_identities
+     WHERE tenant_id=$1 AND provider=$2 AND issuer_tenant_id=$3 AND (subject=$4 OR object_id=$5) LIMIT 1`,
+    [state.tenantId, MICROSOFT_PROVIDER, directoryTenantId, subject, oid || null],
+  )
+  if (existingIdentity.rowCount && existingIdentity.rows[0].user_id !== state.userId) {
+    return c.redirect(`${tenantUrl}/settings/integrations?microsoft=link_conflict`, 302)
+  }
+  await pool.query(
+    `INSERT INTO user_external_identities (tenant_id,user_id,provider,issuer_tenant_id,subject,object_id,principal_name,last_login_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,now())
+     ON CONFLICT (tenant_id,provider,issuer_tenant_id,subject) DO UPDATE
+     SET user_id=EXCLUDED.user_id,object_id=EXCLUDED.object_id,principal_name=EXCLUDED.principal_name,last_login_at=now(),updated_at=now()`,
+    [state.tenantId, state.userId, MICROSOFT_PROVIDER, directoryTenantId, subject, oid || null, principalName],
+  )
+  return c.redirect(`${tenantUrl}/settings/integrations?microsoft=account_linked`, 302)
+}
+
 export function registerMicrosoftRoutes(app) {
   app.get('/api/v1/auth/microsoft/status/:slug', async (c) => {
     const slug = clean(c.req.param('slug')).toLowerCase()
@@ -452,6 +520,13 @@ export function registerMicrosoftRoutes(app) {
     )
     const row = result.rows[0] || {}
     return c.json({ configured: connectorConfigured(), connected: Number(row.connected_count || 0) > 0, ssoEnabled: Number(row.sso_count || 0) > 0, connectionCount: Number(row.connected_count || 0) })
+  })
+
+  app.get('/api/v1/auth/microsoft/discover/:slug', async (c) => {
+    const slug = clean(c.req.param('slug')).toLowerCase()
+    const email = normaliseEmail(c.req.query('email'))
+    if (!slug || !email) return c.json({ method: 'password' })
+    return c.json({ method: await discoverMicrosoftLogin(slug, email) ? 'microsoft' : 'password' })
   })
 
   app.get('/api/v1/auth/microsoft/start', async (c) => {
@@ -468,6 +543,7 @@ export function registerMicrosoftRoutes(app) {
     if (!Number(connected.rows[0]?.count || 0)) return c.json({ error: 'Microsoft SSO is not enabled for this tenant.' }, 404)
     const requestedSurface = clean(c.req.query('surface')).toLowerCase()
     const loginHint = normaliseEmail(c.req.query('loginHint'))
+    if (loginHint && !(await discoverMicrosoftLogin(tenantSlug, loginHint))) return c.json({ error: 'This email address is not linked to Microsoft sign-in for this Hi5Central tenant.' }, 404)
     const urls = tenantUrls(tenant.slug, { rmm: true })
     const targetUrl = requestedSurface === 'rmm' && urls.rmmUrl ? urls.rmmUrl : urls.tenantUrl
     const codeVerifier = randomToken(48)
@@ -484,13 +560,22 @@ export function registerMicrosoftRoutes(app) {
     const query = Object.fromEntries(new URL(c.req.url).searchParams.entries())
     if (state.kind === 'admin_consent') return handleAdminConsentCallback(c, state, query)
     if (state.kind === 'sso') return handleSsoCallback(c, state, query)
+    if (state.kind === 'link_user') return handleLinkUserCallback(c, state, query)
     return c.json({ error: 'Unknown Microsoft authentication flow.' }, 400)
   })
 
   app.get('/api/v1/integrations/microsoft', async (c) => {
     const auth = await requireIntegrationManager(c)
     if (auth.error) return auth.error
-    return c.json(await microsoftStatus(auth.session.tenant_id))
+    const status = await microsoftStatus(auth.session.tenant_id)
+    const linked = await pool.query(
+      `SELECT issuer_tenant_id,principal_name FROM user_external_identities
+       WHERE tenant_id=$1 AND user_id=$2 AND provider=$3`,
+      [auth.session.tenant_id, auth.session.user_id, MICROSOFT_PROVIDER],
+    )
+    const linkedByTenant = new Map(linked.rows.map((row) => [row.issuer_tenant_id, row.principal_name]))
+    status.connections = status.connections.map((connection) => ({ ...connection, current_user_principal: linkedByTenant.get(connection.directory_tenant_id) || null }))
+    return c.json(status)
   })
 
   app.get('/api/v1/integrations/microsoft/connect', async (c) => {
@@ -504,6 +589,30 @@ export function registerMicrosoftRoutes(app) {
     })
     const params = new URLSearchParams({ client_id: CLIENT_ID, redirect_uri: CALLBACK_URI, state, scope: 'https://graph.microsoft.com/.default' })
     return c.redirect(`https://login.microsoftonline.com/organizations/v2.0/adminconsent?${params.toString()}`, 302)
+  })
+
+  app.get('/api/v1/integrations/microsoft/:connectionId/link-me', async (c) => {
+    const auth = await requireIntegrationManager(c)
+    if (auth.error) return auth.error
+    const connectionId = clean(c.req.param('connectionId'))
+    const connection = await pool.query(
+      `SELECT id FROM tenant_microsoft_connections
+       WHERE id=$1 AND tenant_id=$2 AND status='connected' AND sso_enabled=true LIMIT 1`,
+      [connectionId, auth.session.tenant_id],
+    )
+    if (!connection.rowCount) return c.json({ error: 'Microsoft SSO must be enabled for this connection before linking an account.' }, 409)
+    const urls = tenantUrls(auth.session.slug, { rmm: true })
+    const codeVerifier = randomToken(48)
+    const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url')
+    const state = await storeState({
+      kind: 'link_user', tenantId: auth.session.tenant_id, tenantSlug: auth.session.slug,
+      tenantUrl: urls.tenantUrl, userId: auth.session.user_id, connectionId, codeVerifier,
+    })
+    const params = new URLSearchParams({
+      client_id: CLIENT_ID, response_type: 'code', redirect_uri: CALLBACK_URI, response_mode: 'query',
+      scope: 'openid profile email', state, code_challenge: codeChallenge, code_challenge_method: 'S256', prompt: 'select_account',
+    })
+    return c.redirect(`https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize?${params.toString()}`, 302)
   })
 
   const syncAll = async (c) => {

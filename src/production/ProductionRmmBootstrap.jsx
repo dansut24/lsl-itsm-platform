@@ -45,8 +45,6 @@ export function ProductionRmmBootstrap() {
   const [error, setError] = useState('')
   const [theme, setTheme] = useState('light')
   const [devices, setDevices] = useState([])
-  const [microsoftEnabled, setMicrosoftEnabled] = useState(false)
-  const [microsoftChecked, setMicrosoftChecked] = useState(false)
   const [passwordStep, setPasswordStep] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
@@ -61,16 +59,6 @@ export function ProductionRmmBootstrap() {
     return () => { active = false }
   }, [surface.tenantSlug])
 
-  useEffect(() => {
-    let active = true
-    fetch(`${API_BASE}/api/v1/auth/microsoft/status/${encodeURIComponent(surface.tenantSlug)}`)
-      .then(async (response) => ({ response, payload: await response.json().catch(() => ({})) }))
-      .then(({ response, payload }) => {
-        if (active) { setMicrosoftEnabled(Boolean(response.ok && payload.configured && payload.connected && payload.ssoEnabled)); setMicrosoftChecked(true) }
-      })
-      .catch(() => { if (active) setMicrosoftChecked(true) })
-    return () => { active = false }
-  }, [surface.tenantSlug])
 
   useEffect(() => {
     if (!session) return undefined
@@ -88,27 +76,28 @@ export function ProductionRmmBootstrap() {
     const email = form.email.trim()
     if (!email) { setError('Enter your email address to continue.'); return }
     if (!passwordStep) {
-      if (!microsoftChecked) return
-      if (microsoftEnabled) {
-        setSubmitting(true)
-        const params = new URLSearchParams({ tenantSlug: surface.tenantSlug, surface: 'rmm', returnTo: '/devices', loginHint: email })
-        window.location.href = `${API_BASE}/api/v1/auth/microsoft/start?${params.toString()}`
-        return
-      }
-      setForm((current) => ({ ...current, email }))
-      setPasswordStep(true)
+      setSubmitting(true)
+      try {
+        const response = await fetch(`${API_BASE}/api/v1/auth/microsoft/discover/${encodeURIComponent(surface.tenantSlug)}?email=${encodeURIComponent(email)}`)
+        const payload = await response.json().catch(() => ({}))
+        if (response.ok && payload.method === 'microsoft') {
+          const params = new URLSearchParams({ tenantSlug: surface.tenantSlug, surface: 'rmm', returnTo: '/devices', loginHint: email })
+          window.location.href = `${API_BASE}/api/v1/auth/microsoft/start?${params.toString()}`
+          return
+        }
+        setPasswordStep(true)
+      } finally { setSubmitting(false) }
       return
     }
     setSubmitting(true)
-    try {
-      const response = await fetch(`${API_BASE}/api/v1/auth/login`, {
-        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tenantSlug: surface.tenantSlug, email, password: form.password }),
-      })
-      const payload = await response.json().catch(() => ({}))
-      if (!response.ok) { setError(payload.error || 'Sign in failed.'); return }
-      setSession(payload)
-    } finally { setSubmitting(false) }
+    const response = await fetch(`${API_BASE}/api/v1/auth/login`, {
+      method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tenantSlug: surface.tenantSlug, email, password: form.password }),
+    })
+    const payload = await response.json().catch(() => ({}))
+    setSubmitting(false)
+    if (!response.ok) { setError(payload.error || 'Sign in failed.'); return }
+    setSession(payload)
   }
 
   async function logout() {
