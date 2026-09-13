@@ -474,9 +474,10 @@ function RecordWorkspace({ route }) {
       || (detail.requesterId && item.id === detail.requesterId)
       || (detail.requester && item.name && String(item.name).toLowerCase() === String(detail.requester).toLowerCase()),
     )
-    if (!person?.id) { setRequesterAssets([]); return undefined }
+    const personLookupId = person?.databaseId || person?.id
+    if (!personLookupId) { setRequesterAssets([]); return undefined }
     let active = true
-    apiJson(`/api/v1/rmm/devices?personId=${encodeURIComponent(person.id)}`)
+    apiJson(`/api/v1/rmm/devices?personId=${encodeURIComponent(personLookupId)}`)
       .then((payload) => {
         if (!active) return
         setRequesterAssets((payload.devices || []).map((device) => ({

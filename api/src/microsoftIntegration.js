@@ -738,7 +738,10 @@ export function registerMicrosoftRoutes(app) {
     const personId = clean(c.req.query('personId'))
     const params = [session.tenant_id]
     let where = `d.tenant_id=$1 AND d.active=true`
-    if (personId) { params.push(personId); where += ` AND d.assigned_person_id=$2` }
+    if (personId) {
+      params.push(personId)
+      where += ` AND d.assigned_person_id IN (SELECT p2.id FROM organisation_people p2 WHERE p2.tenant_id=$1 AND (p2.id::text=$2 OR p2.external_key=$2))`
+    }
     const result = await pool.query(
       `SELECT d.id,d.reference,d.source,d.source_device_id,d.directory_device_id,d.name,d.platform,d.operating_system,d.os_version,d.manufacturer,d.model,d.serial_number,d.user_display_name,d.user_principal_name,d.owner_type,d.compliance_state,d.management_state,d.management_agent,d.enrollment_type,d.registration_state,d.category_name,d.is_encrypted,d.memory_bytes,d.storage_total_bytes,d.storage_free_bytes,d.enrolled_at,d.source_last_sync_at,d.last_imported_at,d.assigned_person_id,d.microsoft_connection_id,
               p.name AS assigned_person_name,p.email AS assigned_person_email,
