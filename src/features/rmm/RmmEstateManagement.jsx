@@ -34,11 +34,12 @@ import {
 } from '../../data/rmmScopeData.js'
 import './RmmEstateManagement.css'
 
-const DEFAULT_COLUMNS = ['device', 'user', 'siteGroup', 'health', 'resources', 'patch', 'lastSeen']
+const DEFAULT_COLUMNS = ['device', 'user', 'siteGroup', 'sourceTenant', 'health', 'resources', 'patch', 'lastSeen']
 const COLUMN_OPTIONS = [
   ['device', 'Device'],
   ['user', 'User'],
   ['siteGroup', 'Site / group'],
+  ['sourceTenant', 'Source tenant'],
   ['health', 'Health'],
   ['resources', 'Resources'],
   ['patch', 'Patch'],
@@ -97,6 +98,7 @@ function normalizeInventoryFilters(filters = {}) {
     quickView: filters.quickView || 'all',
     siteId: filters.siteId || 'All',
     groupId: filters.groupId || 'All',
+    sourceTenant: filters.sourceTenant || 'All',
     platform: filters.platform || 'All',
     health: filters.health || 'All',
     patchState: filters.patchState || 'All',
@@ -133,6 +135,7 @@ function buildGridTemplate(columns) {
     device: 'minmax(250px, 2fr)',
     user: 'minmax(180px, 1.15fr)',
     siteGroup: 'minmax(170px, 1fr)',
+    sourceTenant: 'minmax(150px, .9fr)',
     health: 'minmax(120px, .72fr)',
     resources: 'minmax(180px, 1fr)',
     patch: 'minmax(125px, .72fr)',
@@ -256,6 +259,7 @@ export function RmmDeviceInventory({ openDevice, query, preset, onPresetApplied,
       device.os,
       device.site,
       device.group,
+      device.sourceTenant,
       device.ip,
       device.publicIp,
       device.manufacturer,
@@ -266,6 +270,7 @@ export function RmmDeviceInventory({ openDevice, query, preset, onPresetApplied,
     if (!searchMatch || !deviceMatchesQuickView(device, filters.quickView)) return false
     if (filters.siteId !== 'All' && device.siteId !== filters.siteId) return false
     if (!deviceMatchesManagedGroup(device, filters.groupId)) return false
+    if (filters.sourceTenant !== 'All' && device.sourceTenant !== filters.sourceTenant) return false
     if (filters.platform !== 'All' && device.platform !== filters.platform) return false
     if (filters.health !== 'All' && device.health !== filters.health) return false
     if (!deviceMatchesPatchState(device, filters.patchState)) return false
@@ -300,6 +305,7 @@ export function RmmDeviceInventory({ openDevice, query, preset, onPresetApplied,
       <div className="rmm-list-toolbar rmm-device-toolbar rmm-device-toolbar-v2">
         <div className="rmm-filter-pills">{quickViews.map(([id, label]) => <button className={filters.quickView === id ? 'active' : ''} key={id} onClick={() => setFilter('quickView', id)} type="button">{label}</button>)}</div>
         <label>Site<select value={filters.siteId} onChange={(event) => setFilter('siteId', event.target.value)}><option value="All">All</option>{allSites.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        <label>Source tenant<select value={filters.sourceTenant} onChange={(event) => setFilter('sourceTenant', event.target.value)}><option value="All">All</option>{[...new Set(devices.map((device) => device.sourceTenant).filter(Boolean))].map((item) => <option key={item}>{item}</option>)}</select></label>
         <label>Group<select value={filters.groupId} onChange={(event) => setFilter('groupId', event.target.value)}><option value="All">All</option>{allGroups.map((item) => <option key={item.id} value={item.id}>{item.name}{item.mode === 'Dynamic' ? ' · dynamic' : ''}</option>)}</select></label>
         <label>Platform<select value={filters.platform} onChange={(event) => setFilter('platform', event.target.value)}><option>All</option>{[...new Set(devices.map((device) => device.platform))].map((item) => <option key={item}>{item}</option>)}</select></label>
         <label>Health<select value={filters.health} onChange={(event) => setFilter('health', event.target.value)}><option>All</option>{['Healthy', 'Warning', 'Critical', 'Offline'].map((item) => <option key={item}>{item}</option>)}</select></label>
@@ -317,6 +323,7 @@ export function RmmDeviceInventory({ openDevice, query, preset, onPresetApplied,
             {visibleColumns.includes('device') && <span className="rmm-device-cell"><span className={`rmm-device-icon ${healthClass(device.health)}`}><DeviceIcon device={device} /></span><span><strong>{device.name}</strong><small>{device.manufacturer} {device.model} · {device.os}</small></span></span>}
             {visibleColumns.includes('user') && <span><strong>{device.user}</strong><small>{device.userEmail || device.type}</small></span>}
             {visibleColumns.includes('siteGroup') && <span><strong>{device.site}</strong><small>{device.group}</small></span>}
+            {visibleColumns.includes('sourceTenant') && <span><strong>{device.sourceTenant || 'Hi5Central'}</strong><small>{device.sourceDirectoryTenantId || device.agentChannel || 'Native'}</small></span>}
             {visibleColumns.includes('health') && <span><StatusPill>{device.health}</StatusPill><small>{device.alerts} alerts</small></span>}
             {visibleColumns.includes('resources') && <span><strong>CPU {device.cpu}% · RAM {device.memory}%</strong><small>Disk {device.disk}%</small></span>}
             {visibleColumns.includes('patch') && <span><strong>{device.patchCompliance}%</strong><small>{device.pendingPatches} pending</small></span>}

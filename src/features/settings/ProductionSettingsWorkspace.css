@@ -567,7 +567,9 @@
 .production-integration-card button { grid-column: 2; justify-self: start; margin-top: 3px; }
 .production-integration-actions { grid-column: 2; display: flex !important; flex-wrap: wrap; gap: 6px !important; }
 .production-integration-actions button { grid-column: auto; margin-top: 3px; }
+.production-microsoft-card.is-summary { grid-column: 1 / -1; }
 .production-microsoft-card.is-connected { border-color: color-mix(in srgb, var(--brand) 35%, var(--line)); }
+.production-microsoft-card p { overflow-wrap: anywhere; }
 .production-microsoft-card .is-feedback { color: var(--ink); font-weight: 700; }
 
 .production-product-summary {

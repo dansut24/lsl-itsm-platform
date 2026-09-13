@@ -21,7 +21,8 @@ function intuneDeviceToRmm(row) {
     user: row.assigned_person_name || row.user_display_name || 'Unassigned',
     userEmail: row.assigned_person_email || row.user_principal_name || '',
     assignedPersonId: row.assigned_person_id || '',
-    site: 'Microsoft Intune', siteId: 'intune', group: 'Microsoft Intune', groupId: 'intune', policy: 'Intune managed',
+    site: row.source_connection_name || 'Microsoft Intune', siteId: row.microsoft_connection_id || 'intune', group: 'Microsoft Intune', groupId: 'intune', policy: 'Intune managed',
+    sourceTenant: row.source_connection_name || 'Microsoft Intune', sourceDirectoryTenantId: row.source_directory_tenant_id || '', sourceConnectionId: row.microsoft_connection_id || '',
     status: 'Managed', health: compliant ? 'Healthy' : 'Warning', alerts: compliant ? 0 : 1,
     cpu: 0, memory: 0, disk: usedPercent, patchCompliance: 0, pendingPatches: 0,
     manufacturer: row.manufacturer || 'Unknown', model: row.model || 'Unknown', serial: row.serial_number || 'Not reported',
@@ -31,7 +32,7 @@ function intuneDeviceToRmm(row) {
     storageGb: total ? Math.round(total / (1024 ** 3)) : 0, storageFreeGb: free ? Math.round(free / (1024 ** 3)) : 0,
     ramGb: row.memory_bytes ? Math.round(Number(row.memory_bytes) / (1024 ** 3)) : 0,
     security: { encryptionState: row.is_encrypted ? 'Protected' : 'Not reported', encryption: row.is_encrypted ? 'Intune reports encrypted' : 'Not reported', avState: 'Not reported', av: 'Not reported', firewall: 'Not reported', secureBoot: 'Not reported', edrState: 'Not reported', edr: 'Not reported', tpm: 'Not reported' },
-    tags: ['Intune', row.compliance_state || 'unknown'], installedSoftware: [], patches: [], activity: [], networkAdapters: [], relatedRecordIds: [],
+    tags: ['Intune', row.source_connection_name || 'Microsoft Intune', row.compliance_state || 'unknown'], installedSoftware: [], patches: [], activity: [], networkAdapters: [], relatedRecordIds: [],
     complianceState: row.compliance_state || 'unknown', managementState: row.management_state || 'managed', enrollmentType: row.enrollment_type || '', categoryName: row.category_name || '',
   }
 }

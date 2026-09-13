@@ -479,9 +479,9 @@ function RmmMonitoring({ config, update }) { return <Panel title="Monitoring" de
 function RmmPatching({ config, update }) { return <Panel title="Patching" description="Default patch ring and maintenance behaviour."><div className="production-settings-grid"><Field label="Patch ring"><input value={config.patchRing || ''} onChange={(e) => update('patchRing', e.target.value)} /></Field><Field label="Maintenance window"><input value={config.maintenanceWindow || ''} onChange={(e) => update('maintenanceWindow', e.target.value)} /></Field></div></Panel> }
 function RmmRemote({ config, update }) { return <Panel title="Remote access" description="Unattended remote-session defaults for managed devices."><div className="production-settings-toggle-list"><Toggle checked={Boolean(config.unattendedAccess)} onChange={(v) => update('unattendedAccess', v)} title="Allow unattended access" description="Permit authorised technicians to start remote sessions without a local prompt." /><Toggle checked={Boolean(config.requireRemoteApproval)} onChange={(v) => update('requireRemoteApproval', v)} title="Require local approval" description="Use attended approval by default instead of unattended access." /></div></Panel> }
 
-function MicrosoftConnectionCard() {
-  const [state, setState] = useState({ loading: true, configured: false, connection: null, lastRun: null })
-  const [working, setWorking] = useState(false)
+function MicrosoftConnections() {
+  const [state, setState] = useState({ loading: true, configured: false, connections: [], connectedCount: 0, totalDeviceCount: 0 })
+  const [working, setWorking] = useState('')
   const [message, setMessage] = useState('')
 
   const load = async () => {
@@ -489,7 +489,7 @@ function MicrosoftConnectionCard() {
       const response = await fetch(`${API_BASE}/api/v1/integrations/microsoft`, { credentials: 'include' })
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(payload.error || 'Could not load Microsoft connection state.')
-      setState({ loading: false, ...payload })
+      setState({ loading: false, ...payload, connections: payload.connections || [] })
     } catch (error) {
       setState((current) => ({ ...current, loading: false }))
       setMessage(error.message)
@@ -498,41 +498,58 @@ function MicrosoftConnectionCard() {
 
   useEffect(() => { void load() }, [])
 
-  async function syncNow() {
-    setWorking(true); setMessage('')
+  function addTenant() {
+    const suggested = window.prompt('Give this Microsoft tenant a friendly name (for example UK tenant or Acquired company).', 'Microsoft 365')
+    if (suggested === null) return
+    const name = suggested.trim() || 'Microsoft 365'
+    window.location.href = `${API_BASE}/api/v1/integrations/microsoft/connect?name=${encodeURIComponent(name)}`
+  }
+
+  async function action(key, request, success) {
+    setWorking(key); setMessage('')
     try {
-      const response = await fetch(`${API_BASE}/api/v1/integrations/microsoft/sync`, { method: 'POST', credentials: 'include' })
+      const response = await request()
       const payload = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(payload.error || 'Microsoft sync failed.')
-      setMessage(`Synced ${payload.users || 0} users and ${payload.devices || 0} Intune devices.`)
+      if (!response.ok) throw new Error(payload.error || 'Microsoft action failed.')
+      setMessage(success(payload))
       await load()
-    } catch (error) { setMessage(error.message) } finally { setWorking(false) }
+    } catch (error) { setMessage(error.message) } finally { setWorking('') }
   }
 
-  async function disconnect() {
-    if (!window.confirm('Disconnect Microsoft 365 SSO and automatic Intune sync for this tenant? Imported inventory will be retained.')) return
-    setWorking(true); setMessage('')
-    try {
-      const response = await fetch(`${API_BASE}/api/v1/integrations/microsoft/disconnect`, { method: 'POST', credentials: 'include' })
-      if (!response.ok) throw new Error('Could not disconnect Microsoft 365.')
-      await load()
-    } catch (error) { setMessage(error.message) } finally { setWorking(false) }
+  async function rename(connection) {
+    const value = window.prompt('Microsoft tenant name', connection.connection_name || 'Microsoft 365')
+    if (value === null || value.trim() === connection.connection_name) return
+    await action(`rename-${connection.id}`, () => fetch(`${API_BASE}/api/v1/integrations/microsoft/${connection.id}`, {
+      method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ connectionName: value.trim() }),
+    }), () => 'Connection renamed.')
   }
 
-  const connection = state.connection
-  const connected = connection?.status === 'connected'
-  const lastSync = connection?.last_sync_completed_at ? new Date(connection.last_sync_completed_at).toLocaleString() : 'Not yet synced'
-  return <div className={`production-integration-card production-microsoft-card ${connected ? 'is-connected' : ''}`}>
-    <span className="production-integration-icon"><Cloud size={20} /></span>
-    <div><strong>Microsoft 365 / Entra ID / Intune</strong><p>Microsoft SSO, directory people and assigned Intune devices.</p><small>{state.loading ? 'Checking connection…' : !state.configured ? 'App registration required' : connected ? `${connection.device_count || 0} devices · Last sync ${lastSync}` : 'Not connected'}</small>{message ? <small className="is-feedback">{message}</small> : null}</div>
-    <div className="production-integration-actions">
-      {!connected ? <button disabled={!state.configured || state.loading} onClick={() => { window.location.href = `${API_BASE}/api/v1/integrations/microsoft/connect` }} type="button">Connect Microsoft 365</button> : <><button disabled={working} onClick={syncNow} type="button">{working ? 'Syncing…' : 'Sync now'}</button><button disabled={working} onClick={disconnect} type="button">Disconnect</button></>}
+  async function disconnect(connection) {
+    if (!window.confirm(`Disconnect ${connection.connection_name}? Imported inventory will be retained.`)) return
+    await action(`disconnect-${connection.id}`, () => fetch(`${API_BASE}/api/v1/integrations/microsoft/${connection.id}/disconnect`, { method: 'POST', credentials: 'include' }), () => 'Microsoft tenant disconnected.')
+  }
+
+  const connections = state.connections || []
+  return <>
+    <div className="production-integration-card production-microsoft-card is-summary">
+      <span className="production-integration-icon"><Cloud size={20} /></span>
+      <div><strong>Microsoft 365 / Entra ID / Intune</strong><p>Connect one or more Microsoft tenants. Each directory keeps its own consent, users, devices and sync history.</p><small>{state.loading ? 'Checking connections…' : !state.configured ? 'App registration required' : `${state.connectedCount || 0} connected tenant${state.connectedCount === 1 ? '' : 's'} · ${state.totalDeviceCount || 0} devices`}</small>{message ? <small className="is-feedback">{message}</small> : null}</div>
+      <div className="production-integration-actions"><button disabled={!state.configured || state.loading || Boolean(working)} onClick={addTenant} type="button">Add Microsoft tenant</button>{state.connectedCount > 1 ? <button disabled={Boolean(working)} onClick={() => action('sync-all', () => fetch(`${API_BASE}/api/v1/integrations/microsoft/sync-all`, { method: 'POST', credentials: 'include' }), (payload) => `Synced ${payload.connections?.length || 0} Microsoft tenants and ${payload.devices || 0} devices.`)} type="button">{working === 'sync-all' ? 'Syncing…' : 'Sync all'}</button> : null}</div>
     </div>
-  </div>
+    {connections.map((connection) => {
+      const connected = connection.status === 'connected'
+      const lastSync = connection.last_sync_completed_at ? new Date(connection.last_sync_completed_at).toLocaleString() : 'Not yet synced'
+      return <div className={`production-integration-card production-microsoft-card ${connected ? 'is-connected' : ''}`} key={connection.id}>
+        <span className="production-integration-icon"><Cloud size={20} /></span>
+        <div><strong>{connection.connection_name || 'Microsoft 365'}</strong><p>{connection.directory_tenant_id || 'Directory tenant pending'} · {connected ? 'Connected' : connection.status}</p><small>{connection.device_count || 0} devices · Last sync {lastSync}</small>{connection.last_sync_error ? <small className="is-feedback">{connection.last_sync_error}</small> : null}</div>
+        <div className="production-integration-actions">{connected ? <><button disabled={Boolean(working)} onClick={() => action(`sync-${connection.id}`, () => fetch(`${API_BASE}/api/v1/integrations/microsoft/${connection.id}/sync`, { method: 'POST', credentials: 'include' }), (payload) => `Synced ${payload.users || 0} users and ${payload.devices || 0} devices from ${connection.connection_name}.`)} type="button">{working === `sync-${connection.id}` ? 'Syncing…' : 'Sync now'}</button><button disabled={Boolean(working)} onClick={() => rename(connection)} type="button">Rename</button><button disabled={Boolean(working)} onClick={() => disconnect(connection)} type="button">Disconnect</button></> : <button disabled={!state.configured || Boolean(working)} onClick={addTenant} type="button">Reconnect / add tenant</button>}</div>
+      </div>
+    })}
+  </>
 }
 
 function Integrations({ config, update }) {
-  return <><Panel title="Integrations" description="Connection catalogue for directory, collaboration, service-management and API integrations."><div className="production-integration-grid"><MicrosoftConnectionCard /><IntegrationCard name="Microsoft Teams" description="Service notifications and collaboration actions." icon={Users} status={config.microsoftTeams?.status} /><IntegrationCard name="Slack" description="Notifications and workflow actions." icon={Mail} status={config.slack?.status} /><IntegrationCard name="Jira" description="Link engineering work and service records." icon={GitBranch} status={config.jira?.status} /></div></Panel><Panel title="Developer integrations"><div className="production-settings-toggle-list"><Toggle checked={Boolean(config.apiAccess?.enabled)} onChange={(v) => update('apiAccess', { ...(config.apiAccess || {}), enabled: v })} title="API access" description="Prepare this tenant for scoped API credentials." /><Toggle checked={Boolean(config.webhooks?.enabled)} onChange={(v) => update('webhooks', { ...(config.webhooks || {}), enabled: v })} title="Webhooks" description="Allow outbound event delivery when webhook management is enabled." /></div></Panel></>
+  return <><Panel title="Integrations" description="Connection catalogue for directory, collaboration, service-management and API integrations."><div className="production-integration-grid"><MicrosoftConnections /><IntegrationCard name="Microsoft Teams" description="Service notifications and collaboration actions." icon={Users} status={config.microsoftTeams?.status} /><IntegrationCard name="Slack" description="Notifications and workflow actions." icon={Mail} status={config.slack?.status} /><IntegrationCard name="Jira" description="Link engineering work and service records." icon={GitBranch} status={config.jira?.status} /></div></Panel><Panel title="Developer integrations"><div className="production-settings-toggle-list"><Toggle checked={Boolean(config.apiAccess?.enabled)} onChange={(v) => update('apiAccess', { ...(config.apiAccess || {}), enabled: v })} title="API access" description="Prepare this tenant for scoped API credentials." /><Toggle checked={Boolean(config.webhooks?.enabled)} onChange={(v) => update('webhooks', { ...(config.webhooks || {}), enabled: v })} title="Webhooks" description="Allow outbound event delivery when webhook management is enabled." /></div></Panel></>
 }
 
 function Subscription({ config, update, modules }) { return <><Panel title="Subscription" description="Subscription metadata for this tenant. Billing activation is handled by the production billing service."><div className="production-settings-grid"><Field label="Plan"><select value={config.plan || 'trial'} onChange={(e) => update('plan', e.target.value)}><option value="trial">Trial</option><option value="business">Business</option><option value="enterprise">Enterprise</option><option value="internal">Internal test tenant</option></select></Field><Field label="Billing contact"><input type="email" value={config.billingContact || ''} onChange={(e) => update('billingContact', e.target.value)} /></Field><Field label="Expected technicians"><input type="number" min="1" value={config.expectedTechnicians || '5'} onChange={(e) => update('expectedTechnicians', e.target.value)} /></Field><Field label="Expected devices"><input type="number" min="0" value={config.expectedDevices || '100'} onChange={(e) => update('expectedDevices', e.target.value)} /></Field></div></Panel><Panel title="Enabled products"><div className="production-product-summary">{modules.itsm ? <div><Wrench size={18} /><span><strong>Hi5Central ITSM</strong><small>Technician workspace + Portal</small></span></div> : null}{modules.rmm ? <div><MonitorCog size={18} /><span><strong>Hi5Central RMM</strong><small>Endpoint management</small></span></div> : null}</div></Panel></> }

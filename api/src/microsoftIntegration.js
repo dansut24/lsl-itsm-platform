@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { createRemoteJWKSet, jwtVerify } from 'jose'
 import { hasPermission } from './access.js'
-import { deployment, originMatchesTenant } from './deploymentConfig.js'
+import { deployment, originMatchesTenant, tenantUrls } from './deploymentConfig.js'
 import { pool, withTransaction } from './db.js'
 import { ensureRedisConnected } from './redis.js'
 import { createSession, resolveSession, setSessionCookie } from './session.js'
@@ -111,7 +111,7 @@ async function upsertSite(client, tenantId, name) {
   return result.rows[0]?.id || null
 }
 
-async function syncDirectoryUsers(client, tenantId, graphUsers) {
+async function syncDirectoryUsers(client, tenantId, connection, graphUsers) {
   const byObjectId = new Map()
   const byEmail = new Map()
   let imported = 0
@@ -124,14 +124,18 @@ async function syncDirectoryUsers(client, tenantId, graphUsers) {
     const siteId = await upsertSite(client, tenantId, user.officeLocation)
     const phone = clean(user.mobilePhone || (Array.isArray(user.businessPhones) ? user.businessPhones[0] : ''))
     const source = {
-      provider: 'microsoft365', label: 'Microsoft 365 / Entra ID', externalId: user.id,
+      provider: 'microsoft365', label: connection.connection_name || 'Microsoft 365 / Entra ID', externalId: user.id,
+      directoryTenantId: connection.directory_tenant_id, connectionId: connection.id,
       managedFields: ['name','email','phone','jobTitle','department','site','active'], lastSyncedAt: new Date().toISOString(),
     }
     const existing = await client.query(
-      `SELECT id,external_key FROM organisation_people
-       WHERE tenant_id=$1 AND (lower(email)=lower($2) OR directory_source->>'externalId'=$3)
-       ORDER BY CASE WHEN directory_source->>'externalId'=$3 THEN 0 ELSE 1 END LIMIT 1`,
-      [tenantId, email, user.id],
+      `SELECT p.id,p.external_key
+       FROM organisation_people p
+       LEFT JOIN organisation_person_external_identities x
+         ON x.tenant_id=p.tenant_id AND x.person_id=p.id AND x.provider=$3 AND x.issuer_tenant_id=$4 AND x.object_id=$5
+       WHERE p.tenant_id=$1 AND (x.id IS NOT NULL OR lower(p.email)=lower($2))
+       ORDER BY CASE WHEN x.id IS NOT NULL THEN 0 ELSE 1 END LIMIT 1`,
+      [tenantId, email, MICROSOFT_PROVIDER, connection.directory_tenant_id, user.id],
     )
     let personId
     if (existing.rowCount) {
@@ -147,11 +151,19 @@ async function syncDirectoryUsers(client, tenantId, graphUsers) {
         `INSERT INTO organisation_people
          (tenant_id,external_key,name,email,phone,job_title,department_id,site_id,directory_source,active)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10) RETURNING id`,
-        [tenantId, `entra:${user.id}`, clean(user.displayName) || email, email, phone, clean(user.jobTitle), departmentId, siteId, JSON.stringify(source), user.accountEnabled !== false],
+        [tenantId, `entra:${connection.id}:${user.id}`, clean(user.displayName) || email, email, phone, clean(user.jobTitle), departmentId, siteId, JSON.stringify(source), user.accountEnabled !== false],
       )
       personId = inserted.rows[0].id
       imported += 1
     }
+    await client.query(
+      `INSERT INTO organisation_person_external_identities
+       (tenant_id,person_id,provider,microsoft_connection_id,issuer_tenant_id,object_id,principal_name)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       ON CONFLICT (tenant_id,provider,issuer_tenant_id,object_id) DO UPDATE
+       SET person_id=EXCLUDED.person_id,microsoft_connection_id=EXCLUDED.microsoft_connection_id,principal_name=EXCLUDED.principal_name,updated_at=now()`,
+      [tenantId, personId, MICROSOFT_PROVIDER, connection.id, connection.directory_tenant_id, user.id, email],
+    )
     await client.query(
       `UPDATE organisation_people p SET user_id=u.id,updated_at=now()
        FROM users u JOIN tenant_memberships m ON m.user_id=u.id AND m.tenant_id=$1
@@ -164,9 +176,13 @@ async function syncDirectoryUsers(client, tenantId, graphUsers) {
   return { byObjectId, byEmail, imported, updated }
 }
 
-function deviceReference(id) { return `INTUNE-${String(id || '').replace(/[^a-z0-9]/gi, '').slice(0, 12).toUpperCase()}` }
+function deviceReference(connectionId, id) {
+  const connectionPart = hashText(connectionId).slice(0, 4).toUpperCase()
+  const devicePart = String(id || '').replace(/[^a-z0-9]/gi, '').slice(0, 10).toUpperCase()
+  return `INTUNE-${connectionPart}-${devicePart}`
+}
 
-async function syncDevices(client, tenantId, runId, graphDevices, people) {
+async function syncDevices(client, tenantId, connection, runId, graphDevices, people) {
   let imported = 0
   let updated = 0
   for (const device of graphDevices) {
@@ -174,7 +190,7 @@ async function syncDevices(client, tenantId, runId, graphDevices, people) {
     const email = normaliseEmail(device.userPrincipalName || device.emailAddress)
     const personId = people.byObjectId.get(device.userId) || people.byEmail.get(email) || null
     const values = [
-      tenantId, device.id, deviceReference(device.id), clean(device.azureADDeviceId) || null,
+      tenantId, connection.id, device.id, deviceReference(connection.id, device.id), clean(device.azureADDeviceId) || null,
       clean(device.deviceName || device.managedDeviceName) || `Intune device ${device.id.slice(0, 8)}`,
       clean(device.operatingSystem) || 'Unknown', clean(device.operatingSystem), clean(device.osVersion), clean(device.manufacturer), clean(device.model), clean(device.serialNumber),
       clean(device.userId) || null, personId, clean(device.userDisplayName), email, clean(device.managedDeviceOwnerType) || 'unknown', clean(device.complianceState) || 'unknown',
@@ -187,9 +203,9 @@ async function syncDevices(client, tenantId, runId, graphDevices, people) {
     ]
     const result = await client.query(
       `INSERT INTO rmm_device_inventory
-       (tenant_id,source,source_device_id,reference,directory_device_id,name,platform,operating_system,os_version,manufacturer,model,serial_number,user_id_external,assigned_person_id,user_display_name,user_principal_name,owner_type,compliance_state,management_state,management_agent,enrollment_type,registration_state,category_name,is_encrypted,memory_bytes,storage_total_bytes,storage_free_bytes,ethernet_mac,wifi_mac,enrolled_at,source_last_sync_at,last_imported_at,last_seen_sync_run_id,active,source_payload)
-       VALUES ($1,'intune',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,now(),$31,true,$32::jsonb)
-       ON CONFLICT (tenant_id,source,source_device_id) DO UPDATE SET
+       (tenant_id,microsoft_connection_id,source,source_device_id,reference,directory_device_id,name,platform,operating_system,os_version,manufacturer,model,serial_number,user_id_external,assigned_person_id,user_display_name,user_principal_name,owner_type,compliance_state,management_state,management_agent,enrollment_type,registration_state,category_name,is_encrypted,memory_bytes,storage_total_bytes,storage_free_bytes,ethernet_mac,wifi_mac,enrolled_at,source_last_sync_at,last_imported_at,last_seen_sync_run_id,active,source_payload)
+       VALUES ($1,$2,'intune',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,now(),$32,true,$33::jsonb)
+       ON CONFLICT (tenant_id,microsoft_connection_id,source_device_id) WHERE source='intune' DO UPDATE SET
        directory_device_id=EXCLUDED.directory_device_id,name=EXCLUDED.name,platform=EXCLUDED.platform,operating_system=EXCLUDED.operating_system,os_version=EXCLUDED.os_version,
        manufacturer=EXCLUDED.manufacturer,model=EXCLUDED.model,serial_number=EXCLUDED.serial_number,user_id_external=EXCLUDED.user_id_external,assigned_person_id=EXCLUDED.assigned_person_id,
        user_display_name=EXCLUDED.user_display_name,user_principal_name=EXCLUDED.user_principal_name,owner_type=EXCLUDED.owner_type,compliance_state=EXCLUDED.compliance_state,
@@ -205,8 +221,8 @@ async function syncDevices(client, tenantId, runId, graphDevices, people) {
   }
   const deactivated = await client.query(
     `UPDATE rmm_device_inventory SET active=false,updated_at=now()
-     WHERE tenant_id=$1 AND source='intune' AND active=true AND last_seen_sync_run_id IS DISTINCT FROM $2`,
-    [tenantId, runId],
+     WHERE tenant_id=$1 AND microsoft_connection_id=$2 AND source='intune' AND active=true AND last_seen_sync_run_id IS DISTINCT FROM $3`,
+    [tenantId, connection.id, runId],
   )
   return { imported, updated, deactivated: deactivated.rowCount }
 }
@@ -214,16 +230,17 @@ async function syncDevices(client, tenantId, runId, graphDevices, people) {
 const USER_SELECT = 'id,displayName,userPrincipalName,mail,jobTitle,department,officeLocation,mobilePhone,businessPhones,accountEnabled'
 const DEVICE_SELECT = 'id,userId,deviceName,managedDeviceName,managedDeviceOwnerType,managementState,enrolledDateTime,lastSyncDateTime,operatingSystem,complianceState,managementAgent,osVersion,emailAddress,azureADDeviceId,deviceRegistrationState,deviceCategoryDisplayName,isEncrypted,userPrincipalName,model,manufacturer,serialNumber,userDisplayName,totalStorageSpaceInBytes,freeStorageSpaceInBytes,ethernetMacAddress,wiFiMacAddress,physicalMemoryInBytes,deviceEnrollmentType'
 
-export async function syncMicrosoftTenant(tenantId, startedByUserId = null) {
-  const connectionResult = await pool.query('SELECT * FROM tenant_microsoft_connections WHERE tenant_id=$1 LIMIT 1', [tenantId])
+export async function syncMicrosoftConnection(connectionId, startedByUserId = null) {
+  const connectionResult = await pool.query('SELECT * FROM tenant_microsoft_connections WHERE id=$1 LIMIT 1', [connectionId])
   const connection = connectionResult.rows[0]
-  if (!connection?.directory_tenant_id || connection.status !== 'connected') throw new Error('Microsoft 365 is not connected for this tenant.')
+  if (!connection?.directory_tenant_id || connection.status !== 'connected') throw new Error('Microsoft 365 connection is not active.')
+  const tenantId = connection.tenant_id
   const run = await pool.query(
-    `INSERT INTO microsoft_sync_runs (tenant_id,sync_type,started_by_user_id) VALUES ($1,'intune_devices',$2) RETURNING id`,
-    [tenantId, startedByUserId],
+    `INSERT INTO microsoft_sync_runs (tenant_id,microsoft_connection_id,sync_type,started_by_user_id) VALUES ($1,$2,'intune_devices',$3) RETURNING id`,
+    [tenantId, connection.id, startedByUserId],
   )
   const runId = run.rows[0].id
-  await pool.query(`UPDATE tenant_microsoft_connections SET last_sync_started_at=now(),last_sync_status='running',last_sync_error=NULL,updated_at=now() WHERE tenant_id=$1`, [tenantId])
+  await pool.query(`UPDATE tenant_microsoft_connections SET last_sync_started_at=now(),last_sync_status='running',last_sync_error=NULL,updated_at=now() WHERE id=$1`, [connection.id])
   try {
     const token = await clientCredentialToken(connection.directory_tenant_id)
     const [graphUsers, graphDevices] = await Promise.all([
@@ -231,59 +248,118 @@ export async function syncMicrosoftTenant(tenantId, startedByUserId = null) {
       graphCollection(token, `/deviceManagement/managedDevices?$select=${encodeURIComponent(DEVICE_SELECT)}&$top=999`),
     ])
     const result = await withTransaction(async (client) => {
-      const people = await syncDirectoryUsers(client, tenantId, graphUsers)
-      const devices = await syncDevices(client, tenantId, runId, graphDevices, people)
+      const people = await syncDirectoryUsers(client, tenantId, connection, graphUsers)
+      const devices = await syncDevices(client, tenantId, connection, runId, graphDevices, people)
       await client.query(
         `UPDATE microsoft_sync_runs SET status='completed',discovered_count=$2,imported_count=$3,updated_count=$4,deactivated_count=$5,completed_at=now() WHERE id=$1`,
         [runId, graphDevices.length, devices.imported, devices.updated, devices.deactivated],
       )
       await client.query(
-        `UPDATE tenant_microsoft_connections SET intune_enabled=true,intune_sync_enabled=true,intune_status='ready',device_count=$2,last_validated_at=now(),last_sync_completed_at=now(),last_sync_status='completed',last_sync_error=NULL,updated_at=now() WHERE tenant_id=$1`,
-        [tenantId, graphDevices.length],
+        `UPDATE tenant_microsoft_connections SET intune_enabled=true,intune_sync_enabled=true,intune_status='ready',device_count=$2,last_validated_at=now(),last_sync_completed_at=now(),last_sync_status='completed',last_sync_error=NULL,updated_at=now() WHERE id=$1`,
+        [connection.id, graphDevices.length],
       )
       return { users: graphUsers.length, peopleImported: people.imported, peopleUpdated: people.updated, devices: graphDevices.length, ...devices }
     })
-    return { runId, ...result }
+    return { connectionId: connection.id, connectionName: connection.connection_name, directoryTenantId: connection.directory_tenant_id, runId, ...result }
   } catch (error) {
     await pool.query(`UPDATE microsoft_sync_runs SET status='failed',error_message=$2,completed_at=now() WHERE id=$1`, [runId, String(error.message || error).slice(0, 2000)]).catch(() => {})
-    await pool.query(`UPDATE tenant_microsoft_connections SET intune_status='error',last_sync_completed_at=now(),last_sync_status='failed',last_sync_error=$2,updated_at=now() WHERE tenant_id=$1`, [tenantId, String(error.message || error).slice(0, 2000)]).catch(() => {})
+    await pool.query(`UPDATE tenant_microsoft_connections SET intune_status='error',last_sync_completed_at=now(),last_sync_status='failed',last_sync_error=$2,updated_at=now() WHERE id=$1`, [connection.id, String(error.message || error).slice(0, 2000)]).catch(() => {})
     throw error
   }
 }
 
+export async function syncMicrosoftTenant(tenantId, startedByUserId = null) {
+  const connections = await pool.query(`SELECT id FROM tenant_microsoft_connections WHERE tenant_id=$1 AND status='connected' AND intune_sync_enabled=true ORDER BY created_at`, [tenantId])
+  if (!connections.rowCount) throw new Error('No active Microsoft 365 connections are available for this tenant.')
+  const results = []
+  for (const row of connections.rows) {
+    try { results.push({ ok: true, ...(await syncMicrosoftConnection(row.id, startedByUserId)) }) }
+    catch (error) { results.push({ ok: false, connectionId: row.id, error: error.message || 'Microsoft sync failed.' }) }
+  }
+  const totals = results.reduce((sum, item) => ({
+    users: sum.users + Number(item.users || 0),
+    devices: sum.devices + Number(item.devices || 0),
+    imported: sum.imported + Number(item.imported || 0),
+    updated: sum.updated + Number(item.updated || 0),
+    deactivated: sum.deactivated + Number(item.deactivated || 0),
+  }), { users: 0, devices: 0, imported: 0, updated: 0, deactivated: 0 })
+  return { connections: results, ...totals, failedConnections: results.filter((item) => !item.ok).length }
+}
+
 async function microsoftStatus(tenantId) {
   const result = await pool.query(
-    `SELECT directory_tenant_id,status,sso_enabled,intune_enabled,intune_sync_enabled,intune_sync_interval_minutes,intune_status,device_count,last_validated_at,last_sync_started_at,last_sync_completed_at,last_sync_status,last_sync_error,admin_consent_at
-     FROM tenant_microsoft_connections WHERE tenant_id=$1 LIMIT 1`, [tenantId],
+    `SELECT c.id,c.connection_name,c.directory_tenant_id,c.status,c.sso_enabled,c.intune_enabled,c.intune_sync_enabled,
+            c.intune_sync_interval_minutes,c.intune_status,c.device_count,c.last_validated_at,c.last_sync_started_at,c.last_sync_completed_at,
+            c.last_sync_status,c.last_sync_error,c.admin_consent_at,c.created_at,
+            r.id AS last_run_id,r.status AS last_run_status,r.discovered_count AS last_run_discovered_count,
+            r.imported_count AS last_run_imported_count,r.updated_count AS last_run_updated_count,
+            r.deactivated_count AS last_run_deactivated_count,r.error_message AS last_run_error,r.started_at AS last_run_started_at,r.completed_at AS last_run_completed_at
+     FROM tenant_microsoft_connections c
+     LEFT JOIN LATERAL (
+       SELECT * FROM microsoft_sync_runs r WHERE r.microsoft_connection_id=c.id ORDER BY r.started_at DESC LIMIT 1
+     ) r ON true
+     WHERE c.tenant_id=$1 ORDER BY c.created_at,c.connection_name`, [tenantId],
   )
-  const connection = result.rows[0] || null
-  const run = await pool.query(`SELECT id,status,discovered_count,imported_count,updated_count,deactivated_count,error_message,started_at,completed_at FROM microsoft_sync_runs WHERE tenant_id=$1 ORDER BY started_at DESC LIMIT 1`, [tenantId])
-  return { configured: connectorConfigured(), callbackUri: CALLBACK_URI, connection, lastRun: run.rows[0] || null }
+  const connections = result.rows.map((row) => ({
+    id: row.id,
+    connection_name: row.connection_name,
+    directory_tenant_id: row.directory_tenant_id,
+    status: row.status,
+    sso_enabled: row.sso_enabled,
+    intune_enabled: row.intune_enabled,
+    intune_sync_enabled: row.intune_sync_enabled,
+    intune_sync_interval_minutes: row.intune_sync_interval_minutes,
+    intune_status: row.intune_status,
+    device_count: row.device_count,
+    last_validated_at: row.last_validated_at,
+    last_sync_started_at: row.last_sync_started_at,
+    last_sync_completed_at: row.last_sync_completed_at,
+    last_sync_status: row.last_sync_status,
+    last_sync_error: row.last_sync_error,
+    admin_consent_at: row.admin_consent_at,
+    lastRun: row.last_run_id ? {
+      id: row.last_run_id, status: row.last_run_status, discovered_count: row.last_run_discovered_count,
+      imported_count: row.last_run_imported_count, updated_count: row.last_run_updated_count,
+      deactivated_count: row.last_run_deactivated_count, error_message: row.last_run_error,
+      started_at: row.last_run_started_at, completed_at: row.last_run_completed_at,
+    } : null,
+  }))
+  return {
+    configured: connectorConfigured(),
+    callbackUri: CALLBACK_URI,
+    connections,
+    connectedCount: connections.filter((item) => item.status === 'connected').length,
+    totalDeviceCount: connections.reduce((sum, item) => sum + Number(item.device_count || 0), 0),
+  }
 }
 
 async function handleAdminConsentCallback(c, state, query) {
   const tenantUrl = state.tenantUrl || `https://${state.tenantSlug}.${deployment.rootDomain}`
-  if (query.error) {
-    await pool.query(`INSERT INTO tenant_microsoft_connections (tenant_id,status,last_sync_error) VALUES ($1,'error',$2) ON CONFLICT (tenant_id) DO UPDATE SET status='error',last_sync_error=EXCLUDED.last_sync_error,updated_at=now()`, [state.tenantId, clean(query.error_description || query.error)]).catch(() => {})
-    return c.redirect(`${tenantUrl}/settings/integrations?microsoft=error`, 302)
-  }
+  if (query.error) return c.redirect(`${tenantUrl}/settings/integrations?microsoft=error`, 302)
   if (String(query.admin_consent || '').toLowerCase() !== 'true') {
     return c.redirect(`${tenantUrl}/settings/integrations?microsoft=consent_required`, 302)
   }
   const directoryTenantId = clean(query.tenant)
   if (!isGuid(directoryTenantId)) return c.redirect(`${tenantUrl}/settings/integrations?microsoft=invalid_tenant`, 302)
-  await pool.query(
-    `INSERT INTO tenant_microsoft_connections (tenant_id,directory_tenant_id,status,sso_enabled,intune_enabled,intune_sync_enabled,intune_status,connected_by_user_id,admin_consent_at,last_validated_at)
-     VALUES ($1,$2,'connected',true,true,true,'ready',$3,now(),now())
-     ON CONFLICT (tenant_id) DO UPDATE SET directory_tenant_id=EXCLUDED.directory_tenant_id,status='connected',sso_enabled=true,intune_enabled=true,intune_sync_enabled=true,intune_status='ready',connected_by_user_id=EXCLUDED.connected_by_user_id,admin_consent_at=now(),last_validated_at=now(),last_sync_error=NULL,updated_at=now()`,
-    [state.tenantId, directoryTenantId, state.userId],
+  const requestedName = clean(state.connectionName)
+  const defaultName = requestedName || `Microsoft tenant ${directoryTenantId.slice(0, 8)}`
+  const connectionResult = await pool.query(
+    `INSERT INTO tenant_microsoft_connections
+     (tenant_id,connection_name,directory_tenant_id,status,sso_enabled,intune_enabled,intune_sync_enabled,intune_status,connected_by_user_id,admin_consent_at,last_validated_at)
+     VALUES ($1,$2,$3,'connected',true,true,true,'ready',$4,now(),now())
+     ON CONFLICT (tenant_id,directory_tenant_id) WHERE directory_tenant_id IS NOT NULL DO UPDATE
+     SET status='connected',sso_enabled=true,intune_enabled=true,intune_sync_enabled=true,intune_status='ready',connected_by_user_id=EXCLUDED.connected_by_user_id,
+         admin_consent_at=now(),last_validated_at=now(),last_sync_error=NULL,updated_at=now()
+     RETURNING id,connection_name,directory_tenant_id`,
+    [state.tenantId, defaultName, directoryTenantId, state.userId],
   )
+  const connection = connectionResult.rows[0]
   try {
-    await syncMicrosoftTenant(state.tenantId, state.userId)
-    return c.redirect(`${tenantUrl}/settings/integrations?microsoft=connected`, 302)
+    await syncMicrosoftConnection(connection.id, state.userId)
+    return c.redirect(`${tenantUrl}/settings/integrations?microsoft=connected&connection=${encodeURIComponent(connection.id)}`, 302)
   } catch (error) {
     console.error('Initial Microsoft sync failed', error)
-    return c.redirect(`${tenantUrl}/settings/integrations?microsoft=connected_sync_error`, 302)
+    return c.redirect(`${tenantUrl}/settings/integrations?microsoft=connected_sync_error&connection=${encodeURIComponent(connection.id)}`, 302)
   }
 }
 
@@ -296,17 +372,25 @@ async function handleSsoCallback(c, state, query) {
     client_id: CLIENT_ID, client_secret: CLIENT_SECRET, grant_type: 'authorization_code', code,
     redirect_uri: CALLBACK_URI, code_verifier: state.codeVerifier, scope: 'openid profile email',
   })
-  const tokenResponse = await fetch(`https://login.microsoftonline.com/${encodeURIComponent(state.directoryTenantId)}/oauth2/v2.0/token`, {
+  const tokenResponse = await fetch('https://login.microsoftonline.com/organizations/oauth2/v2.0/token', {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: tokenBody,
   })
   const tokenPayload = await tokenResponse.json().catch(() => ({}))
   if (!tokenResponse.ok || !tokenPayload.id_token) return c.redirect(`${tenantUrl}/?microsoft=token_error`, 302)
-  const jwks = createRemoteJWKSet(new URL(`https://login.microsoftonline.com/${state.directoryTenantId}/discovery/v2.0/keys`))
-  const verified = await jwtVerify(tokenPayload.id_token, jwks, {
-    issuer: `https://login.microsoftonline.com/${state.directoryTenantId}/v2.0`, audience: CLIENT_ID,
-  })
+  const jwks = createRemoteJWKSet(new URL('https://login.microsoftonline.com/organizations/discovery/v2.0/keys'))
+  const verified = await jwtVerify(tokenPayload.id_token, jwks, { audience: CLIENT_ID })
   const claims = verified.payload
-  if (String(claims.tid || '').toLowerCase() !== String(state.directoryTenantId).toLowerCase()) return c.redirect(`${tenantUrl}/?microsoft=tenant_mismatch`, 302)
+  const directoryTenantId = clean(claims.tid)
+  if (!isGuid(directoryTenantId)) return c.redirect(`${tenantUrl}/?microsoft=tenant_mismatch`, 302)
+  if (clean(claims.iss).toLowerCase() !== `https://login.microsoftonline.com/${directoryTenantId}/v2.0`.toLowerCase()) {
+    return c.redirect(`${tenantUrl}/?microsoft=issuer_mismatch`, 302)
+  }
+  const allowedConnection = await pool.query(
+    `SELECT id FROM tenant_microsoft_connections WHERE tenant_id=$1 AND directory_tenant_id=$2 AND status='connected' AND sso_enabled=true LIMIT 1`,
+    [state.tenantId, directoryTenantId],
+  )
+  if (!allowedConnection.rowCount) return c.redirect(`${tenantUrl}/?microsoft=tenant_not_connected`, 302)
+
   const oid = clean(claims.oid)
   const subject = clean(claims.sub)
   const email = normaliseEmail(claims.preferred_username || claims.email)
@@ -318,7 +402,7 @@ async function handleSsoCallback(c, state, query) {
      FROM tenants t JOIN tenant_memberships m ON m.tenant_id=t.id JOIN users u ON u.id=m.user_id JOIN tenant_settings ts ON ts.tenant_id=t.id
      LEFT JOIN user_external_identities x ON x.tenant_id=t.id AND x.user_id=u.id AND x.provider=$3 AND x.issuer_tenant_id=$4
      WHERE t.id=$1 AND (x.subject=$5 OR x.object_id=$6 OR lower(u.email)=lower($2)) LIMIT 1`,
-    [state.tenantId, email, MICROSOFT_PROVIDER, state.directoryTenantId, subject, oid || null],
+    [state.tenantId, email, MICROSOFT_PROVIDER, directoryTenantId, subject, oid || null],
   )
   if (!account.rowCount) return c.redirect(`${tenantUrl}/?microsoft=not_assigned`, 302)
   const row = account.rows[0]
@@ -330,7 +414,7 @@ async function handleSsoCallback(c, state, query) {
       `INSERT INTO user_external_identities (tenant_id,user_id,provider,issuer_tenant_id,subject,object_id,principal_name,last_login_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,now())
        ON CONFLICT (tenant_id,provider,issuer_tenant_id,subject) DO UPDATE SET user_id=EXCLUDED.user_id,object_id=EXCLUDED.object_id,principal_name=EXCLUDED.principal_name,last_login_at=now(),updated_at=now()`,
-      [row.tenant_id, row.user_id, MICROSOFT_PROVIDER, state.directoryTenantId, subject, oid || null, email],
+      [row.tenant_id, row.user_id, MICROSOFT_PROVIDER, directoryTenantId, subject, oid || null, email],
     )
     return createSession(client, { tenantId: row.tenant_id, userId: row.user_id, surface: 'workspace', mfaVerified: microsoftMfa })
   })
@@ -343,27 +427,36 @@ export function registerMicrosoftRoutes(app) {
   app.get('/api/v1/auth/microsoft/status/:slug', async (c) => {
     const slug = clean(c.req.param('slug')).toLowerCase()
     const result = await pool.query(
-      `SELECT mc.status,mc.sso_enabled FROM tenants t LEFT JOIN tenant_microsoft_connections mc ON mc.tenant_id=t.id WHERE t.slug=$1 LIMIT 1`, [slug],
+      `SELECT t.id,
+              count(mc.id) FILTER (WHERE mc.status='connected')::int AS connected_count,
+              count(mc.id) FILTER (WHERE mc.status='connected' AND mc.sso_enabled=true)::int AS sso_count
+       FROM tenants t LEFT JOIN tenant_microsoft_connections mc ON mc.tenant_id=t.id
+       WHERE t.slug=$1 GROUP BY t.id LIMIT 1`, [slug],
     )
     const row = result.rows[0] || {}
-    return c.json({ configured: connectorConfigured(), connected: row.status === 'connected', ssoEnabled: Boolean(row.sso_enabled) })
+    return c.json({ configured: connectorConfigured(), connected: Number(row.connected_count || 0) > 0, ssoEnabled: Number(row.sso_count || 0) > 0, connectionCount: Number(row.connected_count || 0) })
   })
 
   app.get('/api/v1/auth/microsoft/start', async (c) => {
     if (!connectorConfigured()) return c.json({ error: 'Microsoft SSO is not configured on this Hi5Central installation.' }, 503)
     const tenantSlug = clean(c.req.query('tenantSlug')).toLowerCase()
     const tenantResult = await pool.query(
-      `SELECT t.id,t.slug,ts.tenant_url,ts.rmm_url,mc.directory_tenant_id,mc.status,mc.sso_enabled FROM tenants t JOIN tenant_settings ts ON ts.tenant_id=t.id JOIN tenant_microsoft_connections mc ON mc.tenant_id=t.id WHERE t.slug=$1 LIMIT 1`, [tenantSlug],
+      `SELECT t.id,t.slug FROM tenants t WHERE t.slug=$1 LIMIT 1`, [tenantSlug],
     )
     const tenant = tenantResult.rows[0]
-    if (!tenant || tenant.status !== 'connected' || !tenant.sso_enabled || !tenant.directory_tenant_id) return c.json({ error: 'Microsoft SSO is not enabled for this tenant.' }, 404)
+    if (!tenant) return c.json({ error: 'Tenant not found.' }, 404)
+    const connected = await pool.query(
+      `SELECT count(*)::int AS count FROM tenant_microsoft_connections WHERE tenant_id=$1 AND status='connected' AND sso_enabled=true`, [tenant.id],
+    )
+    if (!Number(connected.rows[0]?.count || 0)) return c.json({ error: 'Microsoft SSO is not enabled for this tenant.' }, 404)
     const requestedSurface = clean(c.req.query('surface')).toLowerCase()
-    const targetUrl = requestedSurface === 'rmm' && tenant.rmm_url ? tenant.rmm_url : tenant.tenant_url
+    const urls = tenantUrls(tenant.slug, { rmm: true })
+    const targetUrl = requestedSurface === 'rmm' && urls.rmmUrl ? urls.rmmUrl : urls.tenantUrl
     const codeVerifier = randomToken(48)
     const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url')
-    const state = await storeState({ kind: 'sso', tenantId: tenant.id, tenantSlug: tenant.slug, tenantUrl: tenant.tenant_url, targetUrl, directoryTenantId: tenant.directory_tenant_id, codeVerifier, returnTo: c.req.query('returnTo') || '/' })
+    const state = await storeState({ kind: 'sso', tenantId: tenant.id, tenantSlug: tenant.slug, tenantUrl: urls.tenantUrl, targetUrl, codeVerifier, returnTo: c.req.query('returnTo') || '/' })
     const params = new URLSearchParams({ client_id: CLIENT_ID, response_type: 'code', redirect_uri: CALLBACK_URI, response_mode: 'query', scope: 'openid profile email', state, code_challenge: codeChallenge, code_challenge_method: 'S256', prompt: 'select_account' })
-    return c.redirect(`https://login.microsoftonline.com/${tenant.directory_tenant_id}/oauth2/v2.0/authorize?${params.toString()}`, 302)
+    return c.redirect(`https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize?${params.toString()}`, 302)
   })
 
   app.get('/api/v1/auth/microsoft/callback', async (c) => {
@@ -385,27 +478,64 @@ export function registerMicrosoftRoutes(app) {
     const auth = await requireIntegrationManager(c)
     if (auth.error) return auth.error
     if (!connectorConfigured()) return c.json({ error: 'Set MICROSOFT_CLIENT_ID and MICROSOFT_CLIENT_SECRET before connecting Microsoft 365.', callbackUri: CALLBACK_URI }, 503)
-    const state = await storeState({ kind: 'admin_consent', tenantId: auth.session.tenant_id, tenantSlug: auth.session.slug, tenantUrl: auth.session.tenant_url, userId: auth.session.user_id })
-    const params = new URLSearchParams({
-      client_id: CLIENT_ID,
-      redirect_uri: CALLBACK_URI,
-      state,
-      scope: 'https://graph.microsoft.com/.default',
+    const urls = tenantUrls(auth.session.slug, { rmm: true })
+    const state = await storeState({
+      kind: 'admin_consent', tenantId: auth.session.tenant_id, tenantSlug: auth.session.slug,
+      tenantUrl: urls.tenantUrl, userId: auth.session.user_id, connectionName: clean(c.req.query('name')),
     })
+    const params = new URLSearchParams({ client_id: CLIENT_ID, redirect_uri: CALLBACK_URI, state, scope: 'https://graph.microsoft.com/.default' })
     return c.redirect(`https://login.microsoftonline.com/organizations/v2.0/adminconsent?${params.toString()}`, 302)
   })
 
-  app.post('/api/v1/integrations/microsoft/sync', async (c) => {
+  const syncAll = async (c) => {
     const auth = await requireIntegrationManager(c)
     if (auth.error) return auth.error
     try { return c.json({ status: 'completed', ...(await syncMicrosoftTenant(auth.session.tenant_id, auth.session.user_id)) }) }
     catch (error) { return c.json({ error: error.message || 'Microsoft sync failed.' }, Number(error.status) || 502) }
-  })
+  }
+  app.post('/api/v1/integrations/microsoft/sync', syncAll)
+  app.post('/api/v1/integrations/microsoft/sync-all', syncAll)
 
-  app.post('/api/v1/integrations/microsoft/disconnect', async (c) => {
+  app.post('/api/v1/integrations/microsoft/:connectionId/sync', async (c) => {
     const auth = await requireIntegrationManager(c)
     if (auth.error) return auth.error
-    await pool.query(`UPDATE tenant_microsoft_connections SET status='disconnected',sso_enabled=false,intune_sync_enabled=false,updated_at=now() WHERE tenant_id=$1`, [auth.session.tenant_id])
+    const connectionId = clean(c.req.param('connectionId'))
+    const owned = await pool.query(`SELECT id FROM tenant_microsoft_connections WHERE id=$1 AND tenant_id=$2 LIMIT 1`, [connectionId, auth.session.tenant_id])
+    if (!owned.rowCount) return c.json({ error: 'Microsoft connection not found.' }, 404)
+    try { return c.json({ status: 'completed', ...(await syncMicrosoftConnection(connectionId, auth.session.user_id)) }) }
+    catch (error) { return c.json({ error: error.message || 'Microsoft sync failed.' }, Number(error.status) || 502) }
+  })
+
+  app.patch('/api/v1/integrations/microsoft/:connectionId', async (c) => {
+    const auth = await requireIntegrationManager(c)
+    if (auth.error) return auth.error
+    const connectionId = clean(c.req.param('connectionId'))
+    const body = await c.req.json().catch(() => ({}))
+    const name = body.connectionName === undefined ? null : clean(body.connectionName)
+    if (name !== null && (name.length < 2 || name.length > 80)) return c.json({ error: 'Connection name must be between 2 and 80 characters.' }, 400)
+    const interval = body.syncIntervalMinutes === undefined ? null : Number(body.syncIntervalMinutes)
+    if (interval !== null && (!Number.isInteger(interval) || interval < 15 || interval > 1440)) return c.json({ error: 'Sync interval must be between 15 and 1440 minutes.' }, 400)
+    const result = await pool.query(
+      `UPDATE tenant_microsoft_connections SET
+         connection_name=COALESCE($3,connection_name),
+         intune_sync_interval_minutes=COALESCE($4,intune_sync_interval_minutes),
+         sso_enabled=COALESCE($5,sso_enabled),
+         intune_sync_enabled=COALESCE($6,intune_sync_enabled),updated_at=now()
+       WHERE id=$1 AND tenant_id=$2 RETURNING id`,
+      [connectionId, auth.session.tenant_id, name, interval, typeof body.ssoEnabled === 'boolean' ? body.ssoEnabled : null, typeof body.syncEnabled === 'boolean' ? body.syncEnabled : null],
+    )
+    if (!result.rowCount) return c.json({ error: 'Microsoft connection not found.' }, 404)
+    return c.json(await microsoftStatus(auth.session.tenant_id))
+  })
+
+  app.post('/api/v1/integrations/microsoft/:connectionId/disconnect', async (c) => {
+    const auth = await requireIntegrationManager(c)
+    if (auth.error) return auth.error
+    const result = await pool.query(
+      `UPDATE tenant_microsoft_connections SET status='disconnected',sso_enabled=false,intune_sync_enabled=false,updated_at=now() WHERE id=$1 AND tenant_id=$2 RETURNING id`,
+      [clean(c.req.param('connectionId')), auth.session.tenant_id],
+    )
+    if (!result.rowCount) return c.json({ error: 'Microsoft connection not found.' }, 404)
     return c.json({ status: 'disconnected' })
   })
 
@@ -418,9 +548,12 @@ export function registerMicrosoftRoutes(app) {
     let where = `d.tenant_id=$1 AND d.active=true`
     if (personId) { params.push(personId); where += ` AND d.assigned_person_id=$2` }
     const result = await pool.query(
-      `SELECT d.id,d.reference,d.source,d.source_device_id,d.directory_device_id,d.name,d.platform,d.operating_system,d.os_version,d.manufacturer,d.model,d.serial_number,d.user_display_name,d.user_principal_name,d.owner_type,d.compliance_state,d.management_state,d.management_agent,d.enrollment_type,d.registration_state,d.category_name,d.is_encrypted,d.memory_bytes,d.storage_total_bytes,d.storage_free_bytes,d.enrolled_at,d.source_last_sync_at,d.last_imported_at,d.assigned_person_id,
-              p.name AS assigned_person_name,p.email AS assigned_person_email
-       FROM rmm_device_inventory d LEFT JOIN organisation_people p ON p.tenant_id=d.tenant_id AND p.id=d.assigned_person_id
+      `SELECT d.id,d.reference,d.source,d.source_device_id,d.directory_device_id,d.name,d.platform,d.operating_system,d.os_version,d.manufacturer,d.model,d.serial_number,d.user_display_name,d.user_principal_name,d.owner_type,d.compliance_state,d.management_state,d.management_agent,d.enrollment_type,d.registration_state,d.category_name,d.is_encrypted,d.memory_bytes,d.storage_total_bytes,d.storage_free_bytes,d.enrolled_at,d.source_last_sync_at,d.last_imported_at,d.assigned_person_id,d.microsoft_connection_id,
+              p.name AS assigned_person_name,p.email AS assigned_person_email,
+              mc.connection_name AS source_connection_name,mc.directory_tenant_id AS source_directory_tenant_id,mc.status AS source_connection_status
+       FROM rmm_device_inventory d
+       LEFT JOIN organisation_people p ON p.tenant_id=d.tenant_id AND p.id=d.assigned_person_id
+       LEFT JOIN tenant_microsoft_connections mc ON mc.id=d.microsoft_connection_id
        WHERE ${where} ORDER BY d.name`, params,
     )
     return c.json({ devices: result.rows })
@@ -434,9 +567,14 @@ export function startMicrosoftSyncScheduler() {
   const runDueSyncs = async () => {
     try {
       const due = await pool.query(
-        `SELECT tenant_id FROM tenant_microsoft_connections WHERE status='connected' AND intune_sync_enabled=true AND (last_sync_completed_at IS NULL OR last_sync_completed_at + make_interval(mins=>intune_sync_interval_minutes) <= now()) LIMIT 10`,
+        `SELECT id,tenant_id FROM tenant_microsoft_connections
+         WHERE status='connected' AND intune_sync_enabled=true
+           AND (last_sync_completed_at IS NULL OR last_sync_completed_at + make_interval(mins=>intune_sync_interval_minutes) <= now())
+         ORDER BY coalesce(last_sync_completed_at,'epoch'::timestamptz) LIMIT 20`,
       )
-      for (const row of due.rows) await syncMicrosoftTenant(row.tenant_id).catch((error) => console.error('Scheduled Microsoft sync failed', row.tenant_id, error.message))
+      for (const row of due.rows) {
+        await syncMicrosoftConnection(row.id).catch((error) => console.error('Scheduled Microsoft sync failed', row.tenant_id, row.id, error.message))
+      }
     } catch (error) { console.error('Microsoft sync scheduler failed', error) }
   }
   setTimeout(runDueSyncs, 10_000).unref?.()

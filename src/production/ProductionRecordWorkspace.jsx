@@ -482,9 +482,11 @@ function RecordWorkspace({ route }) {
         setRequesterAssets((payload.devices || []).map((device) => ({
           id: device.reference || device.id,
           name: device.name,
-          type: [device.platform || device.operating_system, device.compliance_state ? `Compliance: ${device.compliance_state}` : ''].filter(Boolean).join(' · '),
+          type: [device.platform || device.operating_system, device.compliance_state ? `Compliance: ${device.compliance_state}` : '', device.source_connection_name || ''].filter(Boolean).join(' · '),
           status: device.management_state || 'Managed',
           source: device.source,
+          sourceTenant: device.source_connection_name || '',
+          sourceDirectoryTenantId: device.source_directory_tenant_id || '',
           serialNumber: device.serial_number,
           deviceId: device.reference,
         })))
