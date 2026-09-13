@@ -745,10 +745,34 @@ export function registerMicrosoftRoutes(app) {
     const result = await pool.query(
       `SELECT d.id,d.reference,d.source,d.source_device_id,d.directory_device_id,d.name,d.platform,d.operating_system,d.os_version,d.manufacturer,d.model,d.serial_number,d.user_display_name,d.user_principal_name,d.owner_type,d.compliance_state,d.management_state,d.management_agent,d.enrollment_type,d.registration_state,d.category_name,d.is_encrypted,d.memory_bytes,d.storage_total_bytes,d.storage_free_bytes,d.enrolled_at,d.source_last_sync_at,d.last_imported_at,d.assigned_person_id,d.microsoft_connection_id,
               p.name AS assigned_person_name,p.email AS assigned_person_email,
-              mc.connection_name AS source_connection_name,mc.directory_tenant_id AS source_directory_tenant_id,mc.status AS source_connection_status
+              mc.connection_name AS source_connection_name,mc.directory_tenant_id AS source_directory_tenant_id,mc.status AS source_connection_status,
+              CASE WHEN d.source='hi5central_agent' THEN d.reference ELSE agent_match.reference END AS rmm_reference,
+              CASE WHEN d.source='hi5central_agent' THEN 'agent' ELSE agent_match.match_method END AS rmm_match_method
        FROM rmm_device_inventory d
        LEFT JOIN organisation_people p ON p.tenant_id=d.tenant_id AND p.id=d.assigned_person_id
        LEFT JOIN tenant_microsoft_connections mc ON mc.id=d.microsoft_connection_id
+       LEFT JOIN LATERAL (
+         SELECT a.reference,
+                CASE
+                  WHEN NULLIF(trim(d.directory_device_id),'') IS NOT NULL AND lower(trim(a.directory_device_id))=lower(trim(d.directory_device_id)) THEN 'directory_device_id'
+                  ELSE 'serial_number'
+                END AS match_method
+         FROM rmm_device_inventory a
+         WHERE a.tenant_id=d.tenant_id
+           AND a.source='hi5central_agent'
+           AND a.active=true
+           AND a.id<>d.id
+           AND (
+             (NULLIF(trim(d.directory_device_id),'') IS NOT NULL AND NULLIF(trim(a.directory_device_id),'') IS NOT NULL AND lower(trim(a.directory_device_id))=lower(trim(d.directory_device_id)))
+             OR
+             (NULLIF(trim(d.serial_number),'') IS NOT NULL AND NULLIF(trim(a.serial_number),'') IS NOT NULL
+              AND lower(trim(a.serial_number))=lower(trim(d.serial_number))
+              AND (NULLIF(trim(d.manufacturer),'') IS NULL OR NULLIF(trim(a.manufacturer),'') IS NULL OR lower(trim(a.manufacturer))=lower(trim(d.manufacturer))))
+           )
+         ORDER BY CASE WHEN NULLIF(trim(d.directory_device_id),'') IS NOT NULL AND lower(trim(a.directory_device_id))=lower(trim(d.directory_device_id)) THEN 0 ELSE 1 END,
+                  a.updated_at DESC
+         LIMIT 1
+       ) agent_match ON d.source='intune'
        WHERE ${where} ORDER BY d.name`, params,
     )
     return c.json({ devices: result.rows })

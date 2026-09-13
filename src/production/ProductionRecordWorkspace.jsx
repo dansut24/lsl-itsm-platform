@@ -10,6 +10,7 @@ import {
   CircleDot,
   Clock3,
   Download,
+  ExternalLink,
   FileText,
   Link2,
   Laptop,
@@ -35,6 +36,8 @@ import {
   patchProductionServiceRequest,
   transitionProductionServiceRequest,
 } from '../services/productionServiceRequests.js'
+import { deploymentConfig } from '../lib/deploymentConfig.js'
+import { resolveTenantSurface } from '../lib/tenantSurface.js'
 import { Hi5EntityTypeahead } from './Hi5EntityTypeahead.jsx'
 import './ProductionRecordWorkspace.css'
 
@@ -43,6 +46,20 @@ const GENERIC_TYPES = {
   incidents: 'Incident',
   problems: 'Problem',
   changes: 'Change',
+}
+
+function rmmDeviceHref(deviceId) {
+  const encoded = encodeURIComponent(String(deviceId || '').toUpperCase())
+  const surface = resolveTenantSurface()
+  const deployment = deploymentConfig()
+  if (deployment.tenancyMode === 'single') return `/rmm/devices/${encoded}`
+  if (surface?.canonical && surface?.tenantSlug) return `https://${surface.tenantSlug}-rmm.${deployment.rootDomain}/devices/${encoded}`
+  return `/rmm/devices/${encoded}`
+}
+
+function intuneDeviceHref(deviceId) {
+  const encoded = encodeURIComponent(String(deviceId || ''))
+  return `https://intune.microsoft.com/#view/Microsoft_Intune_Devices/DeviceSettingsMenuBlade/~/overview/mdmDeviceId/${encoded}`
 }
 
 function recordWorkspaceRoute(pathname = window.location.pathname) {
@@ -489,6 +506,10 @@ function RecordWorkspace({ route }) {
           sourceTenant: device.source_connection_name || '',
           sourceDirectoryTenantId: device.source_directory_tenant_id || '',
           serialNumber: device.serial_number,
+          sourceDeviceId: device.source_device_id || '',
+          directoryDeviceId: device.directory_device_id || '',
+          rmmReference: device.rmm_reference || device.reference || '',
+          rmmMatchMethod: device.rmm_match_method || (device.source === 'hi5central_agent' ? 'agent' : 'inventory'),
           deviceId: device.reference,
         })))
       })
@@ -776,7 +797,7 @@ function RecordWorkspace({ route }) {
         <div className="record-lab-context-records">{contextRecentRecords.length ? contextRecentRecords.map((item) => <button type="button" key={item.id} onClick={() => openRecord(item)}><span><strong>{item.id}</strong><small>{item.type} · {item.status}</small></span><b>{item.title}</b></button>) : <div className="record-lab-context-empty">No other recent records were found for this requester.</div>}</div>
       </div>
     } else if (contextView === 'assets') {
-      peekContent = <div className="record-lab-context-peek">{linkedAssets.length ? <div className="record-lab-context-records">{linkedAssets.map((asset, index) => <div className="record-lab-context-asset" key={asset.id || asset.deviceId || asset.name || index}><Laptop size={17} /><span><strong>{asset.name || asset.hostname || asset.displayName || asset.id || 'Asset'}</strong><small>{asset.type || asset.deviceType || asset.status || 'Linked configuration item'}</small></span></div>)}</div> : <div className="record-lab-context-empty is-large"><Laptop size={24} /><strong>No linked assets or CIs yet</strong><span>This area is ready to surface assigned devices and configuration items as Intune/RMM data is linked to people and services.</span></div>}</div>
+      peekContent = <div className="record-lab-context-peek">{linkedAssets.length ? <div className="record-lab-context-records">{linkedAssets.map((asset, index) => <div className="record-lab-context-asset" key={asset.id || asset.deviceId || asset.name || index}><Laptop size={17} /><span><strong>{asset.name || asset.hostname || asset.displayName || asset.id || 'Asset'}</strong><small>{asset.type || asset.deviceType || asset.status || 'Linked configuration item'}</small>{asset.serialNumber ? <small>Serial: {asset.serialNumber}</small> : null}</span><div className="record-lab-context-asset-actions">{asset.rmmReference ? <a href={rmmDeviceHref(asset.rmmReference)} target="_blank" rel="noreferrer">Open in RMM <ExternalLink size={12} /></a> : null}{asset.source === 'intune' && asset.sourceDeviceId ? <a href={intuneDeviceHref(asset.sourceDeviceId)} target="_blank" rel="noreferrer">Open in Intune <ExternalLink size={12} /></a> : null}</div></div>)}</div> : <div className="record-lab-context-empty is-large"><Laptop size={24} /><strong>No linked assets or CIs yet</strong><span>This area is ready to surface assigned devices and configuration items as Intune/RMM data is linked to people and services.</span></div>}</div>
     } else if (contextView === 'related') {
       peekContent = <div className="record-lab-context-peek"><div className="record-lab-context-records">{relationships.length ? relationships.map((item) => <button type="button" key={item.id || item.targetReference} onClick={() => openRecord(item)}><span><strong>{item.targetReference || item.reference}</strong><small>{item.targetType || item.type} · {item.relationshipType || 'Related'}</small></span><b>Open record</b></button>) : <div className="record-lab-context-empty">No records are currently linked to this work item.</div>}</div></div>
     } else if (contextView === 'insights') {
