@@ -412,7 +412,7 @@ export function ProductionSettingsWorkspace({ currentPath, session, onSessionCha
             {activeId === 'rmm-patching' ? <RmmPatching config={config.rmm} update={(f, v) => updateArea('rmm', f, v)} /> : null}
             {activeId === 'rmm-remote' ? <RmmRemote config={config.rmm} update={(f, v) => updateArea('rmm', f, v)} /> : null}
 
-            {activeId === 'integrations' ? <Integrations config={config.integrations} users={config.users} update={(f, v) => updateArea('integrations', f, v)} /> : null}
+            {activeId === 'integrations' ? <Integrations config={config.integrations} update={(f, v) => updateArea('integrations', f, v)} /> : null}
             {activeId === 'subscription' ? <Subscription config={config.billing} update={(f, v) => updateArea('billing', f, v)} modules={modules} /> : null}
           </div>
         </div>
@@ -479,9 +479,60 @@ function RmmMonitoring({ config, update }) { return <Panel title="Monitoring" de
 function RmmPatching({ config, update }) { return <Panel title="Patching" description="Default patch ring and maintenance behaviour."><div className="production-settings-grid"><Field label="Patch ring"><input value={config.patchRing || ''} onChange={(e) => update('patchRing', e.target.value)} /></Field><Field label="Maintenance window"><input value={config.maintenanceWindow || ''} onChange={(e) => update('maintenanceWindow', e.target.value)} /></Field></div></Panel> }
 function RmmRemote({ config, update }) { return <Panel title="Remote access" description="Unattended remote-session defaults for managed devices."><div className="production-settings-toggle-list"><Toggle checked={Boolean(config.unattendedAccess)} onChange={(v) => update('unattendedAccess', v)} title="Allow unattended access" description="Permit authorised technicians to start remote sessions without a local prompt." /><Toggle checked={Boolean(config.requireRemoteApproval)} onChange={(v) => update('requireRemoteApproval', v)} title="Require local approval" description="Use attended approval by default instead of unattended access." /></div></Panel> }
 
-function Integrations({ config, users, update }) {
-  const m365 = users?.microsoft365 || {}
-  return <><Panel title="Integrations" description="Connection catalogue for directory, collaboration, service-management and API integrations."><div className="production-integration-grid"><div className="production-integration-card"><span className="production-integration-icon"><Cloud size={20} /></span><div><strong>Microsoft 365</strong><p>Entra ID / Graph directory and email/calendar integration.</p><small>{m365.status === 'connected' ? 'Connected in People & directory' : 'Not connected'}</small></div><button disabled type="button">{m365.status === 'connected' ? 'Managed by connector' : 'Configure connector'}</button></div><IntegrationCard name="Microsoft Teams" description="Service notifications and collaboration actions." icon={Users} status={config.microsoftTeams?.status} /><IntegrationCard name="Slack" description="Notifications and workflow actions." icon={Mail} status={config.slack?.status} /><IntegrationCard name="Jira" description="Link engineering work and service records." icon={GitBranch} status={config.jira?.status} /></div></Panel><Panel title="Developer integrations"><div className="production-settings-toggle-list"><Toggle checked={Boolean(config.apiAccess?.enabled)} onChange={(v) => update('apiAccess', { ...(config.apiAccess || {}), enabled: v })} title="API access" description="Prepare this tenant for scoped API credentials." /><Toggle checked={Boolean(config.webhooks?.enabled)} onChange={(v) => update('webhooks', { ...(config.webhooks || {}), enabled: v })} title="Webhooks" description="Allow outbound event delivery when webhook management is enabled." /></div></Panel></>
+function MicrosoftConnectionCard() {
+  const [state, setState] = useState({ loading: true, configured: false, connection: null, lastRun: null })
+  const [working, setWorking] = useState(false)
+  const [message, setMessage] = useState('')
+
+  const load = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/v1/integrations/microsoft`, { credentials: 'include' })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.error || 'Could not load Microsoft connection state.')
+      setState({ loading: false, ...payload })
+    } catch (error) {
+      setState((current) => ({ ...current, loading: false }))
+      setMessage(error.message)
+    }
+  }
+
+  useEffect(() => { void load() }, [])
+
+  async function syncNow() {
+    setWorking(true); setMessage('')
+    try {
+      const response = await fetch(`${API_BASE}/api/v1/integrations/microsoft/sync`, { method: 'POST', credentials: 'include' })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.error || 'Microsoft sync failed.')
+      setMessage(`Synced ${payload.users || 0} users and ${payload.devices || 0} Intune devices.`)
+      await load()
+    } catch (error) { setMessage(error.message) } finally { setWorking(false) }
+  }
+
+  async function disconnect() {
+    if (!window.confirm('Disconnect Microsoft 365 SSO and automatic Intune sync for this tenant? Imported inventory will be retained.')) return
+    setWorking(true); setMessage('')
+    try {
+      const response = await fetch(`${API_BASE}/api/v1/integrations/microsoft/disconnect`, { method: 'POST', credentials: 'include' })
+      if (!response.ok) throw new Error('Could not disconnect Microsoft 365.')
+      await load()
+    } catch (error) { setMessage(error.message) } finally { setWorking(false) }
+  }
+
+  const connection = state.connection
+  const connected = connection?.status === 'connected'
+  const lastSync = connection?.last_sync_completed_at ? new Date(connection.last_sync_completed_at).toLocaleString() : 'Not yet synced'
+  return <div className={`production-integration-card production-microsoft-card ${connected ? 'is-connected' : ''}`}>
+    <span className="production-integration-icon"><Cloud size={20} /></span>
+    <div><strong>Microsoft 365 / Entra ID / Intune</strong><p>Microsoft SSO, directory people and assigned Intune devices.</p><small>{state.loading ? 'Checking connection…' : !state.configured ? 'App registration required' : connected ? `${connection.device_count || 0} devices · Last sync ${lastSync}` : 'Not connected'}</small>{message ? <small className="is-feedback">{message}</small> : null}</div>
+    <div className="production-integration-actions">
+      {!connected ? <button disabled={!state.configured || state.loading} onClick={() => { window.location.href = `${API_BASE}/api/v1/integrations/microsoft/connect` }} type="button">Connect Microsoft 365</button> : <><button disabled={working} onClick={syncNow} type="button">{working ? 'Syncing…' : 'Sync now'}</button><button disabled={working} onClick={disconnect} type="button">Disconnect</button></>}
+    </div>
+  </div>
+}
+
+function Integrations({ config, update }) {
+  return <><Panel title="Integrations" description="Connection catalogue for directory, collaboration, service-management and API integrations."><div className="production-integration-grid"><MicrosoftConnectionCard /><IntegrationCard name="Microsoft Teams" description="Service notifications and collaboration actions." icon={Users} status={config.microsoftTeams?.status} /><IntegrationCard name="Slack" description="Notifications and workflow actions." icon={Mail} status={config.slack?.status} /><IntegrationCard name="Jira" description="Link engineering work and service records." icon={GitBranch} status={config.jira?.status} /></div></Panel><Panel title="Developer integrations"><div className="production-settings-toggle-list"><Toggle checked={Boolean(config.apiAccess?.enabled)} onChange={(v) => update('apiAccess', { ...(config.apiAccess || {}), enabled: v })} title="API access" description="Prepare this tenant for scoped API credentials." /><Toggle checked={Boolean(config.webhooks?.enabled)} onChange={(v) => update('webhooks', { ...(config.webhooks || {}), enabled: v })} title="Webhooks" description="Allow outbound event delivery when webhook management is enabled." /></div></Panel></>
 }
 
 function Subscription({ config, update, modules }) { return <><Panel title="Subscription" description="Subscription metadata for this tenant. Billing activation is handled by the production billing service."><div className="production-settings-grid"><Field label="Plan"><select value={config.plan || 'trial'} onChange={(e) => update('plan', e.target.value)}><option value="trial">Trial</option><option value="business">Business</option><option value="enterprise">Enterprise</option><option value="internal">Internal test tenant</option></select></Field><Field label="Billing contact"><input type="email" value={config.billingContact || ''} onChange={(e) => update('billingContact', e.target.value)} /></Field><Field label="Expected technicians"><input type="number" min="1" value={config.expectedTechnicians || '5'} onChange={(e) => update('expectedTechnicians', e.target.value)} /></Field><Field label="Expected devices"><input type="number" min="0" value={config.expectedDevices || '100'} onChange={(e) => update('expectedDevices', e.target.value)} /></Field></div></Panel><Panel title="Enabled products"><div className="production-product-summary">{modules.itsm ? <div><Wrench size={18} /><span><strong>Hi5Central ITSM</strong><small>Technician workspace + Portal</small></span></div> : null}{modules.rmm ? <div><MonitorCog size={18} /><span><strong>Hi5Central RMM</strong><small>Endpoint management</small></span></div> : null}</div></Panel></> }

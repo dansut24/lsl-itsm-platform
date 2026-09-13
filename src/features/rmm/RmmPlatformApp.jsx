@@ -157,6 +157,22 @@ function securityTone(value = '') {
   return 'neutral'
 }
 
+function RmmSidebar({ activeView, mobileOpen, navigate, onClose, tenantName }) {
+  const sections = [...new Set(navigation.map((item) => item.section))]
+  return <><button className={`rmm-sidebar-backdrop ${mobileOpen ? 'is-open' : ''}`} aria-label="Close navigation" onClick={onClose} type="button" /><aside className={`rmm-sidebar ${mobileOpen ? 'mobile-open' : ''}`}><div className="rmm-sidebar-brand"><img src={`${import.meta.env.BASE_URL}hi5central-logo.png`} alt="Hi5Central" /><div><strong>{tenantName}</strong><span>RMM</span></div><button className="rmm-mobile-close" onClick={onClose} type="button"><X size={19} /></button></div><nav className="rmm-nav">{sections.map((section) => <div className="rmm-nav-section" key={section}><span>{section}</span>{navigation.filter((item) => item.section === section).map(({ id, label, icon: Icon }) => <button className={activeView === id ? 'active' : ''} key={id} onClick={() => navigate(id)} type="button"><Icon size={17} /><span>{label}</span>{id === 'alerts' && <b>{rmmAlerts.filter((alert) => alert.status === 'Open').length}</b>}</button>)}</div>)}</nav><div className="rmm-sidebar-footer"><div><span>HC</span><div><strong>Hi5Central</strong><small>Microsoft-connected estate</small></div></div></div></aside></>
+}
+
+function RmmTopbar({ activeView, currentUser, navigate, onLogout, onMenu, query, setQuery, setTheme, theme }) {
+  const [, title] = pageMeta[activeView] || pageMeta.dashboard
+  const initials = String(currentUser?.name || 'HC').split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('') || 'HC'
+  return <header className="rmm-topbar"><div className="rmm-topbar-title"><button className="rmm-menu-button" onClick={onMenu} type="button"><Menu size={19} /></button><div><span>RMM</span><strong>{title}</strong></div></div><label className="rmm-global-search"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search devices, users, sites, groups, alerts…" /></label><div className="rmm-topbar-actions"><button onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} type="button">{theme === 'light' ? <Moon size={17} /> : <Sun size={17} />}</button><button className="rmm-notification-button" onClick={() => navigate('alerts')} type="button"><Bell size={17} /><b>{rmmAlerts.filter((alert) => alert.status === 'Open').length}</b></button><button className="rmm-user" onClick={onLogout} type="button"><span>{initials}</span><div><strong>{currentUser?.name || 'Hi5Central user'}</strong><small>Sign out</small></div><LogOut size={14} /></button></div></header>
+}
+
+function PageHeading({ activeView, action }) {
+  const [eyebrow, title, description] = pageMeta[activeView] || pageMeta.dashboard
+  return <div className="rmm-page-heading"><div><span className="rmm-eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{action}</div>
+}
+
 function RmmDashboard({ navigate, openDevice }) {
   const critical = rmmAlerts.filter((alert) => alert.severity === 'Critical' && alert.status === 'Open').length
   const patchTotal = rmmPatchGroups.reduce((sum, group) => sum + group.devices, 0)
@@ -450,7 +466,7 @@ function RmmSettings({ navigate }) {
   return <><PageHeading activeView="settings" /><div className="rmm-settings-grid">{settings.map(({ icon: Icon, title, detail, target }) => <button className="rmm-card" key={title} onClick={() => target && navigate(target)} type="button"><span><Icon size={19} /></span><div><strong>{title}</strong><small>{detail}</small></div><ChevronRight size={17} /></button>)}</div></>
 }
 
-export function RmmPlatformApp({ accent, currentUser, handleLogout, onCreateItsmIncident, setTheme, tenantName, theme, tickets = [] }) {
+export function RmmPlatformApp({ accent, currentUser, devices = rmmDevices, handleLogout, onCreateItsmIncident, setTheme, tenantName, theme, tickets = [] }) {
   const initialRoute = rmmRouteFromLocation()
   const [activeView, setActiveView] = useState(initialRoute.viewId || 'dashboard')
   const [selectedDeviceId, setSelectedDeviceId] = useState(initialRoute.deviceId || '')
@@ -458,7 +474,7 @@ export function RmmPlatformApp({ accent, currentUser, handleLogout, onCreateItsm
   const [query, setQuery] = useState('')
   const [toast, setToast] = useState('')
   const [inventoryPreset, setInventoryPreset] = useState(null)
-  const selectedDevice = rmmDevices.find((device) => device.id === selectedDeviceId)
+  const selectedDevice = devices.find((device) => device.id === selectedDeviceId)
 
   useEffect(() => {
     const handlePop = () => {
@@ -509,7 +525,7 @@ export function RmmPlatformApp({ accent, currentUser, handleLogout, onCreateItsm
 
   function renderPage() {
     if (selectedDevice) return <RmmDeviceDetail device={selectedDevice} navigate={navigate} onBack={() => { setSelectedDeviceId(''); window.history.pushState({}, '', rmmPath(undefined, 'devices')) }} onCreateIncident={createItsmIncident} tickets={tickets} />
-    if (activeView === 'devices') return <RmmDeviceInventory openDevice={openDevice} query={query} preset={inventoryPreset} onPresetApplied={() => setInventoryPreset(null)} />
+    if (activeView === 'devices') return <RmmDeviceInventory devices={devices} openDevice={openDevice} query={query} preset={inventoryPreset} onPresetApplied={() => setInventoryPreset(null)} />
     if (activeView === 'sites') return <RmmSitesManagement query={query} onViewDevices={openScopedInventory} />
     if (activeView === 'groups') return <RmmDeviceGroupsManagement query={query} onViewDevices={openScopedInventory} />
     if (activeView === 'alerts') return <RmmAlerts onCreateIncident={createItsmIncident} openDevice={openDevice} query={query} />

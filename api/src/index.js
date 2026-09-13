@@ -8,6 +8,7 @@ import { attachAccess, effectiveAccessForUser } from './access.js'
 import { enforceWorkspacePermissions } from './accessGate.js'
 import { registerCatalogueRoutes } from './catalogue.js'
 import { registerLicensingRoutes } from './licensing.js'
+import { registerMicrosoftRoutes, startMicrosoftSyncScheduler } from './microsoftIntegration.js'
 import {
   allowedRequestOrigin,
   deployment,
@@ -376,6 +377,7 @@ registerLicensingRoutes(app)
 registerCatalogueRoutes(app)
 registerOrganisationRoutes(app)
 registerSettingsRoutes(app)
+registerMicrosoftRoutes(app)
 
 app.notFound((c) => c.json({ error: 'Not found' }, 404))
 app.onError((error, c) => {
@@ -386,6 +388,7 @@ app.onError((error, c) => {
 
 await pool.query('SELECT 1')
 await ensureRedisConnected()
+startMicrosoftSyncScheduler()
 const server = serve({ fetch: app.fetch, hostname: '0.0.0.0', port })
 console.log(`Hi5Central API listening on port ${port}`)
 

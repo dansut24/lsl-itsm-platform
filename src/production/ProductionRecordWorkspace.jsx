@@ -417,6 +417,7 @@ function RecordWorkspace({ route }) {
   const [activityQuery, setActivityQuery] = useState('')
   const [attachment, setAttachment] = useState(null)
   const [contextView, setContextView] = useState('home')
+  const [requesterAssets, setRequesterAssets] = useState([])
   const [inspectorCollapsed, setInspectorCollapsed] = useState(() => window.localStorage.getItem('hi5central-record-lab-inspector-collapsed') === '1')
   const scrollRef = useRef(null)
   const timelineRef = useRef(null)
@@ -465,6 +466,32 @@ function RecordWorkspace({ route }) {
 
 
   useEffect(() => { void load() }, [route.reference, route.type])
+  useEffect(() => {
+    if (!detail) { setRequesterAssets([]); return undefined }
+    const people = Array.isArray(detail.organisation?.people) ? detail.organisation.people : []
+    const person = people.find((item) =>
+      (detail.requesterEmail && item.email && String(item.email).toLowerCase() === String(detail.requesterEmail).toLowerCase())
+      || (detail.requesterId && item.id === detail.requesterId)
+      || (detail.requester && item.name && String(item.name).toLowerCase() === String(detail.requester).toLowerCase()),
+    )
+    if (!person?.id) { setRequesterAssets([]); return undefined }
+    let active = true
+    apiJson(`/api/v1/rmm/devices?personId=${encodeURIComponent(person.id)}`)
+      .then((payload) => {
+        if (!active) return
+        setRequesterAssets((payload.devices || []).map((device) => ({
+          id: device.reference || device.id,
+          name: device.name,
+          type: [device.platform || device.operating_system, device.compliance_state ? `Compliance: ${device.compliance_state}` : ''].filter(Boolean).join(' · '),
+          status: device.management_state || 'Managed',
+          source: device.source,
+          serialNumber: device.serial_number,
+          deviceId: device.reference,
+        })))
+      })
+      .catch(() => { if (active) setRequesterAssets([]) })
+    return () => { active = false }
+  }, [detail?.id, detail?.requesterEmail, detail?.requesterId, detail?.requester])
   useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = 0 }, [tab])
   useEffect(() => { setContextView('home'); setActivityQuery('') }, [route.reference])
   useEffect(() => { window.localStorage.setItem('hi5central-record-lab-inspector-collapsed', inspectorCollapsed ? '1' : '0') }, [inspectorCollapsed])
@@ -619,6 +646,7 @@ function RecordWorkspace({ route }) {
   const requesterManager = organisationPeople.find((person) => person.id === requesterPerson?.managerId)
   const contextRecentRecords = Array.isArray(detail.contextRecentRecords) ? detail.contextRecentRecords : []
   const linkedAssets = [
+    ...requesterAssets,
     ...(Array.isArray(detail.assets) ? detail.assets : []),
     ...(Array.isArray(detail.configurationItems) ? detail.configurationItems : []),
     ...(Array.isArray(detail.recordData?.assets) ? detail.recordData.assets : []),

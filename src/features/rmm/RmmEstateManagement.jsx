@@ -178,7 +178,7 @@ function ColumnChooser({ columns, onChange, onClose }) {
   )
 }
 
-export function RmmDeviceInventory({ openDevice, query, preset, onPresetApplied }) {
+export function RmmDeviceInventory({ openDevice, query, preset, onPresetApplied, devices = rmmDevices }) {
   const [filters, setFilters] = useState(() => normalizeInventoryFilters())
   const [sort, setSort] = useState({ field: 'name', direction: 'asc' })
   const [visibleColumns, setVisibleColumns] = useState(DEFAULT_COLUMNS)
@@ -247,7 +247,7 @@ export function RmmDeviceInventory({ openDevice, query, preset, onPresetApplied 
     if (activeViewId === viewId) setActiveViewId('')
   }
 
-  const visible = useMemo(() => sortDevices(rmmDevices.filter((device) => {
+  const visible = useMemo(() => sortDevices(devices.filter((device) => {
     const searchMatch = !normalized || [
       device.id,
       device.name,
@@ -270,11 +270,11 @@ export function RmmDeviceInventory({ openDevice, query, preset, onPresetApplied 
     if (filters.health !== 'All' && device.health !== filters.health) return false
     if (!deviceMatchesPatchState(device, filters.patchState)) return false
     return true
-  }), sort), [filters, normalized, sort])
+  }), sort), [devices, filters, normalized, sort])
 
-  const needsAttention = rmmDevices.filter((device) => device.health !== 'Healthy').length
-  const offline = rmmDevices.filter((device) => device.status === 'Offline').length
-  const patchRisk = rmmDevices.filter((device) => Number(device.patchCompliance) < 90).length
+  const needsAttention = devices.filter((device) => device.health !== 'Healthy').length
+  const offline = devices.filter((device) => device.status === 'Offline').length
+  const patchRisk = devices.filter((device) => Number(device.patchCompliance) < 90).length
   const quickViews = [['all', 'All devices'], ['attention', 'Needs attention'], ['online', 'Online'], ['offline', 'Offline'], ['servers', 'Servers'], ['laptops', 'Laptops']]
   const activeFilters = Object.values(filters).filter((value) => value && value !== 'All' && value !== 'all').length
   const gridTemplateColumns = buildGridTemplate(visibleColumns)
@@ -284,7 +284,7 @@ export function RmmDeviceInventory({ openDevice, query, preset, onPresetApplied 
       <PageHeading eyebrow="Estate" title="Devices" description="Search, scope and manage every endpoint, server and monitored network device." action={<button className="rmm-primary compact" type="button"><Download size={15} /> Deploy agent</button>} />
 
       <div className="rmm-device-inventory-metrics">
-        <div><span><Monitor size={17} /></span><div><strong>{rmmDevices.length}</strong><small>Inventory records</small></div></div>
+        <div><span><Monitor size={17} /></span><div><strong>{devices.length}</strong><small>Inventory records</small></div></div>
         <div><span className="warning"><AlertTriangle size={17} /></span><div><strong>{needsAttention}</strong><small>Need attention</small></div></div>
         <div><span className="offline"><Wifi size={17} /></span><div><strong>{offline}</strong><small>Offline</small></div></div>
         <div><span className="warning"><ShieldCheck size={17} /></span><div><strong>{patchRisk}</strong><small>Below 90% patch</small></div></div>
@@ -301,7 +301,7 @@ export function RmmDeviceInventory({ openDevice, query, preset, onPresetApplied 
         <div className="rmm-filter-pills">{quickViews.map(([id, label]) => <button className={filters.quickView === id ? 'active' : ''} key={id} onClick={() => setFilter('quickView', id)} type="button">{label}</button>)}</div>
         <label>Site<select value={filters.siteId} onChange={(event) => setFilter('siteId', event.target.value)}><option value="All">All</option>{allSites.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
         <label>Group<select value={filters.groupId} onChange={(event) => setFilter('groupId', event.target.value)}><option value="All">All</option>{allGroups.map((item) => <option key={item.id} value={item.id}>{item.name}{item.mode === 'Dynamic' ? ' · dynamic' : ''}</option>)}</select></label>
-        <label>Platform<select value={filters.platform} onChange={(event) => setFilter('platform', event.target.value)}><option>All</option>{[...new Set(rmmDevices.map((device) => device.platform))].map((item) => <option key={item}>{item}</option>)}</select></label>
+        <label>Platform<select value={filters.platform} onChange={(event) => setFilter('platform', event.target.value)}><option>All</option>{[...new Set(devices.map((device) => device.platform))].map((item) => <option key={item}>{item}</option>)}</select></label>
         <label>Health<select value={filters.health} onChange={(event) => setFilter('health', event.target.value)}><option>All</option>{['Healthy', 'Warning', 'Critical', 'Offline'].map((item) => <option key={item}>{item}</option>)}</select></label>
         <label>Patch<select value={filters.patchState} onChange={(event) => setFilter('patchState', event.target.value)}><option>All</option><option>At risk</option><option>Compliant</option></select></label>
         <label>Sort<select value={`${sort.field}:${sort.direction}`} onChange={(event) => { const [field, direction] = event.target.value.split(':'); setSort({ field, direction }); setActiveViewId('') }}><option value="name:asc">Device A–Z</option><option value="health:desc">Health priority</option><option value="patch:asc">Patch lowest first</option><option value="site:asc">Site A–Z</option></select></label>
