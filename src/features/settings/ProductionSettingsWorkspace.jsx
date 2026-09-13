@@ -502,7 +502,7 @@ function MicrosoftConnections() {
   function addTenant() {
     if (!state.configured) {
       setShowMicrosoftSetup(true)
-      setMessage('Microsoft app registration details are required before a tenant can be connected.')
+      setMessage('Microsoft platform app registration must be configured securely on the Hi5Central server before a tenant can be connected.')
       return
     }
     const suggested = window.prompt('Give this Microsoft tenant a friendly name (for example UK tenant or Acquired company).', 'Microsoft 365')
@@ -543,8 +543,8 @@ function MicrosoftConnections() {
       <div className="production-integration-actions"><button disabled={state.loading || Boolean(working)} onClick={addTenant} type="button">Add Microsoft tenant</button>{state.connectedCount > 1 ? <button disabled={Boolean(working)} onClick={() => action('sync-all', () => fetch(`${API_BASE}/api/v1/integrations/microsoft/sync-all`, { method: 'POST', credentials: 'include' }), (payload) => `Synced ${payload.connections?.length || 0} Microsoft tenants and ${payload.devices || 0} devices.`)} type="button">{working === 'sync-all' ? 'Syncing…' : 'Sync all'}</button> : null}</div>
     </div>
     {showMicrosoftSetup && !state.configured ? <div className="production-microsoft-setup" role="status">
-      <div><strong>Microsoft app registration required</strong><p>Create the Entra app registration, then add its client ID and secret to Hi5Central before connecting a tenant.</p></div>
-      <div className="production-microsoft-setup-details"><span><small>Redirect URI</small><code>{state.callbackUri || `${API_BASE}/api/v1/auth/microsoft/callback`}</code></span><span><small>Application permissions</small><code>User.Read.All · DeviceManagementManagedDevices.Read.All</code></span></div>
+      <div><strong>Microsoft platform app setup required</strong><p>Create the Entra app registration first. The Application (client) ID and client secret are stored securely on the Hi5Central server and are not entered in tenant Settings.</p></div>
+      <div className="production-microsoft-setup-details"><span><small>Redirect URI</small><code>{state.callbackUri || `${API_BASE}/api/v1/auth/microsoft/callback`}</code></span><span><small>Application permissions</small><code>User.Read.All · DeviceManagementManagedDevices.Read.All</code></span><span><small>Next step</small><strong>After creating the app registration, add the client ID and secret to the Hi5Central server. This page will then enable Microsoft tenant connection automatically.</strong></span></div>
       <button onClick={() => setShowMicrosoftSetup(false)} type="button">Close</button>
     </div> : null}
     {connections.map((connection) => {
