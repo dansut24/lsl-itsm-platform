@@ -483,6 +483,7 @@ function MicrosoftConnections() {
   const [state, setState] = useState({ loading: true, configured: false, connections: [], connectedCount: 0, totalDeviceCount: 0 })
   const [working, setWorking] = useState('')
   const [message, setMessage] = useState('')
+  const [showMicrosoftSetup, setShowMicrosoftSetup] = useState(false)
 
   const load = async () => {
     try {
@@ -499,6 +500,11 @@ function MicrosoftConnections() {
   useEffect(() => { void load() }, [])
 
   function addTenant() {
+    if (!state.configured) {
+      setShowMicrosoftSetup(true)
+      setMessage('Microsoft app registration details are required before a tenant can be connected.')
+      return
+    }
     const suggested = window.prompt('Give this Microsoft tenant a friendly name (for example UK tenant or Acquired company).', 'Microsoft 365')
     if (suggested === null) return
     const name = suggested.trim() || 'Microsoft 365'
@@ -534,8 +540,13 @@ function MicrosoftConnections() {
     <div className="production-integration-card production-microsoft-card is-summary">
       <span className="production-integration-icon"><Cloud size={20} /></span>
       <div><strong>Microsoft 365 / Entra ID / Intune</strong><p>Connect one or more Microsoft tenants. Each directory keeps its own consent, users, devices and sync history.</p><small>{state.loading ? 'Checking connections…' : !state.configured ? 'App registration required' : `${state.connectedCount || 0} connected tenant${state.connectedCount === 1 ? '' : 's'} · ${state.totalDeviceCount || 0} devices`}</small>{message ? <small className="is-feedback">{message}</small> : null}</div>
-      <div className="production-integration-actions"><button disabled={!state.configured || state.loading || Boolean(working)} onClick={addTenant} type="button">Add Microsoft tenant</button>{state.connectedCount > 1 ? <button disabled={Boolean(working)} onClick={() => action('sync-all', () => fetch(`${API_BASE}/api/v1/integrations/microsoft/sync-all`, { method: 'POST', credentials: 'include' }), (payload) => `Synced ${payload.connections?.length || 0} Microsoft tenants and ${payload.devices || 0} devices.`)} type="button">{working === 'sync-all' ? 'Syncing…' : 'Sync all'}</button> : null}</div>
+      <div className="production-integration-actions"><button disabled={state.loading || Boolean(working)} onClick={addTenant} type="button">Add Microsoft tenant</button>{state.connectedCount > 1 ? <button disabled={Boolean(working)} onClick={() => action('sync-all', () => fetch(`${API_BASE}/api/v1/integrations/microsoft/sync-all`, { method: 'POST', credentials: 'include' }), (payload) => `Synced ${payload.connections?.length || 0} Microsoft tenants and ${payload.devices || 0} devices.`)} type="button">{working === 'sync-all' ? 'Syncing…' : 'Sync all'}</button> : null}</div>
     </div>
+    {showMicrosoftSetup && !state.configured ? <div className="production-microsoft-setup" role="status">
+      <div><strong>Microsoft app registration required</strong><p>Create the Entra app registration, then add its client ID and secret to Hi5Central before connecting a tenant.</p></div>
+      <div className="production-microsoft-setup-details"><span><small>Redirect URI</small><code>{state.callbackUri || `${API_BASE}/api/v1/auth/microsoft/callback`}</code></span><span><small>Application permissions</small><code>User.Read.All · DeviceManagementManagedDevices.Read.All</code></span></div>
+      <button onClick={() => setShowMicrosoftSetup(false)} type="button">Close</button>
+    </div> : null}
     {connections.map((connection) => {
       const connected = connection.status === 'connected'
       const lastSync = connection.last_sync_completed_at ? new Date(connection.last_sync_completed_at).toLocaleString() : 'Not yet synced'
