@@ -19,8 +19,8 @@ Create a client secret under **Certificates & secrets**. Store the secret **Valu
 
 Add these **Application** permissions and grant admin consent in every Microsoft tenant that will be connected:
 
-- `User.Read.All` — imports Entra users into the Hi5Central People directory.
-- `DeviceManagementManagedDevices.Read.All` — imports Microsoft Intune managed devices.
+- `User.Read.All` — reads Entra user profiles so Hi5Central can sync People and match an Intune device to the correct employee/requester.
+- `DeviceManagementManagedDevices.Read.All` — reads Intune managed-device inventory, ownership and compliance so devices can appear in RMM and ITSM Assets & CIs. It is read-only; no device write permission is requested.
 
 No Graph write permission is required for the first release.
 ## Hi5Central runtime configuration
@@ -29,9 +29,11 @@ Set the following API environment variables:
 
 ```text
 MICROSOFT_CLIENT_ID=<Application (client) ID>
-MICROSOFT_CLIENT_SECRET=<client secret value>
+MICROSOFT_CLIENT_SECRET_FILE=/run/secrets/microsoft_client_secret
 MICROSOFT_REDIRECT_URI=https://api.hi5central.com/api/v1/auth/microsoft/callback
 ```
+
+Store the client secret in a root-owned file with mode `0600`, mount it read-only into the API container, and point `MICROSOFT_CLIENT_SECRET_FILE` at that mount. Hi5Central never returns the full secret after startup: authorised integration settings receive only the first four characters plus a fixed mask. The direct `MICROSOFT_CLIENT_SECRET` environment variable remains a compatibility fallback, but the protected file is preferred.
 
 Restart only the Hi5Central API after changing these values.
 

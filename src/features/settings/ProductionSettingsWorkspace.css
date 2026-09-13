@@ -571,6 +571,13 @@
 .production-microsoft-card.is-connected { border-color: color-mix(in srgb, var(--brand) 35%, var(--line)); }
 .production-microsoft-card p { overflow-wrap: anywhere; }
 .production-microsoft-card .is-feedback { color: var(--ink); font-weight: 700; }
+.production-microsoft-credential-preview { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px 10px; margin-top: 6px; }
+.production-microsoft-credential-preview span { display: grid; gap: 2px; }
+.production-microsoft-credential-preview code { font-size: 10px; font-weight: 800; }
+.production-microsoft-credential-preview em { grid-column: 1 / -1; color: var(--muted); font-size: 9px; font-style: normal; line-height: 1.4; }
+.production-microsoft-permissions { display: grid; gap: 7px; margin-top: 4px; }
+.production-microsoft-permissions > span { display: grid; gap: 2px; padding: 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
+.production-microsoft-permissions p { margin: 0; }
 .production-microsoft-card .production-integration-actions button:not(:disabled) { cursor: pointer; }
 
 .production-microsoft-setup {
@@ -687,6 +694,8 @@
   .production-integration-grid,
   .production-product-summary { grid-template-columns: 1fr; }
   .production-microsoft-setup { grid-template-columns: 1fr; }
+  .production-microsoft-credential-preview { grid-template-columns: 1fr; }
+  .production-microsoft-credential-preview em { grid-column: 1; }
   .production-microsoft-setup > button { justify-self: start; }
   .production-365-card { grid-template-columns: 38px minmax(0, 1fr); }
   .production-365-card button { grid-column: 2; justify-self: start; }

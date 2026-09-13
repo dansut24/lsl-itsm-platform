@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { createRemoteJWKSet, jwtVerify } from 'jose'
 import { hasPermission } from './access.js'
 import { deployment, originMatchesTenant, tenantUrls } from './deploymentConfig.js'
@@ -7,13 +8,24 @@ import { ensureRedisConnected } from './redis.js'
 import { createSession, resolveSession, setSessionCookie } from './session.js'
 
 const CLIENT_ID = String(process.env.MICROSOFT_CLIENT_ID || '').trim()
-const CLIENT_SECRET = String(process.env.MICROSOFT_CLIENT_SECRET || '').trim()
+function microsoftClientSecret() {
+  const secretFile = String(process.env.MICROSOFT_CLIENT_SECRET_FILE || '').trim()
+  if (secretFile) {
+    try { return String(readFileSync(secretFile, 'utf8') || '').trim() } catch { /* Fall back to legacy env configuration. */ }
+  }
+  return String(process.env.MICROSOFT_CLIENT_SECRET || '').trim()
+}
+const CLIENT_SECRET = microsoftClientSecret()
 const CALLBACK_URI = String(process.env.MICROSOFT_REDIRECT_URI || `${deployment.apiUrl}/api/v1/auth/microsoft/callback`).trim()
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0'
 const STATE_TTL_SECONDS = 600
 const MICROSOFT_PROVIDER = 'microsoft_entra'
 
 function connectorConfigured() { return Boolean(CLIENT_ID && CLIENT_SECRET && CALLBACK_URI) }
+function credentialPreview(value = '') {
+  const normalized = String(value || '').trim()
+  return normalized ? `${normalized.slice(0, 4)}••••••••` : null
+}
 function normaliseEmail(value = '') { return String(value || '').trim().toLowerCase() }
 function clean(value = '') { return String(value ?? '').trim() }
 function hashText(value = '') { return createHash('sha256').update(String(value)).digest('hex').slice(0, 16) }
@@ -327,6 +339,11 @@ async function microsoftStatus(tenantId) {
   return {
     configured: connectorConfigured(),
     callbackUri: CALLBACK_URI,
+    credentials: {
+      clientId: credentialPreview(CLIENT_ID),
+      clientSecret: credentialPreview(CLIENT_SECRET),
+      secretStorage: process.env.MICROSOFT_CLIENT_SECRET_FILE ? 'protected_file' : (CLIENT_SECRET ? 'environment' : 'not_configured'),
+    },
     connections,
     connectedCount: connections.filter((item) => item.status === 'connected').length,
     totalDeviceCount: connections.reduce((sum, item) => sum + Number(item.device_count || 0), 0),
@@ -477,7 +494,7 @@ export function registerMicrosoftRoutes(app) {
   app.get('/api/v1/integrations/microsoft/connect', async (c) => {
     const auth = await requireIntegrationManager(c)
     if (auth.error) return auth.error
-    if (!connectorConfigured()) return c.json({ error: 'Set MICROSOFT_CLIENT_ID and MICROSOFT_CLIENT_SECRET before connecting Microsoft 365.', callbackUri: CALLBACK_URI }, 503)
+    if (!connectorConfigured()) return c.json({ error: 'Configure MICROSOFT_CLIENT_ID and a protected Microsoft client secret before connecting Microsoft 365.', callbackUri: CALLBACK_URI }, 503)
     const urls = tenantUrls(auth.session.slug, { rmm: true })
     const state = await storeState({
       kind: 'admin_consent', tenantId: auth.session.tenant_id, tenantSlug: auth.session.slug,
