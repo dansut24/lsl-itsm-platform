@@ -363,9 +363,9 @@ async function handleAdminConsentCallback(c, state, query) {
   const connectionResult = await pool.query(
     `INSERT INTO tenant_microsoft_connections
      (tenant_id,connection_name,directory_tenant_id,status,sso_enabled,intune_enabled,intune_sync_enabled,intune_status,connected_by_user_id,admin_consent_at,last_validated_at)
-     VALUES ($1,$2,$3,'connected',true,true,true,'ready',$4,now(),now())
+     VALUES ($1,$2,$3,'connected',false,true,true,'ready',$4,now(),now())
      ON CONFLICT (tenant_id,directory_tenant_id) WHERE directory_tenant_id IS NOT NULL DO UPDATE
-     SET status='connected',sso_enabled=true,intune_enabled=true,intune_sync_enabled=true,intune_status='ready',connected_by_user_id=EXCLUDED.connected_by_user_id,
+     SET status='connected',intune_enabled=true,intune_sync_enabled=true,intune_status='ready',connected_by_user_id=EXCLUDED.connected_by_user_id,
          admin_consent_at=now(),last_validated_at=now(),last_sync_error=NULL,updated_at=now()
      RETURNING id,connection_name,directory_tenant_id`,
     [state.tenantId, defaultName, directoryTenantId, state.userId],
@@ -467,12 +467,14 @@ export function registerMicrosoftRoutes(app) {
     )
     if (!Number(connected.rows[0]?.count || 0)) return c.json({ error: 'Microsoft SSO is not enabled for this tenant.' }, 404)
     const requestedSurface = clean(c.req.query('surface')).toLowerCase()
+    const loginHint = normaliseEmail(c.req.query('loginHint'))
     const urls = tenantUrls(tenant.slug, { rmm: true })
     const targetUrl = requestedSurface === 'rmm' && urls.rmmUrl ? urls.rmmUrl : urls.tenantUrl
     const codeVerifier = randomToken(48)
     const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url')
     const state = await storeState({ kind: 'sso', tenantId: tenant.id, tenantSlug: tenant.slug, tenantUrl: urls.tenantUrl, targetUrl, codeVerifier, returnTo: c.req.query('returnTo') || '/' })
     const params = new URLSearchParams({ client_id: CLIENT_ID, response_type: 'code', redirect_uri: CALLBACK_URI, response_mode: 'query', scope: 'openid profile email', state, code_challenge: codeChallenge, code_challenge_method: 'S256', prompt: 'select_account' })
+    if (loginHint) params.set('login_hint', loginHint)
     return c.redirect(`https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize?${params.toString()}`, 302)
   })
 

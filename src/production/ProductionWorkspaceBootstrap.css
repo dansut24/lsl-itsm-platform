@@ -160,3 +160,6 @@
   .production-auth-copy h1 { font-size: 36px; }
   .production-auth-card { padding: 22px 18px; border-radius: 16px; }
 }
+
+.production-auth-method-note { margin: -5px 0 0; color: #718096; font-size: 11px; line-height: 1.45; }
+.production-auth-card .production-auth-secondary-action { min-height: 38px; border: 1px solid #cdd8e5; background: #fff; color: #617188; font-size: 12px; }

@@ -535,6 +535,13 @@ function MicrosoftConnections() {
     await action(`disconnect-${connection.id}`, () => fetch(`${API_BASE}/api/v1/integrations/microsoft/${connection.id}/disconnect`, { method: 'POST', credentials: 'include' }), () => 'Microsoft tenant disconnected.')
   }
 
+  async function toggleSso(connection) {
+    const next = !connection.sso_enabled
+    await action(`sso-${connection.id}`, () => fetch(`${API_BASE}/api/v1/integrations/microsoft/${connection.id}`, {
+      method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ssoEnabled: next }),
+    }), () => next ? 'Microsoft sign-in enabled.' : 'Microsoft sign-in disabled.')
+  }
+
   const connections = state.connections || []
   return <>
     <div className="production-integration-card production-microsoft-card is-summary">
@@ -552,8 +559,8 @@ function MicrosoftConnections() {
       const lastSync = connection.last_sync_completed_at ? new Date(connection.last_sync_completed_at).toLocaleString() : 'Not yet synced'
       return <div className={`production-integration-card production-microsoft-card ${connected ? 'is-connected' : ''}`} key={connection.id}>
         <span className="production-integration-icon"><Cloud size={20} /></span>
-        <div><strong>{connection.connection_name || 'Microsoft 365'}</strong><p>{connection.directory_tenant_id || 'Directory tenant pending'} · {connected ? 'Connected' : connection.status}</p><small>{connection.device_count || 0} devices · Last sync {lastSync}</small>{connection.last_sync_error ? <small className="is-feedback">{connection.last_sync_error}</small> : null}</div>
-        <div className="production-integration-actions">{connected ? <><button disabled={Boolean(working)} onClick={() => action(`sync-${connection.id}`, () => fetch(`${API_BASE}/api/v1/integrations/microsoft/${connection.id}/sync`, { method: 'POST', credentials: 'include' }), (payload) => `Synced ${payload.users || 0} users and ${payload.devices || 0} devices from ${connection.connection_name}.`)} type="button">{working === `sync-${connection.id}` ? 'Syncing…' : 'Sync now'}</button><button disabled={Boolean(working)} onClick={() => rename(connection)} type="button">Rename</button><button disabled={Boolean(working)} onClick={() => disconnect(connection)} type="button">Disconnect</button></> : <button disabled={!state.configured || Boolean(working)} onClick={addTenant} type="button">Reconnect / add tenant</button>}</div>
+        <div><strong>{connection.connection_name || 'Microsoft 365'}</strong><p>{connection.directory_tenant_id || 'Directory tenant pending'} · {connected ? 'Connected' : connection.status}</p><small>{connection.device_count || 0} devices · Last sync {lastSync}</small><small>Microsoft sign-in: {connection.sso_enabled ? 'On' : 'Off'}</small>{connection.last_sync_error ? <small className="is-feedback">{connection.last_sync_error}</small> : null}</div>
+        <div className="production-integration-actions">{connected ? <><button disabled={Boolean(working)} onClick={() => action(`sync-${connection.id}`, () => fetch(`${API_BASE}/api/v1/integrations/microsoft/${connection.id}/sync`, { method: 'POST', credentials: 'include' }), (payload) => `Synced ${payload.users || 0} users and ${payload.devices || 0} devices from ${connection.connection_name}.`)} type="button">{working === `sync-${connection.id}` ? 'Syncing…' : 'Sync now'}</button><button disabled={Boolean(working)} onClick={() => toggleSso(connection)} type="button">{working === `sso-${connection.id}` ? 'Saving…' : connection.sso_enabled ? 'Disable SSO' : 'Enable SSO'}</button><button disabled={Boolean(working)} onClick={() => rename(connection)} type="button">Rename</button><button disabled={Boolean(working)} onClick={() => disconnect(connection)} type="button">Disconnect</button></> : <button disabled={!state.configured || Boolean(working)} onClick={addTenant} type="button">Reconnect / add tenant</button>}</div>
       </div>
     })}
   </>

@@ -46,6 +46,9 @@ export function ProductionRmmBootstrap() {
   const [theme, setTheme] = useState('light')
   const [devices, setDevices] = useState([])
   const [microsoftEnabled, setMicrosoftEnabled] = useState(false)
+  const [microsoftChecked, setMicrosoftChecked] = useState(false)
+  const [passwordStep, setPasswordStep] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -63,9 +66,9 @@ export function ProductionRmmBootstrap() {
     fetch(`${API_BASE}/api/v1/auth/microsoft/status/${encodeURIComponent(surface.tenantSlug)}`)
       .then(async (response) => ({ response, payload: await response.json().catch(() => ({})) }))
       .then(({ response, payload }) => {
-        if (active && response.ok) setMicrosoftEnabled(Boolean(payload.connected && payload.ssoEnabled))
+        if (active) { setMicrosoftEnabled(Boolean(response.ok && payload.configured && payload.connected && payload.ssoEnabled)); setMicrosoftChecked(true) }
       })
-      .catch(() => {})
+      .catch(() => { if (active) setMicrosoftChecked(true) })
     return () => { active = false }
   }, [surface.tenantSlug])
 
@@ -82,13 +85,30 @@ export function ProductionRmmBootstrap() {
   async function login(event) {
     event.preventDefault()
     setError('')
-    const response = await fetch(`${API_BASE}/api/v1/auth/login`, {
-      method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tenantSlug: surface.tenantSlug, email: form.email, password: form.password }),
-    })
-    const payload = await response.json().catch(() => ({}))
-    if (!response.ok) { setError(payload.error || 'Sign in failed.'); return }
-    setSession(payload)
+    const email = form.email.trim()
+    if (!email) { setError('Enter your email address to continue.'); return }
+    if (!passwordStep) {
+      if (!microsoftChecked) return
+      if (microsoftEnabled) {
+        setSubmitting(true)
+        const params = new URLSearchParams({ tenantSlug: surface.tenantSlug, surface: 'rmm', returnTo: '/devices', loginHint: email })
+        window.location.href = `${API_BASE}/api/v1/auth/microsoft/start?${params.toString()}`
+        return
+      }
+      setForm((current) => ({ ...current, email }))
+      setPasswordStep(true)
+      return
+    }
+    setSubmitting(true)
+    try {
+      const response = await fetch(`${API_BASE}/api/v1/auth/login`, {
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tenantSlug: surface.tenantSlug, email, password: form.password }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) { setError(payload.error || 'Sign in failed.'); return }
+      setSession(payload)
+    } finally { setSubmitting(false) }
   }
 
   async function logout() {
@@ -104,12 +124,12 @@ export function ProductionRmmBootstrap() {
         <form className="production-auth-card" onSubmit={login}>
           <img src="/hi5central-logo.png" alt="Hi5Central" />
           <h1>RMM sign in</h1>
-          <p>Sign in with an account assigned to {surface.tenantName || surface.tenantSlug}.</p>
-          <label><span>Email address</span><input type="email" autoComplete="username" required value={form.email} onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} /></label>
-          <label><span>Password</span><input type="password" autoComplete="current-password" required value={form.password} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} /></label>
+          <p>Enter your email address and Hi5Central will use the sign-in method configured by {surface.tenantName || surface.tenantSlug}.</p>
+          <label><span>Email address</span><input type="email" autoComplete="username" required value={form.email} onChange={(event) => { setForm((current) => ({ ...current, email: event.target.value })); if (passwordStep) setPasswordStep(false); setError('') }} /></label>
+          {passwordStep ? <label><span>Password</span><input type="password" autoComplete="current-password" required autoFocus value={form.password} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} /></label> : <p className="production-auth-method-note">Your organisation may continue with Microsoft 365 or ask for your Hi5Central password.</p>}
           {error ? <div className="production-auth-error">{error}</div> : null}
-          <button type="submit">Sign in</button>
-          {microsoftEnabled ? <><div className="production-auth-divider"><span>or</span></div><button className="production-auth-microsoft" onClick={() => { window.location.href = `${API_BASE}/api/v1/auth/microsoft/start?tenantSlug=${encodeURIComponent(surface.tenantSlug)}&surface=rmm&returnTo=%2Fdevices` }} type="button">Sign in with Microsoft</button></> : null}
+          <button disabled={submitting || (!passwordStep && !microsoftChecked)} type="submit">{submitting ? (microsoftEnabled && !passwordStep ? 'Opening Microsoft…' : 'Signing in…') : passwordStep ? 'Sign in' : microsoftChecked ? 'Continue' : 'Checking sign-in…'}</button>
+          {passwordStep ? <button className="production-auth-secondary-action" type="button" onClick={() => { setPasswordStep(false); setForm((current) => ({ ...current, password: '' })); setError('') }}>Use a different email</button> : null}
         </form>
       </main>
     )

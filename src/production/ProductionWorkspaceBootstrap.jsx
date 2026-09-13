@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ArrowRight, CheckCircle2, Cloud, LockKeyhole, ShieldCheck } from 'lucide-react'
+import { ArrowRight, CheckCircle2, LockKeyhole, ShieldCheck } from 'lucide-react'
 import WorkspaceRuntime from '../runtime/WorkspaceRuntime.jsx'
 import { OnboardingWizard } from '../features/onboarding/OnboardingWizard.jsx'
 import { ProductionSettingsWorkspace } from '../features/settings/ProductionSettingsWorkspace.jsx'
@@ -196,6 +196,7 @@ function LoadingScreen({ tenantName }) {
 
 function ProductionLogin({ tenant, onAuthenticated }) {
   const [form, setForm] = useState({ email: '', password: '' })
+  const [passwordStep, setPasswordStep] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [microsoftSso, setMicrosoftSso] = useState({ checked: false, enabled: false })
@@ -211,18 +212,37 @@ function ProductionLogin({ tenant, onAuthenticated }) {
 
   async function submit(event) {
     event.preventDefault()
-    setSubmitting(true)
     setError('')
+    const email = form.email.trim()
+    if (!email) {
+      setError('Enter your email address to continue.')
+      return
+    }
+
+    if (!passwordStep) {
+      if (!microsoftSso.checked) return
+      if (microsoftSso.enabled) {
+        setSubmitting(true)
+        const params = new URLSearchParams({
+          tenantSlug: tenant.slug,
+          returnTo: window.location.pathname || '/',
+          loginHint: email,
+        })
+        window.location.href = `${API_BASE}/api/v1/auth/microsoft/start?${params.toString()}`
+        return
+      }
+      setForm((current) => ({ ...current, email }))
+      setPasswordStep(true)
+      return
+    }
+
+    setSubmitting(true)
     try {
       const response = await fetch(`${API_BASE}/api/v1/auth/login`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          tenantSlug: tenant.slug,
-          email: form.email,
-          password: form.password,
-        }),
+        body: JSON.stringify({ tenantSlug: tenant.slug, email, password: form.password }),
       })
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(payload.error || 'Sign in failed.')
@@ -241,11 +261,11 @@ function ProductionLogin({ tenant, onAuthenticated }) {
           <img src="/hi5central-logo.png" alt="" />
           <span className="production-auth-kicker"><ShieldCheck size={15} /> Secure tenant sign-in</span>
           <h1>Welcome back to {tenant.companyName || tenant.slug}.</h1>
-          <p>Sign in with the administrator or technician account assigned to this Hi5Central tenant.</p>
+          <p>Enter your email address and Hi5Central will use the sign-in method configured by your organisation.</p>
           <div className="production-auth-points">
             <span><CheckCircle2 size={17} /> Tenant-isolated session</span>
             <span><CheckCircle2 size={17} /> HttpOnly secure cookie</span>
-            <span><CheckCircle2 size={17} /> PostgreSQL-backed identity</span>
+            <span><CheckCircle2 size={17} /> Organisation-managed sign-in</span>
           </div>
         </section>
 
@@ -256,32 +276,26 @@ function ProductionLogin({ tenant, onAuthenticated }) {
           </div>
 
           {tenant.status === 'pending_verification' ? (
-            <div className="production-auth-notice">
-              This workspace is waiting for its owner email to be verified. Use the verification email sent during signup before signing in.
-            </div>
+            <div className="production-auth-notice">This workspace is waiting for its owner email to be verified. Use the verification email sent during signup before signing in.</div>
           ) : null}
 
           <label>
             <span>Email address</span>
-            <input type="email" autoComplete="username" required value={form.email} onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} />
+            <input type="email" autoComplete="username" required value={form.email} onChange={(event) => { setForm((current) => ({ ...current, email: event.target.value })); if (passwordStep) setPasswordStep(false); setError('') }} />
           </label>
-          <label>
+
+          {passwordStep ? <label>
             <span>Password</span>
-            <input type="password" autoComplete="current-password" required value={form.password} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} />
-          </label>
+            <input type="password" autoComplete="current-password" required autoFocus value={form.password} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} />
+          </label> : <p className="production-auth-method-note">Your organisation may continue with Microsoft 365 or ask for your Hi5Central password.</p>}
 
           {error ? <div className="production-auth-error">{error}</div> : null}
 
-          <button type="submit" disabled={submitting || tenant.status !== 'active'}>
-            {submitting ? 'Signing in…' : 'Sign in'}
+          <button type="submit" disabled={submitting || tenant.status !== 'active' || (!passwordStep && !microsoftSso.checked)}>
+            {submitting ? (microsoftSso.enabled && !passwordStep ? 'Opening Microsoft…' : 'Signing in…') : passwordStep ? 'Sign in' : microsoftSso.checked ? 'Continue' : 'Checking sign-in…'}
             {!submitting ? <ArrowRight size={17} /> : null}
           </button>
-          {microsoftSso.enabled ? <>
-            <div className="production-auth-divider"><span>or</span></div>
-            <button className="production-auth-microsoft" type="button" onClick={() => { window.location.href = `${API_BASE}/api/v1/auth/microsoft/start?tenantSlug=${encodeURIComponent(tenant.slug)}&returnTo=${encodeURIComponent(window.location.pathname || '/')}` }}>
-              <Cloud size={17} /> Sign in with Microsoft 365
-            </button>
-          </> : null}
+          {passwordStep ? <button className="production-auth-secondary-action" type="button" onClick={() => { setPasswordStep(false); setForm((current) => ({ ...current, password: '' })); setError('') }}>Use a different email</button> : null}
           <a href="https://hi5central.com">Back to hi5central.com</a>
         </form>
       </div>
