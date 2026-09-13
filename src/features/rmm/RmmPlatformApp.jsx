@@ -17,6 +17,7 @@ import {
   ExternalLink,
   HardDrive,
   History,
+  KeyRound,
   GitBranch,
   Laptop,
   LayoutDashboard,
@@ -64,6 +65,7 @@ import {
   RmmSitesManagement,
 } from './RmmEstateManagement.jsx'
 import { RmmMonitoringPolicies } from './RmmMonitoringPolicies.jsx'
+import { RmmAgentDeployment } from './RmmAgentDeployment.jsx'
 import './RmmPlatformApp.css'
 
 const navigation = [
@@ -79,6 +81,7 @@ const navigation = [
   { id: 'policies', label: 'Policies', icon: SlidersHorizontal, section: 'Configure' },
   { id: 'jobs', label: 'Jobs', icon: ListChecks, section: 'Configure' },
   { id: 'reports', label: 'Reports', icon: BarChart3, section: 'Insights' },
+  { id: 'agent-deployment', label: 'Agent deployment', icon: Download, section: 'Administration' },
   { id: 'settings', label: 'RMM settings', icon: Settings, section: 'Administration' },
 ]
 
@@ -95,6 +98,7 @@ const pageMeta = {
   policies: ['Configuration', 'Policies', 'Control monitoring, maintenance, agent and security settings by scope.'],
   jobs: ['Execution', 'Jobs', 'Follow queued, running, completed and failed work across the RMM service.'],
   reports: ['Insights', 'Reports', 'Fleet health, patch compliance, software and operational reporting.'],
+  'agent-deployment': ['Administration', 'Agent deployment', 'Download the Windows agent and create secure, expiring enrollment packages.'],
   settings: ['Administration', 'RMM settings', 'Agent, sites, credentials, maintenance and integration configuration.'],
 }
 
@@ -201,7 +205,8 @@ function RmmDashboard({ navigate, openDevice }) {
 }
 
 function DeviceMetric({ icon: Icon, label, value, suffix = '%', tone }) {
-  return <div className={`rmm-device-metric ${tone}`}><span><Icon size={17} /></span><div><small>{label}</small><strong>{value}{suffix}</strong></div><div className="rmm-device-meter"><span style={{ width: `${Math.min(100, Number(value) || 0)}%` }} /></div></div>
+  const reported = value !== null && value !== undefined && Number.isFinite(Number(value))
+  return <div className={`rmm-device-metric ${reported ? tone : 'neutral'}`}><span><Icon size={17} /></span><div><small>{label}</small><strong>{reported ? `${value}${suffix}` : 'Not reported'}</strong></div><div className="rmm-device-meter"><span style={{ width: reported ? `${Math.min(100, Number(value))}%` : '0%' }} /></div></div>
 }
 
 function DeviceProperty({ label, value, detail }) {
@@ -406,7 +411,7 @@ function RmmDeviceDetail({ device, onBack, navigate, onCreateIncident, tickets =
         <DeviceMetric icon={CircleGauge} label="CPU" value={device.cpu} tone={metricTone(device.cpu)} />
         <DeviceMetric icon={Activity} label="Memory" value={device.memory} tone={metricTone(device.memory)} />
         <DeviceMetric icon={HardDrive} label="Disk" value={device.disk} tone={metricTone(device.disk, 80, 92)} />
-        <div className={`rmm-device-metric patch ${device.patchCompliance < 90 ? 'warning' : 'healthy'}`}><span><ShieldCheck size={17} /></span><div><small>Patch compliance</small><strong>{device.patchCompliance}%</strong></div><small>{device.pendingPatches} pending update{device.pendingPatches === 1 ? '' : 's'}</small></div>
+        <div className={`rmm-device-metric patch ${device.patchCompliance == null ? 'neutral' : device.patchCompliance < 90 ? 'warning' : 'healthy'}`}><span><ShieldCheck size={17} /></span><div><small>Patch compliance</small><strong>{device.patchCompliance == null ? 'Not reported' : `${device.patchCompliance}%`}</strong></div><small>{device.pendingPatches == null ? 'Update state not reported' : `${device.pendingPatches} pending update${device.pendingPatches === 1 ? '' : 's'}`}</small></div>
       </div>
 
       <nav className="rmm-device-subnav" aria-label="Device detail sections">
@@ -455,7 +460,7 @@ function RmmReports() {
 
 function RmmSettings({ navigate }) {
   const settings = [
-    { icon: Download, title: 'Agent deployment', detail: 'Installer packages, enrollment tokens and stable/preview channels.' },
+    { icon: Download, title: 'Agent deployment', detail: 'Installer packages, enrollment tokens and stable/preview channels.', target: 'agent-deployment' },
     { icon: MapPin, title: 'Sites & device groups', detail: 'Organise endpoints by location, department, role or dynamic rule.', target: 'sites' },
     { icon: SlidersHorizontal, title: 'Monitoring policies & inheritance', detail: 'Set estate defaults, target Sites or Groups and audit per-device overrides.', target: 'policies' },
     { icon: ShieldCheck, title: 'Maintenance windows', detail: 'Control when patching, restarts and automated remediation may run.' },
@@ -536,6 +541,7 @@ export function RmmPlatformApp({ accent, currentUser, devices = rmmDevices, hand
     if (activeView === 'policies') return <RmmMonitoringPolicies openDevice={openDevice} />
     if (activeView === 'jobs') return <RmmJobs />
     if (activeView === 'reports') return <RmmReports />
+    if (activeView === 'agent-deployment') return <RmmAgentDeployment />
     if (activeView === 'settings') return <RmmSettings navigate={navigate} />
     return <RmmDashboard navigate={navigate} openDevice={openDevice} />
   }

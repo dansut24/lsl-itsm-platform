@@ -9,6 +9,7 @@ import { enforceWorkspacePermissions } from './accessGate.js'
 import { registerCatalogueRoutes } from './catalogue.js'
 import { registerLicensingRoutes } from './licensing.js'
 import { registerMicrosoftRoutes, startMicrosoftSyncScheduler } from './microsoftIntegration.js'
+import { attachRmmAgentWebSocket, registerRmmAgentRoutes } from './rmmAgent.js'
 import {
   allowedRequestOrigin,
   deployment,
@@ -378,6 +379,7 @@ registerCatalogueRoutes(app)
 registerOrganisationRoutes(app)
 registerSettingsRoutes(app)
 registerMicrosoftRoutes(app)
+registerRmmAgentRoutes(app)
 
 app.notFound((c) => c.json({ error: 'Not found' }, 404))
 app.onError((error, c) => {
@@ -390,6 +392,7 @@ await pool.query('SELECT 1')
 await ensureRedisConnected()
 startMicrosoftSyncScheduler()
 const server = serve({ fetch: app.fetch, hostname: '0.0.0.0', port })
+attachRmmAgentWebSocket(server)
 console.log(`Hi5Central API listening on port ${port}`)
 
 async function shutdown(signal) {

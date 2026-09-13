@@ -737,7 +737,7 @@ export function registerMicrosoftRoutes(app) {
     if (!originMatchesTenant(c.req.header('origin'), session.slug)) return c.json({ error: 'Tenant session mismatch.' }, 403)
     const personId = clean(c.req.query('personId'))
     const params = [session.tenant_id]
-    let where = `d.tenant_id=$1 AND d.active=true`
+    let where = `d.tenant_id=$1 AND d.active=true AND NOT (d.source='hi5central_agent' AND EXISTS (SELECT 1 FROM rmm_device_inventory i WHERE i.tenant_id=d.tenant_id AND i.source='intune' AND i.active=true AND ((NULLIF(trim(d.directory_device_id),'') IS NOT NULL AND NULLIF(trim(i.directory_device_id),'') IS NOT NULL AND lower(trim(i.directory_device_id))=lower(trim(d.directory_device_id))) OR (NULLIF(trim(d.serial_number),'') IS NOT NULL AND NULLIF(trim(i.serial_number),'') IS NOT NULL AND lower(trim(i.serial_number))=lower(trim(d.serial_number)) AND (NULLIF(trim(d.manufacturer),'') IS NULL OR NULLIF(trim(i.manufacturer),'') IS NULL OR lower(trim(i.manufacturer))=lower(trim(d.manufacturer)))))))`
     if (personId) {
       params.push(personId)
       where += ` AND d.assigned_person_id IN (SELECT p2.id FROM organisation_people p2 WHERE p2.tenant_id=$1 AND (p2.id::text=$2 OR p2.external_key=$2))`
@@ -747,17 +747,31 @@ export function registerMicrosoftRoutes(app) {
               p.name AS assigned_person_name,p.email AS assigned_person_email,
               mc.connection_name AS source_connection_name,mc.directory_tenant_id AS source_directory_tenant_id,mc.status AS source_connection_status,
               CASE WHEN d.source='hi5central_agent' THEN d.reference ELSE agent_match.reference END AS rmm_reference,
-              CASE WHEN d.source='hi5central_agent' THEN 'agent' ELSE agent_match.match_method END AS rmm_match_method
+              CASE WHEN d.source='hi5central_agent' THEN 'agent' ELSE agent_match.match_method END AS rmm_match_method,
+              COALESCE(self_agent.id,agent_match.agent_id) AS agent_device_id,
+              COALESCE(self_agent.cpu_percent,agent_match.cpu_percent) AS agent_cpu_percent,
+              COALESCE(self_agent.memory_used_percent,agent_match.memory_used_percent) AS agent_memory_used_percent,
+              COALESCE(self_agent.disk_used_percent,agent_match.disk_used_percent) AS agent_disk_used_percent,
+              COALESCE(self_agent.uptime_seconds,agent_match.uptime_seconds) AS agent_uptime_seconds,
+              COALESCE(self_agent.active_user,agent_match.active_user) AS agent_active_user,
+              COALESCE(self_agent.service_status,agent_match.service_status) AS agent_service_status,
+              COALESCE(self_agent.websocket_status,agent_match.websocket_status) AS agent_websocket_status,
+              COALESCE(self_agent.agent_version,agent_match.agent_version) AS agent_version,
+              COALESCE(self_agent.last_telemetry_at,agent_match.last_telemetry_at) AS agent_last_telemetry_at,
+              CASE WHEN COALESCE(self_agent.last_telemetry_at,agent_match.last_telemetry_at) > now()-interval '90 seconds' THEN true ELSE false END AS agent_online,
+              CASE WHEN d.source='hi5central_agent' THEN d.source_payload ELSE agent_match.agent_inventory_payload END AS agent_inventory_payload
        FROM rmm_device_inventory d
        LEFT JOIN organisation_people p ON p.tenant_id=d.tenant_id AND p.id=d.assigned_person_id
        LEFT JOIN tenant_microsoft_connections mc ON mc.id=d.microsoft_connection_id
+       LEFT JOIN rmm_agent_devices self_agent ON self_agent.inventory_id=d.id AND self_agent.disabled_at IS NULL
        LEFT JOIN LATERAL (
-         SELECT a.reference,
+         SELECT a.reference,ad.id AS agent_id,ad.cpu_percent,ad.memory_used_percent,ad.disk_used_percent,ad.uptime_seconds,ad.active_user,ad.service_status,ad.websocket_status,ad.agent_version,ad.last_telemetry_at,a.source_payload AS agent_inventory_payload,
                 CASE
                   WHEN NULLIF(trim(d.directory_device_id),'') IS NOT NULL AND lower(trim(a.directory_device_id))=lower(trim(d.directory_device_id)) THEN 'directory_device_id'
                   ELSE 'serial_number'
                 END AS match_method
          FROM rmm_device_inventory a
+         JOIN rmm_agent_devices ad ON ad.inventory_id=a.id AND ad.disabled_at IS NULL
          WHERE a.tenant_id=d.tenant_id
            AND a.source='hi5central_agent'
            AND a.active=true

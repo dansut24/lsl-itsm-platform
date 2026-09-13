@@ -4,35 +4,33 @@ import { resolveTenantSurface } from '../lib/tenantSurface.js'
 
 const API_BASE = window.__HI5_API_BASE__
 
-function intuneDeviceToRmm(row) {
-  const total = Number(row.storage_total_bytes || 0)
-  const free = Number(row.storage_free_bytes || 0)
-  const usedPercent = total > 0 ? Math.max(0, Math.min(100, Math.round(((total - free) / total) * 100))) : 0
+function deviceToRmm(row) {
+  const inventory = row.agent_inventory_payload && typeof row.agent_inventory_payload === 'object' ? row.agent_inventory_payload : {}
+  const summary = inventory.summary || {}
+  const security = inventory.security || {}
+  const software = Array.isArray(inventory.software?.items) ? inventory.software.items : []
+  const total = Number(row.storage_total_bytes || summary.storage_total_bytes || 0)
+  const free = Number(row.storage_free_bytes || summary.storage_free_bytes || 0)
+  const hasAgent = Boolean(row.agent_device_id)
   const compliant = String(row.compliance_state || '').toLowerCase() === 'compliant'
+  const uptimeSeconds = row.agent_uptime_seconds == null ? null : Number(row.agent_uptime_seconds)
+  const uptime = uptimeSeconds == null ? 'Not reported' : uptimeSeconds >= 86400 ? `${Math.floor(uptimeSeconds / 86400)}d ${Math.floor((uptimeSeconds % 86400) / 3600)}h` : `${Math.floor(uptimeSeconds / 3600)}h ${Math.floor((uptimeSeconds % 3600) / 60)}m`
   return {
-    id: row.reference,
-    sourceDeviceId: row.source_device_id,
-    directoryDeviceId: row.directory_device_id,
-    name: row.name,
+    id: row.reference, agentDeviceId: row.agent_device_id || '', rmmReference: row.rmm_reference || '', rmmMatchMethod: row.rmm_match_method || '',
+    sourceDeviceId: row.source_device_id, directoryDeviceId: row.directory_device_id, name: row.name,
     type: String(row.operating_system || '').toLowerCase().includes('windows') ? 'Windows device' : (row.platform || 'Device'),
-    platform: row.platform || row.operating_system || 'Unknown',
-    os: [row.operating_system, row.os_version].filter(Boolean).join(' '),
-    edition: '', osBuild: row.os_version || '',
-    user: row.assigned_person_name || row.user_display_name || 'Unassigned',
-    userEmail: row.assigned_person_email || row.user_principal_name || '',
-    assignedPersonId: row.assigned_person_id || '',
-    site: row.source_connection_name || 'Microsoft Intune', siteId: row.microsoft_connection_id || 'intune', group: 'Microsoft Intune', groupId: 'intune', policy: 'Intune managed',
-    sourceTenant: row.source_connection_name || 'Microsoft Intune', sourceDirectoryTenantId: row.source_directory_tenant_id || '', sourceConnectionId: row.microsoft_connection_id || '',
-    status: 'Managed', health: compliant ? 'Healthy' : 'Warning', alerts: compliant ? 0 : 1,
-    cpu: 0, memory: 0, disk: usedPercent, patchCompliance: 0, pendingPatches: 0,
-    manufacturer: row.manufacturer || 'Unknown', model: row.model || 'Unknown', serial: row.serial_number || 'Not reported',
-    lastSeen: row.source_last_sync_at ? new Date(row.source_last_sync_at).toLocaleString() : 'Not reported',
-    managedSince: row.enrolled_at ? new Date(row.enrolled_at).toLocaleDateString() : 'Not reported',
-    agent: row.management_agent || 'Intune', agentChannel: 'Microsoft',
-    storageGb: total ? Math.round(total / (1024 ** 3)) : 0, storageFreeGb: free ? Math.round(free / (1024 ** 3)) : 0,
-    ramGb: row.memory_bytes ? Math.round(Number(row.memory_bytes) / (1024 ** 3)) : 0,
-    security: { encryptionState: row.is_encrypted ? 'Protected' : 'Not reported', encryption: row.is_encrypted ? 'Intune reports encrypted' : 'Not reported', avState: 'Not reported', av: 'Not reported', firewall: 'Not reported', secureBoot: 'Not reported', edrState: 'Not reported', edr: 'Not reported', tpm: 'Not reported' },
-    tags: ['Intune', row.source_connection_name || 'Microsoft Intune', row.compliance_state || 'unknown'], installedSoftware: [], patches: [], activity: [], networkAdapters: [], relatedRecordIds: [],
+    platform: row.platform || row.operating_system || 'Unknown', os: [row.operating_system, row.os_version].filter(Boolean).join(' '), edition: '', osBuild: row.os_version || '',
+    user: row.assigned_person_name || row.user_display_name || row.agent_active_user || 'Unassigned', userEmail: row.assigned_person_email || row.user_principal_name || '', assignedPersonId: row.assigned_person_id || '',
+    site: row.source_connection_name || (row.source === 'hi5central_agent' ? 'Hi5Central Agent' : 'Microsoft Intune'), siteId: row.microsoft_connection_id || row.source, group: hasAgent ? 'Hi5Central Agent' : 'Microsoft Intune', groupId: hasAgent ? 'agent' : 'intune', policy: hasAgent ? 'Agent managed' : 'Intune managed',
+    sourceTenant: row.source_connection_name || '', sourceDirectoryTenantId: row.source_directory_tenant_id || '', sourceConnectionId: row.microsoft_connection_id || '',
+    status: hasAgent ? (row.agent_online ? 'Online' : 'Offline') : 'Managed', health: hasAgent ? (row.agent_online ? 'Healthy' : 'Warning') : (compliant ? 'Healthy' : 'Warning'), alerts: hasAgent && !row.agent_online ? 1 : (compliant ? 0 : 1),
+    cpu: row.agent_cpu_percent == null ? null : Math.round(Number(row.agent_cpu_percent)), memory: row.agent_memory_used_percent == null ? null : Math.round(Number(row.agent_memory_used_percent)), disk: row.agent_disk_used_percent == null ? null : Math.round(Number(row.agent_disk_used_percent)), patchCompliance: null, pendingPatches: inventory.windows_updates?.pending_count ?? null,
+    manufacturer: row.manufacturer || summary.manufacturer || 'Unknown', model: row.model || summary.model || 'Unknown', serial: row.serial_number || summary.serial_number || 'Not reported', processor: inventory.cpu?.name || 'Not reported',
+    lastSeen: row.agent_last_telemetry_at ? new Date(row.agent_last_telemetry_at).toLocaleString() : (row.source_last_sync_at ? new Date(row.source_last_sync_at).toLocaleString() : 'Not reported'), uptime, lastBoot: inventory.os?.last_boot || 'Not reported',
+    managedSince: row.enrolled_at ? new Date(row.enrolled_at).toLocaleDateString() : 'Not reported', agent: hasAgent ? (row.agent_version ? `Hi5Central ${row.agent_version}` : 'Hi5Central Agent') : (row.management_agent || 'Intune'), agentChannel: hasAgent ? 'Stable' : 'Microsoft',
+    storageGb: total ? Math.round(total / (1024 ** 3)) : null, storageFreeGb: free ? Math.round(free / (1024 ** 3)) : null, ramGb: row.memory_bytes ? Math.round(Number(row.memory_bytes) / (1024 ** 3)) : (inventory.memory?.total_bytes ? Math.round(Number(inventory.memory.total_bytes) / (1024 ** 3)) : null),
+    security: { encryptionState: security.bitlocker_status === 'On' ? 'Protected' : (row.is_encrypted ? 'Protected' : 'Not reported'), encryption: security.bitlocker_status === 'On' ? 'BitLocker enabled' : (row.is_encrypted ? 'Intune reports encrypted' : 'Not reported'), avState: security.defender_enabled === true ? 'Enabled' : security.defender_enabled === false ? 'Disabled' : 'Not reported', av: security.defender_realtime_enabled === true ? 'Real-time protection enabled' : 'Not reported', firewall: security.firewall_enabled === true ? 'Enabled' : security.firewall_enabled === false ? 'Disabled' : 'Not reported', secureBoot: security.secure_boot || 'Not reported', edrState: 'Not reported', edr: 'Not reported', tpm: security.tpm_present === true ? 'Present' : 'Not reported' },
+    tags: [row.source === 'intune' ? 'Intune' : null, hasAgent ? 'Hi5Central Agent' : null, row.source_connection_name, row.compliance_state].filter(Boolean), installedSoftware: software.map((app) => ({ name: app.name, version: app.version || '', publisher: app.publisher || '', installed: app.install_date || '', managed: false })), patches: [], activity: [], networkAdapters: [], relatedRecordIds: [],
     complianceState: row.compliance_state || 'unknown', managementState: row.management_state || 'managed', enrollmentType: row.enrollment_type || '', categoryName: row.category_name || '',
   }
 }
@@ -65,7 +63,7 @@ export function ProductionRmmBootstrap() {
     let active = true
     fetch(`${API_BASE}/api/v1/rmm/devices`, { credentials: 'include' })
       .then(async (response) => ({ response, payload: await response.json().catch(() => ({})) }))
-      .then(({ response, payload }) => { if (active && response.ok) setDevices((payload.devices || []).map(intuneDeviceToRmm)) })
+      .then(({ response, payload }) => { if (active && response.ok) setDevices((payload.devices || []).map(deviceToRmm)) })
       .catch(() => { if (active) setDevices([]) })
     return () => { active = false }
   }, [session])
@@ -117,7 +115,7 @@ export function ProductionRmmBootstrap() {
           <label><span>Email address</span><input type="email" autoComplete="username" required value={form.email} onChange={(event) => { setForm((current) => ({ ...current, email: event.target.value })); if (passwordStep) setPasswordStep(false); setError('') }} /></label>
           {passwordStep ? <label><span>Password</span><input type="password" autoComplete="current-password" required autoFocus value={form.password} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} /></label> : <p className="production-auth-method-note">Your organisation may continue with Microsoft 365 or ask for your Hi5Central password.</p>}
           {error ? <div className="production-auth-error">{error}</div> : null}
-          <button disabled={submitting || (!passwordStep && !microsoftChecked)} type="submit">{submitting ? (microsoftEnabled && !passwordStep ? 'Opening Microsoft…' : 'Signing in…') : passwordStep ? 'Sign in' : microsoftChecked ? 'Continue' : 'Checking sign-in…'}</button>
+          <button disabled={submitting} type="submit">{submitting ? (passwordStep ? 'Signing in…' : 'Checking sign-in…') : passwordStep ? 'Sign in' : 'Continue'}</button>
           {passwordStep ? <button className="production-auth-secondary-action" type="button" onClick={() => { setPasswordStep(false); setForm((current) => ({ ...current, password: '' })); setError('') }}>Use a different email</button> : null}
         </form>
       </main>

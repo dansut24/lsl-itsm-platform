@@ -599,3 +599,48 @@ button.rmm-table-row { width: 100%; border: 0; text-align: left; cursor: pointer
   .rmm-alert-meta > button { justify-self: start; }
   .rmm-toast { right: 14px; bottom: 14px; }
 }
+
+.rmm-agent-deployment-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+.rmm-agent-download-card,
+.rmm-agent-security-card,
+.rmm-agent-issued-card,
+.rmm-agent-package-list { padding: 16px; }
+.rmm-agent-download-card,
+.rmm-agent-security-card { display: grid; align-content: start; gap: 8px; }
+.rmm-agent-download-card h2,
+.rmm-agent-security-card h2,
+.rmm-agent-issued-card h2,
+.rmm-agent-package-list h2 { margin: 0; font-size: 14px; }
+.rmm-agent-download-card p,
+.rmm-agent-security-card p,
+.rmm-agent-issued-card p { margin: 0; color: var(--rmm-muted); font-size: 9px; line-height: 1.55; }
+.rmm-agent-download-card > small,
+.rmm-agent-issued-card > small { overflow-wrap: anywhere; color: var(--rmm-muted); font-size: 7px; }
+.rmm-agent-download-card .rmm-primary { justify-self: start; text-decoration: none; }
+.rmm-agent-security-card > div { display: flex; align-items: center; gap: 7px; font-size: 8px; font-weight: 750; }
+.rmm-agent-security-card > div svg { color: #239e63; }
+.rmm-agent-error { margin-bottom: 12px; border: 1px solid rgba(218,73,91,.24); border-radius: 9px; padding: 10px 12px; background: rgba(218,73,91,.08); color: #c83f50; font-size: 9px; font-weight: 800; }
+
+.rmm-agent-issued-card { display: grid; gap: 10px; margin-bottom: 14px; }
+.rmm-agent-command { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: stretch; gap: 8px; }
+.rmm-agent-command code { overflow: auto; border-radius: 8px; padding: 11px; background: var(--rmm-soft); font-size: 8px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.rmm-agent-command button { align-self: stretch; }
+.rmm-agent-package-list { display: grid; gap: 10px; }
+.rmm-agent-package-table { display: grid; min-width: 0; }
+.rmm-agent-package-row { display: grid; grid-template-columns: minmax(160px,1.5fr) .65fr .55fr 1fr auto; align-items: center; gap: 10px; border-top: 1px solid var(--rmm-border); padding: 10px 2px; font-size: 8px; }
+.rmm-agent-package-row.head { border-top: 0; color: var(--rmm-muted); font-size: 7px; font-weight: 850; text-transform: uppercase; }
+.rmm-agent-package-row > span:first-child { display: grid; gap: 2px; min-width: 0; }
+.rmm-agent-package-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rmm-agent-package-row small { color: var(--rmm-muted); font-size: 7px; }
+
+@media (max-width: 900px) {
+  .rmm-agent-deployment-grid { grid-template-columns: 1fr; }
+  .rmm-agent-package-row { grid-template-columns: minmax(140px,1.4fr) .7fr .6fr 1fr auto; }
+}
+
+@media (max-width: 640px) {
+  .rmm-agent-command { grid-template-columns: 1fr; }
+  .rmm-agent-package-row.head { display: none; }
+  .rmm-agent-package-row { grid-template-columns: 1fr auto; gap: 6px 10px; }
+  .rmm-agent-package-row > span:nth-child(4) { grid-column: 1 / -1; color: var(--rmm-muted); }
+}
