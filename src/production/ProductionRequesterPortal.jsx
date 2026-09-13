@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowLeft,
   CheckCircle2,
+  Cloud,
   ClipboardCheck,
   ChevronRight,
   CircleDollarSign,
@@ -112,6 +113,21 @@ function PortalAuth({ tenant, onAuthenticated }) {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const [microsoftAvailable, setMicrosoftAvailable] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    fetch(`${API_BASE}/api/v1/auth/microsoft/status/${encodeURIComponent(tenant.slug)}`, { credentials: 'include' })
+      .then(async (response) => ({ response, payload: await response.json().catch(() => ({})) }))
+      .then(({ response, payload }) => { if (active) setMicrosoftAvailable(Boolean(response.ok && payload.configured && payload.connected && payload.ssoEnabled)) })
+      .catch(() => { if (active) setMicrosoftAvailable(false) })
+    return () => { active = false }
+  }, [tenant.slug])
+
+  function microsoftSignIn() {
+    const params = new URLSearchParams({ tenantSlug: tenant.slug, surface: 'portal', returnTo: '/' })
+    window.location.href = `${API_BASE}/api/v1/auth/microsoft/start?${params.toString()}`
+  }
 
   async function signIn(event) {
     event.preventDefault()
@@ -201,6 +217,7 @@ function PortalAuth({ tenant, onAuthenticated }) {
               {error ? <div className="prp-alert error">{error}</div> : null}
               <button className="prp-primary" disabled={busy || !email || !password} type="submit">{busy ? <RefreshCw className="is-spinning" size={17} /> : <LogIn size={17} />} Sign in</button>
             </form>
+            {microsoftAvailable ? <><div className="prp-auth-divider"><span>or</span></div><button className="prp-microsoft" onClick={microsoftSignIn} type="button"><Cloud size={17} /> Sign in with Microsoft</button></> : null}
             <button className="prp-link" onClick={() => { setMode('activate'); setError(''); setMessage('') }} type="button"><KeyRound size={15} /> Activate Portal access</button>
           </>
         )}

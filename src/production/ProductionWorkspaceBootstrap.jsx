@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ArrowRight, CheckCircle2, LockKeyhole, ShieldCheck } from 'lucide-react'
+import { ArrowRight, CheckCircle2, Cloud, LockKeyhole, ShieldCheck } from 'lucide-react'
 import WorkspaceRuntime from '../runtime/WorkspaceRuntime.jsx'
 import { OnboardingWizard } from '../features/onboarding/OnboardingWizard.jsx'
 import { ProductionSettingsWorkspace } from '../features/settings/ProductionSettingsWorkspace.jsx'
@@ -200,6 +200,16 @@ function ProductionLogin({ tenant, onAuthenticated }) {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [authMethod, setAuthMethod] = useState('')
+  const [microsoftAvailable, setMicrosoftAvailable] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    fetch(`${API_BASE}/api/v1/auth/microsoft/status/${encodeURIComponent(tenant.slug)}`, { credentials: 'include' })
+      .then(async (response) => ({ response, payload: await response.json().catch(() => ({})) }))
+      .then(({ response, payload }) => { if (active) setMicrosoftAvailable(Boolean(response.ok && payload.configured && payload.connected && payload.ssoEnabled)) })
+      .catch(() => { if (active) setMicrosoftAvailable(false) })
+    return () => { active = false }
+  }, [tenant.slug])
 
   useEffect(() => {
     const reason = new URLSearchParams(window.location.search).get('microsoft')
@@ -300,6 +310,10 @@ function ProductionLogin({ tenant, onAuthenticated }) {
             {!submitting ? <ArrowRight size={17} /> : null}
           </button>
           {passwordStep ? <button className="production-auth-secondary-action" type="button" onClick={() => { setPasswordStep(false); setForm((current) => ({ ...current, password: '' })); setError('') }}>Use a different email</button> : null}
+          {microsoftAvailable ? <>
+            <div className="production-auth-divider"><span>or</span></div>
+            <button className="production-auth-microsoft" type="button" onClick={() => { const params = new URLSearchParams({ tenantSlug: tenant.slug, returnTo: window.location.pathname || '/' }); window.location.href = `${API_BASE}/api/v1/auth/microsoft/start?${params.toString()}` }}><Cloud size={17} /> Sign in with Microsoft</button>
+          </> : null}
           <a href="https://hi5central.com">Back to hi5central.com</a>
         </form>
       </div>

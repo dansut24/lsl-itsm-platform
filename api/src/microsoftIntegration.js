@@ -1,11 +1,12 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { createRemoteJWKSet, jwtVerify } from 'jose'
-import { hasPermission } from './access.js'
+import { ensureDefaultRoles, hasPermission } from './access.js'
 import { deployment, originMatchesTenant, tenantUrls } from './deploymentConfig.js'
 import { pool, withTransaction } from './db.js'
+import { hashPassword } from './password.js'
 import { ensureRedisConnected } from './redis.js'
-import { createSession, resolveSession, setSessionCookie } from './session.js'
+import { createSession, resolveSession, setPortalSessionCookie, setSessionCookie } from './session.js'
 
 const CLIENT_ID = String(process.env.MICROSOFT_CLIENT_ID || '').trim()
 function microsoftClientSecret() {
@@ -176,11 +177,45 @@ async function syncDirectoryUsers(client, tenantId, connection, graphUsers) {
        SET person_id=EXCLUDED.person_id,microsoft_connection_id=EXCLUDED.microsoft_connection_id,principal_name=EXCLUDED.principal_name,updated_at=now()`,
       [tenantId, personId, MICROSOFT_PROVIDER, connection.id, connection.directory_tenant_id, user.id, email],
     )
+    const explicitlyLinked = await client.query(
+      `SELECT user_id FROM user_external_identities
+       WHERE tenant_id=$1 AND provider=$2 AND issuer_tenant_id=$3 AND object_id=$4 LIMIT 1`,
+      [tenantId, MICROSOFT_PROVIDER, connection.directory_tenant_id, user.id],
+    )
+    let userId = explicitlyLinked.rows[0]?.user_id || null
+    if (!userId) {
+      let userResult = await client.query('SELECT id FROM users WHERE lower(email)=lower($1) LIMIT 1', [email])
+      userId = userResult.rows[0]?.id || null
+      if (!userId) {
+        const passwordHash = await hashPassword(randomToken(48))
+        userResult = await client.query(
+          'INSERT INTO users (email,name,password_hash,email_verified_at) VALUES ($1,$2,$3,now()) RETURNING id',
+          [email, clean(user.displayName) || email, passwordHash],
+        )
+        userId = userResult.rows[0].id
+      }
+    }
+    const membership = await client.query(
+      'SELECT role,status FROM tenant_memberships WHERE tenant_id=$1 AND user_id=$2 LIMIT 1',
+      [tenantId, userId],
+    )
+    let membershipRole = membership.rows[0]?.role || null
+    if (!membership.rowCount) {
+      await client.query("INSERT INTO tenant_memberships (tenant_id,user_id,role,status) VALUES ($1,$2,'requester','active')", [tenantId, userId])
+      membershipRole = 'requester'
+    }
+    if (membershipRole === 'requester') {
+      await ensureDefaultRoles(client, tenantId)
+      await client.query(
+        `INSERT INTO access_user_roles (tenant_id,user_id,role_id)
+         SELECT $1,$2,id FROM access_roles WHERE tenant_id=$1 AND system_key='requester' AND active=true
+         ON CONFLICT DO NOTHING`,
+        [tenantId, userId],
+      )
+    }
     await client.query(
-      `UPDATE organisation_people p SET user_id=u.id,updated_at=now()
-       FROM users u JOIN tenant_memberships m ON m.user_id=u.id AND m.tenant_id=$1
-       WHERE p.tenant_id=$1 AND p.id=$2 AND lower(u.email)=lower($3)`,
-      [tenantId, personId, email],
+      'UPDATE organisation_people SET user_id=$3,updated_at=now() WHERE tenant_id=$1 AND id=$2',
+      [tenantId, personId, userId],
     )
     byObjectId.set(user.id, personId)
     byEmail.set(email, personId)
@@ -418,7 +453,8 @@ async function handleSsoCallback(c, state, query) {
             ts.modules,ts.onboarding_step,ts.onboarding_completed_at,ts.onboarding_data,ts.configuration,ts.tenant_url,ts.portal_url,ts.rmm_url
      FROM tenants t JOIN tenant_memberships m ON m.tenant_id=t.id JOIN users u ON u.id=m.user_id JOIN tenant_settings ts ON ts.tenant_id=t.id
      LEFT JOIN user_external_identities x ON x.tenant_id=t.id AND x.user_id=u.id AND x.provider=$3 AND x.issuer_tenant_id=$4
-     WHERE t.id=$1 AND (x.subject=$5 OR x.object_id=$6 OR lower(u.email)=lower($2)) LIMIT 1`,
+     WHERE t.id=$1 AND (x.subject=$5 OR x.object_id=$6 OR lower(u.email)=lower($2))
+     ORDER BY CASE WHEN x.id IS NOT NULL THEN 0 ELSE 1 END LIMIT 1`,
     [state.tenantId, email, MICROSOFT_PROVIDER, directoryTenantId, subject, oid || null],
   )
   if (!account.rowCount) return c.redirect(`${tenantUrl}/?microsoft=not_assigned`, 302)
@@ -426,18 +462,36 @@ async function handleSsoCallback(c, state, query) {
   if (row.tenant_status !== 'active' || row.membership_status !== 'active') return c.redirect(`${tenantUrl}/?microsoft=inactive`, 302)
   const amr = Array.isArray(claims.amr) ? claims.amr.map(String) : []
   const microsoftMfa = amr.includes('mfa')
+  const requestedSurface = ['portal','rmm'].includes(state.surface) ? state.surface : 'workspace'
+  const sessionSurface = row.tenant_role === 'requester' || requestedSurface === 'portal' ? 'portal' : 'workspace'
   const sessionToken = await withTransaction(async (client) => {
-    await client.query(
-      `INSERT INTO user_external_identities (tenant_id,user_id,provider,issuer_tenant_id,subject,object_id,principal_name,last_login_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,now())
-       ON CONFLICT (tenant_id,provider,issuer_tenant_id,subject) DO UPDATE SET user_id=EXCLUDED.user_id,object_id=EXCLUDED.object_id,principal_name=EXCLUDED.principal_name,last_login_at=now(),updated_at=now()`,
-      [row.tenant_id, row.user_id, MICROSOFT_PROVIDER, directoryTenantId, subject, oid || null, email],
+    const existingIdentity = await client.query(
+      `SELECT id FROM user_external_identities
+       WHERE tenant_id=$1 AND provider=$2 AND issuer_tenant_id=$3 AND (subject=$4 OR object_id=$5) LIMIT 1`,
+      [row.tenant_id, MICROSOFT_PROVIDER, directoryTenantId, subject, oid || null],
     )
-    return createSession(client, { tenantId: row.tenant_id, userId: row.user_id, surface: 'workspace', mfaVerified: microsoftMfa })
+    if (existingIdentity.rowCount) {
+      await client.query(
+        `UPDATE user_external_identities
+         SET user_id=$2,subject=$3,object_id=$4,principal_name=$5,last_login_at=now(),updated_at=now()
+         WHERE id=$1`,
+        [existingIdentity.rows[0].id, row.user_id, subject, oid || null, email],
+      )
+    } else {
+      await client.query(
+        `INSERT INTO user_external_identities (tenant_id,user_id,provider,issuer_tenant_id,subject,object_id,principal_name,last_login_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,now())`,
+        [row.tenant_id, row.user_id, MICROSOFT_PROVIDER, directoryTenantId, subject, oid || null, email],
+      )
+    }
+    return createSession(client, { tenantId: row.tenant_id, userId: row.user_id, surface: sessionSurface, mfaVerified: microsoftMfa })
   })
-  setSessionCookie(c, sessionToken)
-  const returnTo = String(state.returnTo || '/').startsWith('/') ? state.returnTo : '/'
-  return c.redirect(`${tenantUrl}${returnTo}`, 302)
+  if (sessionSurface === 'portal') setPortalSessionCookie(c, sessionToken)
+  else setSessionCookie(c, sessionToken)
+  const requestedReturnTo = String(state.returnTo || '/').startsWith('/') ? state.returnTo : '/'
+  const returnTo = sessionSurface === 'portal' && requestedSurface !== 'portal' ? '/' : requestedReturnTo
+  const redirectBase = sessionSurface === 'portal' ? (row.portal_url || state.portalUrl || tenantUrl) : tenantUrl
+  return c.redirect(`${redirectBase}${returnTo}`, 302)
 }
 
 async function discoverMicrosoftLogin(tenantSlug, email) {
@@ -449,6 +503,16 @@ async function discoverMicrosoftLogin(tenantSlug, email) {
        FROM user_external_identities x
        JOIN tenant_memberships m ON m.tenant_id=x.tenant_id AND m.user_id=x.user_id AND m.status='active'
        JOIN tenant_microsoft_connections c ON c.tenant_id=x.tenant_id AND c.directory_tenant_id=x.issuer_tenant_id
+       JOIN tenants t ON t.id=x.tenant_id
+       WHERE t.slug=$1 AND t.status='active' AND x.provider=$2
+         AND c.status='connected' AND c.sso_enabled=true
+         AND lower(x.principal_name)=lower($3)
+       UNION ALL
+       SELECT 1
+       FROM organisation_person_external_identities x
+       JOIN organisation_people p ON p.tenant_id=x.tenant_id AND p.id=x.person_id AND p.user_id IS NOT NULL AND p.active=true
+       JOIN tenant_memberships m ON m.tenant_id=p.tenant_id AND m.user_id=p.user_id AND m.status='active'
+       JOIN tenant_microsoft_connections c ON c.id=x.microsoft_connection_id AND c.tenant_id=x.tenant_id
        JOIN tenants t ON t.id=x.tenant_id
        WHERE t.slug=$1 AND t.status='active' AND x.provider=$2
          AND c.status='connected' AND c.sso_enabled=true
@@ -545,11 +609,11 @@ export function registerMicrosoftRoutes(app) {
     const loginHint = normaliseEmail(c.req.query('loginHint'))
     if (loginHint && !(await discoverMicrosoftLogin(tenantSlug, loginHint))) return c.json({ error: 'This email address is not linked to Microsoft sign-in for this Hi5Central tenant.' }, 404)
     const urls = tenantUrls(tenant.slug, { rmm: true })
-    const targetUrl = requestedSurface === 'rmm' && urls.rmmUrl ? urls.rmmUrl : urls.tenantUrl
+    const targetUrl = requestedSurface === 'portal' && urls.portalUrl ? urls.portalUrl : requestedSurface === 'rmm' && urls.rmmUrl ? urls.rmmUrl : urls.tenantUrl
     const codeVerifier = randomToken(48)
     const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url')
-    const state = await storeState({ kind: 'sso', tenantId: tenant.id, tenantSlug: tenant.slug, tenantUrl: urls.tenantUrl, targetUrl, codeVerifier, returnTo: c.req.query('returnTo') || '/' })
-    const params = new URLSearchParams({ client_id: CLIENT_ID, response_type: 'code', redirect_uri: CALLBACK_URI, response_mode: 'query', scope: 'openid profile email', state, code_challenge: codeChallenge, code_challenge_method: 'S256', prompt: 'select_account' })
+    const state = await storeState({ kind: 'sso', tenantId: tenant.id, tenantSlug: tenant.slug, tenantUrl: urls.tenantUrl, portalUrl: urls.portalUrl, targetUrl, surface: requestedSurface || 'workspace', codeVerifier, returnTo: c.req.query('returnTo') || '/' })
+    const params = new URLSearchParams({ client_id: CLIENT_ID, response_type: 'code', redirect_uri: CALLBACK_URI, response_mode: 'query', scope: 'openid profile email', state, code_challenge: codeChallenge, code_challenge_method: 'S256' })
     if (loginHint) params.set('login_hint', loginHint)
     return c.redirect(`https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize?${params.toString()}`, 302)
   })
