@@ -10,6 +10,8 @@ import { registerCatalogueRoutes } from './catalogue.js'
 import { registerLicensingRoutes } from './licensing.js'
 import { registerMicrosoftRoutes, startMicrosoftSyncScheduler } from './microsoftIntegration.js'
 import { attachRmmAgentWebSocket, registerRmmAgentRoutes } from './rmmAgent.js'
+import { registerRmmAutomationRoutes } from './rmmAutomation.js'
+import { attachRmmViewerWebSocket, registerRmmRemoteRoutes } from './rmmRemote.js'
 import {
   allowedRequestOrigin,
   deployment,
@@ -380,6 +382,8 @@ registerOrganisationRoutes(app)
 registerSettingsRoutes(app)
 registerMicrosoftRoutes(app)
 registerRmmAgentRoutes(app)
+registerRmmAutomationRoutes(app)
+registerRmmRemoteRoutes(app)
 
 app.notFound((c) => c.json({ error: 'Not found' }, 404))
 app.onError((error, c) => {
@@ -393,6 +397,7 @@ await ensureRedisConnected()
 startMicrosoftSyncScheduler()
 const server = serve({ fetch: app.fetch, hostname: '0.0.0.0', port })
 attachRmmAgentWebSocket(server)
+attachRmmViewerWebSocket(server)
 console.log(`Hi5Central API listening on port ${port}`)
 
 async function shutdown(signal) {

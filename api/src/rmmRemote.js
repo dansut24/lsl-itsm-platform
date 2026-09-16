@@ -1,0 +1,354 @@
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { WebSocketServer } from 'ws'
+import { hasPermission } from './access.js'
+import { originMatchesTenant } from './deploymentConfig.js'
+import { pool } from './db.js'
+import { agentSocketForDevice } from './rmmAgent.js'
+import { resolveSession } from './session.js'
+
+const VIEWER_DOWNLOAD_URL = 'https://downloads.hi5central.com/viewer/latest/Hi5CentralViewerSetup.exe'
+const VIEWER_WS_URL = 'wss://rmm.hi5central.com/viewer/ws'
+const ROOT_DOMAIN = process.env.ROOT_DOMAIN || 'hi5central.com'
+const TURN_HOST = process.env.TURN_HOST || 'turn.hi5central.com'
+const TURN_SHARED_SECRET_FILE = process.env.TURN_SHARED_SECRET_FILE || '/run/secrets/turn_shared_secret'
+const SESSION_TTL_SECONDS = 15 * 60
+const MAX_VIEWER_PAYLOAD_BYTES = 8 * 1024 * 1024
+const activeViewerSessions = new Map()
+
+const VIEWER_MESSAGE_TYPES = new Set([
+  'webrtc_answer', 'answer', 'ice_candidate',
+  'switch_monitor', 'input_event',
+  'service_shortcut', 'system_shortcut', 'shortcut', 'service_command',
+  'backstage_start', 'backstage_stop', 'console_start',
+  'chat_message', 'chat_close',
+  'remote_file_list_request', 'remote_file_download_request', 'remote_file_upload_request',
+  'remote_file_upload_start', 'remote_file_upload_chunk', 'remote_file_upload_complete_request',
+  'remote_file_delete_request', 'remote_file_mkdir_request', 'remote_file_rename_request',
+  'viewer_disconnected', 'viewer_closed', 'viewer_left', 'end_session', 'stop_webrtc',
+])
+
+function clean(value = '') { return String(value ?? '').trim() }
+function sha256(value = '') { return createHash('sha256').update(String(value)).digest('hex') }
+function randomSecret(prefix) { return `${prefix}_${randomBytes(32).toString('base64url')}` }
+function isPortableUserAgent(value = '') {
+  return /Android|iPhone|iPad|iPod|Mobile|Tablet|Kindle|Silk/i.test(String(value || ''))
+}
+function viewerClientForRequest(c) {
+  const mobileHint = clean(c.req.header('sec-ch-ua-mobile')).toLowerCase()
+  return mobileHint === '?1' || isPortableUserAgent(c.req.header('user-agent')) ? 'browser' : 'native'
+}
+function safeSend(ws, payload) {
+  if (!ws || ws.readyState !== 1) return false
+  try { ws.send(typeof payload === 'string' ? payload : JSON.stringify(payload)); return true } catch { return false }
+}
+function turnSharedSecret() {
+  try { return clean(readFileSync(TURN_SHARED_SECRET_FILE, 'utf8')) } catch { return '' }
+}
+function iceConfiguration(sessionId) {
+  const viewer = [
+    { urls: `stun:${TURN_HOST}:3478` },
+    { urls: 'stun:stun.l.google.com:19302' },
+  ]
+  const agent = [`stun:${TURN_HOST}:3478`, 'stun:stun.l.google.com:19302']
+  const sharedSecret = turnSharedSecret()
+  if (!sharedSecret) return { viewer, agent }
+
+  const expiry = Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS + 300
+  const username = `${expiry}:${clean(sessionId)}`
+  const credential = createHmac('sha1', sharedSecret).update(username).digest('base64')
+  viewer.push({
+    urls: [`turn:${TURN_HOST}:3478?transport=udp`, `turn:${TURN_HOST}:3478?transport=tcp`],
+    username,
+    credential,
+  })
+  const user = encodeURIComponent(username)
+  const pass = encodeURIComponent(credential)
+  agent.push(`turn:${user}:${pass}@${TURN_HOST}:3478?transport=udp`)
+  return { viewer, agent }
+}
+
+async function requireRemoteAccess(c) {
+  const session = await resolveSession(c)
+  if (!session) return { error: c.json({ error: 'Authentication required.' }, 401) }
+  if (!originMatchesTenant(c.req.header('origin'), session.slug)) {
+    return { error: c.json({ error: 'Tenant session mismatch.' }, 403) }
+  }
+  if (!hasPermission(session.access, 'rmm.devices.remote')) {
+    return { error: c.json({ error: 'You do not have permission to start remote sessions.' }, 403) }
+  }
+  return { session }
+}
+
+async function agentForRemoteSession(tenantId, agentDeviceId) {
+  const result = await pool.query(
+    `SELECT a.id,a.tenant_id,a.inventory_id,a.websocket_status,a.last_telemetry_at,
+            i.reference,i.name,i.serial_number
+       FROM rmm_agent_devices a
+       JOIN rmm_device_inventory i ON i.id=a.inventory_id
+      WHERE a.id::text=$1 AND a.tenant_id=$2 AND a.disabled_at IS NULL AND i.active=true
+      LIMIT 1`,
+    [clean(agentDeviceId), tenantId],
+  )
+  return result.rows[0] || null
+}
+
+function browserLaunchUrl(slug, payload) {
+  const ice = Buffer.from(JSON.stringify(payload.iceServers), 'utf8').toString('base64url')
+  const fragment = new URLSearchParams({
+    session_id: payload.sessionId,
+    device_id: payload.deviceId,
+    token: payload.token,
+    wss_url: payload.wssUrl,
+    ice,
+  })
+  return `https://${slug}-rmm.${ROOT_DOMAIN}/rmm-viewer/index.html#${fragment.toString()}`
+}
+
+function nativeLaunchUrl(payload) {
+  const query = new URLSearchParams({
+    session_id: payload.sessionId,
+    device_id: payload.deviceId,
+    token: payload.token,
+    wss_url: payload.wssUrl,
+  })
+  return `hi5central-viewer://connect?${query.toString()}`
+}
+
+export function registerRmmRemoteRoutes(app) {
+  app.post('/api/v1/rmm/remote-sessions', async (c) => {
+    const auth = await requireRemoteAccess(c)
+    if (auth.error) return auth.error
+    const body = await c.req.json().catch(() => ({}))
+    const agent = await agentForRemoteSession(auth.session.tenant_id, body.agentDeviceId)
+    if (!agent) return c.json({ error: 'Managed Agent not found for this device.' }, 404)
+    const liveSocket = agentSocketForDevice(agent.id)
+    if (!liveSocket || liveSocket.readyState !== 1) return c.json({ error: 'The Hi5Central Agent is currently offline.' }, 409)
+
+    const mode = clean(body.mode).toLowerCase() === 'backstage' ? 'backstage' : 'console'
+    const viewerClient = viewerClientForRequest(c)
+    const sessionId = randomUUID()
+    const token = randomSecret('h5v')
+    const expiresAt = new Date(Date.now() + SESSION_TTL_SECONDS * 1000)
+    await pool.query(
+      `INSERT INTO rmm_remote_sessions
+         (id,tenant_id,agent_device_id,inventory_id,created_by_user_id,mode,viewer_client,viewer_token_hash,status,expires_at,last_activity_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'created',$9,now())`,
+      [sessionId, auth.session.tenant_id, agent.id, agent.inventory_id, auth.session.user_id, mode, viewerClient, sha256(token), expiresAt],
+    )
+
+    const ice = iceConfiguration(sessionId)
+    const connection = {
+      sessionId,
+      deviceId: String(agent.id),
+      token,
+      wssUrl: VIEWER_WS_URL,
+      iceServers: ice.viewer,
+    }
+    return c.json({
+      session: { id: sessionId, mode, expiresAt: expiresAt.toISOString(), deviceName: agent.name, reference: agent.reference },
+      connection,
+      viewerClient,
+      browserUrl: viewerClient === 'browser' ? browserLaunchUrl(auth.session.slug, connection) : null,
+      nativeUrl: viewerClient === 'native' ? nativeLaunchUrl(connection) : null,
+      viewerDownloadUrl: viewerClient === 'native' ? VIEWER_DOWNLOAD_URL : null,
+    }, 201)
+  })
+
+  app.get('/api/v1/rmm/remote-sessions', async (c) => {
+    const auth = await requireRemoteAccess(c)
+    if (auth.error) return auth.error
+    const result = await pool.query(
+      `SELECT s.id,s.agent_device_id,s.mode,s.viewer_client,s.status,s.expires_at,s.viewer_connected_at,s.started_at,
+              s.last_activity_at,s.created_at,i.name AS device_name,i.reference,
+              COALESCE(NULLIF(u.name,''),u.email,'Hi5Central technician') AS technician
+         FROM rmm_remote_sessions s
+         LEFT JOIN rmm_device_inventory i ON i.id=s.inventory_id
+         LEFT JOIN users u ON u.id=s.created_by_user_id
+        WHERE s.tenant_id=$1
+          AND s.status IN ('created','viewer_connected','active')
+          AND s.expires_at>now()
+        ORDER BY COALESCE(s.started_at,s.viewer_connected_at,s.created_at) DESC`,
+      [auth.session.tenant_id],
+    )
+    return c.json({ sessions: result.rows })
+  })
+
+  app.post('/api/v1/rmm/remote-sessions/:sessionId/terminate', async (c) => {
+    const auth = await requireRemoteAccess(c)
+    if (auth.error) return auth.error
+    const sessionId = clean(c.req.param('sessionId'))
+    const result = await pool.query(
+      `SELECT id,agent_device_id,status FROM rmm_remote_sessions WHERE id=$1 AND tenant_id=$2 LIMIT 1`,
+      [sessionId, auth.session.tenant_id],
+    )
+    if (!result.rowCount) return c.json({ error: 'Remote session not found.' }, 404)
+    const remote = result.rows[0]
+    if (!['created','viewer_connected','active'].includes(remote.status)) {
+      return c.json({ session: { id: remote.id, status: remote.status }, alreadyEnded: true })
+    }
+
+    await pool.query(
+      `UPDATE rmm_remote_sessions
+          SET status='ended',ended_at=COALESCE(ended_at,now()),end_reason='terminated_by_technician',last_activity_at=now(),updated_at=now()
+        WHERE id=$1 AND tenant_id=$2`,
+      [sessionId, auth.session.tenant_id],
+    )
+
+    const live = activeViewerSessions.get(sessionId)
+    const agentWs = live?.agentWs || agentSocketForDevice(remote.agent_device_id)
+    safeSend(agentWs, { type: 'end_session', session_id: sessionId, reason: 'terminated_by_technician' })
+    if (live?.viewerWs) {
+      safeSend(live.viewerWs, { type: 'session_terminated', session_id: sessionId, reason: 'terminated_by_technician' })
+      try { live.viewerWs.close(4000, 'Session terminated') } catch {}
+    }
+    activeViewerSessions.delete(sessionId)
+    return c.json({ session: { id: sessionId, status: 'ended', endReason: 'terminated_by_technician' } })
+  })
+
+  app.get('/api/v1/rmm/remote-sessions/:sessionId', async (c) => {
+    const auth = await requireRemoteAccess(c)
+    if (auth.error) return auth.error
+    const result = await pool.query(
+      `SELECT id,agent_device_id,mode,status,expires_at,viewer_connected_at,started_at,ended_at,last_activity_at,end_reason,created_at
+         FROM rmm_remote_sessions WHERE id=$1 AND tenant_id=$2 LIMIT 1`,
+      [clean(c.req.param('sessionId')), auth.session.tenant_id],
+    )
+    if (!result.rowCount) return c.json({ error: 'Remote session not found.' }, 404)
+    return c.json({ session: result.rows[0] })
+  })
+}
+
+async function authenticateViewer(sessionId, deviceId, token) {
+  if (!clean(sessionId) || !clean(deviceId) || !clean(token)) return null
+  const result = await pool.query(
+    `SELECT s.id,s.tenant_id,s.agent_device_id,s.inventory_id,s.mode,s.viewer_client,s.status,s.expires_at,
+            u.name AS technician_name,u.email AS technician_email
+       FROM rmm_remote_sessions s
+       LEFT JOIN users u ON u.id=s.created_by_user_id
+      WHERE s.id::text=$1 AND s.agent_device_id::text=$2 AND s.viewer_token_hash=$3
+        AND s.status IN ('created','viewer_connected','active') AND s.expires_at>now()
+      LIMIT 1`,
+    [clean(sessionId), clean(deviceId), sha256(token)],
+  )
+  return result.rows[0] || null
+}
+
+export function attachRmmViewerWebSocket(server) {
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_VIEWER_PAYLOAD_BYTES })
+
+  server.on('upgrade', async (request, socket, head) => {
+    let url
+    try { url = new URL(request.url || '/', 'http://localhost') } catch { return }
+    if (url.pathname !== '/viewer/ws') return
+    const viewerSession = await authenticateViewer(
+      url.searchParams.get('session_id'),
+      url.searchParams.get('device_id'),
+      url.searchParams.get('token'),
+    ).catch(() => null)
+    if (viewerSession?.viewer_client === 'browser') {
+      const requestedClient = clean(url.searchParams.get('client')).toLowerCase()
+      if (requestedClient !== 'browser' || !isPortableUserAgent(request.headers['user-agent'])) {
+        socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
+        socket.destroy()
+        return
+      }
+    } else if (viewerSession?.viewer_client === 'native' && clean(url.searchParams.get('client')).toLowerCase() === 'browser') {
+      socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
+      socket.destroy()
+      return
+    }
+    if (!viewerSession) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
+      socket.destroy()
+      return
+    }
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      ws.hi5RemoteSession = viewerSession
+      wss.emit('connection', ws, request)
+    })
+  })
+
+  wss.on('connection', async (viewerWs) => {
+    const remote = viewerWs.hi5RemoteSession
+    const sessionId = String(remote.id)
+    const agentWs = agentSocketForDevice(remote.agent_device_id)
+    if (!agentWs || agentWs.readyState !== 1) {
+      await pool.query(
+        `UPDATE rmm_remote_sessions SET status='failed',ended_at=now(),end_reason='agent_offline',updated_at=now() WHERE id=$1`,
+        [remote.id],
+      ).catch(() => {})
+      safeSend(viewerWs, { type: 'viewer_error', session_id: sessionId, error: 'Agent offline' })
+      viewerWs.close(1013, 'Agent offline')
+      return
+    }
+
+    const ice = iceConfiguration(sessionId)
+    await pool.query(
+      `UPDATE rmm_remote_sessions SET status='viewer_connected',viewer_connected_at=now(),last_activity_at=now(),updated_at=now() WHERE id=$1`,
+      [remote.id],
+    ).catch(() => {})
+    activeViewerSessions.set(sessionId, { viewerWs, agentWs, tenantId: remote.tenant_id })
+
+    const relayFromAgent = (buffer) => {
+      const text = Buffer.isBuffer(buffer) ? buffer.toString('utf8') : String(buffer)
+      let payload
+      try { payload = JSON.parse(text) } catch { return }
+      const payloadSessionId = clean(payload?.session_id || payload?.sessionId)
+      if (payloadSessionId !== sessionId) return
+      safeSend(viewerWs, text)
+      if (payload?.type === 'webrtc_offer') {
+        pool.query(
+          `UPDATE rmm_remote_sessions SET status='active',started_at=COALESCE(started_at,now()),last_activity_at=now(),updated_at=now() WHERE id=$1`,
+          [remote.id],
+        ).catch(() => {})
+      } else {
+        pool.query(`UPDATE rmm_remote_sessions SET last_activity_at=now(),updated_at=now() WHERE id=$1`, [remote.id]).catch(() => {})
+      }
+    }
+    agentWs.on('message', relayFromAgent)
+
+    viewerWs.on('message', (buffer) => {
+      const text = Buffer.isBuffer(buffer) ? buffer.toString('utf8') : String(buffer)
+      let payload
+      try { payload = JSON.parse(text) } catch { return }
+      const type = clean(payload?.type)
+      if (!VIEWER_MESSAGE_TYPES.has(type)) return
+      payload.session_id = sessionId
+      delete payload.sessionId
+      if (!safeSend(agentWs, payload)) {
+        safeSend(viewerWs, { type: 'viewer_error', session_id: sessionId, error: 'Agent connection unavailable' })
+      }
+      pool.query(`UPDATE rmm_remote_sessions SET last_activity_at=now(),updated_at=now() WHERE id=$1`, [remote.id]).catch(() => {})
+    })
+
+    const cleanup = (reason = 'viewer_disconnected') => {
+      agentWs.off('message', relayFromAgent)
+      const active = activeViewerSessions.get(sessionId)
+      if (active?.viewerWs === viewerWs) activeViewerSessions.delete(sessionId)
+      safeSend(agentWs, { type: 'viewer_disconnected', session_id: sessionId })
+      pool.query(
+        `UPDATE rmm_remote_sessions
+            SET status=CASE WHEN status IN ('ended','expired') THEN status ELSE 'ended' END,
+                ended_at=COALESCE(ended_at,now()),end_reason=COALESCE(end_reason,$2),updated_at=now()
+          WHERE id=$1`,
+        [remote.id, reason],
+      ).catch(() => {})
+    }
+    viewerWs.once('close', () => cleanup('viewer_disconnected'))
+    viewerWs.once('error', () => cleanup('viewer_error'))
+
+    safeSend(viewerWs, { type: 'viewer_connected', session_id: sessionId })
+    safeSend(viewerWs, { type: 'session_config', session_id: sessionId, ice_servers: ice.viewer })
+    safeSend(agentWs, {
+      type: 'start_webrtc',
+      session_id: sessionId,
+      mode: remote.mode,
+      technician_name: clean(remote.technician_name || remote.technician_email) || 'Hi5Central technician',
+      iceServers: ice.agent,
+    })
+    safeSend(viewerWs, { type: 'start_webrtc_sent', session_id: sessionId })
+  })
+
+  return wss
+}

@@ -53,7 +53,6 @@ import {
   rmmDevices,
   rmmJobs,
   rmmPatchGroups,
-  rmmScripts,
   rmmSoftware,
 } from '../../data/rmmData.js'
 import { deploymentConfig } from '../../lib/deploymentConfig.js'
@@ -66,6 +65,7 @@ import {
 } from './RmmEstateManagement.jsx'
 import { RmmMonitoringPolicies } from './RmmMonitoringPolicies.jsx'
 import { RmmAgentDeployment } from './RmmAgentDeployment.jsx'
+import { RmmAutomation, RmmJobs } from './RmmAutomationWorkspace.jsx'
 import './RmmPlatformApp.css'
 
 const navigation = [
@@ -400,9 +400,9 @@ function RmmDeviceDetail({ device, onBack, navigate, onCreateIncident, tickets =
           <div><StatusPill>{device.status}</StatusPill><StatusPill>{device.health}</StatusPill><span>{device.os}</span><span>Agent {device.agent}</span></div>
         </div>
         <div className="rmm-device-actions">
-          <button className="rmm-primary compact" onClick={() => navigate('remote')} type="button"><Monitor size={16} /> Remote desktop</button>
-          <button onClick={() => navigate('remote')} type="button"><TerminalSquare size={16} /> Terminal</button>
-          <button onClick={() => navigate('remote')} type="button"><Box size={16} /> Files</button>
+          <button className="rmm-primary compact" onClick={() => navigate('remote', { deviceId: device.id })} type="button"><Monitor size={16} /> Remote desktop</button>
+          <button onClick={() => navigate('remote', { deviceId: device.id })} type="button"><TerminalSquare size={16} /> Terminal</button>
+          <button onClick={() => navigate('remote', { deviceId: device.id })} type="button"><Box size={16} /> Files</button>
           <button onClick={() => createIncident()} type="button"><AlertTriangle size={16} /> ITSM incident</button>
         </div>
       </header>
@@ -430,9 +430,132 @@ function RmmAlerts({ onCreateIncident, openDevice, query }) {
   return <><PageHeading activeView="alerts" action={<button className="rmm-primary compact" type="button"><CheckCircle2 size={16} /> Acknowledge selected</button>} /><div className="rmm-list-toolbar"><div className="rmm-filter-pills">{['All', 'Critical', 'High', 'Medium'].map((value) => <button className={severity === value ? 'active' : ''} key={value} onClick={() => setSeverity(value)} type="button">{value}</button>)}</div><span>{visible.filter((alert) => alert.status === 'Open').length} open</span></div><div className="rmm-alert-list">{visible.map((alert) => <article className="rmm-card" key={alert.id}><div className={`rmm-alert-severity ${healthClass(alert.severity)}`}><AlertTriangle size={19} /></div><div className="rmm-alert-copy"><div><span className="rmm-eyebrow">{alert.id} · {alert.policy}</span><h2>{alert.title}</h2><p>{alert.detail}</p></div><button onClick={() => openDevice(rmmDevices.find((device) => device.id === alert.deviceId))} type="button"><Monitor size={14} /> {alert.device}</button></div><div className="rmm-alert-meta"><StatusPill tone={healthClass(alert.severity)}>{alert.severity}</StatusPill><span>{alert.raised}</span><button onClick={() => onCreateIncident?.({ alert, device: rmmDevices.find((device) => device.id === alert.deviceId) })} type="button">Create incident</button><button type="button">Acknowledge</button><button type="button"><MoreHorizontal size={16} /></button></div></article>)}</div></>
 }
 
-function RmmRemote({ openDevice }) {
-  const online = rmmDevices.filter((device) => device.status === 'Online')
-  return <><PageHeading activeView="remote" /><div className="rmm-remote-layout"><section className="rmm-card rmm-remote-launch"><span className="rmm-remote-hero-icon"><TerminalSquare size={28} /></span><span className="rmm-eyebrow">Secure support</span><h2>Start a remote session</h2><p>Select an online endpoint and choose the support tool you need. RMM does not use workspace tabs; sessions launch from the current device context.</p><label><Search size={16} /><select defaultValue=""><option value="" disabled>Select an online device…</option>{online.map((device) => <option key={device.id} value={device.id}>{device.name} · {device.user}</option>)}</select></label><div className="rmm-remote-actions"><button className="rmm-primary" type="button"><Monitor size={17} /> Remote desktop</button><button type="button"><TerminalSquare size={17} /> Terminal</button><button type="button"><Box size={17} /> Files</button></div></section><section className="rmm-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">Recent</span><h2>Recent devices</h2></div></div><div className="rmm-health-list">{online.slice(0, 6).map((device) => <button key={device.id} onClick={() => openDevice(device)} type="button"><span className={`rmm-device-icon ${healthClass(device.health)}`}><DeviceIcon device={device} /></span><span><strong>{device.name}</strong><small>{device.user} · {device.site}</small></span><StatusPill>{device.status}</StatusPill><ChevronRight size={15} /></button>)}</div></section></div></>
+function RmmRemote({ devices = [], initialDeviceId = '', openDevice }) {
+  const online = devices.filter((device) => device.status === 'Online' && device.agentDeviceId)
+  const [selectedId, setSelectedId] = useState(initialDeviceId)
+  const [starting, setStarting] = useState(false)
+  const [launch, setLaunch] = useState(null)
+  const [error, setError] = useState('')
+  const [remoteSessions, setRemoteSessions] = useState([])
+  const [sessionError, setSessionError] = useState('')
+  const [terminatingId, setTerminatingId] = useState('')
+  const selected = online.find((device) => device.id === selectedId)
+  const apiBase = window.__HI5_API_BASE__ || deploymentConfig().apiUrl
+
+  useEffect(() => {
+    if (initialDeviceId) setSelectedId(initialDeviceId)
+  }, [initialDeviceId])
+
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      try {
+        const response = await fetch(`${apiBase}/api/v1/rmm/remote-sessions`, { credentials: 'include' })
+        const payload = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(payload.error || 'Unable to load live remote sessions.')
+        if (!cancelled) {
+          setRemoteSessions(Array.isArray(payload.sessions) ? payload.sessions : [])
+          setSessionError('')
+        }
+      } catch (err) {
+        if (!cancelled) setSessionError(err?.message || 'Unable to load live remote sessions.')
+      }
+    }
+    load()
+    const timer = window.setInterval(load, 5000)
+    return () => { cancelled = true; window.clearInterval(timer) }
+  }, [apiBase])
+
+  async function startRemoteDesktop() {
+    if (!selected?.agentDeviceId || starting) return
+    setStarting(true)
+    setLaunch(null)
+    setError('')
+    try {
+      const response = await fetch(`${apiBase}/api/v1/rmm/remote-sessions`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentDeviceId: selected.agentDeviceId, mode: 'console' }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.error || 'Unable to start the remote session.')
+      setLaunch(payload)
+      if (payload.viewerClient === 'browser' && payload.browserUrl) window.location.assign(payload.browserUrl)
+      else if (payload.viewerClient === 'native' && payload.nativeUrl) window.location.assign(payload.nativeUrl)
+      else throw new Error('The server could not determine a supported viewer for this device.')
+    } catch (err) {
+      setError(err?.message || 'Unable to start the remote session.')
+    } finally {
+      setStarting(false)
+    }
+  }
+
+  async function terminateRemoteSession(sessionId) {
+    if (!sessionId || terminatingId) return
+    setTerminatingId(sessionId)
+    setSessionError('')
+    try {
+      const response = await fetch(`${apiBase}/api/v1/rmm/remote-sessions/${encodeURIComponent(sessionId)}/terminate`, {
+        method: 'POST',
+        credentials: 'include',
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.error || 'Unable to terminate the remote session.')
+      setRemoteSessions((current) => current.filter((session) => session.id !== sessionId))
+    } catch (err) {
+      setSessionError(err?.message || 'Unable to terminate the remote session.')
+    } finally {
+      setTerminatingId('')
+    }
+  }
+
+  function sessionState(session) {
+    if (session.status === 'active') return ['LIVE', 'active']
+    if (session.status === 'viewer_connected') return ['Connecting', 'connecting']
+    return ['Starting', 'starting']
+  }
+
+  function sessionStarted(session) {
+    const value = session.started_at || session.viewer_connected_at || session.created_at
+    if (!value) return 'Starting now'
+    const date = new Date(value)
+    return Number.isNaN(date.getTime()) ? 'Starting now' : `Started ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+  }
+
+  return <>
+    <PageHeading activeView="remote" />
+    <div className="rmm-remote-layout">
+      <section className="rmm-card rmm-remote-launch">
+        <span className="rmm-remote-hero-icon"><TerminalSquare size={28} /></span>
+        <span className="rmm-eyebrow">Secure support</span>
+        <h2>Start a remote session</h2>
+        <p>Choose an online endpoint. Windows desktops open the Hi5Central Viewer; phones and tablets launch the touch-friendly browser viewer automatically.</p>
+        <label><Search size={16} /><select value={selectedId} onChange={(event) => { setSelectedId(event.target.value); setLaunch(null); setError('') }}><option value="" disabled>Select an online device…</option>{online.map((device) => <option key={device.id} value={device.id}>{device.name} · {device.user}</option>)}</select></label>
+        {!online.length && <div className="rmm-remote-message warning">No online endpoints currently have a connected Hi5Central Agent.</div>}
+        {error && <div className="rmm-remote-message error">{error}</div>}
+        <div className="rmm-remote-actions">
+          <button className="rmm-primary" disabled={!selected || starting} onClick={startRemoteDesktop} type="button"><Monitor size={17} /> {starting ? 'Starting…' : 'Remote desktop'}</button>
+          <button disabled title="Terminal support is the next remote tool to be wired." type="button"><TerminalSquare size={17} /> Terminal</button>
+          <button disabled title="Remote file access is the next remote tool to be wired." type="button"><Box size={17} /> Files</button>
+        </div>
+        {launch && <div className="rmm-remote-ready"><CheckCircle2 size={18} /><div><strong>Session ready for {launch.session?.deviceName || selected?.name}</strong><span>{launch.viewerClient === 'browser' ? 'This phone or tablet is authorised for the browser viewer.' : 'This desktop is authorised for the installed Hi5Central Viewer.'}</span></div><div>{launch.viewerClient === 'native' && launch.nativeUrl && <a className="rmm-primary compact" href={launch.nativeUrl}>Open Windows Viewer</a>}{launch.viewerClient === 'native' && launch.viewerDownloadUrl && <a href={launch.viewerDownloadUrl}>Install Viewer</a>}{launch.viewerClient === 'browser' && launch.browserUrl && <a className="rmm-primary compact" href={launch.browserUrl}>Open browser viewer</a>}</div></div>}
+      </section>
+      <section className="rmm-card rmm-remote-status-card">
+        <div className="rmm-card-heading rmm-live-heading"><div><span className="rmm-eyebrow">Remote control</span><h2>Live sessions</h2></div><span className={`rmm-live-count ${remoteSessions.some((session) => session.status === 'active') ? 'is-live' : ''}`}><Activity size={13} /> {remoteSessions.length}</span></div>
+        {sessionError && <div className="rmm-remote-message error rmm-session-error">{sessionError}</div>}
+        <div className="rmm-live-session-list">
+          {!remoteSessions.length && <div className="rmm-live-empty"><ShieldCheck size={18} /><span>No remote sessions are active.</span></div>}
+          {remoteSessions.map((session) => {
+            const [label, tone] = sessionState(session)
+            return <div className="rmm-live-session" key={session.id}><span className={`rmm-live-state ${tone}`}><span />{label}</span><div><strong>{session.device_name || 'Managed device'}</strong><small>{session.technician || 'Hi5Central technician'} · {session.viewer_client === 'browser' ? 'Browser viewer' : 'Windows Viewer'} · {sessionStarted(session)}</small></div><button disabled={terminatingId === session.id} onClick={() => terminateRemoteSession(session.id)} type="button"><LogOut size={14} /> {terminatingId === session.id ? 'Ending…' : 'Terminate'}</button></div>
+          })}
+        </div>
+        <div className="rmm-remote-agents-heading"><span className="rmm-eyebrow">Online now</span><h3>Connected Agents</h3></div>
+        <div className="rmm-health-list">{online.slice(0, 6).map((device) => <button key={device.id} onClick={() => { setSelectedId(device.id); setLaunch(null); setError('') }} type="button"><span className={`rmm-device-icon ${healthClass(device.health)}`}><DeviceIcon device={device} /></span><span><strong>{device.name}</strong><small>{device.user} · {device.site}</small></span><StatusPill>{device.status}</StatusPill><ChevronRight size={15} /></button>)}</div>{selected && <div className="rmm-remote-device-link"><button onClick={() => openDevice(selected)} type="button">View {selected.name} details <ChevronRight size={14} /></button></div>}
+      </section>
+    </div>
+  </>
 }
 
 function RmmPatching() {
@@ -443,14 +566,6 @@ function RmmPatching() {
 
 function RmmSoftware() {
   return <><PageHeading activeView="software" action={<button className="rmm-primary compact" type="button"><PackageCheck size={16} /> New deployment</button>} /><section className="rmm-table-card"><div className="rmm-table rmm-software-table"><div className="rmm-table-head"><span>Application</span><span>Version</span><span>Installed</span><span>Updates</span><span>Management</span><span /></div>{rmmSoftware.map((app) => <div className="rmm-table-row" key={app.name}><span className="rmm-device-cell"><span className="rmm-device-icon neutral"><Box size={17} /></span><span><strong>{app.name}</strong><small>{app.latest ? 'Current release' : 'Update available'}</small></span></span><span><strong>{app.version}</strong></span><span><strong>{app.installed}</strong><small>devices</small></span><span><strong>{app.updates}</strong><small>required</small></span><span><StatusPill tone={app.managed ? 'healthy' : 'neutral'}>{app.managed ? 'Managed' : 'Observed'}</StatusPill></span><span><button type="button"><MoreHorizontal size={16} /></button></span></div>)}</div></section></>
-}
-
-function RmmAutomation() {
-  return <><PageHeading activeView="automation" action={<button className="rmm-primary compact" type="button"><Code2 size={16} /> New script</button>} /><div className="rmm-automation-grid">{rmmScripts.map((script) => <article className="rmm-card" key={script.id}><div className="rmm-script-icon"><Code2 size={20} /></div><span className="rmm-eyebrow">{script.id} · {script.platform}</span><h2>{script.name}</h2><p>{script.language} · {script.scope}</p><div className="rmm-script-meta"><span><strong>{script.success}%</strong><small>Success rate</small></span><span><strong>{script.lastRun}</strong><small>Last run</small></span></div><footer><button type="button">Edit</button><button className="rmm-primary compact" type="button"><Play size={14} /> Run</button></footer></article>)}</div></>
-}
-
-function RmmJobs() {
-  return <><PageHeading activeView="jobs" /><section className="rmm-table-card"><div className="rmm-table rmm-jobs-table"><div className="rmm-table-head"><span>Job</span><span>Target</span><span>Status</span><span>Progress</span><span>Started</span><span>Initiated by</span></div>{rmmJobs.map((job) => <div className="rmm-table-row" key={job.id}><span><strong>{job.title}</strong><small>{job.id} · {job.type}</small></span><span><strong>{job.target}</strong></span><span><StatusPill>{job.status}</StatusPill></span><span>{job.status === 'Running' ? <div className="rmm-job-progress"><div><span style={{ width: `${job.progress}%` }} /></div><b>{job.progress}%</b></div> : <strong>{job.progress}%</strong>}</span><span><strong>{job.started}</strong></span><span><strong>{job.initiatedBy}</strong></span></div>)}</div></section></>
 }
 
 function RmmReports() {
@@ -479,6 +594,7 @@ export function RmmPlatformApp({ accent, currentUser, devices = rmmDevices, hand
   const [query, setQuery] = useState('')
   const [toast, setToast] = useState('')
   const [inventoryPreset, setInventoryPreset] = useState(null)
+  const [remoteDeviceId, setRemoteDeviceId] = useState('')
   const selectedDevice = devices.find((device) => device.id === selectedDeviceId)
 
   useEffect(() => {
@@ -507,6 +623,7 @@ export function RmmPlatformApp({ accent, currentUser, devices = rmmDevices, hand
   function navigate(viewId, options = {}) {
     setActiveView(viewId)
     setSelectedDeviceId('')
+    setRemoteDeviceId(viewId === 'remote' ? (options.deviceId || '') : '')
     setMobileOpen(false)
     setQuery('')
     const path = rmmPath(undefined, viewId)
@@ -534,7 +651,7 @@ export function RmmPlatformApp({ accent, currentUser, devices = rmmDevices, hand
     if (activeView === 'sites') return <RmmSitesManagement query={query} onViewDevices={openScopedInventory} />
     if (activeView === 'groups') return <RmmDeviceGroupsManagement query={query} onViewDevices={openScopedInventory} />
     if (activeView === 'alerts') return <RmmAlerts onCreateIncident={createItsmIncident} openDevice={openDevice} query={query} />
-    if (activeView === 'remote') return <RmmRemote openDevice={openDevice} />
+    if (activeView === 'remote') return <RmmRemote devices={devices} initialDeviceId={remoteDeviceId} openDevice={openDevice} />
     if (activeView === 'patching') return <RmmPatching />
     if (activeView === 'software') return <RmmSoftware />
     if (activeView === 'automation') return <RmmAutomation />
