@@ -1,0 +1,42 @@
+name: Sync validated VPS main checkpoint
+
+on:
+  push:
+    branches:
+      - vps-sync-automation-20260916
+    paths:
+      - ".github/workflows/vps-main-sync.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  fast-forward-main:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout GitHub main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Download and verify VPS commit bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 --retry-delay 2 \
+            https://downloads.hi5central.com/bootstrap-app-sync/app-main-through-9f3b94d.bundle \
+            -o /tmp/app-main-through-9f3b94d.bundle
+          echo "beece0fdc397f5aa9826ac3e8a6f2a20568f09c28d48ac643dccb033db6065ad  /tmp/app-main-through-9f3b94d.bundle" | sha256sum -c -
+          test "$(git rev-parse HEAD)" = "6539d4268dfb93ff8691b529c95a69a3299a3e27"
+
+      - name: Fast-forward to exact VPS checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch /tmp/app-main-through-9f3b94d.bundle HEAD:refs/remotes/vps/head
+          test "$(git rev-parse refs/remotes/vps/head)" = "9f3b94dd1fb4ff188dcbbef9bdfabf61011ee955"
+          git merge --ff-only refs/remotes/vps/head
+          test "$(git rev-parse HEAD)" = "9f3b94dd1fb4ff188dcbbef9bdfabf61011ee955"
+          git push origin HEAD:main
