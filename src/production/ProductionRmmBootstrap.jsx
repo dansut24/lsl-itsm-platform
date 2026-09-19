@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { RmmPlatformApp } from '../features/rmm/RmmPlatformApp.jsx'
 import { resolveTenantSurface } from '../lib/tenantSurface.js'
+import './ProductionWorkspaceBootstrap.css'
 
 const API_BASE = window.__HI5_API_BASE__
 
@@ -21,7 +22,7 @@ function deviceToRmm(row) {
     type: String(row.operating_system || '').toLowerCase().includes('windows') ? 'Windows device' : (row.platform || 'Device'),
     platform: row.platform || row.operating_system || 'Unknown', os: [row.operating_system, row.os_version].filter(Boolean).join(' '), edition: '', osBuild: row.os_version || '',
     user: row.assigned_person_name || row.user_display_name || row.agent_active_user || 'Unassigned', userEmail: row.assigned_person_email || row.user_principal_name || '', assignedPersonId: row.assigned_person_id || '',
-    site: row.source_connection_name || (row.source === 'hi5central_agent' ? 'Hi5Central Agent' : 'Microsoft Intune'), siteId: row.microsoft_connection_id || row.source, group: hasAgent ? 'Hi5Central Agent' : 'Microsoft Intune', groupId: hasAgent ? 'agent' : 'intune', policy: hasAgent ? 'Agent managed' : 'Intune managed',
+    site: row.assigned_site_name || 'Unassigned', siteId: row.assigned_site_external_key || '', group: hasAgent ? 'Hi5Central Agent' : 'Microsoft Intune', groupId: hasAgent ? 'agent' : 'intune', policy: hasAgent ? 'Agent managed' : 'Intune managed',
     sourceTenant: row.source_connection_name || '', sourceDirectoryTenantId: row.source_directory_tenant_id || '', sourceConnectionId: row.microsoft_connection_id || '',
     status: hasAgent ? (row.agent_online ? 'Online' : 'Offline') : 'Managed', health: hasAgent ? (row.agent_online ? 'Healthy' : 'Warning') : (compliant ? 'Healthy' : 'Warning'), alerts: hasAgent && !row.agent_online ? 1 : (compliant ? 0 : 1),
     cpu: row.agent_cpu_percent == null ? null : Math.round(Number(row.agent_cpu_percent)), memory: row.agent_memory_used_percent == null ? null : Math.round(Number(row.agent_memory_used_percent)), disk: row.agent_disk_used_percent == null ? null : Math.round(Number(row.agent_disk_used_percent)), patchCompliance: null, pendingPatches: inventory.windows_updates?.pending_count ?? null,
@@ -30,7 +31,18 @@ function deviceToRmm(row) {
     managedSince: row.enrolled_at ? new Date(row.enrolled_at).toLocaleDateString() : 'Not reported', agent: hasAgent ? (row.agent_version ? `Hi5Central ${row.agent_version}` : 'Hi5Central Agent') : (row.management_agent || 'Intune'), agentChannel: hasAgent ? 'Stable' : 'Microsoft',
     storageGb: total ? Math.round(total / (1024 ** 3)) : null, storageFreeGb: free ? Math.round(free / (1024 ** 3)) : null, ramGb: row.memory_bytes ? Math.round(Number(row.memory_bytes) / (1024 ** 3)) : (inventory.memory?.total_bytes ? Math.round(Number(inventory.memory.total_bytes) / (1024 ** 3)) : null),
     security: { encryptionState: security.bitlocker_status === 'On' ? 'Protected' : (row.is_encrypted ? 'Protected' : 'Not reported'), encryption: security.bitlocker_status === 'On' ? 'BitLocker enabled' : (row.is_encrypted ? 'Intune reports encrypted' : 'Not reported'), avState: security.defender_enabled === true ? 'Enabled' : security.defender_enabled === false ? 'Disabled' : 'Not reported', av: security.defender_realtime_enabled === true ? 'Real-time protection enabled' : 'Not reported', firewall: security.firewall_enabled === true ? 'Enabled' : security.firewall_enabled === false ? 'Disabled' : 'Not reported', secureBoot: security.secure_boot || 'Not reported', edrState: 'Not reported', edr: 'Not reported', tpm: security.tpm_present === true ? 'Present' : 'Not reported' },
-    tags: [row.source === 'intune' ? 'Intune' : null, hasAgent ? 'Hi5Central Agent' : null, row.source_connection_name, row.compliance_state].filter(Boolean), installedSoftware: software.map((app) => ({ name: app.name, version: app.version || '', publisher: app.publisher || '', installed: app.install_date || '', managed: false })), patches: [], activity: [], networkAdapters: [], relatedRecordIds: [],
+    tags: [row.source === 'intune' ? 'Intune' : null, hasAgent ? 'Hi5Central Agent' : null, row.source_connection_name, row.compliance_state].filter(Boolean),
+    installedSoftware: software.map((app) => ({
+      name: app.name, version: app.version || '', publisher: app.publisher || '', installed: app.install_date || '', managed: false,
+      registryKey: app.registry_key || '', scope: app.scope || '', userSid: app.user_sid || '', userProfile: app.user_profile || '',
+      uninstallString: app.uninstall_string || '', quietUninstallString: app.quiet_uninstall_string || '',
+      estimatedSizeKb: app.estimated_size_kb ?? null, installLocation: app.install_location || '',
+    })),
+    patches: Array.isArray(inventory.windows_updates?.updates) ? inventory.windows_updates.updates : [],
+    activity: [], networkAdapters: Array.isArray(inventory.network?.adapters) ? inventory.network.adapters : [], relatedRecordIds: [],
+    ip: inventory.network?.primary_ipv4 || '', publicIp: inventory.network?.public_ip || '', gateway: inventory.network?.gateway || '', mac: inventory.network?.mac || '',
+    bios: [inventory.hardware?.bios_vendor, inventory.hardware?.bios_version].filter(Boolean).join(' '), warranty: 'Not reported',
+    timeZone: inventory.os?.timezone || 'Not reported', inventory,
     complianceState: row.compliance_state || 'unknown', managementState: row.management_state || 'managed', enrollmentType: row.enrollment_type || '', categoryName: row.category_name || '',
   }
 }
@@ -43,6 +55,7 @@ export function ProductionRmmBootstrap() {
   const [error, setError] = useState('')
   const [theme, setTheme] = useState('light')
   const [devices, setDevices] = useState([])
+  const [sites, setSites] = useState([])
   const [passwordStep, setPasswordStep] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
@@ -61,10 +74,18 @@ export function ProductionRmmBootstrap() {
   useEffect(() => {
     if (!session) return undefined
     let active = true
-    fetch(`${API_BASE}/api/v1/rmm/devices`, { credentials: 'include' })
-      .then(async (response) => ({ response, payload: await response.json().catch(() => ({})) }))
-      .then(({ response, payload }) => { if (active && response.ok) setDevices((payload.devices || []).map(deviceToRmm)) })
-      .catch(() => { if (active) setDevices([]) })
+    Promise.all([
+      fetch(`${API_BASE}/api/v1/rmm/devices`, { credentials: 'include' }).then(async (response) => ({ response, payload: await response.json().catch(() => ({})) })),
+      fetch(`${API_BASE}/api/v1/organisation`, { credentials: 'include' }).then(async (response) => ({ response, payload: await response.json().catch(() => ({})) })),
+    ]).then(([deviceResult, organisationResult]) => {
+      if (!active) return
+      setDevices(deviceResult.response.ok ? (deviceResult.payload.devices || []).map(deviceToRmm) : [])
+      setSites(organisationResult.response.ok ? (organisationResult.payload.sites || []).filter((site) => site.active !== false) : [])
+    }).catch(() => {
+      if (!active) return
+      setDevices([])
+      setSites([])
+    })
     return () => { active = false }
   }, [session])
 
@@ -98,9 +119,24 @@ export function ProductionRmmBootstrap() {
     setSession(payload)
   }
 
+  async function saveSites(nextSites) {
+    const response = await fetch(`${API_BASE}/api/v1/organisation/sites`, {
+      method: 'PUT',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: nextSites }),
+    })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(payload.error || 'Unable to save organisation sites.')
+    const updated = (payload.sites || []).filter((site) => site.active !== false)
+    setSites(updated)
+    return updated
+  }
+
   async function logout() {
     await fetch(`${API_BASE}/api/v1/auth/logout`, { method: 'POST', credentials: 'include' }).catch(() => {})
     setDevices([])
+    setSites([])
     setSession(null)
   }
 
@@ -126,9 +162,11 @@ export function ProductionRmmBootstrap() {
     <RmmPlatformApp
       accent="amber"
       devices={devices}
+      sites={sites}
       currentUser={{ role: 'rmm', name: session.user?.name || session.user?.email || 'RMM user', username: session.user?.email || '' }}
       handleLogout={logout}
       onCreateItsmIncident={() => null}
+      onSitesChange={saveSites}
       setTheme={setTheme}
       tenantName={session.tenant?.companyName || surface.tenantName || surface.tenantSlug}
       theme={theme}

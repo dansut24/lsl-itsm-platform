@@ -275,9 +275,32 @@ export function registerRmmAgentRoutes(app) {
 }
 
 const liveAgentSockets = new Map()
+const agentMessageSubscribers = new Map()
 
 export function agentSocketForDevice(deviceId) {
   return liveAgentSockets.get(String(deviceId)) || null
+}
+
+export function sendAgentMessage(deviceId, payload) {
+  const socket = agentSocketForDevice(deviceId)
+  if (!socket || socket.readyState !== 1) return false
+  try {
+    socket.send(typeof payload === 'string' ? payload : JSON.stringify(payload))
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function subscribeAgentMessages(deviceId, handler) {
+  const key = String(deviceId)
+  if (!agentMessageSubscribers.has(key)) agentMessageSubscribers.set(key, new Set())
+  const subscribers = agentMessageSubscribers.get(key)
+  subscribers.add(handler)
+  return () => {
+    subscribers.delete(handler)
+    if (!subscribers.size) agentMessageSubscribers.delete(key)
+  }
 }
 
 export function attachRmmAgentWebSocket(server) {
@@ -314,6 +337,13 @@ export function attachRmmAgentWebSocket(server) {
       let payload
       try { payload = JSON.parse(text) } catch { return }
       if (!payload || typeof payload !== 'object') return
+
+      const subscribers = agentMessageSubscribers.get(String(agent.id))
+      if (subscribers?.size) {
+        for (const handler of [...subscribers]) {
+          try { handler(payload) } catch {}
+        }
+      }
 
       if (payload.type === 'hello') {
         if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'hello_ack' }))

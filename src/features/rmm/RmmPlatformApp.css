@@ -695,3 +695,152 @@ button.rmm-table-row { width: 100%; border: 0; text-align: left; cursor: pointer
   .rmm-live-session > button { grid-column: 1 / -1; width: 100%; justify-content: center; }
   .rmm-live-session small { white-space: normal; }
 }
+
+/* Desktop RMM scale: 100% browser zoom is the design baseline. Mobile keeps its existing density. */
+@media (min-width: 901px) {
+  .rmm-app { grid-template-columns: 264px minmax(0, 1fr); font-size: 14px; }
+  .rmm-shell-main { grid-template-rows: 68px minmax(0, 1fr); }
+  .rmm-sidebar { padding: 17px 14px 14px; }
+  .rmm-nav-section > span { font-size: 10px; }
+  .rmm-nav-section button { min-height: 42px; font-size: 12px; }
+  .rmm-sidebar-brand strong { font-size: 13px; }
+  .rmm-sidebar-brand span { font-size: 10px; }
+  .rmm-estate-chip strong, .rmm-sidebar-footer strong { font-size: 11px; }
+  .rmm-estate-chip small, .rmm-sidebar-footer small { font-size: 10px; }
+  .rmm-topbar { padding-inline: 24px; }
+  .rmm-topbar-title span { font-size: 10px; }
+  .rmm-topbar-title strong { font-size: 15px; }
+  .rmm-global-search { min-height: 42px; }
+  .rmm-global-search input { font-size: 13px; }
+  .rmm-user strong { font-size: 11px; }
+  .rmm-user small { font-size: 10px; }
+  .rmm-page { padding: 28px clamp(26px, 2.8vw, 48px) 52px; }
+  .rmm-page-heading h1 { font-size: 30px; }
+  .rmm-page-heading p { font-size: 13px; }
+  .rmm-eyebrow { font-size: 11px; }
+  .rmm-card-heading h2 { font-size: 16px; }
+  .rmm-card-heading button, .rmm-primary.compact { font-size: 11px; }
+  .rmm-primary { font-size: 13px; }
+  .rmm-status-pill { font-size: 10px; padding: 5px 8px; }
+  .rmm-table-head { min-height: 42px; font-size: 10px; }
+  .rmm-table-row { min-height: 64px; }
+  .rmm-table-row strong { font-size: 12px; }
+  .rmm-table-row small { font-size: 10px; }
+  .rmm-list-toolbar > span,
+  .rmm-list-toolbar label,
+  .rmm-list-toolbar select,
+  .rmm-filter-pills button { font-size: 10px; }
+  .rmm-device-hero-copy h1 { font-size: 25px; }
+  .rmm-device-hero-copy p { font-size: 11px; }
+  .rmm-device-hero-copy > div > span:not(.rmm-status-pill) { font-size: 10px; }
+  .rmm-device-actions > button:not(.rmm-primary) { min-height: 40px; font-size: 11px; }
+  .rmm-device-metric small, .rmm-property-grid span { font-size: 10px; }
+  .rmm-device-metric strong { font-size: 17px; }
+  .rmm-property-grid strong { font-size: 12px; }
+  .rmm-property-grid small { font-size: 10px; }
+  .rmm-empty strong { font-size: 12px; }
+  .rmm-empty span { font-size: 10px; }
+}
+
+.rmm-device-inline-search {
+  min-width: min(340px, 100%);
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--rmm-border);
+  border-radius: 9px;
+  padding: 0 10px;
+  background: var(--rmm-soft);
+  color: var(--rmm-muted);
+}
+.rmm-device-inline-search input {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--rmm-text);
+  font: inherit;
+  font-size: 12px;
+}
+.rmm-software-uninstall {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid color-mix(in srgb, #d04458 35%, var(--rmm-border));
+  border-radius: 8px;
+  padding: 0 10px;
+  background: color-mix(in srgb, #d04458 7%, var(--rmm-surface));
+  color: #c53b4f;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.rmm-software-uninstall:disabled { opacity: .55; cursor: wait; }
+.rmm-software-action-state { white-space: normal !important; line-height: 1.35; }
+.rmm-software-action-state.running { color: #3d73e8 !important; }
+.rmm-software-action-state.healthy { color: #188c61 !important; }
+.rmm-software-action-state.critical { color: #d04458 !important; }
+
+
+.rmm-device-tools-menu { position: relative; }
+.rmm-device-tools-menu > button {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--rmm-border);
+  border-radius: 8px;
+  padding: 0 10px;
+  background: var(--rmm-surface);
+  color: var(--rmm-text);
+  font: inherit;
+  font-size: 9px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.rmm-device-tools-popover {
+  position: absolute;
+  z-index: 80;
+  top: calc(100% + 7px);
+  right: 0;
+  width: 310px;
+  max-height: min(540px, 70vh);
+  overflow-y: auto;
+  display: grid;
+  gap: 3px;
+  border: 1px solid var(--rmm-border);
+  border-radius: 11px;
+  padding: 7px;
+  background: var(--rmm-surface);
+  box-shadow: 0 20px 55px rgba(17,33,60,.22);
+}
+.rmm-device-tools-popover > button {
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: 26px minmax(0,1fr);
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 8px;
+  padding: 7px 9px;
+  background: transparent;
+  color: var(--rmm-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.rmm-device-tools-popover > button:hover { background: var(--rmm-soft); }
+.rmm-device-tools-popover > button > svg { color: var(--rmm-accent); }
+.rmm-device-tools-popover > button > span { display: grid; gap: 2px; }
+.rmm-device-tools-popover strong { font-size: 11px; }
+.rmm-device-tools-popover small { color: var(--rmm-muted); font-size: 9px; }
+.rmm-device-action-message { display: block; margin-top: 7px; color: var(--rmm-muted); font-size: 10px; }
+
+@media (max-width: 900px) {
+  .rmm-device-tools-menu { width: 100%; }
+  .rmm-device-tools-menu > button { width: 100%; justify-content: center; }
+  .rmm-device-tools-popover { position: fixed; top: auto; right: 12px; bottom: 12px; left: 12px; width: auto; max-height: 72dvh; }
+}

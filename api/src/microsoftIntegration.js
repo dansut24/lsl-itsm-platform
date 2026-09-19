@@ -745,6 +745,7 @@ export function registerMicrosoftRoutes(app) {
     const result = await pool.query(
       `SELECT d.id,d.reference,d.source,d.source_device_id,d.directory_device_id,d.name,d.platform,d.operating_system,d.os_version,d.manufacturer,d.model,d.serial_number,d.user_display_name,d.user_principal_name,d.owner_type,d.compliance_state,d.management_state,d.management_agent,d.enrollment_type,d.registration_state,d.category_name,d.is_encrypted,d.memory_bytes,d.storage_total_bytes,d.storage_free_bytes,d.enrolled_at,d.source_last_sync_at,d.last_imported_at,d.assigned_person_id,d.microsoft_connection_id,
               p.name AS assigned_person_name,p.email AS assigned_person_email,
+              os.external_key AS assigned_site_external_key,os.name AS assigned_site_name,
               mc.connection_name AS source_connection_name,mc.directory_tenant_id AS source_directory_tenant_id,mc.status AS source_connection_status,
               CASE WHEN d.source='hi5central_agent' THEN d.reference ELSE agent_match.reference END AS rmm_reference,
               CASE WHEN d.source='hi5central_agent' THEN 'agent' ELSE agent_match.match_method END AS rmm_match_method,
@@ -762,6 +763,7 @@ export function registerMicrosoftRoutes(app) {
               CASE WHEN d.source='hi5central_agent' THEN d.source_payload ELSE agent_match.agent_inventory_payload END AS agent_inventory_payload
        FROM rmm_device_inventory d
        LEFT JOIN organisation_people p ON p.tenant_id=d.tenant_id AND p.id=d.assigned_person_id
+       LEFT JOIN organisation_sites os ON os.tenant_id=d.tenant_id AND os.id=p.site_id
        LEFT JOIN tenant_microsoft_connections mc ON mc.id=d.microsoft_connection_id
        LEFT JOIN rmm_agent_devices self_agent ON self_agent.inventory_id=d.id AND self_agent.disabled_at IS NULL
        LEFT JOIN LATERAL (

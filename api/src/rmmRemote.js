@@ -2,15 +2,15 @@ import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { WebSocketServer } from 'ws'
 import { hasPermission } from './access.js'
-import { originMatchesTenant } from './deploymentConfig.js'
+import { deployment, originMatchesTenant, tenantUrls } from './deploymentConfig.js'
 import { pool } from './db.js'
 import { agentSocketForDevice } from './rmmAgent.js'
 import { resolveSession } from './session.js'
 
-const VIEWER_DOWNLOAD_URL = 'https://downloads.hi5central.com/viewer/latest/Hi5CentralViewerSetup.exe'
-const VIEWER_WS_URL = 'wss://rmm.hi5central.com/viewer/ws'
-const ROOT_DOMAIN = process.env.ROOT_DOMAIN || 'hi5central.com'
-const TURN_HOST = process.env.TURN_HOST || 'turn.hi5central.com'
+const ROOT_DOMAIN = deployment.rootDomain
+const VIEWER_DOWNLOAD_URL = process.env.VIEWER_DOWNLOAD_URL || `https://downloads.${ROOT_DOMAIN}/viewer/latest/Hi5CentralViewerSetup.exe`
+const VIEWER_WS_URL = process.env.VIEWER_WS_URL || `wss://rmm.${ROOT_DOMAIN}/viewer/ws`
+const TURN_HOST = process.env.TURN_HOST || `turn.${ROOT_DOMAIN}`
 const TURN_SHARED_SECRET_FILE = process.env.TURN_SHARED_SECRET_FILE || '/run/secrets/turn_shared_secret'
 const SESSION_TTL_SECONDS = 15 * 60
 const MAX_VIEWER_PAYLOAD_BYTES = 8 * 1024 * 1024
@@ -102,7 +102,8 @@ function browserLaunchUrl(slug, payload) {
     wss_url: payload.wssUrl,
     ice,
   })
-  return `https://${slug}-rmm.${ROOT_DOMAIN}/rmm-viewer/index.html#${fragment.toString()}`
+  const base = tenantUrls(slug, { rmm: true }).rmmUrl || `https://${slug}-rmm.${ROOT_DOMAIN}`
+  return `${base.replace(/\/$/, '')}/rmm-viewer/index.html#${fragment.toString()}`
 }
 
 function nativeLaunchUrl(payload) {

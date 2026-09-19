@@ -42,87 +42,36 @@ function bool(value, fallback = true) {
 
 async function ensureOrganisationSeed(session) {
   const existing = await pool.query(
-    'SELECT 1 FROM organisation_people WHERE tenant_id = $1 LIMIT 1',
-    [session.tenant_id],
+    'SELECT 1 FROM organisation_people WHERE tenant_id = $1 AND user_id = $2 LIMIT 1',
+    [session.tenant_id, session.user_id],
   )
   if (existing.rowCount) return
 
   await withTransaction(async (client) => {
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1::text))', [session.tenant_id])
     const locked = await client.query(
-      'SELECT 1 FROM organisation_people WHERE tenant_id = $1 LIMIT 1',
-      [session.tenant_id],
+      'SELECT 1 FROM organisation_people WHERE tenant_id = $1 AND user_id = $2 LIMIT 1',
+      [session.tenant_id, session.user_id],
     )
     if (locked.rowCount) return
 
-    const settingsResult = await client.query(
-      `SELECT configuration, onboarding_data
-       FROM tenant_settings
-       WHERE tenant_id = $1`,
-      [session.tenant_id],
-    )
-    const settings = settingsResult.rows[0] || {}
-    const config = settings.configuration && Object.keys(settings.configuration).length
-      ? settings.configuration
-      : settings.onboarding_data || {}
-    const groups = config.groups || {}
-
-    const department = await client.query(
-      `INSERT INTO organisation_departments
-         (tenant_id, external_key, name, description)
-       VALUES ($1, 'DEPT-DEFAULT', $2, 'Primary department created from tenant onboarding.')
-       RETURNING id`,
-      [session.tenant_id, text(groups.firstDepartment || 'IT', 120)],
-    )
-
-    const team = await client.query(
-      `INSERT INTO organisation_teams
-         (tenant_id, external_key, department_id, name, description, colour)
-       VALUES ($1, 'TEAM-SERVICE-DESK', $2, $3, 'Primary support team created from tenant onboarding.', 'blue')
-       RETURNING id`,
-      [session.tenant_id, department.rows[0].id, text(groups.serviceDeskTeam || 'Service Desk', 120)],
-    )
-
-    const site = await client.query(
-      `INSERT INTO organisation_sites
-         (tenant_id, external_key, code, name, type, timezone, notes)
-       VALUES ($1, 'SITE-DEFAULT', 'MAIN', $2, 'Office', $3, 'Primary site created from tenant onboarding.')
-       RETURNING id`,
-      [session.tenant_id, text(groups.firstSite || 'Head Office', 120), text(config.company?.timezone || 'Europe/London', 80)],
-    )
-
     const ownerKey = `USR-${String(session.user_id).slice(0, 12).toUpperCase()}`
-    const person = await client.query(
+    await client.query(
       `INSERT INTO organisation_people
-         (tenant_id, external_key, user_id, primary_team_id, department_id, site_id,
-          name, email, job_title, access_profile, directory_source)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'Tenant Owner', $9,
+         (tenant_id, external_key, user_id, name, email, job_title, access_profile, directory_source)
+       VALUES ($1,$2,$3,$4,$5,'Tenant Owner',$6,
                '{"provider":"local","label":"Hi5Central","managedFields":[]}'::jsonb)
-       RETURNING id`,
+       ON CONFLICT (tenant_id, external_key) DO UPDATE SET
+         user_id=EXCLUDED.user_id,name=EXCLUDED.name,email=EXCLUDED.email,active=true,updated_at=now()`,
       [
         session.tenant_id,
         ownerKey,
         session.user_id,
-        team.rows[0].id,
-        department.rows[0].id,
-        site.rows[0].id,
         text(session.name, 120),
         text(session.email, 254).toLowerCase(),
         ['owner', 'admin'].includes(session.tenant_role) ? 'tenant_admin' : 'employee',
       ],
     )
-
-    await Promise.all([
-      client.query('UPDATE organisation_departments SET lead_person_id = $2 WHERE id = $1', [department.rows[0].id, person.rows[0].id]),
-      client.query('UPDATE organisation_teams SET lead_person_id = $2 WHERE id = $1', [team.rows[0].id, person.rows[0].id]),
-      client.query('UPDATE organisation_sites SET primary_contact_id = $2, support_team_id = $3 WHERE id = $1', [site.rows[0].id, person.rows[0].id, team.rows[0].id]),
-      client.query(
-        `INSERT INTO organisation_team_memberships (tenant_id, person_id, team_id, role, is_primary)
-         VALUES ($1, $2, $3, 'lead', true)
-         ON CONFLICT (person_id, team_id) DO UPDATE SET role = EXCLUDED.role, is_primary = true`,
-        [session.tenant_id, person.rows[0].id, team.rows[0].id],
-      ),
-    ])
   })
 }
 
@@ -336,20 +285,18 @@ async function syncSites(client, tenantId, items) {
         maps.people.get(item.primaryContactId) || null,
         maps.teams.get(item.supportTeamId) || null,
         text(rmm.id, 120),
-        ['linked', 'linked_demo'].includes(rmm.status) ? rmm.status : 'not_linked',
+        rmm.status === 'linked' ? 'linked' : 'not_linked',
         text(item.notes, 4000),
         JSON.stringify(asObject(item.source)),
         bool(item.active),
       ],
     )
   }
-  if (items.length) {
-    await client.query(
-      `UPDATE organisation_sites SET active = false, updated_at = now()
-       WHERE tenant_id = $1 AND NOT (external_key = ANY($2::text[]))`,
-      [tenantId, items.map((item) => key(item.id))],
-    )
-  }
+  await client.query(
+    `UPDATE organisation_sites SET active = false, updated_at = now()
+     WHERE tenant_id = $1 AND NOT (external_key = ANY($2::text[]))`,
+    [tenantId, items.map((item) => key(item.id))],
+  )
 }
 
 async function syncPeople(client, tenantId, items) {

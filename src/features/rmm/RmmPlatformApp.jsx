@@ -1,10 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Activity,
   AlertTriangle,
   BarChart3,
   Bell,
-  Bot,
   Box,
   CheckCircle2,
   ChevronRight,
@@ -22,7 +21,6 @@ import {
   Laptop,
   LayoutDashboard,
   ListChecks,
-  LogIn,
   LogOut,
   MapPin,
   Menu,
@@ -32,8 +30,6 @@ import {
   Network,
   Package,
   PackageCheck,
-  Play,
-  RefreshCw,
   Search,
   Server,
   Settings,
@@ -42,6 +38,7 @@ import {
   Sun,
   Tag,
   TerminalSquare,
+  Trash2,
   Users,
   Wifi,
   X,
@@ -52,8 +49,6 @@ import {
   rmmAlerts,
   rmmDevices,
   rmmJobs,
-  rmmPatchGroups,
-  rmmSoftware,
 } from '../../data/rmmData.js'
 import { deploymentConfig } from '../../lib/deploymentConfig.js'
 import { resolveTenantSurface, rmmPath, rmmRouteFromLocation } from '../../lib/tenantSurface.js'
@@ -66,6 +61,7 @@ import {
 import { RmmMonitoringPolicies } from './RmmMonitoringPolicies.jsx'
 import { RmmAgentDeployment } from './RmmAgentDeployment.jsx'
 import { RmmAutomation, RmmJobs } from './RmmAutomationWorkspace.jsx'
+import { RmmDeviceToolWorkspace } from './RmmDeviceTools.jsx'
 import './RmmPlatformApp.css'
 
 const navigation = [
@@ -74,7 +70,6 @@ const navigation = [
   { id: 'sites', label: 'Sites', icon: MapPin, section: 'Manage' },
   { id: 'groups', label: 'Device groups', icon: Users, section: 'Manage' },
   { id: 'alerts', label: 'Alerts', icon: AlertTriangle, section: 'Manage' },
-  { id: 'remote', label: 'Remote access', icon: TerminalSquare, section: 'Operate' },
   { id: 'patching', label: 'Patching', icon: ShieldCheck, section: 'Operate' },
   { id: 'software', label: 'Software', icon: PackageCheck, section: 'Operate' },
   { id: 'automation', label: 'Automation', icon: Code2, section: 'Operate' },
@@ -177,28 +172,53 @@ function PageHeading({ activeView, action }) {
   return <div className="rmm-page-heading"><div><span className="rmm-eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{action}</div>
 }
 
-function RmmDashboard({ navigate, openDevice }) {
-  const critical = rmmAlerts.filter((alert) => alert.severity === 'Critical' && alert.status === 'Open').length
-  const patchTotal = rmmPatchGroups.reduce((sum, group) => sum + group.devices, 0)
-  const patchCompliant = rmmPatchGroups.reduce((sum, group) => sum + group.compliant, 0)
-  const compliance = Math.round((patchCompliant / patchTotal) * 100)
-  const activeJobs = rmmJobs.filter((job) => ['Running', 'Queued'].includes(job.status)).length
+function RmmDashboard({ devices = [], navigate, openDevice }) {
+  const online = devices.filter((device) => device.status === 'Online').length
+  const offline = devices.filter((device) => device.status === 'Offline').length
+  const healthy = devices.filter((device) => device.health === 'Healthy').length
+  const warning = devices.filter((device) => device.health === 'Warning').length
+  const criticalDevices = devices.filter((device) => device.health === 'Critical').length
+  const attentionDevices = devices.filter((device) => device.health !== 'Healthy')
+  const criticalAlerts = rmmAlerts.filter((alert) => alert.severity === 'Critical' && alert.status === 'Open').length
+  const openAlerts = rmmAlerts.filter((alert) => alert.status === 'Open').length
+  const patchReported = devices.filter((device) => Number.isFinite(Number(device.patchCompliance)))
+  const compliance = patchReported.length ? Math.round(patchReported.reduce((sum, device) => sum + Number(device.patchCompliance), 0) / patchReported.length) : null
+  const pendingPatches = devices.reduce((sum, device) => sum + (Number.isFinite(Number(device.pendingPatches)) ? Number(device.pendingPatches) : 0), 0)
+  const activeJobs = rmmJobs.filter((job) => ['Running', 'Queued', 'running', 'queued', 'claimed'].includes(job.status)).length
+  const failedJobs = rmmJobs.filter((job) => ['Failed', 'failed'].includes(job.status)).length
+  const healthPercent = devices.length ? Math.round((healthy / devices.length) * 100) : null
+
   return (
     <>
       <PageHeading activeView="dashboard" action={<button className="rmm-primary compact" onClick={() => navigate('devices')} type="button"><Monitor size={16} /> View devices</button>} />
       <div className="rmm-metric-grid">
-        <button onClick={() => navigate('devices')} type="button"><span className="rmm-metric-icon blue"><Monitor size={19} /></span><div><span>Managed devices</span><strong>184</strong><small>181 online · 3 offline</small></div><ChevronRight size={16} /></button>
-        <button onClick={() => navigate('alerts')} type="button"><span className="rmm-metric-icon red"><AlertTriangle size={19} /></span><div><span>Critical alerts</span><strong>{critical}</strong><small>{rmmAlerts.filter((alert) => alert.status === 'Open').length} alerts need attention</small></div><ChevronRight size={16} /></button>
-        <button onClick={() => navigate('patching')} type="button"><span className="rmm-metric-icon green"><ShieldCheck size={19} /></span><div><span>Patch compliance</span><strong>{compliance}%</strong><small>{patchTotal - patchCompliant} devices pending</small></div><ChevronRight size={16} /></button>
-        <button onClick={() => navigate('jobs')} type="button"><span className="rmm-metric-icon violet"><Zap size={19} /></span><div><span>Active jobs</span><strong>{activeJobs}</strong><small>1 failed in the last 24 hr</small></div><ChevronRight size={16} /></button>
+        <button onClick={() => navigate('devices')} type="button"><span className="rmm-metric-icon blue"><Monitor size={19} /></span><div><span>Managed devices</span><strong>{devices.length}</strong><small>{devices.length ? `${online} online · ${offline} offline` : 'No devices enrolled'}</small></div><ChevronRight size={16} /></button>
+        <button onClick={() => navigate('alerts')} type="button"><span className="rmm-metric-icon red"><AlertTriangle size={19} /></span><div><span>Critical alerts</span><strong>{criticalAlerts}</strong><small>{openAlerts ? `${openAlerts} open alert${openAlerts === 1 ? '' : 's'}` : 'No real alerts reported'}</small></div><ChevronRight size={16} /></button>
+        <button onClick={() => navigate('patching')} type="button"><span className="rmm-metric-icon green"><ShieldCheck size={19} /></span><div><span>Patch compliance</span><strong>{compliance == null ? '—' : `${compliance}%`}</strong><small>{patchReported.length ? `${pendingPatches} pending update${pendingPatches === 1 ? '' : 's'}` : 'Not reported by enrolled devices'}</small></div><ChevronRight size={16} /></button>
+        <button onClick={() => navigate('jobs')} type="button"><span className="rmm-metric-icon violet"><Zap size={19} /></span><div><span>Active jobs</span><strong>{activeJobs}</strong><small>{failedJobs ? `${failedJobs} failed job${failedJobs === 1 ? '' : 's'}` : 'No failed jobs reported'}</small></div><ChevronRight size={16} /></button>
       </div>
+
       <div className="rmm-dashboard-grid">
-        <section className="rmm-card rmm-health-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">Estate health</span><h2>Device health</h2></div><button onClick={() => navigate('devices')} type="button">All devices <ChevronRight size={14} /></button></div><div className="rmm-health-summary"><div className="rmm-health-ring"><strong>96%</strong><span>Healthy</span></div><div className="rmm-health-legend"><span><b className="healthy" />Healthy<strong>176</strong></span><span><b className="warning" />Warning<strong>4</strong></span><span><b className="critical" />Critical<strong>1</strong></span><span><b className="offline" />Offline<strong>3</strong></span></div></div><div className="rmm-health-list">{rmmDevices.filter((device) => device.health !== 'Healthy').slice(0, 4).map((device) => <button key={device.id} onClick={() => openDevice(device)} type="button"><span className={`rmm-device-icon ${healthClass(device.health)}`}><DeviceIcon device={device} /></span><span><strong>{device.name}</strong><small>{device.user} · {device.site}</small></span><StatusPill>{device.health}</StatusPill><ChevronRight size={15} /></button>)}</div></section>
-        <section className="rmm-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">Monitoring</span><h2>Alerts requiring attention</h2></div><button onClick={() => navigate('alerts')} type="button">Open alerts <ChevronRight size={14} /></button></div><div className="rmm-alert-mini-list">{rmmAlerts.slice(0, 5).map((alert) => <article key={alert.id}><span className={`rmm-alert-dot ${healthClass(alert.severity)}`} /><div><strong>{alert.title}</strong><span>{alert.device}</span><small>{alert.raised} · {alert.policy}</small></div><StatusPill tone={healthClass(alert.severity)}>{alert.severity}</StatusPill></article>)}</div></section>
+        <section className="rmm-card rmm-health-card">
+          <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Estate health</span><h2>Device health</h2></div><button onClick={() => navigate('devices')} type="button">All devices <ChevronRight size={14} /></button></div>
+          {devices.length ? <>
+            <div className="rmm-health-summary">
+              <div className="rmm-health-ring" style={{ background: `conic-gradient(#239e63 0 ${healthPercent}%, var(--rmm-soft-strong) ${healthPercent}% 100%)` }}><strong>{healthPercent}%</strong><span>Healthy</span></div>
+              <div className="rmm-health-legend"><span><b className="healthy" />Healthy<strong>{healthy}</strong></span><span><b className="warning" />Warning<strong>{warning}</strong></span><span><b className="critical" />Critical<strong>{criticalDevices}</strong></span><span><b className="offline" />Offline<strong>{offline}</strong></span></div>
+            </div>
+            <div className="rmm-health-list">{attentionDevices.slice(0, 4).map((device) => <button key={device.id} onClick={() => openDevice(device)} type="button"><span className={`rmm-device-icon ${healthClass(device.health)}`}><DeviceIcon device={device} /></span><span><strong>{device.name}</strong><small>{device.user} · {device.site || 'No site'}</small></span><StatusPill>{device.health}</StatusPill><ChevronRight size={15} /></button>)}</div>
+          </> : <div className="rmm-empty"><Monitor size={24} /><strong>No managed devices yet</strong><span>Enroll the Hi5Central Agent or connect Microsoft Intune to populate this dashboard with real device data.</span></div>}
+        </section>
+
+        <section className="rmm-card">
+          <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Monitoring</span><h2>Alerts requiring attention</h2></div><button onClick={() => navigate('alerts')} type="button">Open alerts <ChevronRight size={14} /></button></div>
+          <div className="rmm-alert-mini-list">{rmmAlerts.slice(0, 5).map((alert) => <article key={alert.id}><span className={`rmm-alert-dot ${healthClass(alert.severity)}`} /><div><strong>{alert.title}</strong><span>{alert.device}</span><small>{alert.raised} · {alert.policy}</small></div><StatusPill tone={healthClass(alert.severity)}>{alert.severity}</StatusPill></article>)}{!rmmAlerts.length && <div className="rmm-empty compact"><CheckCircle2 size={22} /><strong>No real alert records</strong><span>Alerts will appear here when monitoring reports a condition.</span></div>}</div>
+        </section>
       </div>
+
       <div className="rmm-dashboard-lower">
-        <section className="rmm-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">Execution</span><h2>Jobs</h2></div><button onClick={() => navigate('jobs')} type="button">View all <ChevronRight size={14} /></button></div><div className="rmm-job-mini-list">{rmmJobs.slice(0, 4).map((job) => <article key={job.id}><span className={`rmm-job-icon ${healthClass(job.status)}`}>{job.type === 'Patch' ? <ShieldCheck size={16} /> : job.type === 'Software' ? <PackageCheck size={16} /> : <Code2 size={16} />}</span><div><strong>{job.title}</strong><small>{job.target} · {job.started}</small>{job.status === 'Running' && <div className="rmm-mini-progress"><span style={{ width: `${job.progress}%` }} /></div>}</div><StatusPill>{job.status}</StatusPill></article>)}</div></section>
-        <section className="rmm-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">Recent</span><h2>Activity</h2></div></div><div className="rmm-activity-list">{rmmActivity.map((item) => <article key={item.id}><span className="rmm-activity-icon">{item.kind === 'alert' ? <AlertTriangle size={15} /> : item.kind === 'remote' ? <TerminalSquare size={15} /> : item.kind === 'patch' ? <ShieldCheck size={15} /> : <Zap size={15} />}</span><div><strong>{item.title}</strong><small>{item.detail}</small></div><time>{item.time}</time></article>)}</div></section>
+        <section className="rmm-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">Execution</span><h2>Jobs</h2></div><button onClick={() => navigate('jobs')} type="button">View all <ChevronRight size={14} /></button></div><div className="rmm-job-mini-list">{rmmJobs.slice(0, 4).map((job) => <article key={job.id}><span className={`rmm-job-icon ${healthClass(job.status)}`}><Code2 size={16} /></span><div><strong>{job.title || job.job_type}</strong><small>{job.target || job.device_name || 'Managed device'} · {job.started || job.created_at || ''}</small></div><StatusPill>{job.status}</StatusPill></article>)}{!rmmJobs.length && <div className="rmm-empty compact"><ListChecks size={22} /><strong>No device jobs yet</strong><span>Live actions, scripts and maintenance work will appear here.</span></div>}</div></section>
+        <section className="rmm-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">Recent</span><h2>Activity</h2></div></div><div className="rmm-activity-list">{rmmActivity.map((item) => <article key={item.id}><span className="rmm-activity-icon"><Zap size={15} /></span><div><strong>{item.title}</strong><small>{item.detail}</small></div><time>{item.time}</time></article>)}{!rmmActivity.length && <div className="rmm-empty compact"><History size={22} /><strong>No activity recorded yet</strong><span>Remote sessions and management actions will populate this feed.</span></div>}</div></section>
       </div>
     </>
   )
@@ -273,7 +293,7 @@ function DeviceOverview({ device, deviceAlerts, monitoringResolution, relatedTic
         <section className="rmm-card rmm-device-monitoring-card">
           <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Monitoring</span><h2>Effective policy</h2></div><StatusPill>{monitoringResolution?.override ? 'Override' : 'Inherited'}</StatusPill></div>
           <p>Resolved through estate, site, group and device precedence.</p>
-          <div className="rmm-device-monitoring-effective"><span><SlidersHorizontal size={16} /></span><div><strong>{monitoringResolution?.policy?.name || 'Standard endpoint monitoring'}</strong><small>{monitoringResolution?.checks?.length || 0} checks · {monitoringResolution?.policy?.evaluation || 'Every 2 minutes'}</small></div></div>
+          <div className="rmm-device-monitoring-effective"><span><SlidersHorizontal size={16} /></span><div><strong>{monitoringResolution?.policy?.name || 'No monitoring policy assigned'}</strong><small>{monitoringResolution?.policy ? `${monitoringResolution.checks?.length || 0} checks · ${monitoringResolution.policy.evaluation || 'Evaluation not set'}` : 'Assign a tenant policy from Monitoring policies'}</small></div></div>
           <button onClick={() => navigate('policies')} type="button"><GitBranch size={14} /> View policy inheritance</button>
         </section>
 
@@ -305,23 +325,131 @@ function DeviceHardware({ device }) {
 }
 
 function DeviceSoftware({ device }) {
+  const [search, setSearch] = useState('')
+  const [busyKey, setBusyKey] = useState('')
+  const [removedKeys, setRemovedKeys] = useState([])
+  const [resultByKey, setResultByKey] = useState({})
+  const apiBase = window.__HI5_API_BASE__ || deploymentConfig().apiUrl
+
+  function softwareKey(app) {
+    return `${app.scope || 'unknown'}:${app.registryKey || app.name}:${app.version || ''}`
+  }
+
+  function protectedSoftware(app) {
+    const value = `${app.name || ''} ${app.publisher || ''}`.toLowerCase()
+    return [
+      'hi5central', 'chatpass', 'microsoft defender', 'windows defender', 'crowdstrike', 'sentinelone',
+      'sophos', 'bitdefender', 'eset', 'malwarebytes', 'webroot', 'cylance', 'carbon black',
+      'symantec endpoint', 'trend micro', 'mcafee', 'trellix', 'forticlient', 'huntress',
+      'cisco secure', 'cisco amp', 'cortex xdr', 'palo alto cortex', 'avast', 'avg antivirus',
+      'kaspersky', 'f-secure', 'withsecure',
+    ].some((term) => value.includes(term))
+  }
+
+  function uninstallMessage(result) {
+    const reason = result?.reason || ''
+    if (result?.status === 'uninstalled') return result?.reboot_required ? 'Uninstalled successfully · restart required' : 'Uninstalled successfully'
+    if (reason === 'protected_security_or_agent') return result?.detail || 'Protected Agent or security software cannot be removed here.'
+    if (reason === 'password_or_vendor_protection_required') return 'The vendor requires a password, tamper-protection change or another authorised removal method.'
+    if (reason === 'no_safe_silent_uninstaller_found') return 'No safe silent uninstall method was found for this application.'
+    if (reason === 'user_context_or_silent_uninstall_failed') return 'The application is installed for a user profile and could not be removed silently from the available user/system context.'
+    if (reason === 'silent_uninstall_failed') return 'Silent uninstall methods were attempted but the application is still installed.'
+    return result?.error || 'The uninstall could not be completed.'
+  }
+
+  async function waitForAction(jobId) {
+    for (let attempt = 0; attempt < 450; attempt += 1) {
+      const response = await fetch(`${apiBase}/api/v1/rmm/device-actions/${encodeURIComponent(jobId)}`, { credentials: 'include' })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.error || 'Unable to read uninstall status.')
+      if (['completed', 'failed', 'cancelled'].includes(payload.job?.status)) return payload.job
+      await new Promise((resolve) => window.setTimeout(resolve, 2000))
+    }
+    throw new Error('The uninstall is still running. Check Jobs for its final result.')
+  }
+
+  async function uninstallSoftware(app) {
+    if (!device.agentDeviceId || busyKey || protectedSoftware(app)) return
+    const key = softwareKey(app)
+    if (!window.confirm(`Uninstall ${app.name} silently from ${device.name}? Hi5Central will try the vendor command first, verify removal, then try recognised silent fallbacks if needed.`)) return
+    setBusyKey(key)
+    setResultByKey((current) => ({ ...current, [key]: { tone: 'running', message: 'Preparing silent uninstall…' } }))
+    try {
+      const response = await fetch(`${apiBase}/api/v1/rmm/devices/${encodeURIComponent(device.agentDeviceId)}/actions`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'software.uninstall',
+          payload: { name: app.name, registry_key: app.registryKey, scope: app.scope, user_profile: app.userProfile },
+        }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.error || 'Unable to queue the uninstall.')
+      setResultByKey((current) => ({ ...current, [key]: { tone: 'running', message: 'Uninstall running in the background…' } }))
+      const job = await waitForAction(payload.job?.id)
+      const result = job?.result || {}
+      const success = job?.status === 'completed' && result?.status === 'uninstalled'
+      setResultByKey((current) => ({ ...current, [key]: { tone: success ? 'healthy' : 'critical', message: uninstallMessage(result), result } }))
+      if (success) setRemovedKeys((current) => [...current, key])
+    } catch (error) {
+      setResultByKey((current) => ({ ...current, [key]: { tone: 'critical', message: error?.message || 'Uninstall failed.' } }))
+    } finally {
+      setBusyKey('')
+    }
+  }
+
+  const normalized = search.trim().toLowerCase()
+  const visibleSoftware = (device.installedSoftware || []).filter((app) => {
+    const key = softwareKey(app)
+    if (removedKeys.includes(key)) return false
+    return !normalized || [app.name, app.version, app.publisher, app.installLocation].join(' ').toLowerCase().includes(normalized)
+  })
+
   return (
     <section className="rmm-table-card">
-      <div className="rmm-device-section-heading"><div><span className="rmm-eyebrow">Inventory</span><h2>Installed software</h2><p>{device.installedSoftware?.length || 0} applications are reported by the device inventory.</p></div><button className="rmm-primary compact" type="button"><PackageCheck size={14} /> Deploy software</button></div>
-      <div className="rmm-table rmm-device-software-table">
-        <div className="rmm-table-head"><span>Application</span><span>Version</span><span>Publisher</span><span>Installed</span><span>Management</span></div>
-        {(device.installedSoftware || []).map((app) => <div className="rmm-table-row" key={`${app.name}-${app.version}`}><span className="rmm-device-cell"><span className="rmm-device-icon neutral"><Package size={16} /></span><span><strong>{app.name}</strong><small>{app.managed ? 'Managed application' : 'Observed software'}</small></span></span><span><strong>{app.version}</strong></span><span><strong>{app.publisher}</strong></span><span><strong>{app.installed}</strong></span><span><StatusPill tone={app.managed ? 'healthy' : 'neutral'}>{app.managed ? 'Managed' : 'Observed'}</StatusPill></span></div>)}
+      <div className="rmm-device-section-heading">
+        <div><span className="rmm-eyebrow">Inventory</span><h2>Installed software</h2><p>{visibleSoftware.length} applications are reported by the latest real device inventory.</p></div>
+        <label className="rmm-device-inline-search"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search installed software…" /></label>
       </div>
-      {!device.installedSoftware?.length && <div className="rmm-empty"><Package size={24} /><strong>No software inventory</strong><span>This device does not report installed application inventory.</span></div>}
+      <div className="rmm-table rmm-device-software-table">
+        <div className="rmm-table-head"><span>Application</span><span>Version</span><span>Publisher</span><span>Installed</span><span>Removal</span></div>
+        {visibleSoftware.map((app) => {
+          const key = softwareKey(app)
+          const protectedApp = protectedSoftware(app)
+          const status = resultByKey[key]
+          return <div className="rmm-table-row" key={key}>
+            <span className="rmm-device-cell"><span className="rmm-device-icon neutral"><Package size={16} /></span><span><strong>{app.name}</strong><small>{app.installLocation || app.scope || 'Observed software'}</small>{status && <small className={`rmm-software-action-state ${status.tone}`}>{status.message}</small>}</span></span>
+            <span><strong>{app.version || 'Not reported'}</strong></span>
+            <span><strong>{app.publisher || 'Not reported'}</strong></span>
+            <span><strong>{app.installed || 'Not reported'}</strong></span>
+            <span>{protectedApp ? <StatusPill tone="neutral">Protected</StatusPill> : device.agentDeviceId ? <button className="rmm-software-uninstall" disabled={busyKey === key} onClick={() => uninstallSoftware(app)} type="button"><Trash2 size={13} /> {busyKey === key ? 'Uninstalling…' : 'Uninstall'}</button> : <StatusPill tone="neutral">Agent required</StatusPill>}</span>
+          </div>
+        })}
+      </div>
+      {!visibleSoftware.length && <div className="rmm-empty"><Package size={24} /><strong>{search ? 'No software matches this search' : 'No software inventory'}</strong><span>{search ? 'Try another application, version or publisher.' : 'This device does not report installed application inventory.'}</span></div>}
     </section>
   )
 }
 
 function DevicePatching({ device }) {
+  const updates = device.patches || []
+  const lastScan = device.inventory?.windows_updates?.last_scan_utc
   return (
     <>
-      <div className="rmm-device-patch-summary"><div><span><ShieldCheck size={18} /></span><div><strong>{device.patchCompliance}%</strong><small>Patch compliance</small></div></div><div><span><Download size={18} /></span><div><strong>{device.pendingPatches}</strong><small>Pending updates</small></div></div><div><span><Clock3 size={18} /></span><div><strong>{device.policy}</strong><small>Assigned maintenance policy</small></div></div></div>
-      <section className="rmm-table-card"><div className="rmm-device-section-heading"><div><span className="rmm-eyebrow">Update inventory</span><h2>Operating system patches</h2></div><button className="rmm-primary compact" type="button"><Play size={14} /> Deploy approved</button></div><div className="rmm-table rmm-device-patch-table"><div className="rmm-table-head"><span>Update</span><span>Classification</span><span>Severity</span><span>Released</span><span>State</span><span>Reboot</span></div>{(device.patches || []).map((patch) => <div className="rmm-table-row" key={patch.id}><span><strong>{patch.title}</strong><small>{patch.id}</small></span><span><strong>{patch.classification}</strong></span><span><StatusPill tone={healthClass(patch.severity)}>{patch.severity}</StatusPill></span><span><strong>{patch.released}</strong></span><span><StatusPill tone={patch.state === 'Installed' ? 'healthy' : 'warning'}>{patch.state}</StatusPill></span><span><strong>{patch.reboot ? 'Required' : 'No'}</strong></span></div>)}</div></section>
+      <div className="rmm-device-patch-summary">
+        <div><span><ShieldCheck size={18} /></span><div><strong>{device.pendingPatches == null ? 'Not reported' : device.pendingPatches}</strong><small>Pending updates</small></div></div>
+        <div><span><Download size={18} /></span><div><strong>{updates.filter((patch) => patch.downloaded).length}</strong><small>Downloaded</small></div></div>
+        <div><span><Clock3 size={18} /></span><div><strong>{lastScan ? new Date(lastScan).toLocaleString() : 'Not reported'}</strong><small>Last Windows Update scan</small></div></div>
+      </div>
+      <section className="rmm-table-card">
+        <div className="rmm-device-section-heading"><div><span className="rmm-eyebrow">Live inventory</span><h2>Pending Windows updates</h2><p>Reported directly by the Windows Update Agent on this endpoint.</p></div></div>
+        <div className="rmm-table rmm-device-patch-table">
+          <div className="rmm-table-head"><span>Update</span><span>Categories</span><span>Severity</span><span>Downloaded</span><span>Mandatory</span><span>Reboot</span></div>
+          {updates.map((patch, index) => <div className="rmm-table-row" key={(patch.kb || []).join('-') || patch.title || index}><span><strong>{patch.title || 'Windows update'}</strong><small>{(patch.kb || []).map((kb) => 'KB' + kb).join(', ') || 'No KB reference'}</small></span><span><strong>{(patch.categories || []).join(', ') || 'Not classified'}</strong></span><span><StatusPill tone={healthClass(patch.severity)}>{patch.severity || 'Not rated'}</StatusPill></span><span><strong>{patch.downloaded ? 'Yes' : 'No'}</strong></span><span><strong>{patch.mandatory ? 'Yes' : 'No'}</strong></span><span><strong>{patch.reboot_required ? 'Required' : 'No'}</strong></span></div>)}
+        </div>
+        {!updates.length && <div className="rmm-empty"><ShieldCheck size={24} /><strong>{device.pendingPatches === 0 ? 'No pending updates' : 'No update inventory reported'}</strong><span>{device.pendingPatches === 0 ? 'Windows Update currently reports this device as clear.' : 'Run or wait for an Agent inventory scan to populate this view.'}</span></div>}
+      </section>
     </>
   )
 }
@@ -354,6 +482,10 @@ function DeviceItsm({ relatedTickets, onCreateIncident }) {
 
 function RmmDeviceDetail({ device, onBack, navigate, onCreateIncident, tickets = [] }) {
   const [section, setSection] = useState('overview')
+  const [tool, setTool] = useState('')
+  const [toolsOpen, setToolsOpen] = useState(false)
+  const [remoteState, setRemoteState] = useState('')
+  const [remoteBusy, setRemoteBusy] = useState(false)
   const monitoringResolution = resolveDeviceMonitoringPolicy(device)
   const deviceAlerts = rmmAlerts.filter((alert) => alert.deviceId === device.id)
   const relatedTickets = tickets.filter((ticket) => (
@@ -364,6 +496,7 @@ function RmmDeviceDetail({ device, onBack, navigate, onCreateIncident, tickets =
     || (device.relatedRecordIds || []).includes(ticket.id)
     || (device.user && ticket.requester === device.user)
   ))
+  const apiBase = window.__HI5_API_BASE__ || deploymentConfig().apiUrl
 
   const sections = [
     ['overview', 'Overview', CircleGauge],
@@ -379,6 +512,39 @@ function RmmDeviceDetail({ device, onBack, navigate, onCreateIncident, tickets =
     onCreateIncident?.({ device, alert })
   }
 
+  async function startRemote(mode = 'console') {
+    if (!device.agentDeviceId) {
+      setRemoteState('Remote tools require the Hi5Central Agent on this device.')
+      return
+    }
+    setRemoteBusy(true)
+    setRemoteState(mode === 'backstage' ? 'Starting Background session…' : 'Starting remote desktop…')
+    try {
+      const response = await fetch(apiBase + '/api/v1/rmm/remote-sessions', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentDeviceId: device.agentDeviceId, mode }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.error || 'Unable to start remote session.')
+      const launchUrl = payload.browserUrl || payload.nativeUrl
+      if (!launchUrl) throw new Error('The remote session was created but no viewer launch URL was returned.')
+      setRemoteState(mode === 'backstage' ? 'Background session ready.' : 'Remote session ready.')
+      if (payload.browserUrl) window.open(payload.browserUrl, '_blank', 'noopener,noreferrer')
+      else window.location.href = payload.nativeUrl
+    } catch (error) {
+      setRemoteState(error?.message || 'Unable to start remote session.')
+    } finally {
+      setRemoteBusy(false)
+    }
+  }
+
+  function openTool(nextTool) {
+    setToolsOpen(false)
+    setTool(nextTool)
+  }
+
   let content
   if (section === 'hardware') content = <DeviceHardware device={device} />
   else if (section === 'software') content = <DeviceSoftware device={device} />
@@ -392,17 +558,31 @@ function RmmDeviceDetail({ device, onBack, navigate, onCreateIncident, tickets =
     <div className="rmm-device-detail">
       <button className="rmm-back" onClick={onBack} type="button"><ChevronRight size={15} /> Back to devices</button>
       <header className="rmm-device-hero">
-        <div className={`rmm-device-hero-icon ${healthClass(device.health)}`}><DeviceIcon device={device} size={28} /></div>
+        <div className={'rmm-device-hero-icon ' + healthClass(device.health)}><DeviceIcon device={device} size={28} /></div>
         <div className="rmm-device-hero-copy">
           <span className="rmm-eyebrow">{device.id} · {device.serial}</span>
           <h1>{device.name}</h1>
-          <p>{device.user} · {device.site} · {device.group}</p>
+          <p>{device.user} · {device.site || 'No site'} · {device.group || 'No group'}</p>
           <div><StatusPill>{device.status}</StatusPill><StatusPill>{device.health}</StatusPill><span>{device.os}</span><span>Agent {device.agent}</span></div>
+          {remoteState && <small className="rmm-device-action-message">{remoteState}</small>}
         </div>
         <div className="rmm-device-actions">
-          <button className="rmm-primary compact" onClick={() => navigate('remote', { deviceId: device.id })} type="button"><Monitor size={16} /> Remote desktop</button>
-          <button onClick={() => navigate('remote', { deviceId: device.id })} type="button"><TerminalSquare size={16} /> Terminal</button>
-          <button onClick={() => navigate('remote', { deviceId: device.id })} type="button"><Box size={16} /> Files</button>
+          <button className="rmm-primary compact" disabled={remoteBusy || !device.agentDeviceId} onClick={() => startRemote('console')} type="button"><Monitor size={16} /> {remoteBusy ? 'Starting…' : 'Remote desktop'}</button>
+          <div className="rmm-device-tools-menu">
+            <button onClick={() => setToolsOpen((value) => !value)} type="button"><TerminalSquare size={16} /> Tools <MoreHorizontal size={14} /></button>
+            {toolsOpen && <div className="rmm-device-tools-popover">
+              <button onClick={() => openTool('powershell')} type="button"><TerminalSquare size={15} /><span><strong>PowerShell</strong><small>Native ConPTY</small></span></button>
+              <button onClick={() => openTool('cmd')} type="button"><Code2 size={15} /><span><strong>Command Prompt</strong><small>Native ConPTY</small></span></button>
+              <button onClick={() => openTool('files')} type="button"><Box size={15} /><span><strong>File browser</strong><small>Upload, download and manage</small></span></button>
+              <button onClick={() => openTool('processes')} type="button"><ListChecks size={15} /><span><strong>Task Manager</strong><small>End and restart processes</small></span></button>
+              <button onClick={() => openTool('services')} type="button"><Server size={15} /><span><strong>Services</strong><small>State and startup type</small></span></button>
+              <button onClick={() => openTool('registry')} type="button"><Database size={15} /><span><strong>Registry Editor</strong><small>Browse and edit registry</small></span></button>
+              <button onClick={() => openTool('disks')} type="button"><HardDrive size={15} /><span><strong>Disk Management</strong><small>Volumes and BitLocker state</small></span></button>
+              <button onClick={() => openTool('sessions')} type="button"><Users size={15} /><span><strong>Users & Sessions</strong><small>Interactive and RDP sessions</small></span></button>
+              <button onClick={() => openTool('events')} type="button"><History size={15} /><span><strong>Event Logs</strong><small>Event health and diagnostics</small></span></button>
+              <button onClick={() => { setToolsOpen(false); startRemote('backstage') }} type="button"><Monitor size={15} /><span><strong>Background Mode</strong><small>Private Hi5 maintenance desktop</small></span></button>
+            </div>}
+          </div>
           <button onClick={() => createIncident()} type="button"><AlertTriangle size={16} /> ITSM incident</button>
         </div>
       </header>
@@ -411,7 +591,7 @@ function RmmDeviceDetail({ device, onBack, navigate, onCreateIncident, tickets =
         <DeviceMetric icon={CircleGauge} label="CPU" value={device.cpu} tone={metricTone(device.cpu)} />
         <DeviceMetric icon={Activity} label="Memory" value={device.memory} tone={metricTone(device.memory)} />
         <DeviceMetric icon={HardDrive} label="Disk" value={device.disk} tone={metricTone(device.disk, 80, 92)} />
-        <div className={`rmm-device-metric patch ${device.patchCompliance == null ? 'neutral' : device.patchCompliance < 90 ? 'warning' : 'healthy'}`}><span><ShieldCheck size={17} /></span><div><small>Patch compliance</small><strong>{device.patchCompliance == null ? 'Not reported' : `${device.patchCompliance}%`}</strong></div><small>{device.pendingPatches == null ? 'Update state not reported' : `${device.pendingPatches} pending update${device.pendingPatches === 1 ? '' : 's'}`}</small></div>
+        <div className={'rmm-device-metric patch ' + (device.patchCompliance == null ? 'neutral' : device.patchCompliance < 90 ? 'warning' : 'healthy')}><span><ShieldCheck size={17} /></span><div><small>Patch compliance</small><strong>{device.patchCompliance == null ? 'Not reported' : device.patchCompliance + '%'}</strong></div><small>{device.pendingPatches == null ? 'Update state not reported' : device.pendingPatches + ' pending update' + (device.pendingPatches === 1 ? '' : 's')}</small></div>
       </div>
 
       <nav className="rmm-device-subnav" aria-label="Device detail sections">
@@ -419,6 +599,7 @@ function RmmDeviceDetail({ device, onBack, navigate, onCreateIncident, tickets =
       </nav>
 
       <div className="rmm-device-section">{content}</div>
+      {tool && <RmmDeviceToolWorkspace device={device} initialTool={tool} onClose={() => setTool('')} />}
     </div>
   )
 }
@@ -430,147 +611,46 @@ function RmmAlerts({ onCreateIncident, openDevice, query }) {
   return <><PageHeading activeView="alerts" action={<button className="rmm-primary compact" type="button"><CheckCircle2 size={16} /> Acknowledge selected</button>} /><div className="rmm-list-toolbar"><div className="rmm-filter-pills">{['All', 'Critical', 'High', 'Medium'].map((value) => <button className={severity === value ? 'active' : ''} key={value} onClick={() => setSeverity(value)} type="button">{value}</button>)}</div><span>{visible.filter((alert) => alert.status === 'Open').length} open</span></div><div className="rmm-alert-list">{visible.map((alert) => <article className="rmm-card" key={alert.id}><div className={`rmm-alert-severity ${healthClass(alert.severity)}`}><AlertTriangle size={19} /></div><div className="rmm-alert-copy"><div><span className="rmm-eyebrow">{alert.id} · {alert.policy}</span><h2>{alert.title}</h2><p>{alert.detail}</p></div><button onClick={() => openDevice(rmmDevices.find((device) => device.id === alert.deviceId))} type="button"><Monitor size={14} /> {alert.device}</button></div><div className="rmm-alert-meta"><StatusPill tone={healthClass(alert.severity)}>{alert.severity}</StatusPill><span>{alert.raised}</span><button onClick={() => onCreateIncident?.({ alert, device: rmmDevices.find((device) => device.id === alert.deviceId) })} type="button">Create incident</button><button type="button">Acknowledge</button><button type="button"><MoreHorizontal size={16} /></button></div></article>)}</div></>
 }
 
-function RmmRemote({ devices = [], initialDeviceId = '', openDevice }) {
-  const online = devices.filter((device) => device.status === 'Online' && device.agentDeviceId)
-  const [selectedId, setSelectedId] = useState(initialDeviceId)
-  const [starting, setStarting] = useState(false)
-  const [launch, setLaunch] = useState(null)
-  const [error, setError] = useState('')
-  const [remoteSessions, setRemoteSessions] = useState([])
-  const [sessionError, setSessionError] = useState('')
-  const [terminatingId, setTerminatingId] = useState('')
-  const selected = online.find((device) => device.id === selectedId)
-  const apiBase = window.__HI5_API_BASE__ || deploymentConfig().apiUrl
+function RmmPatching({ devices = [] }) {
+  const reported = devices.filter((device) => device.pendingPatches != null)
+  const pending = reported.reduce((sum, device) => sum + Number(device.pendingPatches || 0), 0)
+  const current = reported.filter((device) => Number(device.pendingPatches || 0) === 0).length
+  const atRisk = reported.filter((device) => Number(device.pendingPatches || 0) > 0)
+  return <><PageHeading activeView="patching" /><div className="rmm-request-stats"><div><strong>{reported.length}</strong><span>Devices reporting updates</span></div><div><strong>{pending}</strong><span>Pending updates</span></div><div><strong>{current}</strong><span>No pending updates</span></div><div><strong>{devices.length - reported.length}</strong><span>Not yet reported</span></div></div><section className="rmm-table-card"><div className="rmm-table rmm-software-table"><div className="rmm-table-head"><span>Device</span><span>Pending</span><span>Last seen</span><span>Source</span><span>Status</span><span /></div>{reported.map((device) => <div className="rmm-table-row" key={device.id}><span className="rmm-device-cell"><span className="rmm-device-icon neutral"><Monitor size={16} /></span><span><strong>{device.name}</strong><small>{device.user} · {device.site || 'No site'}</small></span></span><span><strong>{device.pendingPatches}</strong></span><span><strong>{device.lastSeen}</strong></span><span><strong>{device.agent}</strong></span><span><StatusPill tone={device.pendingPatches > 0 ? 'warning' : 'healthy'}>{device.pendingPatches > 0 ? 'Updates pending' : 'Current'}</StatusPill></span><span /></div>)}</div>{!reported.length && <div className="rmm-empty"><ShieldCheck size={24} /><strong>No Windows Update inventory yet</strong><span>Pending update counts will appear after the Hi5Central Agent completes an inventory scan.</span></div>}</section>{atRisk.length > 0 && <div className="rmm-scope-explainer"><AlertTriangle size={18} /><div><strong>{atRisk.length} device{atRisk.length === 1 ? '' : 's'} require patch attention</strong><span>This view is using the live Windows Update inventory reported by each device; no placeholder compliance figures are inserted.</span></div></div>}</>
+}
 
-  useEffect(() => {
-    if (initialDeviceId) setSelectedId(initialDeviceId)
-  }, [initialDeviceId])
-
-  useEffect(() => {
-    let cancelled = false
-    async function load() {
-      try {
-        const response = await fetch(`${apiBase}/api/v1/rmm/remote-sessions`, { credentials: 'include' })
-        const payload = await response.json().catch(() => ({}))
-        if (!response.ok) throw new Error(payload.error || 'Unable to load live remote sessions.')
-        if (!cancelled) {
-          setRemoteSessions(Array.isArray(payload.sessions) ? payload.sessions : [])
-          setSessionError('')
-        }
-      } catch (err) {
-        if (!cancelled) setSessionError(err?.message || 'Unable to load live remote sessions.')
+function RmmSoftware({ devices = [] }) {
+  const applications = useMemo(() => {
+    const map = new Map()
+    for (const device of devices) {
+      for (const app of device.installedSoftware || []) {
+        const key = [String(app.name || '').toLowerCase(), String(app.version || '').toLowerCase(), String(app.publisher || '').toLowerCase()].join('|')
+        const current = map.get(key) || { name: app.name || 'Unnamed application', version: app.version || 'Not reported', publisher: app.publisher || 'Not reported', devices: new Set(), scopes: new Set() }
+        current.devices.add(device.id)
+        if (app.scope) current.scopes.add(app.scope.startsWith('user:') ? 'Per-user' : app.scope.startsWith('machine') ? 'Machine' : app.scope)
+        map.set(key, current)
       }
     }
-    load()
-    const timer = window.setInterval(load, 5000)
-    return () => { cancelled = true; window.clearInterval(timer) }
-  }, [apiBase])
-
-  async function startRemoteDesktop() {
-    if (!selected?.agentDeviceId || starting) return
-    setStarting(true)
-    setLaunch(null)
-    setError('')
-    try {
-      const response = await fetch(`${apiBase}/api/v1/rmm/remote-sessions`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentDeviceId: selected.agentDeviceId, mode: 'console' }),
-      })
-      const payload = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(payload.error || 'Unable to start the remote session.')
-      setLaunch(payload)
-      if (payload.viewerClient === 'browser' && payload.browserUrl) window.location.assign(payload.browserUrl)
-      else if (payload.viewerClient === 'native' && payload.nativeUrl) window.location.assign(payload.nativeUrl)
-      else throw new Error('The server could not determine a supported viewer for this device.')
-    } catch (err) {
-      setError(err?.message || 'Unable to start the remote session.')
-    } finally {
-      setStarting(false)
-    }
-  }
-
-  async function terminateRemoteSession(sessionId) {
-    if (!sessionId || terminatingId) return
-    setTerminatingId(sessionId)
-    setSessionError('')
-    try {
-      const response = await fetch(`${apiBase}/api/v1/rmm/remote-sessions/${encodeURIComponent(sessionId)}/terminate`, {
-        method: 'POST',
-        credentials: 'include',
-      })
-      const payload = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(payload.error || 'Unable to terminate the remote session.')
-      setRemoteSessions((current) => current.filter((session) => session.id !== sessionId))
-    } catch (err) {
-      setSessionError(err?.message || 'Unable to terminate the remote session.')
-    } finally {
-      setTerminatingId('')
-    }
-  }
-
-  function sessionState(session) {
-    if (session.status === 'active') return ['LIVE', 'active']
-    if (session.status === 'viewer_connected') return ['Connecting', 'connecting']
-    return ['Starting', 'starting']
-  }
-
-  function sessionStarted(session) {
-    const value = session.started_at || session.viewer_connected_at || session.created_at
-    if (!value) return 'Starting now'
-    const date = new Date(value)
-    return Number.isNaN(date.getTime()) ? 'Starting now' : `Started ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
-  }
-
-  return <>
-    <PageHeading activeView="remote" />
-    <div className="rmm-remote-layout">
-      <section className="rmm-card rmm-remote-launch">
-        <span className="rmm-remote-hero-icon"><TerminalSquare size={28} /></span>
-        <span className="rmm-eyebrow">Secure support</span>
-        <h2>Start a remote session</h2>
-        <p>Choose an online endpoint. Windows desktops open the Hi5Central Viewer; phones and tablets launch the touch-friendly browser viewer automatically.</p>
-        <label><Search size={16} /><select value={selectedId} onChange={(event) => { setSelectedId(event.target.value); setLaunch(null); setError('') }}><option value="" disabled>Select an online device…</option>{online.map((device) => <option key={device.id} value={device.id}>{device.name} · {device.user}</option>)}</select></label>
-        {!online.length && <div className="rmm-remote-message warning">No online endpoints currently have a connected Hi5Central Agent.</div>}
-        {error && <div className="rmm-remote-message error">{error}</div>}
-        <div className="rmm-remote-actions">
-          <button className="rmm-primary" disabled={!selected || starting} onClick={startRemoteDesktop} type="button"><Monitor size={17} /> {starting ? 'Starting…' : 'Remote desktop'}</button>
-          <button disabled title="Terminal support is the next remote tool to be wired." type="button"><TerminalSquare size={17} /> Terminal</button>
-          <button disabled title="Remote file access is the next remote tool to be wired." type="button"><Box size={17} /> Files</button>
-        </div>
-        {launch && <div className="rmm-remote-ready"><CheckCircle2 size={18} /><div><strong>Session ready for {launch.session?.deviceName || selected?.name}</strong><span>{launch.viewerClient === 'browser' ? 'This phone or tablet is authorised for the browser viewer.' : 'This desktop is authorised for the installed Hi5Central Viewer.'}</span></div><div>{launch.viewerClient === 'native' && launch.nativeUrl && <a className="rmm-primary compact" href={launch.nativeUrl}>Open Windows Viewer</a>}{launch.viewerClient === 'native' && launch.viewerDownloadUrl && <a href={launch.viewerDownloadUrl}>Install Viewer</a>}{launch.viewerClient === 'browser' && launch.browserUrl && <a className="rmm-primary compact" href={launch.browserUrl}>Open browser viewer</a>}</div></div>}
-      </section>
-      <section className="rmm-card rmm-remote-status-card">
-        <div className="rmm-card-heading rmm-live-heading"><div><span className="rmm-eyebrow">Remote control</span><h2>Live sessions</h2></div><span className={`rmm-live-count ${remoteSessions.some((session) => session.status === 'active') ? 'is-live' : ''}`}><Activity size={13} /> {remoteSessions.length}</span></div>
-        {sessionError && <div className="rmm-remote-message error rmm-session-error">{sessionError}</div>}
-        <div className="rmm-live-session-list">
-          {!remoteSessions.length && <div className="rmm-live-empty"><ShieldCheck size={18} /><span>No remote sessions are active.</span></div>}
-          {remoteSessions.map((session) => {
-            const [label, tone] = sessionState(session)
-            return <div className="rmm-live-session" key={session.id}><span className={`rmm-live-state ${tone}`}><span />{label}</span><div><strong>{session.device_name || 'Managed device'}</strong><small>{session.technician || 'Hi5Central technician'} · {session.viewer_client === 'browser' ? 'Browser viewer' : 'Windows Viewer'} · {sessionStarted(session)}</small></div><button disabled={terminatingId === session.id} onClick={() => terminateRemoteSession(session.id)} type="button"><LogOut size={14} /> {terminatingId === session.id ? 'Ending…' : 'Terminate'}</button></div>
-          })}
-        </div>
-        <div className="rmm-remote-agents-heading"><span className="rmm-eyebrow">Online now</span><h3>Connected Agents</h3></div>
-        <div className="rmm-health-list">{online.slice(0, 6).map((device) => <button key={device.id} onClick={() => { setSelectedId(device.id); setLaunch(null); setError('') }} type="button"><span className={`rmm-device-icon ${healthClass(device.health)}`}><DeviceIcon device={device} /></span><span><strong>{device.name}</strong><small>{device.user} · {device.site}</small></span><StatusPill>{device.status}</StatusPill><ChevronRight size={15} /></button>)}</div>{selected && <div className="rmm-remote-device-link"><button onClick={() => openDevice(selected)} type="button">View {selected.name} details <ChevronRight size={14} /></button></div>}
-      </section>
-    </div>
-  </>
+    return [...map.values()].map((app) => ({ ...app, deviceCount: app.devices.size, scopeLabel: [...app.scopes].join(', ') || 'Not reported' })).sort((a, b) => a.name.localeCompare(b.name))
+  }, [devices])
+  const reportingDevices = devices.filter((device) => (device.installedSoftware || []).length > 0).length
+  return <><PageHeading activeView="software" /><div className="rmm-request-stats"><div><strong>{applications.length}</strong><span>Unique application versions</span></div><div><strong>{reportingDevices}</strong><span>Devices reporting software</span></div><div><strong>{devices.length - reportingDevices}</strong><span>Awaiting inventory</span></div><div><strong>{applications.reduce((sum, app) => sum + app.deviceCount, 0)}</strong><span>Observed installations</span></div></div><section className="rmm-table-card"><div className="rmm-table rmm-software-table"><div className="rmm-table-head"><span>Application</span><span>Version</span><span>Installed</span><span>Publisher</span><span>Scope</span><span /></div>{applications.map((app) => <div className="rmm-table-row" key={[app.name, app.version, app.publisher].join('|')}><span className="rmm-device-cell"><span className="rmm-device-icon neutral"><Box size={17} /></span><span><strong>{app.name}</strong><small>Observed from live device inventory</small></span></span><span><strong>{app.version}</strong></span><span><strong>{app.deviceCount}</strong><small>device{app.deviceCount === 1 ? '' : 's'}</small></span><span><strong>{app.publisher}</strong></span><span><StatusPill tone="neutral">{app.scopeLabel}</StatusPill></span><span /></div>)}</div>{!applications.length && <div className="rmm-empty"><PackageCheck size={24} /><strong>No software inventory yet</strong><span>Applications appear here after managed devices report their installed-software inventory.</span></div>}</section></>
 }
 
-function RmmPatching() {
-  const total = rmmPatchGroups.reduce((sum, item) => sum + item.devices, 0)
-  const compliant = rmmPatchGroups.reduce((sum, item) => sum + item.compliant, 0)
-  return <><PageHeading activeView="patching" action={<button className="rmm-primary compact" type="button"><RefreshCw size={16} /> Run patch scan</button>} /><div className="rmm-request-stats"><div><strong>{Math.round(compliant / total * 100)}%</strong><span>Compliant</span></div><div><strong>{rmmPatchGroups.reduce((sum, item) => sum + item.pending, 0)}</strong><span>Pending</span></div><div><strong>{rmmPatchGroups.reduce((sum, item) => sum + item.failed, 0)}</strong><span>Failed</span></div><div><strong>14</strong><span>Approved today</span></div></div><div className="rmm-patch-grid">{rmmPatchGroups.map((group) => <article className="rmm-card" key={group.id}><header><span className="rmm-metric-icon green"><ShieldCheck size={18} /></span><div><span className="rmm-eyebrow">{group.policy}</span><h2>{group.name}</h2><p>{group.devices} managed devices · {group.window}</p></div></header><div className="rmm-patch-progress"><span style={{ width: `${Math.round(group.compliant / group.devices * 100)}%` }} /></div><div className="rmm-patch-counts"><span><b>{group.compliant}</b>Compliant</span><span><b>{group.pending}</b>Pending</span><span><b>{group.failed}</b>Failed</span></div><footer><button type="button">View devices</button><button className="rmm-primary compact" type="button"><Play size={14} /> Deploy now</button></footer></article>)}</div></>
-}
-
-function RmmSoftware() {
-  return <><PageHeading activeView="software" action={<button className="rmm-primary compact" type="button"><PackageCheck size={16} /> New deployment</button>} /><section className="rmm-table-card"><div className="rmm-table rmm-software-table"><div className="rmm-table-head"><span>Application</span><span>Version</span><span>Installed</span><span>Updates</span><span>Management</span><span /></div>{rmmSoftware.map((app) => <div className="rmm-table-row" key={app.name}><span className="rmm-device-cell"><span className="rmm-device-icon neutral"><Box size={17} /></span><span><strong>{app.name}</strong><small>{app.latest ? 'Current release' : 'Update available'}</small></span></span><span><strong>{app.version}</strong></span><span><strong>{app.installed}</strong><small>devices</small></span><span><strong>{app.updates}</strong><small>required</small></span><span><StatusPill tone={app.managed ? 'healthy' : 'neutral'}>{app.managed ? 'Managed' : 'Observed'}</StatusPill></span><span><button type="button"><MoreHorizontal size={16} /></button></span></div>)}</div></section></>
-}
-
-function RmmReports() {
-  const cards = [['Fleet health', '94%', 'Healthy across managed devices', CircleGauge], ['Patch compliance', '96%', '+2% from last month', ShieldCheck], ['Alert resolution', '38 min', 'Median time to acknowledge', Clock3], ['Automation success', '98.2%', 'Across 2,814 job executions', Bot]]
-  return <><PageHeading activeView="reports" /><div className="rmm-report-metrics">{cards.map(([title, value, detail, Icon]) => <article className="rmm-card" key={title}><Icon size={20} /><span>{title}</span><strong>{value}</strong><small>{detail}</small></article>)}</div><div className="rmm-dashboard-grid"><section className="rmm-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">30 day trend</span><h2>Patch compliance</h2></div></div><div className="rmm-placeholder-chart"><BarChart3 size={34} /><strong>Compliance trend</strong><span>Reporting foundation ready for API-backed historical metrics.</span></div></section><section className="rmm-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">Operations</span><h2>Top alert policies</h2></div></div><div className="rmm-report-list"><span><strong>Endpoint performance</strong><b>18</b></span><span><strong>Disk capacity</strong><b>13</b></span><span><strong>Endpoint availability</strong><b>9</b></span><span><strong>Agent health</strong><b>6</b></span></div></section></div></>
+function RmmReports({ devices = [] }) {
+  const total = devices.length
+  const online = devices.filter((device) => device.status === 'Online').length
+  const healthy = devices.filter((device) => device.health === 'Healthy').length
+  const softwareReported = devices.filter((device) => (device.installedSoftware || []).length > 0).length
+  const updatesReported = devices.filter((device) => device.pendingPatches != null).length
+  const siteAssigned = devices.filter((device) => device.siteId).length
+  const cards = [
+    ['Online devices', total ? Math.round(online / total * 100) + '%' : '—', total ? online + ' of ' + total + ' devices currently online' : 'No managed devices', Wifi],
+    ['Healthy devices', total ? Math.round(healthy / total * 100) + '%' : '—', total ? healthy + ' of ' + total + ' devices healthy' : 'No managed devices', CircleGauge],
+    ['Software inventory', total ? Math.round(softwareReported / total * 100) + '%' : '—', softwareReported + ' devices reporting applications', PackageCheck],
+    ['Update inventory', total ? Math.round(updatesReported / total * 100) + '%' : '—', updatesReported + ' devices reporting Windows Update state', ShieldCheck],
+  ]
+  return <><PageHeading activeView="reports" /><div className="rmm-report-metrics">{cards.map(([title, value, detail, Icon]) => <article className="rmm-card" key={title}><Icon size={20} /><span>{title}</span><strong>{value}</strong><small>{detail}</small></article>)}</div><div className="rmm-dashboard-grid"><section className="rmm-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">Inventory coverage</span><h2>Device reporting</h2></div></div><div className="rmm-report-list"><span><strong>Managed devices</strong><b>{total}</b></span><span><strong>Online now</strong><b>{online}</b></span><span><strong>Software inventory reported</strong><b>{softwareReported}</b></span><span><strong>Windows Update inventory reported</strong><b>{updatesReported}</b></span></div></section><section className="rmm-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">Organisation scope</span><h2>Site assignment</h2></div></div><div className="rmm-report-list"><span><strong>Assigned to an organisation site</strong><b>{siteAssigned}</b></span><span><strong>Unassigned</strong><b>{Math.max(0, total - siteAssigned)}</b></span><span><strong>Agent-backed</strong><b>{devices.filter((device) => device.agentDeviceId).length}</b></span><span><strong>Encrypted / protected</strong><b>{devices.filter((device) => device.security?.encryptionState === 'Protected').length}</b></span></div></section></div><div className="rmm-scope-explainer"><BarChart3 size={18} /><div><strong>Reports now use current device inventory only</strong><span>Historical trend charts will appear when time-series reporting data exists; fabricated percentages and example alert counts are no longer used here.</span></div></div></>
 }
 
 function RmmSettings({ navigate }) {
@@ -586,7 +666,7 @@ function RmmSettings({ navigate }) {
   return <><PageHeading activeView="settings" /><div className="rmm-settings-grid">{settings.map(({ icon: Icon, title, detail, target }) => <button className="rmm-card" key={title} onClick={() => target && navigate(target)} type="button"><span><Icon size={19} /></span><div><strong>{title}</strong><small>{detail}</small></div><ChevronRight size={17} /></button>)}</div></>
 }
 
-export function RmmPlatformApp({ accent, currentUser, devices = rmmDevices, handleLogout, onCreateItsmIncident, setTheme, tenantName, theme, tickets = [] }) {
+export function RmmPlatformApp({ accent, currentUser, devices = rmmDevices, sites = [], handleLogout, onCreateItsmIncident, onSitesChange, setTheme, tenantName, theme, tickets = [] }) {
   const initialRoute = rmmRouteFromLocation()
   const [activeView, setActiveView] = useState(initialRoute.viewId || 'dashboard')
   const [selectedDeviceId, setSelectedDeviceId] = useState(initialRoute.deviceId || '')
@@ -594,7 +674,6 @@ export function RmmPlatformApp({ accent, currentUser, devices = rmmDevices, hand
   const [query, setQuery] = useState('')
   const [toast, setToast] = useState('')
   const [inventoryPreset, setInventoryPreset] = useState(null)
-  const [remoteDeviceId, setRemoteDeviceId] = useState('')
   const selectedDevice = devices.find((device) => device.id === selectedDeviceId)
 
   useEffect(() => {
@@ -623,7 +702,6 @@ export function RmmPlatformApp({ accent, currentUser, devices = rmmDevices, hand
   function navigate(viewId, options = {}) {
     setActiveView(viewId)
     setSelectedDeviceId('')
-    setRemoteDeviceId(viewId === 'remote' ? (options.deviceId || '') : '')
     setMobileOpen(false)
     setQuery('')
     const path = rmmPath(undefined, viewId)
@@ -647,20 +725,20 @@ export function RmmPlatformApp({ accent, currentUser, devices = rmmDevices, hand
 
   function renderPage() {
     if (selectedDevice) return <RmmDeviceDetail device={selectedDevice} navigate={navigate} onBack={() => { setSelectedDeviceId(''); window.history.pushState({}, '', rmmPath(undefined, 'devices')) }} onCreateIncident={createItsmIncident} tickets={tickets} />
-    if (activeView === 'devices') return <RmmDeviceInventory devices={devices} openDevice={openDevice} query={query} preset={inventoryPreset} onPresetApplied={() => setInventoryPreset(null)} />
-    if (activeView === 'sites') return <RmmSitesManagement query={query} onViewDevices={openScopedInventory} />
-    if (activeView === 'groups') return <RmmDeviceGroupsManagement query={query} onViewDevices={openScopedInventory} />
+    if (activeView === 'devices') return <RmmDeviceInventory devices={devices} sites={sites} openDevice={openDevice} query={query} preset={inventoryPreset} onPresetApplied={() => setInventoryPreset(null)} />
+    if (activeView === 'sites') return <RmmSitesManagement devices={devices} query={query} sites={sites} onSitesChange={onSitesChange} onViewDevices={openScopedInventory} />
+    if (activeView === 'groups') return <RmmDeviceGroupsManagement devices={devices} query={query} sites={sites} onViewDevices={openScopedInventory} />
     if (activeView === 'alerts') return <RmmAlerts onCreateIncident={createItsmIncident} openDevice={openDevice} query={query} />
-    if (activeView === 'remote') return <RmmRemote devices={devices} initialDeviceId={remoteDeviceId} openDevice={openDevice} />
-    if (activeView === 'patching') return <RmmPatching />
-    if (activeView === 'software') return <RmmSoftware />
+    if (activeView === 'remote') return <RmmDeviceInventory devices={devices} sites={sites} openDevice={openDevice} query={query} preset={inventoryPreset} onPresetApplied={() => setInventoryPreset(null)} />
+    if (activeView === 'patching') return <RmmPatching devices={devices} />
+    if (activeView === 'software') return <RmmSoftware devices={devices} />
     if (activeView === 'automation') return <RmmAutomation />
-    if (activeView === 'policies') return <RmmMonitoringPolicies openDevice={openDevice} />
+    if (activeView === 'policies') return <RmmMonitoringPolicies devices={devices} openDevice={openDevice} sites={sites} />
     if (activeView === 'jobs') return <RmmJobs />
-    if (activeView === 'reports') return <RmmReports />
+    if (activeView === 'reports') return <RmmReports devices={devices} />
     if (activeView === 'agent-deployment') return <RmmAgentDeployment />
     if (activeView === 'settings') return <RmmSettings navigate={navigate} />
-    return <RmmDashboard navigate={navigate} openDevice={openDevice} />
+    return <RmmDashboard devices={devices} navigate={navigate} openDevice={openDevice} />
   }
 
   return (

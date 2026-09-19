@@ -1,66 +1,11 @@
 import { rmmDevices } from './rmmData.js'
-import { deviceMatchesManagedGroup, rmmManagedDeviceGroups, rmmManagedSites } from './rmmScopeData.js'
 
 export const RMM_CUSTOM_MONITORING_POLICIES_STORAGE_KEY = 'hi5central:rmm:monitoring-policies:v1'
 export const RMM_CUSTOM_MONITORING_ASSIGNMENTS_STORAGE_KEY = 'hi5central:rmm:monitoring-assignments:v1'
 export const RMM_DEVICE_MONITORING_OVERRIDES_STORAGE_KEY = 'hi5central:rmm:monitoring-device-overrides:v1'
 
-// Product defaults only. Tenant assignments, overrides and estate records are
-// loaded from tenant state and are never seeded into the runtime.
-export const rmmMonitoringPolicies = [
-  {
-    id: 'MON-ENDPOINT-STD',
-    name: 'Standard endpoint monitoring',
-    status: 'Active',
-    platform: 'Windows / macOS',
-    category: 'Endpoint',
-    description: 'Balanced availability, performance, storage and security monitoring for user endpoints.',
-    evaluation: 'Every 2 minutes',
-    alertDelay: '5 minutes',
-    autoResolve: true,
-    checks: [
-      { id: 'cpu', label: 'CPU utilisation', metric: 'CPU', condition: 'Above', warning: 85, critical: 95, unit: '%', duration: '10 min' },
-      { id: 'memory', label: 'Memory utilisation', metric: 'Memory', condition: 'Above', warning: 85, critical: 95, unit: '%', duration: '10 min' },
-      { id: 'disk', label: 'Disk utilisation', metric: 'Disk', condition: 'Above', warning: 85, critical: 92, unit: '%', duration: '5 min' },
-      { id: 'offline', label: 'Agent availability', metric: 'Heartbeat', condition: 'Missing for', warning: 15, critical: 30, unit: 'min', duration: 'Immediate' },
-      { id: 'security', label: 'Endpoint protection', metric: 'Security health', condition: 'Not healthy', warning: null, critical: null, unit: '', duration: 'Immediate' },
-    ],
-  },
-  {
-    id: 'MON-SERVER-PROD',
-    name: 'Production Windows Server',
-    status: 'Active',
-    platform: 'Windows Server',
-    category: 'Server',
-    description: 'Tighter thresholds and faster availability detection for production server workloads.',
-    evaluation: 'Every 60 seconds',
-    alertDelay: '2 minutes',
-    autoResolve: true,
-    checks: [
-      { id: 'cpu', label: 'CPU utilisation', metric: 'CPU', condition: 'Above', warning: 80, critical: 92, unit: '%', duration: '5 min' },
-      { id: 'memory', label: 'Memory utilisation', metric: 'Memory', condition: 'Above', warning: 85, critical: 95, unit: '%', duration: '5 min' },
-      { id: 'disk', label: 'Disk utilisation', metric: 'Disk', condition: 'Above', warning: 82, critical: 90, unit: '%', duration: '3 min' },
-      { id: 'offline', label: 'Agent availability', metric: 'Heartbeat', condition: 'Missing for', warning: 3, critical: 5, unit: 'min', duration: 'Immediate' },
-      { id: 'patch', label: 'Patch compliance', metric: 'Patch compliance', condition: 'Below', warning: 90, critical: 75, unit: '%', duration: '30 min' },
-    ],
-  },
-  {
-    id: 'MON-NETWORK',
-    name: 'Network monitoring',
-    status: 'Active',
-    platform: 'Network devices',
-    category: 'Infrastructure',
-    description: 'Availability and response monitoring for managed network appliances.',
-    evaluation: 'Every 60 seconds',
-    alertDelay: '2 minutes',
-    autoResolve: true,
-    checks: [
-      { id: 'availability', label: 'Device availability', metric: 'Ping / SNMP', condition: 'Unavailable for', warning: 2, critical: 5, unit: 'min', duration: 'Immediate' },
-      { id: 'latency', label: 'Network latency', metric: 'Latency', condition: 'Above', warning: 80, critical: 150, unit: 'ms', duration: '5 min' },
-      { id: 'packetloss', label: 'Packet loss', metric: 'Packet loss', condition: 'Above', warning: 5, critical: 15, unit: '%', duration: '5 min' },
-    ],
-  },
-]
+// Tenant monitoring records are created explicitly. Nothing is inserted into a production tenant by default.
+export const rmmMonitoringPolicies = []
 
 export const rmmMonitoringAssignments = Object.freeze([])
 export const rmmDeviceMonitoringOverrides = Object.freeze([])
@@ -88,7 +33,7 @@ export function assignmentMatchesDevice(device, assignment) {
   if (!device || !assignment?.enabled) return false
   if (assignment.scopeType === 'Estate') return true
   if (assignment.scopeType === 'Site') return device.siteId === assignment.scopeId
-  if (assignment.scopeType === 'Group') return deviceMatchesManagedGroup(device, assignment.scopeId)
+  if (assignment.scopeType === 'Group') return device.groupId === assignment.scopeId || device.group === assignment.scopeName
   if (assignment.scopeType === 'Device') return device.id === assignment.scopeId
   return false
 }
@@ -146,21 +91,26 @@ export function resolveDeviceMonitoringPolicy(device, options = {}) {
 }
 
 export function monitoringPolicyCoverage(policyId, options = {}) {
-  return rmmDevices.filter((device) => resolveDeviceMonitoringPolicy(device, options).policyId === policyId).length
+  const devices = options.devices || rmmDevices
+  return devices.filter((device) => resolveDeviceMonitoringPolicy(device, options).policyId === policyId).length
 }
 
-export function monitoringScopeDeviceCount(scopeType, scopeId) {
-  if (scopeType === 'Estate') return rmmDevices.length
-  if (scopeType === 'Site') return rmmDevices.filter((device) => device.siteId === scopeId).length
-  if (scopeType === 'Group') return rmmDevices.filter((device) => deviceMatchesManagedGroup(device, scopeId)).length
-  if (scopeType === 'Device') return rmmDevices.some((device) => device.id === scopeId) ? 1 : 0
+export function monitoringScopeDeviceCount(scopeType, scopeId, options = {}) {
+  const devices = options.devices || rmmDevices
+  if (scopeType === 'Estate') return devices.length
+  if (scopeType === 'Site') return devices.filter((device) => device.siteId === scopeId).length
+  if (scopeType === 'Group') return devices.filter((device) => device.groupId === scopeId || device.group === scopeId).length
+  if (scopeType === 'Device') return devices.some((device) => device.id === scopeId) ? 1 : 0
   return 0
 }
 
-export function monitoringScopeOptions(scopeType) {
+export function monitoringScopeOptions(scopeType, options = {}) {
+  const devices = options.devices || rmmDevices
+  const sites = options.sites || []
+  const groups = options.groups || []
   if (scopeType === 'Estate') return [{ id: 'ALL', name: 'Entire managed estate' }]
-  if (scopeType === 'Site') return rmmManagedSites.map((site) => ({ id: site.id, name: site.name }))
-  if (scopeType === 'Group') return rmmManagedDeviceGroups.map((group) => ({ id: group.id, name: group.name }))
-  if (scopeType === 'Device') return rmmDevices.map((device) => ({ id: device.id, name: `${device.name} · ${device.user || device.type}` }))
+  if (scopeType === 'Site') return sites.filter((site) => site.active !== false).map((site) => ({ id: site.id, name: site.name }))
+  if (scopeType === 'Group') return groups.map((group) => ({ id: group.id, name: group.name }))
+  if (scopeType === 'Device') return devices.map((device) => ({ id: device.id, name: `${device.name} · ${device.user || device.type}` }))
   return []
 }

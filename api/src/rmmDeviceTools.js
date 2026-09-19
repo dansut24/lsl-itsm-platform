@@ -1,0 +1,310 @@
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { WebSocketServer } from 'ws'
+import { hasPermission } from './access.js'
+import { originMatchesTenant } from './deploymentConfig.js'
+import { pool } from './db.js'
+import { agentSocketForDevice, sendAgentMessage, subscribeAgentMessages } from './rmmAgent.js'
+import { resolveSession } from './session.js'
+
+const TOOL_SESSION_TTL_MS = 10 * 60 * 1000
+const toolSessions = new Map()
+
+function clean(value = '') { return String(value ?? '').trim() }
+function sha256(value = '') { return createHash('sha256').update(String(value)).digest('hex') }
+function boundedInteger(value, min, max) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return null
+  return Math.min(max, Math.max(min, Math.trunc(number)))
+}
+
+async function requireDeviceControl(c) {
+  const session = await resolveSession(c)
+  if (!session) return { error: c.json({ error: 'Authentication required.' }, 401) }
+  if (!originMatchesTenant(c.req.header('origin'), session.slug)) {
+    return { error: c.json({ error: 'Tenant session mismatch.' }, 403) }
+  }
+  if (!hasPermission(session.access, 'rmm.devices.control') && !hasPermission(session.access, 'rmm.automation.run')) {
+    return { error: c.json({ error: 'You do not have permission to control RMM devices.' }, 403) }
+  }
+  return { session }
+}
+
+function payloadForAction(type, body = {}) {
+  const payload = body?.payload && typeof body.payload === 'object' && !Array.isArray(body.payload) ? body.payload : {}
+  if (['processes.list', 'services.list', 'inventory.scan'].includes(type)) return {}
+  if (['process.kill', 'process.restart'].includes(type)) {
+    const pid = boundedInteger(payload.pid ?? payload.processId, 5, 2147483647)
+    if (!pid) throw new Error('A valid process ID is required.')
+    return { pid }
+  }
+  if (['services.start', 'services.stop', 'services.restart'].includes(type)) {
+    const serviceName = clean(payload.serviceName || payload.service_name).slice(0, 256)
+    if (!serviceName) throw new Error('A service name is required.')
+    return { serviceName }
+  }
+  if (type === 'services.set_start_type') {
+    const serviceName = clean(payload.serviceName || payload.service_name).slice(0, 256)
+    const startType = clean(payload.startType || payload.start_type).slice(0, 64)
+    if (!serviceName || !['Automatic', 'AutomaticDelayed', 'Manual', 'Disabled'].includes(startType)) {
+      throw new Error('A valid service and startup type are required.')
+    }
+    return { serviceName, startType }
+  }
+  if (type === 'files.list') {
+    const path = clean(payload.path || 'C:\\').slice(0, 2048) || 'C:\\'
+    return { path }
+  }
+  if (type === 'registry.list') {
+    const path = clean(payload.path || 'HKLM:\\').slice(0, 2048) || 'HKLM:\\'
+    if (!/^HK(?:LM|CU|CR|U|CC):\\/i.test(path)) throw new Error('A valid registry path is required.')
+    return { path }
+  }
+  if (type === 'events.list') {
+    const logName = clean(payload.logName || payload.log_name || 'System')
+    const level = clean(payload.level || 'All')
+    const maxEvents = boundedInteger(payload.maxEvents ?? payload.max_events, 25, 500) || 200
+    if (!['System', 'Application', 'Security'].includes(logName)) throw new Error('Unsupported event log.')
+    if (!['All', 'Critical', 'Error', 'Warning', 'Information', 'Verbose'].includes(level)) throw new Error('Unsupported event level.')
+    return { logName, level, maxEvents }
+  }
+  if (['registry.create_key', 'registry.delete_key', 'registry.set_value', 'registry.delete_value'].includes(type)) {
+    const path = clean(payload.path).slice(0, 2048)
+    const name = clean(payload.name).slice(0, 512)
+    const value = String(payload.value ?? '').slice(0, 65536)
+    const kind = clean(payload.kind || 'String').slice(0, 32)
+    if (!/^HK(?:LM|CU|CR|U|CC):\\/i.test(path)) throw new Error('A valid registry path is required.')
+    if (type !== 'registry.delete_key' && !name) throw new Error('A registry key or value name is required.')
+    if (type === 'registry.set_value' && !['String', 'ExpandString', 'MultiString', 'DWord', 'QWord', 'Binary'].includes(kind)) {
+      throw new Error('Unsupported registry value type.')
+    }
+    return { path, name, value, kind }
+  }
+  if (type === 'software.uninstall') {
+    const name = clean(payload.name).slice(0, 512)
+    const registryKey = clean(payload.registry_key || payload.registryKey).slice(0, 512)
+    const scope = clean(payload.scope).slice(0, 192)
+    const userProfile = clean(payload.user_profile || payload.userProfile).slice(0, 1024)
+    if (!name && !registryKey) throw new Error('Software name or registry identity is required.')
+    const validScope = !scope || ['machine64', 'machine32', 'user'].includes(scope) || /^user:S-1-(?:5-21|12-1)-[0-9-]+$/i.test(scope)
+    if (!validScope) throw new Error('Unsupported software scope.')
+    return { name, registry_key: registryKey, scope, user_profile: userProfile }
+  }
+  throw new Error('Unsupported device action.')
+}
+
+async function managedAgent(tenantId, agentDeviceId) {
+  const result = await pool.query(
+    "SELECT a.id,i.name,i.reference " +
+    "FROM rmm_agent_devices a " +
+    "JOIN rmm_device_inventory i ON i.id=a.inventory_id " +
+    "WHERE a.id::text=$1 AND a.tenant_id=$2 AND a.disabled_at IS NULL AND i.active=true LIMIT 1",
+    [clean(agentDeviceId), tenantId],
+  )
+  return result.rows[0] || null
+}
+
+export function registerRmmDeviceToolRoutes(app) {
+  app.post('/api/v1/rmm/devices/:agentDeviceId/actions', async (c) => {
+    const auth = await requireDeviceControl(c)
+    if (auth.error) return auth.error
+    const agentDeviceId = clean(c.req.param('agentDeviceId'))
+    const body = await c.req.json().catch(() => ({}))
+    const type = clean(body.type || body.action)
+    let payload
+    try { payload = payloadForAction(type, body) } catch (error) {
+      return c.json({ error: error.message || 'Invalid device action.' }, 400)
+    }
+
+    const device = await managedAgent(auth.session.tenant_id, agentDeviceId)
+    if (!device) return c.json({ error: 'Managed Agent not found for this device.' }, 404)
+
+    const label = clean(auth.session.name || auth.session.email || 'Technician').slice(0, 255)
+    const inserted = await pool.query(
+      "INSERT INTO rmm_agent_jobs " +
+      "(tenant_id,agent_device_id,job_type,payload,queued_by_user_id,initiated_by,initiated_by_label,request_metadata) " +
+      "VALUES ($1,$2,$3,$4::jsonb,$5,'technician',$6,$7::jsonb) " +
+      "RETURNING id,job_type,status,created_at",
+      [
+        auth.session.tenant_id,
+        device.id,
+        type,
+        JSON.stringify(payload),
+        auth.session.user_id,
+        label,
+        JSON.stringify({ source: 'device_details', device_name: device.name, device_reference: device.reference }),
+      ],
+    )
+    return c.json({ job: inserted.rows[0] }, 202)
+  })
+
+  app.get('/api/v1/rmm/device-actions/:jobId', async (c) => {
+    const auth = await requireDeviceControl(c)
+    if (auth.error) return auth.error
+    const result = await pool.query(
+      "SELECT j.id,j.job_type,j.status,j.result,j.error_message,j.created_at,j.claimed_at,j.completed_at,j.updated_at," +
+      "i.name AS device_name,i.reference AS device_reference " +
+      "FROM rmm_agent_jobs j " +
+      "JOIN rmm_agent_devices a ON a.id=j.agent_device_id " +
+      "JOIN rmm_device_inventory i ON i.id=a.inventory_id " +
+      "WHERE j.id=$1 AND j.tenant_id=$2 LIMIT 1",
+      [clean(c.req.param('jobId')), auth.session.tenant_id],
+    )
+    if (!result.rowCount) return c.json({ error: 'Device action not found.' }, 404)
+    return c.json({ job: result.rows[0] })
+  })
+
+  app.get('/api/v1/rmm/devices/:agentDeviceId/actions', async (c) => {
+    const auth = await requireDeviceControl(c)
+    if (auth.error) return auth.error
+    const limit = boundedInteger(c.req.query('limit'), 1, 100) || 25
+    const result = await pool.query(
+      "SELECT j.id,j.job_type,j.status,j.result,j.error_message,j.created_at,j.claimed_at,j.completed_at,j.updated_at " +
+      "FROM rmm_agent_jobs j WHERE j.tenant_id=$1 AND j.agent_device_id::text=$2 " +
+      "ORDER BY j.created_at DESC LIMIT $3",
+      [auth.session.tenant_id, clean(c.req.param('agentDeviceId')), limit],
+    )
+    return c.json({ jobs: result.rows })
+  })
+
+  app.post('/api/v1/rmm/devices/:agentDeviceId/tool-sessions', async (c) => {
+    const auth = await requireDeviceControl(c)
+    if (auth.error) return auth.error
+    const device = await managedAgent(auth.session.tenant_id, c.req.param('agentDeviceId'))
+    if (!device) return c.json({ error: 'Managed Agent not found for this device.' }, 404)
+    const socket = agentSocketForDevice(device.id)
+    if (!socket || socket.readyState !== 1) return c.json({ error: 'The Hi5Central Agent is currently offline.' }, 409)
+
+    const body = await c.req.json().catch(() => ({}))
+    const tool = clean(body.tool || 'terminal').toLowerCase()
+    const shell = clean(body.shell || 'powershell').toLowerCase()
+    if (!['terminal', 'files'].includes(tool)) return c.json({ error: 'Unsupported live tool session.' }, 400)
+    if (tool === 'terminal' && !['cmd', 'powershell'].includes(shell)) return c.json({ error: 'Terminal shell must be cmd or powershell.' }, 400)
+
+    const id = randomUUID()
+    const token = 'h5t_' + randomBytes(32).toString('base64url')
+    const expiresAt = Date.now() + TOOL_SESSION_TTL_MS
+    toolSessions.set(id, {
+      id,
+      tenantId: auth.session.tenant_id,
+      userId: auth.session.user_id,
+      agentDeviceId: String(device.id),
+      deviceName: device.name,
+      tool,
+      shell,
+      tokenHash: sha256(token),
+      expiresAt,
+    })
+    const cleanup = setTimeout(() => toolSessions.delete(id), TOOL_SESSION_TTL_MS + 5000)
+    cleanup.unref?.()
+    return c.json({
+      session: { id, tool, shell, deviceName: device.name, expiresAt: new Date(expiresAt).toISOString() },
+      token,
+      websocketPath: '/rmm-tools/ws',
+    }, 201)
+  })
+}
+
+function safeSend(ws, payload) {
+  if (!ws || ws.readyState !== 1) return false
+  try { ws.send(typeof payload === 'string' ? payload : JSON.stringify(payload)); return true } catch { return false }
+}
+
+export function attachRmmDeviceToolWebSocket(server) {
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 })
+  server.on('upgrade', (request, socket, head) => {
+    let url
+    try { url = new URL(request.url || '/', 'http://localhost') } catch { return }
+    if (url.pathname !== '/rmm-tools/ws') return
+    const id = clean(url.searchParams.get('session_id'))
+    const token = clean(url.searchParams.get('token'))
+    const session = toolSessions.get(id)
+    if (!session || session.expiresAt <= Date.now() || session.tokenHash !== sha256(token)) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
+      socket.destroy()
+      return
+    }
+    const agent = agentSocketForDevice(session.agentDeviceId)
+    if (!agent || agent.readyState !== 1) {
+      socket.write('HTTP/1.1 409 Conflict\r\nConnection: close\r\n\r\n')
+      socket.destroy()
+      return
+    }
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      ws.hi5ToolSession = session
+      wss.emit('connection', ws, request)
+    })
+  })
+
+  wss.on('connection', (browserWs) => {
+    const session = browserWs.hi5ToolSession
+    const sessionId = String(session.id)
+    const isTerminal = session.tool === 'terminal'
+    const isFiles = session.tool === 'files'
+
+    const unsubscribe = subscribeAgentMessages(session.agentDeviceId, (payload) => {
+      const type = String(payload?.type || '')
+      if (isTerminal && !type.startsWith('terminal_')) return
+      if (isFiles && !type.startsWith('files_')) return
+      if (clean(payload.session_id || payload.sessionId) !== sessionId) return
+      safeSend(browserWs, payload)
+    })
+
+    if (isTerminal) {
+      const started = sendAgentMessage(session.agentDeviceId, {
+        type: 'terminal_start',
+        session_id: sessionId,
+        shell: session.shell,
+        run_as: 'admin',
+        arch: 'x64',
+        cols: 120,
+        rows: 32,
+      })
+      if (!started) {
+        safeSend(browserWs, { type: 'terminal_error', session_id: sessionId, error: 'Agent is offline.' })
+        try { browserWs.close(1013, 'Agent offline') } catch {}
+        unsubscribe()
+        toolSessions.delete(sessionId)
+        return
+      }
+    }
+
+    browserWs.on('message', (buffer) => {
+      let payload
+      try { payload = JSON.parse(Buffer.isBuffer(buffer) ? buffer.toString('utf8') : String(buffer)) } catch { return }
+      const type = clean(payload?.type)
+      let allowed = false
+      if (isTerminal) allowed = ['terminal_input', 'terminal_resize', 'terminal_stop'].includes(type)
+      if (isFiles) allowed = [
+        'files_list', 'files_cancel', 'files_download_request', 'files_download_cancel',
+        'files_rename_request', 'files_delete_request', 'files_mkdir_request',
+        'files_upload_start', 'files_upload_chunk', 'files_upload_complete', 'files_upload_cancel',
+      ].includes(type)
+      if (!allowed) return
+
+      const outgoing = { ...payload, session_id: sessionId, sessionId }
+      if (type === 'terminal_input') outgoing.data = String(payload.data || '').slice(0, 65536)
+      if (type === 'terminal_resize') {
+        outgoing.cols = boundedInteger(payload.cols, 20, 300) || 120
+        outgoing.rows = boundedInteger(payload.rows, 5, 100) || 32
+      }
+      if (isFiles) {
+        if (outgoing.path != null) outgoing.path = clean(outgoing.path).slice(0, 4096)
+        if (outgoing.currentPath != null) outgoing.currentPath = clean(outgoing.currentPath).slice(0, 4096)
+        if (outgoing.current_path != null) outgoing.current_path = clean(outgoing.current_path).slice(0, 4096)
+        if (outgoing.directory != null) outgoing.directory = clean(outgoing.directory).slice(0, 4096)
+        if (outgoing.name != null) outgoing.name = clean(outgoing.name).slice(0, 512)
+        if (outgoing.filename != null) outgoing.filename = clean(outgoing.filename).slice(0, 512)
+        if (outgoing.data != null) outgoing.data = String(outgoing.data).slice(0, 262144)
+      }
+      sendAgentMessage(session.agentDeviceId, outgoing)
+    })
+
+    browserWs.on('close', () => {
+      if (isTerminal) sendAgentMessage(session.agentDeviceId, { type: 'terminal_stop', session_id: sessionId, sessionId })
+      if (isFiles) sendAgentMessage(session.agentDeviceId, { type: 'files_cancel', session_id: sessionId, sessionId })
+      unsubscribe()
+      toolSessions.delete(sessionId)
+    })
+  })
+}
+
