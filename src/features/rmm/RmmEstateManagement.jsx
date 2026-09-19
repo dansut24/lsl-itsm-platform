@@ -23,11 +23,14 @@ import {
   X,
 } from 'lucide-react'
 import { rmmDevices } from '../../data/rmmData.js'
+import { rmmDefaultSavedViews } from '../../data/rmmScopeData.js'
 import {
-  RMM_CUSTOM_GROUPS_STORAGE_KEY,
-  RMM_SAVED_VIEWS_STORAGE_KEY,
-  rmmDefaultSavedViews,
-} from '../../data/rmmScopeData.js'
+  createRmmGroup,
+  createRmmSavedView,
+  deleteRmmGroup,
+  deleteRmmSavedView,
+  loadRmmScope,
+} from '../../lib/rmmScopeApi.js'
 import './RmmEstateManagement.css'
 
 const DEFAULT_COLUMNS = ['device', 'user', 'siteGroup', 'sourceTenant', 'health', 'resources', 'patch', 'lastSeen']
@@ -43,23 +46,6 @@ const COLUMN_OPTIONS = [
 ]
 
 const HEALTH_ORDER = { Critical: 5, Warning: 4, Offline: 3, Healthy: 1, Online: 1 }
-
-function readStoredList(key) {
-  try {
-    const value = JSON.parse(window.localStorage.getItem(key) || '[]')
-    return Array.isArray(value) ? value : []
-  } catch {
-    return []
-  }
-}
-
-function writeStoredList(key, value) {
-  try {
-    window.localStorage.setItem(key, JSON.stringify(value))
-  } catch {
-    // Local state remains usable in-memory if storage is unavailable.
-  }
-}
 
 function healthClass(value = '') {
   const normalized = String(value).toLowerCase()
@@ -147,6 +133,8 @@ function renderColumnHeader(column) {
 function SavedViewModal({ filters, onClose, onSave, sort, visibleColumns }) {
   const [name, setName] = useState('')
   const [visibility, setVisibility] = useState('Private')
+  const [favourite, setFavourite] = useState(false)
+  const [makeDefault, setMakeDefault] = useState(false)
   const valid = name.trim().length >= 2
 
   return (
@@ -156,9 +144,10 @@ function SavedViewModal({ filters, onClose, onSave, sort, visibleColumns }) {
         <div className="rmm-modal-body">
           <label>View name<input autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. London patch risk" /></label>
           <fieldset><legend>Visibility</legend><button className={visibility === 'Private' ? 'active' : ''} onClick={() => setVisibility('Private')} type="button"><Lock size={16} /><span><strong>Private</strong><small>Only visible to you</small></span></button><button className={visibility === 'Shared' ? 'active' : ''} onClick={() => setVisibility('Shared')} type="button"><Share2 size={16} /><span><strong>Shared</strong><small>Available to RMM technicians</small></span></button></fieldset>
+          <div className="rmm-saved-view-options"><label><input checked={favourite} onChange={(event) => setFavourite(event.target.checked)} type="checkbox" /><span><strong>Favourite</strong><small>Keep this view at the front of the list.</small></span></label><label><input checked={makeDefault} onChange={(event) => setMakeDefault(event.target.checked)} type="checkbox" /><span><strong>Default view</strong><small>Open Devices using this view automatically.</small></span></label></div>
           <div className="rmm-saved-view-summary"><strong>Will save</strong><span>{Object.values(filters).filter((value) => value && value !== 'All' && value !== 'all').length} active filters</span><span>{visibleColumns.length} visible columns</span><span>Sort: {sort.field} · {sort.direction}</span></div>
         </div>
-        <footer><button onClick={onClose} type="button">Cancel</button><button className="rmm-primary" disabled={!valid} onClick={() => valid && onSave({ name: name.trim(), visibility })} type="button"><Save size={15} /> Save view</button></footer>
+        <footer><button onClick={onClose} type="button">Cancel</button><button className="rmm-primary" disabled={!valid} onClick={() => valid && onSave({ name: name.trim(), visibility, favourite, default: makeDefault })} type="button"><Save size={15} /> Save view</button></footer>
       </section>
     </div>
   )
@@ -181,16 +170,40 @@ export function RmmDeviceInventory({ openDevice, query, preset, onPresetApplied,
   const [filters, setFilters] = useState(() => normalizeInventoryFilters())
   const [sort, setSort] = useState({ field: 'name', direction: 'asc' })
   const [visibleColumns, setVisibleColumns] = useState(DEFAULT_COLUMNS)
-  const [customViews, setCustomViews] = useState(() => readStoredList(RMM_SAVED_VIEWS_STORAGE_KEY))
-  const [customGroups] = useState(() => readStoredList(RMM_CUSTOM_GROUPS_STORAGE_KEY))
+  const [customViews, setCustomViews] = useState([])
+  const [customGroups, setCustomGroups] = useState([])
   const [activeViewId, setActiveViewId] = useState('')
   const [showSaveModal, setShowSaveModal] = useState(false)
   const [showColumns, setShowColumns] = useState(false)
+  const [scopeError, setScopeError] = useState('')
   const normalized = query.trim().toLowerCase()
 
   const allViews = useMemo(() => [...rmmDefaultSavedViews, ...customViews], [customViews])
   const allSites = useMemo(() => sites.filter((site) => site.active !== false), [sites])
   const allGroups = customGroups
+
+  useEffect(() => {
+    let active = true
+    loadRmmScope()
+      .then((payload) => {
+        if (!active) return
+        const savedViews = payload.savedViews || []
+        setCustomViews(savedViews)
+        setCustomGroups(payload.groups || [])
+        const savedDefault = savedViews.find((view) => view.default)
+        if (savedDefault) {
+          setFilters(normalizeInventoryFilters(savedDefault.filters))
+          setSort(savedDefault.sort || { field: 'name', direction: 'asc' })
+          setVisibleColumns(Array.isArray(savedDefault.columns) && savedDefault.columns.length ? savedDefault.columns : DEFAULT_COLUMNS)
+          setActiveViewId(savedDefault.id)
+        }
+        setScopeError('')
+      })
+      .catch((error) => {
+        if (active) setScopeError(error?.message || 'Unable to load RMM scope configuration.')
+      })
+    return () => { active = false }
+  }, [])
 
   useEffect(() => {
     if (!preset) return
@@ -219,30 +232,37 @@ export function RmmDeviceInventory({ openDevice, query, preset, onPresetApplied,
     setActiveViewId('')
   }
 
-  function saveCurrentView({ name, visibility }) {
-    const next = {
-      id: createId('VIEW'),
-      name,
-      visibility,
-      owner: 'You',
-      builtIn: false,
-      description: 'Custom device inventory view.',
-      filters,
-      sort,
-      columns: visibleColumns,
+  async function saveCurrentView({ name, visibility, favourite = false, default: makeDefault = false }) {
+    try {
+      const result = await createRmmSavedView({
+        name,
+        visibility,
+        favourite,
+        default: makeDefault,
+        filters,
+        sort,
+        columns: visibleColumns,
+      })
+      setCustomViews(result.bundle?.savedViews || [])
+      setCustomGroups(result.bundle?.groups || customGroups)
+      setActiveViewId(result.id || '')
+      setScopeError('')
+      setShowSaveModal(false)
+    } catch (error) {
+      setScopeError(error?.message || 'Unable to save this view.')
     }
-    const updated = [...customViews, next]
-    setCustomViews(updated)
-    writeStoredList(RMM_SAVED_VIEWS_STORAGE_KEY, updated)
-    setActiveViewId(next.id)
-    setShowSaveModal(false)
   }
 
-  function deleteView(viewId) {
-    const updated = customViews.filter((view) => view.id !== viewId)
-    setCustomViews(updated)
-    writeStoredList(RMM_SAVED_VIEWS_STORAGE_KEY, updated)
-    if (activeViewId === viewId) setActiveViewId('')
+  async function deleteView(viewId) {
+    try {
+      const result = await deleteRmmSavedView(viewId)
+      setCustomViews(result.bundle?.savedViews || [])
+      setCustomGroups(result.bundle?.groups || customGroups)
+      if (activeViewId === viewId) setActiveViewId('')
+      setScopeError('')
+    } catch (error) {
+      setScopeError(error?.message || 'Unable to delete this view.')
+    }
   }
 
   const visible = useMemo(() => sortDevices(devices.filter((device) => {
@@ -266,7 +286,7 @@ export function RmmDeviceInventory({ openDevice, query, preset, onPresetApplied,
     if (filters.siteId !== 'All' && device.siteId !== filters.siteId) return false
     if (filters.groupId !== 'All') {
       const group = allGroups.find((item) => item.id === filters.groupId)
-      if (!group || (device.groupId !== group.id && device.group !== group.name)) return false
+      if (!group || !(group.deviceIds || []).includes(device.id)) return false
     }
     if (filters.sourceTenant !== 'All' && device.sourceTenant !== filters.sourceTenant) return false
     if (filters.platform !== 'All' && device.platform !== filters.platform) return false
@@ -285,6 +305,7 @@ export function RmmDeviceInventory({ openDevice, query, preset, onPresetApplied,
   return (
     <>
       <PageHeading eyebrow="Estate" title="Devices" description="Search, scope and manage every endpoint, server and monitored network device." action={<button className="rmm-primary compact" type="button"><Download size={15} /> Deploy agent</button>} />
+      {scopeError && <div className="rmm-scope-explainer warning"><AlertTriangle size={18} /><div><strong>Saved views and groups</strong><span>{scopeError}</span></div></div>}
 
       <div className="rmm-device-inventory-metrics">
         <div><span><Monitor size={17} /></span><div><strong>{devices.length}</strong><small>Inventory records</small></div></div>
@@ -296,7 +317,7 @@ export function RmmDeviceInventory({ openDevice, query, preset, onPresetApplied,
       <section className="rmm-saved-views-card">
         <div className="rmm-saved-views-heading"><div><span className="rmm-eyebrow">Saved views</span><strong>Reusable estate views</strong><small>Saved views remember filters, sort order and visible columns.</small></div><button className="rmm-primary compact" onClick={() => setShowSaveModal(true)} type="button"><Plus size={14} /> Save current view</button></div>
         <div className="rmm-saved-view-strip">
-          {allViews.map((view) => <div className={`rmm-saved-view-chip ${activeViewId === view.id ? 'active' : ''}`} key={view.id}><button onClick={() => applySavedView(view)} type="button"><span>{view.visibility === 'Private' ? <Lock size={13} /> : <Share2 size={13} />}</span><strong>{view.name}</strong><small>{view.description}</small></button>{!view.builtIn && <button aria-label={`Delete ${view.name}`} className="delete" onClick={() => deleteView(view.id)} type="button"><Trash2 size={13} /></button>}</div>)}
+          {allViews.map((view) => <div className={`rmm-saved-view-chip ${activeViewId === view.id ? 'active' : ''}`} key={view.id}><button onClick={() => applySavedView(view)} type="button"><span>{view.visibility === 'Private' ? <Lock size={13} /> : <Share2 size={13} />}</span><strong>{view.name}</strong><small>{[view.default ? 'Default' : '', view.favourite ? 'Favourite' : '', view.description].filter(Boolean).join(' · ')}</small></button>{!view.builtIn && <button aria-label={`Delete ${view.name}`} className="delete" onClick={() => deleteView(view.id)} type="button"><Trash2 size={13} /></button>}</div>)}
         </div>
       </section>
 
@@ -381,35 +402,155 @@ export function RmmSitesManagement({ devices = [], query, sites = [], onSitesCha
   </>
 }
 
-function GroupModal({ onClose, onSave, sites = [] }) {
-  const [form, setForm] = useState({ name: '', mode: 'Static', scope: 'All sites', ruleText: 'Manually assigned membership', monitoringPolicy: 'Inherited', patchRing: 'Inherited', softwareProfile: 'Inherited', automationProfile: 'Inherited' })
-  const valid = form.name.trim().length >= 2 && (form.mode === 'Static' || form.ruleText.trim().length >= 3)
+function GroupModal({ devices = [], onClose, onSave, sites = [] }) {
+  const [form, setForm] = useState({
+    name: '', mode: 'Static', siteId: '', platformContains: '', osContains: '',
+    manufacturerContains: '', modelContains: '', userContains: '', tagContains: '',
+    onlineState: 'Any', softwareNameContains: '', softwareVersionContains: '',
+    encryptionState: 'Any', updateState: 'Any', patchRing: 'Inherited',
+    softwareProfile: 'Inherited', automationProfile: 'Inherited', deviceIds: [],
+  })
   const update = (name, value) => setForm((current) => ({ ...current, [name]: value }))
-  return <div className="rmm-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="rmm-modal" role="dialog" aria-modal="true"><header><div><span className="rmm-eyebrow">RMM scope</span><h2>New device group</h2><p>Create a static or dynamic scope for policy and deployment targeting.</p></div><button onClick={onClose} type="button"><X size={18} /></button></header><div className="rmm-modal-body rmm-form-grid"><label>Group name<input autoFocus value={form.name} onChange={(event) => update('name', event.target.value)} placeholder="Windows kiosks" /></label><label>Membership<select value={form.mode} onChange={(event) => update('mode', event.target.value)}><option>Static</option><option>Dynamic</option></select></label><label>Scope<select value={form.scope} onChange={(event) => update('scope', event.target.value)}><option>All sites</option>{sites.filter((site) => site.active !== false).map((site) => <option key={site.id}>{site.name}</option>)}</select></label><label className="wide">{form.mode === 'Dynamic' ? 'Dynamic rule' : 'Membership note'}<input value={form.ruleText} onChange={(event) => update('ruleText', event.target.value)} placeholder={form.mode === 'Dynamic' ? 'Platform = Windows AND tag contains Kiosk' : 'Manually assigned membership'} /></label><label>Monitoring policy<input value={form.monitoringPolicy} onChange={(event) => update('monitoringPolicy', event.target.value)} /></label><label>Patch ring<input value={form.patchRing} onChange={(event) => update('patchRing', event.target.value)} /></label><label>Software profile<input value={form.softwareProfile} onChange={(event) => update('softwareProfile', event.target.value)} /></label><label>Automation profile<input value={form.automationProfile} onChange={(event) => update('automationProfile', event.target.value)} /></label></div><footer><button onClick={onClose} type="button">Cancel</button><button className="rmm-primary" disabled={!valid} onClick={() => valid && onSave(form)} type="button"><Plus size={15} /> Create group</button></footer></section></div>
+  const scopedDevices = useMemo(() => devices.filter((device) => !form.siteId || device.siteId === form.siteId), [devices, form.siteId])
+  const valid = form.name.trim().length >= 2
+
+  function toggleDevice(deviceId) {
+    setForm((current) => ({ ...current, deviceIds: current.deviceIds.includes(deviceId) ? current.deviceIds.filter((id) => id !== deviceId) : [...current.deviceIds, deviceId] }))
+  }
+
+  function submit() {
+    if (!valid) return
+    const site = sites.find((item) => item.id === form.siteId)
+    onSave({
+      name: form.name.trim(),
+      mode: form.mode,
+      siteId: form.siteId,
+      description: form.mode === 'Dynamic' ? 'Server-resolved dynamic device group.' : 'Static device membership group.',
+      rules: form.mode === 'Dynamic' ? {
+        siteId: form.siteId, siteName: site?.name || '', platformContains: form.platformContains.trim(),
+        osContains: form.osContains.trim(), manufacturerContains: form.manufacturerContains.trim(),
+        modelContains: form.modelContains.trim(), userContains: form.userContains.trim(),
+        tagContains: form.tagContains.trim(), onlineState: form.onlineState,
+        softwareNameContains: form.softwareNameContains.trim(), softwareVersionContains: form.softwareVersionContains.trim(),
+        encryptionState: form.encryptionState, updateState: form.updateState,
+      } : {},
+      deviceIds: form.mode === 'Static' ? form.deviceIds : [],
+      patchRing: form.patchRing, softwareProfile: form.softwareProfile, automationProfile: form.automationProfile,
+    })
+  }
+
+  return <div className="rmm-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <section className="rmm-modal rmm-group-modal" role="dialog" aria-modal="true">
+      <header><div><span className="rmm-eyebrow">RMM scope</span><h2>New device group</h2><p>Create membership once, then reuse it across Monitoring, Automation, Patching and Software.</p></div><button onClick={onClose} type="button"><X size={18} /></button></header>
+      <div className="rmm-modal-body rmm-form-grid">
+        <label>Group name<input autoFocus value={form.name} onChange={(event) => update('name', event.target.value)} placeholder="Windows kiosks" /></label>
+        <label>Membership<select value={form.mode} onChange={(event) => update('mode', event.target.value)}><option>Static</option><option>Dynamic</option></select></label>
+        <label>Site scope<select value={form.siteId} onChange={(event) => update('siteId', event.target.value)}><option value="">All sites</option>{sites.filter((site) => site.active !== false).map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}</select></label>
+        {form.mode === 'Static' ? <div className="wide rmm-group-device-picker">
+          <div className="rmm-group-device-picker-heading"><strong>Static members</strong><span>{form.deviceIds.length} selected · {scopedDevices.length} available</span></div>
+          <div className="rmm-group-device-picker-list">{scopedDevices.map((device) => <label key={device.id}><input checked={form.deviceIds.includes(device.id)} onChange={() => toggleDevice(device.id)} type="checkbox" /><span><strong>{device.name}</strong><small>{device.user || 'Unassigned'} · {device.site || 'No site'} · {device.status}</small></span></label>)}</div>
+        </div> : <>
+          <div className="wide rmm-group-rule-note"><SlidersHorizontal size={16} /><span><strong>All populated criteria use AND.</strong> Membership is recalculated server-side from current inventory and live Agent state.</span></div>
+          <label>Platform contains<input value={form.platformContains} onChange={(event) => update('platformContains', event.target.value)} placeholder="Windows" /></label>
+          <label>OS contains<input value={form.osContains} onChange={(event) => update('osContains', event.target.value)} placeholder="Windows 11" /></label>
+          <label>Manufacturer contains<input value={form.manufacturerContains} onChange={(event) => update('manufacturerContains', event.target.value)} placeholder="Dell" /></label>
+          <label>Model contains<input value={form.modelContains} onChange={(event) => update('modelContains', event.target.value)} placeholder="Latitude" /></label>
+          <label>User contains<input value={form.userContains} onChange={(event) => update('userContains', event.target.value)} placeholder="Finance" /></label>
+          <label>Tag contains<input value={form.tagContains} onChange={(event) => update('tagContains', event.target.value)} placeholder="Kiosk" /></label>
+          <label>Online state<select value={form.onlineState} onChange={(event) => update('onlineState', event.target.value)}><option>Any</option><option>Online</option><option>Offline</option></select></label>
+          <label>Encryption<select value={form.encryptionState} onChange={(event) => update('encryptionState', event.target.value)}><option>Any</option><option>Protected</option><option>Unprotected</option></select></label>
+          <label>Update state<select value={form.updateState} onChange={(event) => update('updateState', event.target.value)}><option>Any</option><option value="Pending">Pending updates</option><option value="Clear">No pending updates</option></select></label>
+          <label>Software contains<input value={form.softwareNameContains} onChange={(event) => update('softwareNameContains', event.target.value)} placeholder="Microsoft 365" /></label>
+          <label>Software version contains<input value={form.softwareVersionContains} onChange={(event) => update('softwareVersionContains', event.target.value)} placeholder="16." /></label>
+        </>}
+        <label>Patch ring<input value={form.patchRing} onChange={(event) => update('patchRing', event.target.value)} /></label>
+        <label>Software profile<input value={form.softwareProfile} onChange={(event) => update('softwareProfile', event.target.value)} /></label>
+        <label>Automation profile<input value={form.automationProfile} onChange={(event) => update('automationProfile', event.target.value)} /></label>
+      </div>
+      <footer><button onClick={onClose} type="button">Cancel</button><button className="rmm-primary" disabled={!valid} onClick={submit} type="button"><Plus size={15} /> Create group</button></footer>
+    </section>
+  </div>
 }
 
-export function RmmDeviceGroupsManagement({ query, onViewDevices, sites = [] }) {
-  const [customGroups, setCustomGroups] = useState(() => readStoredList(RMM_CUSTOM_GROUPS_STORAGE_KEY))
+export function RmmDeviceGroupsManagement({ devices = [], query, onViewDevices, sites = [] }) {
+  const [groups, setGroups] = useState([])
+  const [monitoringPolicies, setMonitoringPolicies] = useState([])
+  const [monitoringAssignments, setMonitoringAssignments] = useState([])
   const [showModal, setShowModal] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [scopeError, setScopeError] = useState('')
   const normalized = query.trim().toLowerCase()
-  const groups = customGroups
-  const visible = groups.filter((group) => !normalized || [group.name, group.type, group.mode, group.scope, group.ruleText, group.monitoringPolicy, group.patchRing].join(' ').toLowerCase().includes(normalized))
+
+  useEffect(() => {
+    let active = true
+    loadRmmScope().then((payload) => {
+      if (!active) return
+      setGroups(payload.groups || [])
+      setMonitoringPolicies(payload.monitoring?.policies || [])
+      setMonitoringAssignments(payload.monitoring?.assignments || [])
+      setScopeError('')
+    }).catch((error) => {
+      if (active) setScopeError(error?.message || 'Unable to load device groups.')
+    })
+    return () => { active = false }
+  }, [])
+
+  function monitoringLabel(group) {
+    const assignment = monitoringAssignments
+      .filter((item) => item.enabled !== false && item.scopeType === 'Group' && item.scopeId === group.id)
+      .sort((a, b) => Number(b.priority || 0) - Number(a.priority || 0))[0]
+    return monitoringPolicies.find((policy) => policy.id === assignment?.policyId)?.name || 'Inherited'
+  }
+
+  const visible = groups.filter((group) => !normalized || [
+    group.name, group.type, group.mode, group.scope, group.ruleText, monitoringLabel(group), group.patchRing,
+  ].join(' ').toLowerCase().includes(normalized))
   const dynamicCount = groups.filter((group) => group.mode === 'Dynamic').length
   const staticCount = groups.filter((group) => group.mode !== 'Dynamic').length
-  function addGroup(form) {
-    const updated = [...customGroups, { id: createId('GRP'), type: form.mode === 'Dynamic' ? 'Smart group' : 'Custom', devices: 0, description: 'Tenant device group.', source: 'Custom', ...form }]
-    setCustomGroups(updated); writeStoredList(RMM_CUSTOM_GROUPS_STORAGE_KEY, updated); setShowModal(false)
+  const resolvedMemberships = groups.reduce((sum, group) => sum + Number(group.devices || 0), 0)
+
+  async function addGroup(form) {
+    setSaving(true)
+    setScopeError('')
+    try {
+      const result = await createRmmGroup(form)
+      setGroups(result.bundle?.groups || [])
+      setMonitoringPolicies(result.bundle?.monitoring?.policies || [])
+      setMonitoringAssignments(result.bundle?.monitoring?.assignments || [])
+      setShowModal(false)
+    } catch (error) {
+      setScopeError(error?.message || 'Unable to create device group.')
+    } finally {
+      setSaving(false)
+    }
   }
-  function deleteGroup(groupId) {
-    const updated = customGroups.filter((group) => group.id !== groupId)
-    setCustomGroups(updated); writeStoredList(RMM_CUSTOM_GROUPS_STORAGE_KEY, updated)
+
+  async function removeGroup(group) {
+    if (!window.confirm('Delete device group ' + group.name + '? Monitoring assignments targeting it will also be removed.')) return
+    setSaving(true)
+    setScopeError('')
+    try {
+      const result = await deleteRmmGroup(group.id)
+      setGroups(result.bundle?.groups || [])
+      setMonitoringPolicies(result.bundle?.monitoring?.policies || [])
+      setMonitoringAssignments(result.bundle?.monitoring?.assignments || [])
+    } catch (error) {
+      setScopeError(error?.message || 'Unable to delete device group.')
+    } finally {
+      setSaving(false)
+    }
   }
+
   return <>
-    <PageHeading eyebrow="Estate structure" title="Device groups" description="Build static and dynamic device scopes for policies, patching, software and automation." action={<button className="rmm-primary compact" onClick={() => setShowModal(true)} type="button"><Plus size={15} /> New group</button>} />
-    <div className="rmm-scope-metrics"><div><span><Users size={17} /></span><div><strong>{groups.length}</strong><small>Total groups</small></div></div><div><span><Users size={17} /></span><div><strong>{staticCount}</strong><small>Static groups</small></div></div><div><span><SlidersHorizontal size={17} /></span><div><strong>{dynamicCount}</strong><small>Dynamic groups</small></div></div><div><span><ShieldCheck size={17} /></span><div><strong>{groups.filter((group) => group.monitoringPolicy && group.monitoringPolicy !== 'Inherited').length}</strong><small>Policy overrides</small></div></div></div>
-    <div className="rmm-scope-explainer"><Users size={18} /><div><strong>No placeholder groups are inserted</strong><span>Only device groups created by your tenant are shown here. Site choices come from the real organisation directory.</span></div></div>
-    <div className="rmm-group-list">{visible.map((group) => <article className="rmm-card rmm-group-card" key={group.id}><span className={'rmm-group-icon ' + (group.mode === 'Dynamic' ? 'dynamic' : '')}>{group.mode === 'Dynamic' ? <SlidersHorizontal size={18} /> : <Users size={18} />}</span><div className="rmm-group-main"><div><span className="rmm-eyebrow">{group.id} · {group.scope}</span><h2>{group.name}</h2><p>{group.description}</p></div><div className="rmm-group-rule"><span>{group.mode === 'Dynamic' ? 'Dynamic membership' : 'Static membership'}</span><strong>{group.ruleText}</strong></div></div><div className="rmm-group-targeting"><span><small>Devices</small><strong>{group.devices}</strong></span><span><small>Monitoring</small><strong>{group.monitoringPolicy || 'Inherited'}</strong></span><span><small>Patch ring</small><strong>{group.patchRing}</strong></span><span><small>Software</small><strong>{group.softwareProfile}</strong></span><span><small>Automation</small><strong>{group.automationProfile}</strong></span></div><div className="rmm-group-actions"><StatusPill tone={group.mode === 'Dynamic' ? 'running' : 'neutral'}>{group.mode}</StatusPill><button onClick={() => onViewDevices?.({ groupId: group.id })} type="button">View devices <ChevronRight size={14} /></button><button aria-label={'Delete ' + group.name} className="danger-text icon-only" onClick={() => deleteGroup(group.id)} type="button"><Trash2 size={14} /></button></div></article>)}</div>
-    {!visible.length && <div className="rmm-empty"><Users size={24} /><strong>No tenant device groups yet</strong><span>Create a group when you need a reusable policy or deployment scope.</span></div>}
-    {showModal && <GroupModal sites={sites} onClose={() => setShowModal(false)} onSave={addGroup} />}
+    <PageHeading eyebrow="Estate structure" title="Device groups" description="Build static and dynamic server-resolved scopes for policies, patching, software and automation." action={<button className="rmm-primary compact" disabled={saving} onClick={() => setShowModal(true)} type="button"><Plus size={15} /> New group</button>} />
+    {scopeError && <div className="rmm-scope-explainer warning"><AlertTriangle size={18} /><div><strong>Device group configuration</strong><span>{scopeError}</span></div></div>}
+    <div className="rmm-scope-metrics"><div><span><Users size={17} /></span><div><strong>{groups.length}</strong><small>Total groups</small></div></div><div><span><Users size={17} /></span><div><strong>{staticCount}</strong><small>Static groups</small></div></div><div><span><SlidersHorizontal size={17} /></span><div><strong>{dynamicCount}</strong><small>Dynamic groups</small></div></div><div><span><Monitor size={17} /></span><div><strong>{resolvedMemberships}</strong><small>Resolved memberships</small></div></div></div>
+    <div className="rmm-scope-explainer"><Users size={18} /><div><strong>One reusable scope model</strong><span>Membership is stored or calculated server-side. Monitoring Policies, Automation, Patching and Software can all target the same group IDs.</span></div></div>
+    <div className="rmm-group-list">{visible.map((group) => {
+      const siteName = sites.find((site) => site.id === group.siteId)?.name || group.scope || 'All sites'
+      return <article className="rmm-card rmm-group-card" key={group.id}><span className={'rmm-group-icon ' + (group.mode === 'Dynamic' ? 'dynamic' : '')}>{group.mode === 'Dynamic' ? <SlidersHorizontal size={18} /> : <Users size={18} />}</span><div className="rmm-group-main"><div><span className="rmm-eyebrow">{group.id} · {siteName}</span><h2>{group.name}</h2><p>{group.description}</p></div><div className="rmm-group-rule"><span>{group.mode === 'Dynamic' ? 'Server-resolved dynamic membership' : 'Static membership'}</span><strong>{group.ruleText}</strong></div></div><div className="rmm-group-targeting"><span><small>Devices</small><strong>{group.devices}</strong></span><span><small>Monitoring</small><strong>{monitoringLabel(group)}</strong></span><span><small>Patch ring</small><strong>{group.patchRing}</strong></span><span><small>Software</small><strong>{group.softwareProfile}</strong></span><span><small>Automation</small><strong>{group.automationProfile}</strong></span></div><div className="rmm-group-actions"><StatusPill tone={group.mode === 'Dynamic' ? 'running' : 'neutral'}>{group.mode}</StatusPill><button onClick={() => onViewDevices?.({ groupId: group.id })} type="button">View devices <ChevronRight size={14} /></button><button aria-label={'Delete ' + group.name} className="danger-text icon-only" disabled={saving} onClick={() => removeGroup(group)} type="button"><Trash2 size={14} /></button></div></article>
+    })}</div>
+    {!visible.length && <div className="rmm-empty"><Users size={24} /><strong>No tenant device groups yet</strong><span>Create a static membership list or a dynamic group evaluated from current device data.</span></div>}
+    {showModal && <GroupModal devices={devices} sites={sites} onClose={() => setShowModal(false)} onSave={addGroup} />}
   </>
 }

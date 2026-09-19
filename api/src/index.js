@@ -14,6 +14,7 @@ import { registerRmmAutomationRoutes } from './rmmAutomation.js'
 import { registerRmmActivityRoutes } from './rmmActivity.js'
 import { attachRmmDeviceToolWebSocket, registerRmmDeviceToolRoutes } from './rmmDeviceTools.js'
 import { attachRmmViewerWebSocket, registerRmmRemoteRoutes } from './rmmRemote.js'
+import { registerRmmScopeRoutes } from './rmmScope.js'
 import {
   allowedRequestOrigin,
   deployment,
@@ -388,6 +389,7 @@ registerRmmAutomationRoutes(app)
 registerRmmActivityRoutes(app)
 registerRmmDeviceToolRoutes(app)
 registerRmmRemoteRoutes(app)
+registerRmmScopeRoutes(app)
 
 app.notFound((c) => c.json({ error: 'Not found' }, 404))
 app.onError((error, c) => {

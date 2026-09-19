@@ -51,7 +51,7 @@ import {
 } from '../../data/rmmData.js'
 import { deploymentConfig } from '../../lib/deploymentConfig.js'
 import { resolveTenantSurface, rmmPath, rmmRouteFromLocation } from '../../lib/tenantSurface.js'
-import { resolveDeviceMonitoringPolicy } from '../../data/rmmMonitoringData.js'
+import { loadRmmScope } from '../../lib/rmmScopeApi.js'
 import {
   RmmDeviceGroupsManagement,
   RmmDeviceInventory,
@@ -307,7 +307,7 @@ function DeviceOverview({ device, deviceAlerts, monitoringResolution, relatedTic
         <section className="rmm-card rmm-device-monitoring-card">
           <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Monitoring</span><h2>Effective policy</h2></div><StatusPill>{monitoringResolution?.override ? 'Override' : 'Inherited'}</StatusPill></div>
           <p>Resolved through estate, site, group and device precedence.</p>
-          <div className="rmm-device-monitoring-effective"><span><SlidersHorizontal size={16} /></span><div><strong>{monitoringResolution?.policy?.name || 'No monitoring policy assigned'}</strong><small>{monitoringResolution?.policy ? `${monitoringResolution.checks?.length || 0} checks · ${monitoringResolution.policy.evaluation || 'Evaluation not set'}` : 'Assign a tenant policy from Monitoring policies'}</small></div></div>
+          <div className="rmm-device-monitoring-effective"><span><SlidersHorizontal size={16} /></span><div><strong>{monitoringResolution?.policy?.name || 'No monitoring policy assigned'}</strong><small>{monitoringResolution?.policy ? `${monitoringResolution.policy.checks?.length || 0} checks · ${monitoringResolution.policy.evaluation || 'Evaluation not set'}` : 'Assign a tenant policy from Monitoring policies'}</small></div></div>
           <button onClick={() => navigate('policies')} type="button"><GitBranch size={14} /> View policy inheritance</button>
         </section>
 
@@ -503,7 +503,7 @@ function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device
   const [toolsOpen, setToolsOpen] = useState(false)
   const [remoteState, setRemoteState] = useState('')
   const [remoteBusy, setRemoteBusy] = useState(false)
-  const monitoringResolution = resolveDeviceMonitoringPolicy(device)
+  const [monitoringResolution, setMonitoringResolution] = useState(null)
   const deviceAlerts = rmmAlerts.filter((alert) => alert.deviceId === device.id)
   const relatedTickets = tickets.filter((ticket) => (
     ticket.rmmDeviceId === device.id
@@ -518,6 +518,18 @@ function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device
   useEffect(() => {
     prefetchDeviceHistory(device).catch(() => {})
   }, [device.agentDeviceId])
+
+  useEffect(() => {
+    let active = true
+    loadRmmScope()
+      .then((payload) => {
+        if (!active) return
+        const resolved = (payload.monitoring?.effectivePolicies || []).find((item) => item.deviceId === device.id)
+        setMonitoringResolution(resolved || null)
+      })
+      .catch(() => { if (active) setMonitoringResolution(null) })
+    return () => { active = false }
+  }, [device.id])
 
   const sections = [
     ['overview', 'Overview', CircleGauge],
