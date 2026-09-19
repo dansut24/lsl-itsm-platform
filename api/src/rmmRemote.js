@@ -75,9 +75,20 @@ async function requireRemoteAccess(c) {
     return { error: c.json({ error: 'Tenant session mismatch.' }, 403) }
   }
   if (!hasPermission(session.access, 'rmm.devices.remote')) {
-    return { error: c.json({ error: 'You do not have permission to start remote sessions.' }, 403) }
+    return { error: c.json({ error: 'You do not have permission to start unattended console remote sessions.' }, 403) }
   }
   return { session }
+}
+
+function canUseBackstage(session) {
+  return hasPermission(session?.access, 'rmm.devices.backstage')
+}
+
+function ensureSessionModeAccess(c, session, mode) {
+  if (mode === 'backstage' && !canUseBackstage(session)) {
+    return c.json({ error: 'You do not have permission to start Background remote sessions.' }, 403)
+  }
+  return null
 }
 
 async function agentForRemoteSession(tenantId, agentDeviceId) {
@@ -127,6 +138,8 @@ export function registerRmmRemoteRoutes(app) {
     if (!liveSocket || liveSocket.readyState !== 1) return c.json({ error: 'The Hi5Central Agent is currently offline.' }, 409)
 
     const mode = clean(body.mode).toLowerCase() === 'backstage' ? 'backstage' : 'console'
+    const modeError = ensureSessionModeAccess(c, auth.session, mode)
+    if (modeError) return modeError
     const viewerClient = viewerClientForRequest(c)
     const sessionId = randomUUID()
     const token = randomSecret('h5v')
@@ -167,10 +180,11 @@ export function registerRmmRemoteRoutes(app) {
          LEFT JOIN rmm_device_inventory i ON i.id=s.inventory_id
          LEFT JOIN users u ON u.id=s.created_by_user_id
         WHERE s.tenant_id=$1
+          AND ($2::boolean OR s.mode <> 'backstage')
           AND s.status IN ('created','viewer_connected','active')
           AND s.expires_at>now()
         ORDER BY COALESCE(s.started_at,s.viewer_connected_at,s.created_at) DESC`,
-      [auth.session.tenant_id],
+      [auth.session.tenant_id, canUseBackstage(auth.session)],
     )
     return c.json({ sessions: result.rows })
   })
@@ -180,11 +194,13 @@ export function registerRmmRemoteRoutes(app) {
     if (auth.error) return auth.error
     const sessionId = clean(c.req.param('sessionId'))
     const result = await pool.query(
-      `SELECT id,agent_device_id,status FROM rmm_remote_sessions WHERE id=$1 AND tenant_id=$2 LIMIT 1`,
+      `SELECT id,agent_device_id,mode,status FROM rmm_remote_sessions WHERE id=$1 AND tenant_id=$2 LIMIT 1`,
       [sessionId, auth.session.tenant_id],
     )
     if (!result.rowCount) return c.json({ error: 'Remote session not found.' }, 404)
     const remote = result.rows[0]
+    const modeError = ensureSessionModeAccess(c, auth.session, remote.mode)
+    if (modeError) return modeError
     if (!['created','viewer_connected','active'].includes(remote.status)) {
       return c.json({ session: { id: remote.id, status: remote.status }, alreadyEnded: true })
     }
@@ -216,7 +232,10 @@ export function registerRmmRemoteRoutes(app) {
       [clean(c.req.param('sessionId')), auth.session.tenant_id],
     )
     if (!result.rowCount) return c.json({ error: 'Remote session not found.' }, 404)
-    return c.json({ session: result.rows[0] })
+    const remote = result.rows[0]
+    const modeError = ensureSessionModeAccess(c, auth.session, remote.mode)
+    if (modeError) return modeError
+    return c.json({ session: remote })
   })
 }
 
@@ -315,6 +334,14 @@ export function attachRmmViewerWebSocket(server) {
       try { payload = JSON.parse(text) } catch { return }
       const type = clean(payload?.type)
       if (!VIEWER_MESSAGE_TYPES.has(type)) return
+      if (remote.mode !== 'backstage' && (type === 'backstage_start' || type === 'backstage_stop')) {
+        safeSend(viewerWs, { type: 'viewer_error', session_id: sessionId, error: 'Background mode is not authorised for this remote session.' })
+        return
+      }
+      if (remote.mode === 'backstage' && type === 'console_start') {
+        safeSend(viewerWs, { type: 'viewer_error', session_id: sessionId, error: 'Console mode is not authorised for this Background remote session.' })
+        return
+      }
       payload.session_id = sessionId
       delete payload.sessionId
       if (!safeSend(agentWs, payload)) {

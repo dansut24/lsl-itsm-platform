@@ -5,6 +5,13 @@ import './ProductionWorkspaceBootstrap.css'
 
 const API_BASE = window.__HI5_API_BASE__
 
+function sessionHasPermission(session, permission) {
+  const effective = session?.access?.effectivePermissions || []
+  const grants = session?.access?.permissions || []
+  if (effective.includes(permission) || grants.includes('*') || grants.includes(permission)) return true
+  return grants.some((grant) => grant.endsWith('*') && permission.startsWith(grant.slice(0, -1)))
+}
+
 function deviceToRmm(row) {
   const inventory = row.agent_inventory_payload && typeof row.agent_inventory_payload === 'object' ? row.agent_inventory_payload : {}
   const summary = inventory.summary || {}
@@ -163,6 +170,8 @@ export function ProductionRmmBootstrap() {
       accent="amber"
       devices={devices}
       sites={sites}
+      canRemote={sessionHasPermission(session, 'rmm.devices.remote')}
+      canBackstageRemote={sessionHasPermission(session, 'rmm.devices.backstage')}
       currentUser={{ role: 'rmm', name: session.user?.name || session.user?.email || 'RMM user', username: session.user?.email || '' }}
       handleLogout={logout}
       onCreateItsmIncident={() => null}

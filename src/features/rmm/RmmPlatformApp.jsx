@@ -483,7 +483,7 @@ function DeviceItsm({ relatedTickets, onCreateIncident }) {
   )
 }
 
-function RmmDeviceDetail({ device, onBack, navigate, onCreateIncident, tickets = [] }) {
+function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device, onBack, navigate, onCreateIncident, tickets = [] }) {
   const [section, setSection] = useState('overview')
   const [tool, setTool] = useState('')
   const [toolsOpen, setToolsOpen] = useState(false)
@@ -516,6 +516,14 @@ function RmmDeviceDetail({ device, onBack, navigate, onCreateIncident, tickets =
   }
 
   async function startRemote(mode = 'console') {
+    if (mode === 'backstage' && !canBackstageRemote) {
+      setRemoteState('Your role does not include Background remote access.')
+      return
+    }
+    if (mode === 'console' && !canRemote) {
+      setRemoteState('Your role does not include unattended remote access.')
+      return
+    }
     if (!device.agentDeviceId) {
       setRemoteState('Remote tools require the Hi5Central Agent on this device.')
       return
@@ -570,7 +578,7 @@ function RmmDeviceDetail({ device, onBack, navigate, onCreateIncident, tickets =
           {remoteState && <small className="rmm-device-action-message">{remoteState}</small>}
         </div>
         <div className="rmm-device-actions">
-          <button className="rmm-primary compact" disabled={remoteBusy || !device.agentDeviceId} onClick={() => startRemote('console')} type="button"><Monitor size={16} /> {remoteBusy ? 'Starting…' : 'Remote desktop'}</button>
+          <button className="rmm-primary compact" disabled={remoteBusy || !device.agentDeviceId || !canRemote} title={canRemote ? 'Start unattended console remote session' : 'Your role does not include unattended remote access'} onClick={() => startRemote('console')} type="button"><Monitor size={16} /> {remoteBusy ? 'Starting…' : 'Remote desktop'}</button>
           <div className="rmm-device-tools-menu">
             <button onClick={() => setToolsOpen((value) => !value)} type="button"><TerminalSquare size={16} /> Tools <MoreHorizontal size={14} /></button>
             {toolsOpen && <div className="rmm-device-tools-popover">
@@ -583,7 +591,7 @@ function RmmDeviceDetail({ device, onBack, navigate, onCreateIncident, tickets =
               <button onClick={() => openTool('disks')} type="button"><HardDrive size={15} /><span><strong>Disk Management</strong><small>Volumes and BitLocker state</small></span></button>
               <button onClick={() => openTool('sessions')} type="button"><Users size={15} /><span><strong>Users & Sessions</strong><small>Interactive and RDP sessions</small></span></button>
               <button onClick={() => openTool('events')} type="button"><History size={15} /><span><strong>Event Logs</strong><small>Event health and diagnostics</small></span></button>
-              <button onClick={() => { setToolsOpen(false); startRemote('backstage') }} type="button"><Monitor size={15} /><span><strong>Background Mode</strong><small>Private Hi5 maintenance desktop</small></span></button>
+              {canBackstageRemote && <button onClick={() => { setToolsOpen(false); startRemote('backstage') }} type="button"><Monitor size={15} /><span><strong>Background Mode</strong><small>Private Hi5 maintenance desktop</small></span></button>}
             </div>}
           </div>
           <button onClick={() => createIncident()} type="button"><AlertTriangle size={16} /> ITSM incident</button>
@@ -669,7 +677,7 @@ function RmmSettings({ navigate }) {
   return <><PageHeading activeView="settings" /><div className="rmm-settings-grid">{settings.map(({ icon: Icon, title, detail, target }) => <button className="rmm-card" key={title} onClick={() => target && navigate(target)} type="button"><span><Icon size={19} /></span><div><strong>{title}</strong><small>{detail}</small></div><ChevronRight size={17} /></button>)}</div></>
 }
 
-export function RmmPlatformApp({ accent, currentUser, devices = rmmDevices, sites = [], handleLogout, onCreateItsmIncident, onSitesChange, setTheme, tenantName, theme, tickets = [] }) {
+export function RmmPlatformApp({ accent, canBackstageRemote = false, canRemote = false, currentUser, devices = rmmDevices, sites = [], handleLogout, onCreateItsmIncident, onSitesChange, setTheme, tenantName, theme, tickets = [] }) {
   const initialRoute = rmmRouteFromLocation()
   const [activeView, setActiveView] = useState(initialRoute.viewId || 'dashboard')
   const [selectedDeviceId, setSelectedDeviceId] = useState(initialRoute.deviceId || '')
@@ -727,7 +735,7 @@ export function RmmPlatformApp({ accent, currentUser, devices = rmmDevices, site
   }
 
   function renderPage() {
-    if (selectedDevice) return <RmmDeviceDetail device={selectedDevice} navigate={navigate} onBack={() => { setSelectedDeviceId(''); window.history.pushState({}, '', rmmPath(undefined, 'devices')) }} onCreateIncident={createItsmIncident} tickets={tickets} />
+    if (selectedDevice) return <RmmDeviceDetail canBackstageRemote={canBackstageRemote} canRemote={canRemote} device={selectedDevice} navigate={navigate} onBack={() => { setSelectedDeviceId(''); window.history.pushState({}, '', rmmPath(undefined, 'devices')) }} onCreateIncident={createItsmIncident} tickets={tickets} />
     if (activeView === 'devices') return <RmmDeviceInventory devices={devices} sites={sites} openDevice={openDevice} query={query} preset={inventoryPreset} onPresetApplied={() => setInventoryPreset(null)} />
     if (activeView === 'sites') return <RmmSitesManagement devices={devices} query={query} sites={sites} onSitesChange={onSitesChange} onViewDevices={openScopedInventory} />
     if (activeView === 'groups') return <RmmDeviceGroupsManagement devices={devices} query={query} sites={sites} onViewDevices={openScopedInventory} />
