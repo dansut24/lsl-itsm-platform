@@ -71,6 +71,21 @@ export function jobActivityDescriptor(job, success, result = {}, errorMessage = 
     const name = clean(result.name || payload.name) || 'software'
     return { ...common, eventType: type, category: 'software', summary: ok ? actor.actorLabel + ' uninstalled ' + quoted(name) : actor.actorLabel + ' attempted to uninstall ' + quoted(name), detail: suffix, metadata: { software: name, result } }
   }
+  if (type === 'patch.software') {
+    const name = clean(result.applicationName || result.application_name || payload.applicationName) || 'software'
+    const fromVersion = clean(result.installedVersion || result.installed_version || payload.installedVersion)
+    const toVersion = clean(result.verifiedVersion || result.verified_version || result.targetVersion || result.target_version || payload.targetVersion)
+    const provider = clean(result.provider || payload.provider)
+    const detailParts = [fromVersion && toVersion ? fromVersion + ' → ' + toVersion : '', provider ? 'Provider: ' + provider : '', suffix].filter(Boolean)
+    return {
+      ...common,
+      eventType: type,
+      category: 'patching',
+      summary: ok ? actor.actorLabel + ' patched ' + quoted(name) : actor.actorLabel + ' failed to patch ' + quoted(name),
+      detail: detailParts.join(' · '),
+      metadata: { software: name, installedVersion: fromVersion, targetVersion: toVersion, provider, result },
+    }
+  }
   if (type === 'process.kill') {
     const name = clean(result.name) || ('PID ' + (payload.pid || '')).trim()
     return { ...common, eventType: 'process.end', category: 'process', summary: ok ? actor.actorLabel + ' ended process ' + quoted(name) : actor.actorLabel + ' failed to end process ' + quoted(name), detail: suffix, metadata: { pid: payload.pid, result } }

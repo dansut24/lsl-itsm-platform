@@ -4,6 +4,7 @@ import { hasPermission } from './access.js'
 import { originMatchesTenant } from './deploymentConfig.js'
 import { pool, withTransaction } from './db.js'
 import { recordJobCompletionActivity, recordRmmActivity } from './rmmActivity.js'
+import { recalculateTenantVulnerabilityExposures } from './rmmVulnerabilityExposure.js'
 import { resolveSession } from './session.js'
 
 const AGENT_DOWNLOAD_URL = 'https://downloads.hi5central.com/agent/latest/Hi5CentralAgentSetup.exe'
@@ -255,6 +256,9 @@ async function ingestInventory(agent, payload) {
       }, client)
     }
   })
+  recalculateTenantVulnerabilityExposures(agent.tenant_id, [agent.inventory_id]).catch((error) => {
+    console.error('RMM vulnerability exposure recalculation failed', agent.inventory_id, error.message)
+  })
 }
 
 async function packageRows(tenantId) {
@@ -444,6 +448,21 @@ export function registerRmmAgentRoutes(app) {
     )
     if (!result.rowCount) return c.json({ success: false, error: 'Job not found or already completed.' }, 404)
     const completedJob = { ...result.rows[0], inventory_id: agent.inventory_id }
+
+    if (completedJob.job_type === 'patch.software') {
+      const rebootRequired = Boolean(resultPayload.rebootRequired || resultPayload.reboot_required)
+      const verificationFailed = Boolean(resultPayload.verificationFailed || resultPayload.verification_failed)
+      const deploymentStatus = success
+        ? (rebootRequired ? 'reboot_required' : 'succeeded')
+        : (verificationFailed ? 'verification_failed' : 'failed')
+      await pool.query(
+        `UPDATE rmm_patch_deployments
+            SET status=$4,result=$5::jsonb,completed_at=now(),updated_at=now()
+          WHERE tenant_id=$1 AND agent_job_id=$2 AND inventory_id=$3`,
+        [agent.tenant_id, completedJob.id, agent.inventory_id, deploymentStatus, JSON.stringify(resultPayload)],
+      ).catch((error) => console.error('RMM patch deployment result update failed', completedJob.id, error.message))
+    }
+
     await recordJobCompletionActivity(completedJob, success, resultPayload, errorMessage).catch((error) => {
       console.error('RMM activity job logging failed', completedJob.id, error.message)
     })

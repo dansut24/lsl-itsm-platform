@@ -20,6 +20,7 @@ import {
   createSoftwareCatalogueEntry,
   deletePatchAssignment,
   deleteSoftwareCatalogueEntry,
+  deploySoftwarePatch,
   loadRmmPatching,
   loadRmmVulnerabilities,
 } from '../../lib/rmmPatchingApi.js'
@@ -105,6 +106,43 @@ function MappingModal({ application, onClose, onSave }) {
         <button className="rmm-primary" disabled={!valid} type="submit"><PackageCheck size={15} /> Save mapping</button>
       </footer>
     </form>
+  </div>
+}
+
+function SoftwarePatchModal({ application, installs, devices, onClose, onPatch, saving }) {
+  return <div className="rmm-patch-modal-backdrop">
+    <div className="rmm-patch-modal">
+      <header>
+        <div><span className="rmm-eyebrow">Controlled deployment</span><h2>Patch {application.name}</h2></div>
+        <button aria-label="Close" onClick={onClose} type="button"><X size={17} /></button>
+      </header>
+      <p>Select one managed endpoint. Hi5Central resolves the safest available provider at dispatch time and PatchHost verifies the installed version before reporting success.</p>
+      <div className="rmm-patch-device-picker">
+        {installs.map((install) => {
+          const device = devices.find((item) => item.agentDeviceId === install.agentDeviceId)
+          const installReady = Boolean(device?.online && device?.patchCapabilities?.softwareInstall)
+          return <article key={install.inventoryId + ':' + install.key}>
+            <div>
+              <strong>{install.deviceName}</strong>
+              <small>{install.installedVersion || 'Version not reported'} → {install.targetVersion || application.catalogue?.targetVersion || 'Target pending'}</small>
+            </div>
+            <div className="rmm-patch-device-state">
+              {!device?.online
+                ? <StatusPill tone="neutral"><WifiOff size={12} /> Offline</StatusPill>
+                : device?.patchCapabilities?.softwareInstall
+                  ? <StatusPill tone="healthy">PatchHost ready</StatusPill>
+                  : <StatusPill tone="warning">Install capability pending</StatusPill>}
+            </div>
+            <button className="rmm-primary compact" disabled={saving || !installReady || !application.catalogue?.id} onClick={() => onPatch(install)} type="button">
+              <PackageCheck size={14} /> Patch this device
+            </button>
+          </article>
+        })}
+      </div>
+      {!installs.length && <div className="rmm-empty"><CheckCircle2 size={22} /><strong>No devices require this update</strong><span>All detected installations are already current or do not have a confirmed target.</span></div>}
+      <div className="rmm-patch-security-note"><ShieldCheck size={16} /><span>Offline devices are never queued. Vendor-direct jobs require HTTPS, SHA-256 and a valid Authenticode signer before installation.</span></div>
+      <footer><button onClick={onClose} type="button">Close</button></footer>
+    </div>
   </div>
 }
 
@@ -211,6 +249,7 @@ export function RmmPatching({ devices = [] }) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [mappingApp, setMappingApp] = useState(null)
+  const [patchApp, setPatchApp] = useState(null)
   const [showPolicy, setShowPolicy] = useState(false)
   const [assignPolicy, setAssignPolicy] = useState(null)
 
@@ -258,12 +297,15 @@ export function RmmPatching({ devices = [] }) {
   const vendorLatest = bundle?.vendorIntel?.latest || []
   const policies = bundle?.policies || []
   const assignments = bundle?.assignments || []
+  const deviceSoftware = bundle?.deviceSoftware || []
+  const deployments = bundle?.deployments || []
   const overview = bundle?.overview || {}
   const exposedApps = applications.filter((item) => item.updateAvailable > 0)
   const mappedApps = applications.filter((item) => item.catalogue)
   const windowsReported = devices.filter((device) => device.pendingPatches != null)
   const windowsPending = windowsReported.reduce((sum, device) => sum + Number(device.pendingPatches || 0), 0)
   const patchHostReady = (bundle?.devices || []).filter((device) => device.patchCapabilities?.softwareDiscovery).length
+  const patchHostInstallReady = (bundle?.devices || []).filter((device) => device.patchCapabilities?.softwareInstall).length
 
   async function saveMapping(form) {
     setSaving(true)
@@ -288,6 +330,21 @@ export function RmmPatching({ devices = [] }) {
       setBundle(result.bundle)
     } catch (requestError) {
       setError(requestError?.message || 'Unable to archive software mapping.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function runSoftwarePatch(install) {
+    if (!patchApp?.catalogue?.id || !install?.agentDeviceId) return
+    setSaving(true)
+    setError('')
+    try {
+      const result = await deploySoftwarePatch(install.agentDeviceId, patchApp.catalogue.id)
+      setBundle(result.bundle)
+      setPatchApp(null)
+    } catch (requestError) {
+      setError(requestError?.message || 'Unable to start software patch.')
     } finally {
       setSaving(false)
     }
@@ -369,7 +426,10 @@ export function RmmPatching({ devices = [] }) {
             <span><strong>{application.catalogue?.targetVersion || 'Not set'}</strong><small>{application.catalogue?.packageId || 'No package ID'}</small></span>
             <span><StatusPill tone={patchTone(status)}>{patchLabel(status)}</StatusPill>{application.updateAvailable > 0 && <small>{application.updateAvailable} install{application.updateAvailable === 1 ? '' : 's'} behind</small>}</span>
             <span><strong>{application.catalogue?.provider || 'Unmapped'}</strong><small>{application.catalogue?.builtIn ? 'Hi5Central catalogue' : application.catalogue ? 'Tenant mapping' : 'Needs mapping'}</small></span>
-            <span className="actions">{application.catalogue ? <>{!application.catalogue.builtIn && <button aria-label={'Archive ' + application.name} disabled={saving} onClick={() => removeMapping(application)} type="button"><Trash2 size={14} /></button>}</> : <button disabled={saving} onClick={() => setMappingApp(application)} type="button"><Plus size={14} /> Map</button>}</span>
+            <span className="actions">{application.catalogue ? <>
+              <button disabled={saving || application.updateAvailable < 1} onClick={() => setPatchApp(application)} type="button"><PackageCheck size={14} /> Patch</button>
+              {!application.catalogue.builtIn && <button aria-label={'Archive ' + application.name} disabled={saving} onClick={() => removeMapping(application)} type="button"><Trash2 size={14} /></button>}
+            </> : <button disabled={saving} onClick={() => setMappingApp(application)} type="button"><Plus size={14} /> Map</button>}</span>
           </div>
         })}
       </div>
@@ -388,7 +448,20 @@ export function RmmPatching({ devices = [] }) {
         </div>
         <small className="rmm-patch-candidate-footnote">{patchObservations.length} endpoint package observation{patchObservations.length === 1 ? '' : 's'} currently back these candidates.</small>
       </div>}
-      <div className="rmm-patch-execution-gate"><Clock3 size={17} /><div><strong>Deployment intentionally gated</strong><span>{patchHostReady} endpoint{patchHostReady === 1 ? '' : 's'} currently report PatchHost software-discovery capability. Software deployment controls will enable only when the endpoint reports the later install capability too.</span></div></div>
+      <div className="rmm-patch-execution-gate"><Clock3 size={17} /><div><strong>Capability-gated deployment</strong><span>{patchHostReady} endpoint{patchHostReady === 1 ? '' : 's'} report PatchHost discovery · {patchHostInstallReady} report software-install capability. Offline devices and endpoints without install capability cannot receive patch jobs.</span></div></div>
+      {!!deployments.length && <div className="rmm-patch-deployment-history">
+        <div><span className="rmm-eyebrow">Execution history</span><h3>Recent software patch deployments</h3></div>
+        <div className="rmm-patch-table deployments">
+          <div className="head"><span>Application</span><span>Device</span><span>Version</span><span>Provider</span><span>Status</span></div>
+          {deployments.slice(0, 20).map((deployment) => <div className="row" key={deployment.id}>
+            <span><strong>{deployment.application_name}</strong><small>{new Date(deployment.created_at).toLocaleString()}</small></span>
+            <span><strong>{deployment.device_name}</strong><small>{deployment.device_reference}</small></span>
+            <span><strong>{deployment.installed_version || 'Unknown'} → {deployment.target_version || 'Unknown'}</strong></span>
+            <span><strong>{deployment.provider || 'Pending'}</strong><small>{deployment.provider_package_id || ''}</small></span>
+            <span><StatusPill tone={['succeeded'].includes(deployment.status) ? 'healthy' : ['failed', 'verification_failed'].includes(deployment.status) ? 'critical' : ['running', 'eligible'].includes(deployment.status) ? 'running' : 'neutral'}>{deployment.status.replaceAll('_', ' ')}</StatusPill></span>
+          </div>)}
+        </div>
+      </div>}
     </section>}
 
     {tab === 'vendors' && <section className="rmm-patch-panel">
@@ -462,6 +535,14 @@ export function RmmPatching({ devices = [] }) {
     </section>}
 
     {mappingApp && <MappingModal application={mappingApp} onClose={() => setMappingApp(null)} onSave={saveMapping} />}
+    {patchApp && <SoftwarePatchModal
+      application={patchApp}
+      devices={bundle?.devices || []}
+      installs={deviceSoftware.filter((item) => item.key === patchApp.key && item.patchStatus === 'update_available')}
+      onClose={() => setPatchApp(null)}
+      onPatch={runSoftwarePatch}
+      saving={saving}
+    />}
     {showPolicy && <PolicyModal onClose={() => setShowPolicy(false)} onSave={savePolicy} />}
     {assignPolicy && <AssignmentModal devices={bundle?.devices || devices} groups={scope.groups || []} onClose={() => setAssignPolicy(null)} onSave={saveAssignment} policy={assignPolicy} />}
   </>

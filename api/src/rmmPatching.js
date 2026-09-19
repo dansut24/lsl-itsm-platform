@@ -1,10 +1,11 @@
 import { hasPermission } from './access.js'
 import { originMatchesTenant } from './deploymentConfig.js'
 import { pool, withTransaction } from './db.js'
-import { authenticateAgent } from './rmmAgent.js'
+import { agentSocketForDevice, authenticateAgent, sendAgentMessage } from './rmmAgent.js'
 import { recordRmmActivity } from './rmmActivity.js'
 import { recentVulnerabilities, vulnerabilitySummary } from './rmmVulnerabilityIntel.js'
 import { softwareVendorSummary } from './rmmSoftwareVendorIntel.js'
+import { vulnerabilityExposureSummary } from './rmmVulnerabilityExposure.js'
 import { resolveSession } from './session.js'
 
 function clean(value = '') { return String(value ?? '').trim() }
@@ -254,7 +255,7 @@ function buildSoftware(devices, catalogue) {
 }
 
 async function patchBundle(tenantId) {
-  const [devices, catalogue, policies, assignments, vulnerabilities, discovery, vendorIntel] = await Promise.all([
+  const [devices, catalogue, policies, assignments, vulnerabilities, discovery, vendorIntel, exposureSummary, deployments] = await Promise.all([
     patchDeviceRows(tenantId),
     catalogueRows(tenantId),
     policyRows(tenantId),
@@ -262,6 +263,8 @@ async function patchBundle(tenantId) {
     vulnerabilitySummary(),
     patchDiscoveryRows(tenantId),
     softwareVendorSummary(),
+    vulnerabilityExposureSummary(tenantId),
+    patchDeploymentRows(tenantId),
   ])
   const software = buildSoftware(devices, catalogue)
   const updateAvailable = software.deviceSoftware.filter((item) => item.patchStatus === 'update_available').length
@@ -283,7 +286,9 @@ async function patchBundle(tenantId) {
     deviceSoftware: software.deviceSoftware,
     policies,
     assignments,
+    deployments,
     vulnerabilities,
+    vulnerabilityExposures: exposureSummary,
     vendorIntel,
     devices: devices.map((device) => ({
       id: device.reference,
@@ -485,6 +490,231 @@ async function ingestPatchDiscovery(agent, body = {}) {
   return { packages: packages.length, patchHostVersion: hostVersion }
 }
 
+async function patchDeploymentRows(tenantId) {
+  const result = await pool.query(
+    `SELECT d.id,d.inventory_id,d.catalogue_id,d.policy_id,d.agent_job_id,d.application_name,
+            d.provider,d.provider_package_id,d.installed_version,d.target_version,d.status,d.result,
+            d.created_at,d.started_at,d.completed_at,
+            i.reference AS device_reference,i.name AS device_name
+       FROM rmm_patch_deployments d
+       JOIN rmm_device_inventory i ON i.id=d.inventory_id
+      WHERE d.tenant_id=$1
+      ORDER BY d.created_at DESC
+      LIMIT 100`,
+    [tenantId],
+  )
+  return result.rows
+}
+
+function installedSoftwareForCatalogue(sourcePayload, catalogue) {
+  const items = array(object(sourcePayload).software?.items)
+  return items.find((item) => contains(item?.name, catalogue.name_pattern)
+    && contains(item?.publisher, catalogue.publisher_pattern)) || null
+}
+
+async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId) {
+  const result = await pool.query(
+    `SELECT a.id AS agent_device_id,a.inventory_id,a.architecture,a.agent_version,a.websocket_status,
+            a.last_telemetry_at,a.patch_capabilities,
+            i.reference,i.name AS device_name,i.source_payload,
+            c.id AS catalogue_id,c.canonical_name,c.publisher,c.name_pattern,c.publisher_pattern,
+            c.provider,c.provider_package_id,c.target_version,c.release_channel,c.installer_type,
+            c.execution,c.verification,c.tenant_id AS catalogue_tenant_id
+       FROM rmm_agent_devices a
+       JOIN rmm_device_inventory i ON i.id=a.inventory_id AND i.active=true
+       JOIN rmm_software_catalogue c ON c.id=$3 AND c.status='active'
+         AND (c.tenant_id=$1 OR c.tenant_id IS NULL)
+      WHERE a.tenant_id=$1 AND a.id::text=$2 AND a.disabled_at IS NULL
+      LIMIT 1`,
+    [tenantId, agentDeviceId, catalogueId],
+  )
+  const row = result.rows[0]
+  if (!row) return { error: 'Device or software catalogue entry was not found.', status: 404 }
+
+  const liveSocket = agentSocketForDevice(row.agent_device_id)
+  const telemetryFresh = row.last_telemetry_at && Date.now() - new Date(row.last_telemetry_at).getTime() <= 90_000
+  if (!liveSocket || liveSocket.readyState !== 1 || !telemetryFresh) {
+    return { error: 'This device is offline. No patch job was queued.', status: 409, offline: true }
+  }
+
+  const capabilities = object(row.patch_capabilities)
+  if (capabilities.softwareInstall !== true) {
+    return { error: 'This device has not reported PatchHost software-install capability yet.', status: 409, capabilityMissing: true }
+  }
+
+  const installed = installedSoftwareForCatalogue(row.source_payload, row)
+  if (!installed) return { error: 'The selected application is not currently detected on this device.', status: 409 }
+
+  const installedVersion = clean(installed.version)
+  const targetVersion = clean(row.target_version)
+  if (!targetVersion) return { error: 'The software catalogue does not have an approved target version.', status: 409 }
+
+  const comparison = compareVersions(installedVersion, targetVersion)
+  if (comparison != null && comparison >= 0) {
+    return { error: 'The application is already at or above the approved target version.', status: 409, current: true }
+  }
+
+  const release = await pool.query(
+    `SELECT source_key,version,release_date,installer_url,installer_sha256,installer_type,source_priority
+       FROM rmm_software_vendor_releases
+      WHERE provider_package_id=$1 AND version=$2
+      ORDER BY source_priority DESC,COALESCE(release_date,last_seen_at) DESC
+      LIMIT 1`,
+    [clean(row.provider_package_id), targetVersion],
+  )
+  const vendor = release.rows[0]
+  const vendorDirect = vendor
+    && /^https:\/\//i.test(clean(vendor.installer_url))
+    && /^[a-f0-9]{64}$/i.test(clean(vendor.installer_sha256))
+
+  const provider = vendorDirect ? 'vendor_direct' : 'winget'
+  if (provider === 'winget' && !clean(row.provider_package_id)) {
+    return { error: 'No safe deployment provider is available for this catalogue entry.', status: 409 }
+  }
+
+  return {
+    device: row,
+    installed,
+    provider,
+    manifest: {
+      protocolVersion: 1,
+      action: 'software.install',
+      catalogueId: row.catalogue_id,
+      applicationName: row.canonical_name,
+      publisher: row.publisher,
+      packageId: clean(row.provider_package_id),
+      installedVersion,
+      targetVersion,
+      provider,
+      vendorSource: vendorDirect ? clean(vendor.source_key) : '',
+      downloadUrl: vendorDirect ? clean(vendor.installer_url) : '',
+      sha256: vendorDirect ? clean(vendor.installer_sha256).toUpperCase() : '',
+      installerType: vendorDirect ? clean(vendor.installer_type || row.installer_type) : '',
+      expectedSigner: clean(row.publisher),
+      fallbackProvider: vendorDirect && clean(row.provider_package_id) ? 'winget' : '',
+      verification: {
+        provider: 'winget',
+        packageId: clean(row.provider_package_id),
+        targetVersion,
+      },
+    },
+  }
+}
+
+async function createAndDispatchSoftwarePatch(session, plan) {
+  const label = clean(session.name || session.email || 'Technician').slice(0, 255)
+  const created = await withTransaction(async (client) => {
+    const jobResult = await client.query(
+      `INSERT INTO rmm_agent_jobs
+        (tenant_id,agent_device_id,job_type,payload,queued_by_user_id,initiated_by,initiated_by_label,request_metadata)
+       VALUES ($1,$2,'patch.software',$3::jsonb,$4,'technician',$5,$6::jsonb)
+       RETURNING id,status,correlation_id,created_at`,
+      [
+        session.tenant_id,
+        plan.device.agent_device_id,
+        JSON.stringify(plan.manifest),
+        session.user_id,
+        label,
+        JSON.stringify({
+          source: 'rmm_patching',
+          device_name: plan.device.device_name,
+          device_reference: plan.device.reference,
+          catalogue_id: plan.device.catalogue_id,
+          provider: plan.provider,
+        }),
+      ],
+    )
+    const job = jobResult.rows[0]
+    const deploymentResult = await client.query(
+      `INSERT INTO rmm_patch_deployments
+        (tenant_id,inventory_id,catalogue_id,agent_job_id,application_name,provider,provider_package_id,
+         installed_version,target_version,status,requested_by_user_id,result)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'eligible',$10,$11::jsonb)
+       RETURNING *`,
+      [
+        session.tenant_id,
+        plan.device.inventory_id,
+        plan.device.catalogue_id,
+        job.id,
+        plan.manifest.applicationName,
+        plan.provider,
+        plan.manifest.packageId,
+        plan.manifest.installedVersion,
+        plan.manifest.targetVersion,
+        session.user_id,
+        JSON.stringify({ requestedProvider: plan.provider, vendorSource: plan.manifest.vendorSource || '' }),
+      ],
+    )
+    return { job, deployment: deploymentResult.rows[0] }
+  })
+
+  const claimed = await pool.query(
+    `UPDATE rmm_agent_jobs
+        SET status='claimed',claimed_at=now(),updated_at=now()
+      WHERE id=$1 AND tenant_id=$2 AND status='queued'
+      RETURNING status,claimed_at,updated_at`,
+    [created.job.id, session.tenant_id],
+  )
+  if (!claimed.rowCount) throw new Error('Patch job could not be claimed for immediate dispatch.')
+
+  await pool.query(
+    `UPDATE rmm_patch_deployments
+        SET status='running',started_at=now(),updated_at=now()
+      WHERE id=$1 AND tenant_id=$2`,
+    [created.deployment.id, session.tenant_id],
+  )
+
+  const pushed = sendAgentMessage(plan.device.agent_device_id, {
+    type: 'job_execute',
+    job: {
+      id: created.job.id,
+      job_type: 'patch.software',
+      payload: plan.manifest,
+      created_at: created.job.created_at,
+    },
+  })
+
+  if (!pushed) {
+    await withTransaction(async (client) => {
+      await client.query(
+        `UPDATE rmm_agent_jobs
+            SET status='cancelled',claimed_at=NULL,completed_at=now(),
+                error_message='Device went offline before the patch could be dispatched. The job was not retained for reconnect.',
+                updated_at=now()
+          WHERE id=$1 AND tenant_id=$2 AND status='claimed'`,
+        [created.job.id, session.tenant_id],
+      )
+      await client.query(
+        `UPDATE rmm_patch_deployments
+            SET status='cancelled',completed_at=now(),updated_at=now(),
+                result=result || '{"reason":"device_offline_before_dispatch"}'::jsonb
+          WHERE id=$1 AND tenant_id=$2`,
+        [created.deployment.id, session.tenant_id],
+      )
+    })
+    return { ...created, dispatched: false, offline: true }
+  }
+
+  await recordRmmActivity({
+    tenantId: session.tenant_id,
+    agentDeviceId: plan.device.agent_device_id,
+    inventoryId: plan.device.inventory_id,
+    actorUserId: session.user_id,
+    actorType: 'technician',
+    actorLabel: label,
+    eventType: 'patch.software.requested',
+    category: 'patching',
+    summary: label + ' started software patch ' + '“' + plan.manifest.applicationName + '”',
+    detail: plan.manifest.installedVersion + ' → ' + plan.manifest.targetVersion + ' via ' + plan.provider,
+    outcome: 'requested',
+    correlationId: created.job.correlation_id,
+    jobId: created.job.id,
+    metadata: { deploymentId: created.deployment.id, manifest: { ...plan.manifest, downloadUrl: plan.manifest.downloadUrl ? '[vendor URL]' : '' } },
+  }).catch(() => null)
+
+  return { ...created, dispatched: true }
+}
+
 function validProvider(value) {
   return ['winget', 'managed', 'vendor'].includes(value) ? value : 'winget'
 }
@@ -533,6 +763,37 @@ export function registerRmmPatchingRoutes(app) {
     const auth = await requirePatchAccess(c)
     if (auth.error) return auth.error
     return c.json({ summary: await vulnerabilitySummary(), vulnerabilities: await recentVulnerabilities(c.req.query('limit')) })
+  })
+
+  app.post('/api/v1/rmm/patching/software/deploy', async (c) => {
+    const auth = await requirePatchAccess(c, 'software')
+    if (auth.error) return auth.error
+    if (!hasPermission(auth.session.access, 'rmm.devices.control')) {
+      return c.json({ error: 'You do not have permission to control RMM devices.' }, 403)
+    }
+
+    const body = await c.req.json().catch(() => ({}))
+    const agentDeviceId = clean(body.agentDeviceId)
+    const catalogueId = clean(body.catalogueId)
+    if (!agentDeviceId || !catalogueId) {
+      return c.json({ error: 'Device and software catalogue entry are required.' }, 400)
+    }
+
+    const plan = await softwarePatchPlan(auth.session.tenant_id, agentDeviceId, catalogueId)
+    if (plan.error) return c.json({ error: plan.error, offline: plan.offline, capabilityMissing: plan.capabilityMissing, current: plan.current }, plan.status || 400)
+
+    const dispatched = await createAndDispatchSoftwarePatch(auth.session, plan)
+    if (!dispatched.dispatched) {
+      return c.json({ error: 'The device went offline before the patch could be dispatched. No patch job was retained.', offline: true }, 409)
+    }
+
+    return c.json({
+      success: true,
+      job: dispatched.job,
+      deployment: dispatched.deployment,
+      provider: plan.provider,
+      bundle: await patchBundle(auth.session.tenant_id),
+    }, 202)
   })
 
   app.post('/api/v1/rmm/software-catalogue', async (c) => {

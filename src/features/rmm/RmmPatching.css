@@ -54,6 +54,17 @@
 .rmm-patch-candidate-section p { margin:0; color:var(--rmm-muted); font-size:8px; line-height:1.45; }
 .rmm-patch-table.candidates .head,.rmm-patch-table.candidates .row { grid-template-columns:minmax(220px,1.4fr) minmax(220px,1.2fr) 80px 80px minmax(130px,.8fr); min-width:760px; }
 .rmm-patch-candidate-footnote { display:block; margin-top:7px; color:var(--rmm-muted); font-size:7px; }
+.rmm-patch-deployment-history { border-top:1px solid var(--rmm-border); padding:12px; }
+.rmm-patch-deployment-history > div:first-child { display:grid; gap:3px; margin-bottom:9px; }
+.rmm-patch-deployment-history h3 { margin:0; font-size:10px; }
+.rmm-patch-table.deployments .head,.rmm-patch-table.deployments .row { grid-template-columns:minmax(220px,1.25fr) minmax(180px,1fr) minmax(170px,.9fr) minmax(150px,.8fr) 130px; min-width:850px; }
+.rmm-patch-device-picker { display:grid; gap:8px; margin:10px 0; }
+.rmm-patch-device-picker article { display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:10px; border:1px solid var(--rmm-border); border-radius:9px; padding:10px; background:var(--rmm-soft); }
+.rmm-patch-device-picker article > div:first-child { display:grid; gap:2px; min-width:0; }
+.rmm-patch-device-picker article strong { overflow:hidden; font-size:8px; text-overflow:ellipsis; white-space:nowrap; }
+.rmm-patch-device-picker article small { color:var(--rmm-muted); font-size:7px; }
+.rmm-patch-device-state { display:flex; align-items:center; }
+
 
 .rmm-patch-execution-gate { display:flex; align-items:flex-start; gap:9px; margin:12px; border:1px dashed var(--rmm-border); border-radius:9px; padding:10px; background:var(--rmm-soft); }
 .rmm-patch-execution-gate svg { color:var(--rmm-accent); flex:0 0 auto; }
@@ -120,6 +131,10 @@
   .rmm-patch-vendor-grid { grid-template-columns:1fr; }
   .rmm-patch-vendor-grid article { grid-template-columns:minmax(0,1fr) auto; }
   .rmm-patch-vendor-grid article > span:not(.rmm-status-pill) { grid-column:1; }
+  .rmm-patch-device-picker article { grid-template-columns:1fr; }
+  .rmm-patch-device-state { justify-content:flex-start; }
+  .rmm-patch-device-picker article > button { width:100%; justify-content:center; }
+  .rmm-patch-table.deployments .row { grid-template-columns:1fr 1fr; }
   .rmm-patch-form-grid,.rmm-patch-checks { grid-template-columns:1fr; }
   .rmm-patch-form-grid label.wide { grid-column:auto; }
   .rmm-patch-modal { width:100%; max-height:calc(100dvh - 20px); }

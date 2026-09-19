@@ -38,6 +38,13 @@ export function deleteSoftwareCatalogueEntry(catalogueId) {
   })
 }
 
+export function deploySoftwarePatch(agentDeviceId, catalogueId) {
+  return request('/api/v1/rmm/patching/software/deploy', {
+    method: 'POST',
+    body: JSON.stringify({ agentDeviceId, catalogueId }),
+  })
+}
+
 export function createPatchPolicy(policy) {
   return request('/api/v1/rmm/patch-policies', {
     method: 'POST',
