@@ -111,6 +111,7 @@ function browserLaunchUrl(slug, payload) {
     device_id: payload.deviceId,
     token: payload.token,
     wss_url: payload.wssUrl,
+    mode: payload.mode,
     ice,
   })
   const base = tenantUrls(slug, { rmm: true }).rmmUrl || `https://${slug}-rmm.${ROOT_DOMAIN}`
@@ -123,6 +124,7 @@ function nativeLaunchUrl(payload) {
     device_id: payload.deviceId,
     token: payload.token,
     wss_url: payload.wssUrl,
+    mode: payload.mode,
   })
   return `hi5central-viewer://connect?${query.toString()}`
 }
@@ -157,6 +159,7 @@ export function registerRmmRemoteRoutes(app) {
       deviceId: String(agent.id),
       token,
       wssUrl: VIEWER_WS_URL,
+      mode,
       iceServers: ice.viewer,
     }
     return c.json({
@@ -367,7 +370,7 @@ export function attachRmmViewerWebSocket(server) {
     viewerWs.once('error', () => cleanup('viewer_error'))
 
     safeSend(viewerWs, { type: 'viewer_connected', session_id: sessionId })
-    safeSend(viewerWs, { type: 'session_config', session_id: sessionId, ice_servers: ice.viewer })
+    safeSend(viewerWs, { type: 'session_config', session_id: sessionId, mode: remote.mode, ice_servers: ice.viewer })
     safeSend(agentWs, {
       type: 'start_webrtc',
       session_id: sessionId,

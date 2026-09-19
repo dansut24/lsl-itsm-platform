@@ -1309,6 +1309,11 @@ window.__hi5NativeShortcut = function(action) {
 
 function sendBackstageMode(enabled) {
   if (!currentSession) return false;
+  const targetMode = enabled ? "backstage" : "console";
+  if (currentSession.launchMode && currentSession.launchMode !== targetMode) {
+    console.warn("[viewer] remote mode switch rejected by immutable session mode", { launchMode: currentSession.launchMode, targetMode });
+    return false;
+  }
 
   const type = enabled ? "backstage_start" : "backstage_stop";
   const payload = JSON.stringify({
@@ -2613,6 +2618,8 @@ function startSession(params) {
   const wssUrl = params.wss_url || params.wssUrl || params.signaling_url || params.signalingUrl || "";
   const iceServers = normalizeIceServers(params.ice_servers || params.iceServers || []);
   const viewerClient = params.viewer_client || params.viewerClient || '';
+  const modeValue = String(params.mode || params.session_mode || params.sessionMode || "console").toLowerCase();
+  const launchMode = (modeValue === "backstage" || modeValue === "background" || modeValue === "background_mode") ? "backstage" : "console";
 
   if (!sessionId || !deviceId || !token || !wssUrl) {
     console.error("[viewer] invalid connection parameters");
@@ -2626,7 +2633,8 @@ function startSession(params) {
     deviceId,
     wssUrl,
     iceServers,
-    viewerClient
+    viewerClient,
+    launchMode
   };
 
   remoteMonitors = [];
@@ -2643,8 +2651,16 @@ function startSession(params) {
   setRemoteAudioEnabled(false);
   setLocalInputBlocked(false, false);
   if (elBtnKeyboard) elBtnKeyboard.disabled = false;
-  if (elBtnBackstage) elBtnBackstage.disabled = false;
-  if (elBtnConsole) elBtnConsole.disabled = false;
+  if (elBtnBackstage) {
+    elBtnBackstage.hidden = launchMode !== "backstage";
+    elBtnBackstage.disabled = true;
+    elBtnBackstage.classList.toggle("session-toggle-active", launchMode === "backstage");
+  }
+  if (elBtnConsole) {
+    elBtnConsole.hidden = launchMode !== "console";
+    elBtnConsole.disabled = true;
+    elBtnConsole.classList.toggle("session-toggle-active", launchMode === "console");
+  }
   if (elBtnStartMenu) elBtnStartMenu.disabled = false;
   if (elBtnCad) elBtnCad.disabled = false;
   if (elDeviceLabel) elDeviceLabel.textContent = deviceId || "";
