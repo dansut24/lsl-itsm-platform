@@ -52,8 +52,10 @@ function versionParts(value) {
 }
 
 function compareVersions(installed, target) {
-  const left = versionParts(installed)
-  const right = versionParts(target)
+  const installedText = clean(installed)
+  const targetText = clean(target)
+  const left = versionParts(installedText)
+  const right = versionParts(targetText)
   if (!left || !right) return null
   const size = Math.max(left.length, right.length)
   for (let index = 0; index < size; index += 1) {
@@ -62,6 +64,13 @@ function compareVersions(installed, target) {
     if (a < b) return -1
     if (a > b) return 1
   }
+
+  // WinGet can report an installed version as "< X" when the exact installed
+  // version is not known but is known to be lower than the available package.
+  // Preserve that ordering instead of flattening both values to the same digits.
+  if (/^\s*</.test(installedText) && !/^\s*<=/.test(installedText)) return -1
+  if (/^\s*>/.test(installedText) && !/^\s*>=/.test(installedText)) return 1
+
   return 0
 }
 async function patchDeviceRows(tenantId) {
