@@ -4,6 +4,7 @@ import { hasPermission } from './access.js'
 import { originMatchesTenant } from './deploymentConfig.js'
 import { pool } from './db.js'
 import { agentSocketForDevice, sendAgentMessage, subscribeAgentMessages } from './rmmAgent.js'
+import { recordRmmActivity } from './rmmActivity.js'
 import { resolveSession } from './session.js'
 
 const TOOL_SESSION_TTL_MS = 10 * 60 * 1000
@@ -36,6 +37,19 @@ async function requireDeviceControl(c) {
   }
   if (!hasPermission(session.access, 'rmm.devices.control') && !hasPermission(session.access, 'rmm.automation.run')) {
     return { error: c.json({ error: 'You do not have permission to control RMM devices.' }, 403) }
+  }
+  return { session }
+}
+
+
+async function requireDeviceView(c) {
+  const session = await resolveSession(c)
+  if (!session) return { error: c.json({ error: 'Authentication required.' }, 401) }
+  if (!originMatchesTenant(c.req.header('origin'), session.slug)) {
+    return { error: c.json({ error: 'Tenant session mismatch.' }, 403) }
+  }
+  if (!hasPermission(session.access, 'rmm.devices.view') && !hasPermission(session.access, 'rmm.devices.control')) {
+    return { error: c.json({ error: 'You do not have permission to view RMM device jobs.' }, 403) }
   }
   return { session }
 }
@@ -105,7 +119,7 @@ function payloadForAction(type, body = {}) {
 
 async function managedAgent(tenantId, agentDeviceId) {
   const result = await pool.query(
-    "SELECT a.id,a.agent_version,i.name,i.reference " +
+    "SELECT a.id,a.agent_version,i.id AS inventory_id,i.name,i.reference " +
     "FROM rmm_agent_devices a " +
     "JOIN rmm_device_inventory i ON i.id=a.inventory_id " +
     "WHERE a.id::text=$1 AND a.tenant_id=$2 AND a.disabled_at IS NULL AND i.active=true LIMIT 1",
@@ -193,10 +207,11 @@ export function registerRmmDeviceToolRoutes(app) {
   })
 
   app.get('/api/v1/rmm/device-actions/:jobId', async (c) => {
-    const auth = await requireDeviceControl(c)
+    const auth = await requireDeviceView(c)
     if (auth.error) return auth.error
     const result = await pool.query(
-      "SELECT j.id,j.job_type,j.status,j.result,j.error_message,j.created_at,j.claimed_at,j.completed_at,j.updated_at," +
+      "SELECT j.id,j.agent_device_id,j.job_type,j.payload,j.status,j.result,j.error_message,j.created_at,j.claimed_at,j.completed_at,j.updated_at," +
+      "j.queued_by_user_id,j.initiated_by,j.initiated_by_label,j.correlation_id,j.request_metadata," +
       "i.name AS device_name,i.reference AS device_reference " +
       "FROM rmm_agent_jobs j " +
       "JOIN rmm_agent_devices a ON a.id=j.agent_device_id " +
@@ -209,11 +224,12 @@ export function registerRmmDeviceToolRoutes(app) {
   })
 
   app.get('/api/v1/rmm/devices/:agentDeviceId/actions', async (c) => {
-    const auth = await requireDeviceControl(c)
+    const auth = await requireDeviceView(c)
     if (auth.error) return auth.error
     const limit = boundedInteger(c.req.query('limit'), 1, 100) || 25
     const result = await pool.query(
-      "SELECT j.id,j.job_type,j.status,j.result,j.error_message,j.created_at,j.claimed_at,j.completed_at,j.updated_at " +
+      "SELECT j.id,j.agent_device_id,j.job_type,j.payload,j.status,j.result,j.error_message,j.created_at,j.claimed_at,j.completed_at,j.updated_at," +
+      "j.queued_by_user_id,j.initiated_by,j.initiated_by_label,j.correlation_id,j.request_metadata " +
       "FROM rmm_agent_jobs j WHERE j.tenant_id=$1 AND j.agent_device_id::text=$2 " +
       "ORDER BY j.created_at DESC LIMIT $3",
       [auth.session.tenant_id, clean(c.req.param('agentDeviceId')), limit],
@@ -238,16 +254,27 @@ export function registerRmmDeviceToolRoutes(app) {
     const id = randomUUID()
     const token = 'h5t_' + randomBytes(32).toString('base64url')
     const expiresAt = Date.now() + TOOL_SESSION_TTL_MS
+    const actorLabel = clean(auth.session.name || auth.session.email || 'Technician').slice(0, 255)
+    await pool.query(
+      "INSERT INTO rmm_tool_sessions (id,tenant_id,agent_device_id,inventory_id,initiated_by_user_id,initiated_by_label,tool,shell,status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'created')",
+      [id, auth.session.tenant_id, device.id, device.inventory_id, auth.session.user_id, actorLabel, tool, shell],
+    )
     toolSessions.set(id, {
       id,
       tenantId: auth.session.tenant_id,
       userId: auth.session.user_id,
+      actorLabel,
       agentDeviceId: String(device.id),
+      inventoryId: device.inventory_id,
       deviceName: device.name,
       tool,
       shell,
       tokenHash: sha256(token),
       expiresAt,
+      transcript: '',
+      transcriptTruncated: false,
+      commandCount: 0,
+      startedAt: null,
     })
     const cleanup = setTimeout(() => toolSessions.delete(id), TOOL_SESSION_TTL_MS + 5000)
     cleanup.unref?.()
@@ -262,6 +289,29 @@ export function registerRmmDeviceToolRoutes(app) {
 function safeSend(ws, payload) {
   if (!ws || ws.readyState !== 1) return false
   try { ws.send(typeof payload === 'string' ? payload : JSON.stringify(payload)); return true } catch { return false }
+}
+
+
+function appendToolTranscript(session, text) {
+  if (!session || !text) return
+  const MAX_TRANSCRIPT_CHARS = 700000
+  const value = String(text)
+  if (session.transcript.length >= MAX_TRANSCRIPT_CHARS) {
+    session.transcriptTruncated = true
+    return
+  }
+  const remaining = MAX_TRANSCRIPT_CHARS - session.transcript.length
+  session.transcript += value.slice(0, remaining)
+  if (value.length > remaining) session.transcriptTruncated = true
+}
+
+function fileActionDescription(type, payload = {}) {
+  if (type === 'files_download_request') return { eventType: 'files.download', summary: 'started downloading ' + (clean(payload.path) || 'a file'), detail: clean(payload.path) }
+  if (type === 'files_delete_request') return { eventType: 'files.delete', summary: 'requested deletion of ' + (clean(payload.path) || 'a file'), detail: clean(payload.path) }
+  if (type === 'files_rename_request') return { eventType: 'files.rename', summary: 'renamed ' + (clean(payload.path) || 'a file') + ' to ' + clean(payload.name), detail: clean(payload.path) }
+  if (type === 'files_mkdir_request') return { eventType: 'files.mkdir', summary: 'created folder ' + clean(payload.name), detail: clean(payload.currentPath || payload.current_path) }
+  if (type === 'files_upload_complete') return { eventType: 'files.upload', summary: 'uploaded ' + clean(payload.filename || payload.name), detail: clean(payload.directory || payload.currentPath) }
+  return null
 }
 
 export function attachRmmDeviceToolWebSocket(server) {
@@ -295,12 +345,97 @@ export function attachRmmDeviceToolWebSocket(server) {
     const sessionId = String(session.id)
     const isTerminal = session.tool === 'terminal'
     const isFiles = session.tool === 'files'
+    session.startedAt = Date.now()
+    pool.query(
+      "UPDATE rmm_tool_sessions SET status='active',started_at=COALESCE(started_at,now()),updated_at=now() WHERE id=$1 AND tenant_id=$2",
+      [sessionId, session.tenantId],
+    ).catch(() => {})
+    const toolLabel = isTerminal ? (session.shell === 'cmd' ? 'Command Prompt' : 'PowerShell') : 'File Browser'
+    recordRmmActivity({
+      tenantId: session.tenantId,
+      agentDeviceId: session.agentDeviceId,
+      inventoryId: session.inventoryId,
+      actorUserId: session.userId,
+      actorType: 'technician',
+      actorLabel: session.actorLabel,
+      eventType: isTerminal ? 'terminal.started' : 'files.session_started',
+      category: isTerminal ? 'terminal' : 'files',
+      summary: session.actorLabel + ' started a ' + toolLabel + ' session',
+      detail: 'Live device tool session started.',
+      outcome: 'success',
+      toolSessionId: sessionId,
+      metadata: { tool: session.tool, shell: session.shell },
+    }).catch(() => {})
 
     const unsubscribe = subscribeAgentMessages(session.agentDeviceId, (payload) => {
       const type = String(payload?.type || '')
       if (isTerminal && !type.startsWith('terminal_')) return
       if (isFiles && !type.startsWith('files_')) return
       if (clean(payload.session_id || payload.sessionId) !== sessionId) return
+      if (isTerminal && type === 'terminal_output') appendToolTranscript(session, String(payload.data || ''))
+      if (isFiles && type === 'files_action_result') {
+        const action = clean(payload.action)
+        const labels = {
+          files_mkdir_request: 'folder creation',
+          files_rename_request: 'rename',
+          files_delete_request: 'delete',
+        }
+        const success = payload.success !== false
+        recordRmmActivity({
+          tenantId: session.tenantId,
+          agentDeviceId: session.agentDeviceId,
+          inventoryId: session.inventoryId,
+          actorUserId: session.userId,
+          actorType: 'technician',
+          actorLabel: session.actorLabel,
+          eventType: action.replace('_request', '').replaceAll('_', '.'),
+          category: 'files',
+          summary: session.actorLabel + ' ' + (success ? 'completed ' : 'failed ') + (labels[action] || 'a file operation'),
+          detail: clean(payload.message || payload.error || payload.refreshPath || payload.refresh_path),
+          outcome: success ? 'success' : 'failed',
+          severity: success ? 'info' : 'warning',
+          toolSessionId: sessionId,
+          metadata: { action, success, refreshPath: payload.refreshPath || payload.refresh_path || '', error: payload.error || '' },
+        }).catch(() => {})
+      }
+      if (isFiles && type === 'files_upload_result') {
+        const success = payload.success !== false
+        const filename = clean(payload.filename) || 'file'
+        recordRmmActivity({
+          tenantId: session.tenantId,
+          agentDeviceId: session.agentDeviceId,
+          inventoryId: session.inventoryId,
+          actorUserId: session.userId,
+          actorType: 'technician',
+          actorLabel: session.actorLabel,
+          eventType: 'files.upload_completed',
+          category: 'files',
+          summary: session.actorLabel + (success ? ' uploaded ' : ' failed to upload ') + '“' + filename + '”',
+          detail: clean(payload.message || payload.error || payload.refreshPath || payload.refresh_path),
+          outcome: success ? 'success' : 'failed',
+          severity: success ? 'info' : 'warning',
+          toolSessionId: sessionId,
+          metadata: { filename, success, error: payload.error || '' },
+        }).catch(() => {})
+      }
+      if (isFiles && type === 'files_download_complete') {
+        const filename = clean(payload.filename) || 'file'
+        recordRmmActivity({
+          tenantId: session.tenantId,
+          agentDeviceId: session.agentDeviceId,
+          inventoryId: session.inventoryId,
+          actorUserId: session.userId,
+          actorType: 'technician',
+          actorLabel: session.actorLabel,
+          eventType: 'files.download_completed',
+          category: 'files',
+          summary: session.actorLabel + ' downloaded “' + filename + '”',
+          detail: clean(payload.path),
+          outcome: 'success',
+          toolSessionId: sessionId,
+          metadata: { filename, path: payload.path || '', sizeBytes: payload.size_bytes || payload.size || null },
+        }).catch(() => {})
+      }
       safeSend(browserWs, payload)
     })
 
@@ -316,6 +451,25 @@ export function attachRmmDeviceToolWebSocket(server) {
       })
       if (!started) {
         safeSend(browserWs, { type: 'terminal_error', session_id: sessionId, error: 'Agent is offline.' })
+        pool.query(
+          "UPDATE rmm_tool_sessions SET status='failed',ended_at=now(),updated_at=now() WHERE id=$1 AND tenant_id=$2",
+          [sessionId, session.tenantId],
+        ).catch(() => {})
+        recordRmmActivity({
+          tenantId: session.tenantId,
+          agentDeviceId: session.agentDeviceId,
+          inventoryId: session.inventoryId,
+          actorUserId: session.userId,
+          actorType: 'technician',
+          actorLabel: session.actorLabel,
+          eventType: 'terminal.failed',
+          category: 'terminal',
+          summary: session.actorLabel + ' failed to start a ' + toolLabel + ' session',
+          detail: 'The Agent connection was unavailable.',
+          outcome: 'failed',
+          severity: 'warning',
+          toolSessionId: sessionId,
+        }).catch(() => {})
         try { browserWs.close(1013, 'Agent offline') } catch {}
         unsubscribe()
         toolSessions.delete(sessionId)
@@ -337,7 +491,14 @@ export function attachRmmDeviceToolWebSocket(server) {
       if (!allowed) return
 
       const outgoing = { ...payload, session_id: sessionId, sessionId }
-      if (type === 'terminal_input') outgoing.data = String(payload.data || '').slice(0, 65536)
+      if (type === 'terminal_input') {
+        outgoing.data = String(payload.data || '').slice(0, 65536)
+        const command = outgoing.data.replace(/[\r\n]+$/g, '').trim()
+        if (command) {
+          session.commandCount += 1
+          appendToolTranscript(session, '\n> ' + command + '\n')
+        }
+      }
       if (type === 'terminal_resize') {
         outgoing.cols = boundedInteger(payload.cols, 20, 300) || 120
         outgoing.rows = boundedInteger(payload.rows, 5, 100) || 32
@@ -350,6 +511,24 @@ export function attachRmmDeviceToolWebSocket(server) {
         if (outgoing.name != null) outgoing.name = clean(outgoing.name).slice(0, 512)
         if (outgoing.filename != null) outgoing.filename = clean(outgoing.filename).slice(0, 512)
         if (outgoing.data != null) outgoing.data = String(outgoing.data).slice(0, 262144)
+        const activity = fileActionDescription(type, outgoing)
+        if (activity) {
+          recordRmmActivity({
+            tenantId: session.tenantId,
+            agentDeviceId: session.agentDeviceId,
+            inventoryId: session.inventoryId,
+            actorUserId: session.userId,
+            actorType: 'technician',
+            actorLabel: session.actorLabel,
+            eventType: activity.eventType,
+            category: 'files',
+            summary: session.actorLabel + ' ' + activity.summary,
+            detail: activity.detail,
+            outcome: 'requested',
+            toolSessionId: sessionId,
+            metadata: { type, path: outgoing.path || '', currentPath: outgoing.currentPath || outgoing.current_path || '', directory: outgoing.directory || '', name: outgoing.name || outgoing.filename || '' },
+          }).catch(() => {})
+        }
       }
       sendAgentMessage(session.agentDeviceId, outgoing)
     })
@@ -358,6 +537,28 @@ export function attachRmmDeviceToolWebSocket(server) {
       if (isTerminal) sendAgentMessage(session.agentDeviceId, { type: 'terminal_stop', session_id: sessionId, sessionId })
       if (isFiles) sendAgentMessage(session.agentDeviceId, { type: 'files_cancel', session_id: sessionId, sessionId })
       unsubscribe()
+      const durationSeconds = session.startedAt ? Math.max(0, Math.round((Date.now() - session.startedAt) / 1000)) : null
+      pool.query(
+        "UPDATE rmm_tool_sessions SET status='ended',ended_at=now(),command_count=$3,transcript=$4,transcript_truncated=$5,updated_at=now() WHERE id=$1 AND tenant_id=$2",
+        [sessionId, session.tenantId, session.commandCount || 0, session.transcript || '', Boolean(session.transcriptTruncated)],
+      ).catch(() => {})
+      recordRmmActivity({
+        tenantId: session.tenantId,
+        agentDeviceId: session.agentDeviceId,
+        inventoryId: session.inventoryId,
+        actorUserId: session.userId,
+        actorType: 'technician',
+        actorLabel: session.actorLabel,
+        eventType: isTerminal ? 'terminal.ended' : 'files.session_ended',
+        category: isTerminal ? 'terminal' : 'files',
+        summary: session.actorLabel + ' ended a ' + toolLabel + ' session',
+        detail: isTerminal
+          ? (session.commandCount || 0) + ' command' + ((session.commandCount || 0) === 1 ? '' : 's') + ' executed · See output'
+          : 'File Browser session ended.',
+        outcome: 'success',
+        toolSessionId: sessionId,
+        metadata: { tool: session.tool, shell: session.shell, commandCount: session.commandCount || 0, durationSeconds, transcriptTruncated: Boolean(session.transcriptTruncated) },
+      }).catch(() => {})
       toolSessions.delete(sessionId)
     })
   })

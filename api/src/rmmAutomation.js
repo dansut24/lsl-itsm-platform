@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { hasPermission } from './access.js'
 import { originMatchesTenant } from './deploymentConfig.js'
 import { pool, withTransaction } from './db.js'
+import { recordRmmActivity } from './rmmActivity.js'
 import { resolveSession } from './session.js'
 
 function clean(value = '') { return String(value ?? '').trim() }
@@ -280,11 +281,30 @@ export function registerRmmAutomationRoutes(app) {
     const auth = await requireAccess(c, ['rmm.automation.run', 'rmm.automation.manage'])
     if (auth.error) return auth.error
     const result = await pool.query(
-      `UPDATE rmm_agent_jobs SET status='cancelled',updated_at=now()
-        WHERE id=$1 AND tenant_id=$2 AND status='queued' RETURNING id`,
+      `UPDATE rmm_agent_jobs
+          SET status='cancelled',updated_at=now()
+        WHERE id=$1 AND tenant_id=$2 AND status='queued'
+        RETURNING id,agent_device_id,initiated_by_label,job_type,request_metadata,correlation_id`,
       [clean(c.req.param('jobId')), auth.session.tenant_id],
     )
     if (!result.rowCount) return c.json({ error: 'Only queued jobs can be cancelled.' }, 409)
+    const job = result.rows[0]
+    const actorLabel = clean(auth.session.name || auth.session.email) || 'Technician'
+    recordRmmActivity({
+      tenantId: auth.session.tenant_id,
+      agentDeviceId: job.agent_device_id,
+      actorUserId: auth.session.user_id,
+      actorType: 'technician',
+      actorLabel,
+      eventType: 'job.cancelled',
+      category: 'automation',
+      summary: actorLabel + ' cancelled a queued RMM job',
+      detail: clean(job.request_metadata?.automation_name || job.request_metadata?.tray_label || job.job_type),
+      outcome: 'cancelled',
+      jobId: job.id,
+      correlationId: job.correlation_id,
+      metadata: { jobType: job.job_type, requestMetadata: job.request_metadata || {} },
+    }).catch(() => {})
     return c.json({ success: true })
   })
 

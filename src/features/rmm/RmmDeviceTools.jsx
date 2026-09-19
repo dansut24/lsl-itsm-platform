@@ -74,6 +74,14 @@ function ToolSearch({ value, onChange, placeholder }) {
   return <label className="rmm-tool-search"><Search size={15} /><input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /></label>
 }
 
+function ToolLoadingRows({ columns = 5, count = 8 }) {
+  return <div className="rmm-tool-loading-rows" aria-label="Loading">
+    {Array.from({ length: count }).map((_, row) => <div key={row} style={{ '--tool-loading-columns': columns }}>
+      {Array.from({ length: columns }).map((__, column) => <span key={column} />)}
+    </div>)}
+  </div>
+}
+
 const liveToolCache = new Map()
 function cachedToolValue(key, maxAgeMs = 60000) {
   const item = liveToolCache.get(key)
@@ -299,7 +307,7 @@ function FilesTool({ device }) {
     </div>
     <div className="rmm-file-drive-strip">{drives.map((drive) => <button key={drive.root || drive.name} onClick={() => list(drive.root)} type="button"><HardDrive size={14} />{drive.name || drive.root}<small>{bytes(drive.free_bytes)} free</small></button>)}</div>
     <div className="rmm-tool-table-head files"><span>Name</span><span>Type</span><span>Size</span><span>Modified</span><span /></div>
-    <div className="rmm-tool-table-body">{visible.map((entry) => <div className="rmm-tool-table-row files" key={entry.full_path || entry.path || entry.name}>
+    <div className="rmm-tool-table-body">{!entries.length && /connecting|loading/i.test(state) ? <ToolLoadingRows columns={5} /> : visible.map((entry) => <div className="rmm-tool-table-row files" key={entry.full_path || entry.path || entry.name}>
       <button className="rmm-file-name" onDoubleClick={() => entry.type === 'folder' && list(entry.full_path || entry.path)} onClick={() => {}} type="button"><Folder size={15} /><strong>{entry.name}</strong></button>
       <span>{entry.type || 'file'}</span><span>{entry.type === 'folder' ? '—' : bytes(entry.size_bytes)}</span><span>{entry.modified_at ? new Date(entry.modified_at).toLocaleString() : '—'}</span>
       <span className="rmm-row-actions">{entry.type !== 'folder' && <button onClick={() => download(entry)} title="Download" type="button"><Download size={14} /></button>}<button onClick={() => rename(entry)} title="Rename" type="button"><Settings2 size={14} /></button><button onClick={() => remove(entry)} title="Delete" type="button"><Trash2 size={14} /></button></span>
@@ -345,7 +353,7 @@ function ProcessesTool({ device }) {
   return <div className="rmm-live-list-tool">
     <div className="rmm-tool-commandbar"><ToolSearch value={search} onChange={setSearch} placeholder="Search processes…" /><button disabled={busy} onClick={load} type="button"><RefreshCw size={14} /> Refresh</button></div>
     <div className="rmm-tool-table-head processes"><span>Process</span><span>PID</span><span>CPU time</span><span>Memory</span><span>Threads</span><span /></div>
-    <div className="rmm-tool-table-body">{visible.map((row) => <div className="rmm-tool-table-row processes" key={row.pid}><span><strong>{row.name}</strong><small>{row.window_title || row.path}</small></span><span>{row.pid}</span><span>{row.cpu_seconds ?? '—'}s</span><span>{bytes(row.working_set_bytes)}</span><span>{row.thread_count ?? '—'}</span><span className="rmm-row-actions"><button disabled={busy} onClick={() => control('process.restart', row)} title="Restart process" type="button"><RotateCw size={14} /></button><button className="danger" disabled={busy} onClick={() => control('process.kill', row)} title="End task" type="button"><CircleStop size={14} /></button></span></div>)}</div>
+    <div className="rmm-tool-table-body">{busy && !rows.length ? <ToolLoadingRows columns={6} /> : visible.map((row) => <div className="rmm-tool-table-row processes" key={row.pid}><span><strong>{row.name}</strong><small>{row.window_title || row.path}</small></span><span>{row.pid}</span><span>{row.cpu_seconds ?? '—'}s</span><span>{bytes(row.working_set_bytes)}</span><span>{row.thread_count ?? '—'}</span><span className="rmm-row-actions"><button disabled={busy} onClick={() => control('process.restart', row)} title="Restart process" type="button"><RotateCw size={14} /></button><button className="danger" disabled={busy} onClick={() => control('process.kill', row)} title="End task" type="button"><CircleStop size={14} /></button></span></div>)}</div>
     <div className="rmm-tool-footer-status">{state}<span>{visible.length} processes</span></div>
   </div>
 }
@@ -357,6 +365,7 @@ function ServicesTool({ device }) {
   const [search, setSearch] = useState('')
   const [state, setState] = useState(cachedRows ? 'Showing recent service list · refreshing…' : '')
   const [busy, setBusy] = useState('')
+  const [loading, setLoading] = useState(!cachedRows)
 
   function startupValue(row) {
     const raw = String(row.start_mode || 'Manual').toLowerCase()
@@ -367,6 +376,7 @@ function ServicesTool({ device }) {
   }
 
   async function load() {
+    setLoading(true)
     setState(rows.length ? 'Refreshing services…' : 'Loading services…')
     try {
       const job = await runAction(device, 'services.list', {})
@@ -375,7 +385,7 @@ function ServicesTool({ device }) {
       setRows(nextRows)
       rememberToolValue(cacheKey, nextRows)
       setState('Service list refreshed')
-    } catch (error) { setState(error.message) }
+    } catch (error) { setState(error.message) } finally { setLoading(false) }
   }
   useEffect(() => { load() }, [device.agentDeviceId])
 
@@ -391,9 +401,9 @@ function ServicesTool({ device }) {
   const normalized = search.toLowerCase()
   const visible = rows.filter((row) => !normalized || [row.name, row.display_name, row.state, row.start_mode, row.description].join(' ').toLowerCase().includes(normalized))
   return <div className="rmm-live-list-tool">
-    <div className="rmm-tool-commandbar"><ToolSearch value={search} onChange={setSearch} placeholder="Search services…" /><button onClick={load} type="button"><RefreshCw size={14} /> Refresh</button></div>
+    <div className="rmm-tool-commandbar"><ToolSearch value={search} onChange={setSearch} placeholder="Search services…" /><button disabled={loading} onClick={load} type="button"><RefreshCw size={14} /> Refresh</button></div>
     <div className="rmm-tool-table-head services"><span>Service</span><span>Status</span><span>Startup</span><span>Account</span><span /></div>
-    <div className="rmm-tool-table-body">{visible.map((row) => <div className="rmm-tool-table-row services" key={row.name}>
+    <div className="rmm-tool-table-body">{loading && !rows.length ? <ToolLoadingRows columns={5} /> : visible.map((row) => <div className="rmm-tool-table-row services" key={row.name}>
       <span><strong>{row.display_name || row.name}</strong><small>{row.name} · {row.description || row.path_name}</small></span>
       <span>{row.state}</span>
       <span><select value={startupValue(row)} onChange={(event) => control('services.set_start_type', row, { startType: event.target.value })}><option value="Automatic">Automatic</option><option value="AutomaticDelayed">Automatic (Delayed)</option><option value="Manual">Manual</option><option value="Disabled">Disabled</option></select></span>
@@ -462,8 +472,8 @@ function RegistryTool({ device }) {
   return <div className="rmm-registry-tool">
     <div className="rmm-files-toolbar"><button onClick={() => load(parentRegistryPath(path))} type="button"><ArrowLeft size={15} /></button><input value={path} onChange={(event) => setPath(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') load(event.currentTarget.value) }} /><button onClick={() => load(path)} type="button"><RefreshCw size={15} /></button><button onClick={createKey} type="button"><FolderPlus size={15} /> New key</button></div>
     <div className="rmm-registry-layout">
-      <section><header>Subkeys</header>{data.subkeys.map((row) => <div className="rmm-registry-row" key={row.name}><button onClick={() => load(path.replace(/\\+$/, '') + '\\' + row.name)} type="button"><Folder size={14} /><span>{row.name}</span></button><button className="danger" onClick={() => mutation('registry.delete_key', { path: path.replace(/\\+$/, '') + '\\' + row.name }, 'Delete registry key ' + row.name + ' and all of its contents?')} type="button"><Trash2 size={13} /></button></div>)}</section>
-      <section><header>Values</header>{data.values.map((row) => <div className="rmm-registry-value" key={row.name}><button onClick={() => editValue(row)} type="button"><strong>{row.name || '(Default)'}</strong><small>{row.kind || 'String'}</small><span>{row.value}</span></button><button className="danger" onClick={() => mutation('registry.delete_value', { path, name: row.name }, 'Delete registry value ' + row.name + '?')} type="button"><Trash2 size={13} /></button></div>)}</section>
+      <section><header>Subkeys</header>{busy && !data.subkeys.length && !data.values.length ? <ToolLoadingRows columns={2} count={7} /> : data.subkeys.map((row) => <div className="rmm-registry-row" key={row.name}><button onClick={() => load(path.replace(/\\+$/, '') + '\\' + row.name)} type="button"><Folder size={14} /><span>{row.name}</span></button><button className="danger" onClick={() => mutation('registry.delete_key', { path: path.replace(/\\+$/, '') + '\\' + row.name }, 'Delete registry key ' + row.name + ' and all of its contents?')} type="button"><Trash2 size={13} /></button></div>)}</section>
+      <section><header>Values</header>{busy && !data.subkeys.length && !data.values.length ? <ToolLoadingRows columns={3} count={7} /> : data.values.map((row) => <div className="rmm-registry-value" key={row.name}><button onClick={() => editValue(row)} type="button"><strong>{row.name || '(Default)'}</strong><small>{row.kind || 'String'}</small><span>{row.value}</span></button><button className="danger" onClick={() => mutation('registry.delete_value', { path, name: row.name }, 'Delete registry value ' + row.name + '?')} type="button"><Trash2 size={13} /></button></div>)}</section>
     </div>
     <div className="rmm-tool-footer-status">{busy ? 'Working…' : state}<span>{data.subkeys.length} keys · {data.values.length} values</span></div>
   </div>
@@ -527,7 +537,7 @@ function EventsTool({ device }) {
       <button disabled={busy} onClick={() => load()} type="button"><RefreshCw size={14} /> Refresh</button>
     </div>
     <div className="rmm-tool-table-head events"><span>Level</span><span>Date & time</span><span>Source</span><span>Event ID</span><span>Message</span></div>
-    <div className="rmm-tool-table-body">{visible.map((row) => <div className="rmm-tool-table-row events" key={(row.record_id || row.event_id) + ':' + (row.time_created || '')}><span><strong>{row.level || 'Information'}</strong></span><span>{row.time_created ? new Date(row.time_created).toLocaleString() : '—'}</span><span><strong>{row.provider || 'Unknown'}</strong></span><span>{row.event_id ?? '—'}</span><span title={row.message || ''}>{row.message || 'No message text'}</span></div>)}</div>
+    <div className="rmm-tool-table-body">{busy && !events.length ? <ToolLoadingRows columns={5} /> : visible.map((row) => <div className="rmm-tool-table-row events" key={(row.record_id || row.event_id) + ':' + (row.time_created || '')}><span><strong>{row.level || 'Information'}</strong></span><span>{row.time_created ? new Date(row.time_created).toLocaleString() : '—'}</span><span><strong>{row.provider || 'Unknown'}</strong></span><span>{row.event_id ?? '—'}</span><span title={row.message || ''}>{row.message || 'No message text'}</span></div>)}</div>
     {!busy && !visible.length && <Empty>{search ? 'No events match this search.' : 'No events were returned for this log and level.'}</Empty>}
     <div className="rmm-tool-footer-status">{busy ? 'Working…' : state}<span>{visible.length} event{visible.length === 1 ? '' : 's'}</span></div>
   </div>

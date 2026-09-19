@@ -63,6 +63,7 @@ export function ProductionRmmBootstrap() {
   const [theme, setTheme] = useState('light')
   const [devices, setDevices] = useState([])
   const [sites, setSites] = useState([])
+  const [dataLoading, setDataLoading] = useState(false)
   const [passwordStep, setPasswordStep] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
@@ -81,6 +82,7 @@ export function ProductionRmmBootstrap() {
   useEffect(() => {
     if (!session) return undefined
     let active = true
+    setDataLoading(true)
     Promise.all([
       fetch(`${API_BASE}/api/v1/rmm/devices`, { credentials: 'include' }).then(async (response) => ({ response, payload: await response.json().catch(() => ({})) })),
       fetch(`${API_BASE}/api/v1/organisation`, { credentials: 'include' }).then(async (response) => ({ response, payload: await response.json().catch(() => ({})) })),
@@ -92,6 +94,8 @@ export function ProductionRmmBootstrap() {
       if (!active) return
       setDevices([])
       setSites([])
+    }).finally(() => {
+      if (active) setDataLoading(false)
     })
     return () => { active = false }
   }, [session])
@@ -144,6 +148,7 @@ export function ProductionRmmBootstrap() {
     await fetch(`${API_BASE}/api/v1/auth/logout`, { method: 'POST', credentials: 'include' }).catch(() => {})
     setDevices([])
     setSites([])
+    setDataLoading(false)
     setSession(null)
   }
 
@@ -168,10 +173,12 @@ export function ProductionRmmBootstrap() {
   return (
     <RmmPlatformApp
       accent="amber"
+      dataLoading={dataLoading}
       devices={devices}
       sites={sites}
       canRemote={sessionHasPermission(session, 'rmm.devices.remote')}
       canBackstageRemote={sessionHasPermission(session, 'rmm.devices.backstage')}
+      canAudit={sessionHasPermission(session, 'rmm.audit.view') || sessionHasPermission(session, 'audit.view')}
       currentUser={{ role: 'rmm', name: session.user?.name || session.user?.email || 'RMM user', username: session.user?.email || '' }}
       handleLogout={logout}
       onCreateItsmIncident={() => null}

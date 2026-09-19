@@ -5,6 +5,7 @@ import { hasPermission } from './access.js'
 import { deployment, originMatchesTenant, tenantUrls } from './deploymentConfig.js'
 import { pool } from './db.js'
 import { agentSocketForDevice } from './rmmAgent.js'
+import { recordRmmActivity } from './rmmActivity.js'
 import { resolveSession } from './session.js'
 
 const ROOT_DOMAIN = deployment.rootDomain
@@ -197,7 +198,7 @@ export function registerRmmRemoteRoutes(app) {
     if (auth.error) return auth.error
     const sessionId = clean(c.req.param('sessionId'))
     const result = await pool.query(
-      `SELECT id,agent_device_id,mode,status FROM rmm_remote_sessions WHERE id=$1 AND tenant_id=$2 LIMIT 1`,
+      `SELECT id,agent_device_id,inventory_id,mode,status FROM rmm_remote_sessions WHERE id=$1 AND tenant_id=$2 LIMIT 1`,
       [sessionId, auth.session.tenant_id],
     )
     if (!result.rowCount) return c.json({ error: 'Remote session not found.' }, 404)
@@ -223,6 +224,21 @@ export function registerRmmRemoteRoutes(app) {
       try { live.viewerWs.close(4000, 'Session terminated') } catch {}
     }
     activeViewerSessions.delete(sessionId)
+    recordRmmActivity({
+      tenantId: auth.session.tenant_id,
+      agentDeviceId: remote.agent_device_id,
+      inventoryId: remote.inventory_id,
+      actorUserId: auth.session.user_id,
+      actorType: 'technician',
+      actorLabel: clean(auth.session.name || auth.session.email) || 'Technician',
+      eventType: remote.mode === 'backstage' ? 'remote.background_ended' : 'remote.console_ended',
+      category: 'remote',
+      summary: (clean(auth.session.name || auth.session.email) || 'Technician') + ' ended a ' + (remote.mode === 'backstage' ? 'Background' : 'remote') + ' session',
+      detail: 'Session terminated by technician.',
+      outcome: 'success',
+      remoteSessionId: sessionId,
+      metadata: { mode: remote.mode, endReason: 'terminated_by_technician' },
+    }).catch(() => {})
     return c.json({ session: { id: sessionId, status: 'ended', endReason: 'terminated_by_technician' } })
   })
 
@@ -245,7 +261,7 @@ export function registerRmmRemoteRoutes(app) {
 async function authenticateViewer(sessionId, deviceId, token) {
   if (!clean(sessionId) || !clean(deviceId) || !clean(token)) return null
   const result = await pool.query(
-    `SELECT s.id,s.tenant_id,s.agent_device_id,s.inventory_id,s.mode,s.viewer_client,s.status,s.expires_at,
+    `SELECT s.id,s.tenant_id,s.agent_device_id,s.inventory_id,s.created_by_user_id,s.mode,s.viewer_client,s.status,s.expires_at,
             u.name AS technician_name,u.email AS technician_email
        FROM rmm_remote_sessions s
        LEFT JOIN users u ON u.id=s.created_by_user_id
@@ -322,9 +338,38 @@ export function attachRmmViewerWebSocket(server) {
       safeSend(viewerWs, text)
       if (payload?.type === 'webrtc_offer') {
         pool.query(
-          `UPDATE rmm_remote_sessions SET status='active',started_at=COALESCE(started_at,now()),last_activity_at=now(),updated_at=now() WHERE id=$1`,
+          `UPDATE rmm_remote_sessions
+              SET status='active',started_at=now(),last_activity_at=now(),updated_at=now()
+            WHERE id=$1 AND started_at IS NULL
+            RETURNING started_at`,
           [remote.id],
-        ).catch(() => {})
+        ).then(async (started) => {
+          if (!started.rowCount) {
+            await pool.query(
+              `UPDATE rmm_remote_sessions SET status='active',last_activity_at=now(),updated_at=now() WHERE id=$1`,
+              [remote.id],
+            )
+            return
+          }
+          const active = activeViewerSessions.get(sessionId)
+          if (active) active.activityStarted = true
+          const technician = clean(remote.technician_name || remote.technician_email) || 'Technician'
+          return recordRmmActivity({
+            tenantId: remote.tenant_id,
+            agentDeviceId: remote.agent_device_id,
+            inventoryId: remote.inventory_id,
+            actorUserId: remote.created_by_user_id,
+            actorType: 'technician',
+            actorLabel: technician,
+            eventType: remote.mode === 'backstage' ? 'remote.background_started' : 'remote.console_started',
+            category: 'remote',
+            summary: technician + ' started a ' + (remote.mode === 'backstage' ? 'Background' : 'remote') + ' session',
+            detail: 'Remote session connected successfully.',
+            outcome: 'success',
+            remoteSessionId: remote.id,
+            metadata: { mode: remote.mode, viewerClient: remote.viewer_client },
+          })
+        }).catch(() => {})
       } else {
         pool.query(`UPDATE rmm_remote_sessions SET last_activity_at=now(),updated_at=now() WHERE id=$1`, [remote.id]).catch(() => {})
       }
@@ -362,9 +407,32 @@ export function attachRmmViewerWebSocket(server) {
         `UPDATE rmm_remote_sessions
             SET status=CASE WHEN status IN ('ended','expired') THEN status ELSE 'ended' END,
                 ended_at=COALESCE(ended_at,now()),end_reason=COALESCE(end_reason,$2),updated_at=now()
-          WHERE id=$1`,
+          WHERE id=$1 AND ended_at IS NULL
+          RETURNING started_at,ended_at`,
         [remote.id, reason],
-      ).catch(() => {})
+      ).then((updated) => {
+        if (!updated.rowCount) return
+        const technician = clean(remote.technician_name || remote.technician_email) || 'Technician'
+        const startedAt = updated.rows[0]?.started_at ? new Date(updated.rows[0].started_at).getTime() : 0
+        const endedAt = updated.rows[0]?.ended_at ? new Date(updated.rows[0].ended_at).getTime() : Date.now()
+        const durationSeconds = startedAt ? Math.max(0, Math.round((endedAt - startedAt) / 1000)) : null
+        return recordRmmActivity({
+          tenantId: remote.tenant_id,
+          agentDeviceId: remote.agent_device_id,
+          inventoryId: remote.inventory_id,
+          actorUserId: remote.created_by_user_id,
+          actorType: 'technician',
+          actorLabel: technician,
+          eventType: remote.mode === 'backstage' ? 'remote.background_ended' : 'remote.console_ended',
+          category: 'remote',
+          summary: technician + ' ended a ' + (remote.mode === 'backstage' ? 'Background' : 'remote') + ' session',
+          detail: durationSeconds == null ? 'Remote session ended.' : 'Session duration ' + durationSeconds + ' seconds.',
+          outcome: reason === 'viewer_error' ? 'failed' : 'success',
+          severity: reason === 'viewer_error' ? 'warning' : 'info',
+          remoteSessionId: remote.id,
+          metadata: { mode: remote.mode, viewerClient: remote.viewer_client, reason, durationSeconds },
+        })
+      }).catch(() => {})
     }
     viewerWs.once('close', () => cleanup('viewer_disconnected'))
     viewerWs.once('error', () => cleanup('viewer_error'))

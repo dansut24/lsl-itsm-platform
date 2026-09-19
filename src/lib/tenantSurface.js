@@ -261,7 +261,7 @@ export function rmmRouteFromLocation(surface = resolveTenantSurface(), location 
     return { viewId: 'devices', deviceId, path: rmmPath(surface, 'devices', deviceId) }
   }
 
-  const pageMatch = normalized.match(/^\/(dashboard|devices|sites|groups|alerts|remote|patching|software|automation|policies|jobs|reports|settings)$/i)
+  const pageMatch = normalized.match(/^\/(dashboard|devices|sites|groups|alerts|remote|patching|software|automation|policies|reports|activity-audit|agent-deployment|settings)$/i)
   if (pageMatch) {
     const viewId = pageMatch[1].toLowerCase()
     return { viewId, path: rmmPath(surface, viewId) }

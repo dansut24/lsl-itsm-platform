@@ -3,6 +3,7 @@ import { WebSocketServer } from 'ws'
 import { hasPermission } from './access.js'
 import { originMatchesTenant } from './deploymentConfig.js'
 import { pool, withTransaction } from './db.js'
+import { recordJobCompletionActivity, recordRmmActivity } from './rmmActivity.js'
 import { resolveSession } from './session.js'
 
 const AGENT_DOWNLOAD_URL = 'https://downloads.hi5central.com/agent/latest/Hi5CentralAgentSetup.exe'
@@ -61,6 +62,138 @@ function storageTotals(storage) {
   return seen ? { total, free } : { total: null, free: null }
 }
 
+
+function softwareIdentity(app = {}) {
+  return [
+    clean(app.registry_key || app.registryKey),
+    clean(app.scope),
+    clean(app.name).toLowerCase(),
+    clean(app.version).toLowerCase(),
+  ].join('|')
+}
+
+function bitlockerVolumes(payload = {}) {
+  const direct = Array.isArray(payload.security?.bitlocker) ? payload.security.bitlocker : []
+  if (direct.length) return direct
+  return (Array.isArray(payload.storage) ? payload.storage : []).map((drive) => ({
+    drive: drive.drive || drive.mount,
+    ...(drive.bitlocker && typeof drive.bitlocker === 'object' ? drive.bitlocker : {}),
+    encryption_percentage: drive.encryption_percentage ?? drive.bitlocker?.encryption_percentage,
+    protection_status: drive.bitlocker_status || drive.bitlocker?.protection_status,
+  }))
+}
+
+function inventoryDeltaEvents(previous = {}, current = {}) {
+  const events = []
+  if (!previous || !Object.keys(previous).length) return events
+
+  const previousBitlocker = new Map(bitlockerVolumes(previous).map((drive) => [clean(drive.drive || drive.mount_point), drive]))
+  for (const drive of bitlockerVolumes(current)) {
+    const key = clean(drive.drive || drive.mount_point)
+    if (!key) continue
+    const before = previousBitlocker.get(key)
+    if (!before) continue
+
+    const beforePct = Number(before.encryption_percentage)
+    const afterPct = Number(drive.encryption_percentage)
+    const beforeProtection = clean(before.protection_status)
+    const afterProtection = clean(drive.protection_status)
+    const beforeVolume = clean(before.volume_status)
+    const afterVolume = clean(drive.volume_status)
+
+    if (Number.isFinite(beforePct) && Number.isFinite(afterPct) && beforePct <= 0 && afterPct > 0 && afterPct < 100) {
+      events.push({ eventType: 'bitlocker.encrypting', category: 'security', summary: 'SYSTEM: ' + key + ' started encrypting', detail: 'BitLocker encryption progressed from ' + beforePct + '% to ' + afterPct + '%.', outcome: 'info', metadata: { drive: key, before: beforePct, after: afterPct } })
+    } else if (Number.isFinite(beforePct) && Number.isFinite(afterPct) && beforePct < 100 && afterPct >= 100) {
+      events.push({ eventType: 'bitlocker.encrypted', category: 'security', summary: 'SYSTEM: ' + key + ' finished encrypting', detail: 'BitLocker encryption reached 100%.', outcome: 'success', metadata: { drive: key, before: beforePct, after: afterPct } })
+    } else if (Number.isFinite(beforePct) && Number.isFinite(afterPct) && beforePct > 0 && afterPct < beforePct && afterPct < 100) {
+      events.push({ eventType: 'bitlocker.decrypting', category: 'security', summary: 'SYSTEM: ' + key + ' started decrypting', detail: 'BitLocker encryption changed from ' + beforePct + '% to ' + afterPct + '%.', outcome: 'info', severity: 'warning', metadata: { drive: key, before: beforePct, after: afterPct } })
+    }
+
+    if (beforeProtection && afterProtection && beforeProtection !== afterProtection) {
+      if (/on|protected/i.test(beforeProtection) && /off|suspended/i.test(afterProtection)) {
+        events.push({ eventType: 'bitlocker.suspended', category: 'security', summary: 'SYSTEM: BitLocker was suspended on ' + key, detail: beforeProtection + ' → ' + afterProtection, outcome: 'info', severity: 'warning', metadata: { drive: key, before: beforeProtection, after: afterProtection } })
+      } else if (/off|suspended/i.test(beforeProtection) && /on|protected/i.test(afterProtection)) {
+        events.push({ eventType: 'bitlocker.resumed', category: 'security', summary: 'SYSTEM: BitLocker protection resumed on ' + key, detail: beforeProtection + ' → ' + afterProtection, outcome: 'success', metadata: { drive: key, before: beforeProtection, after: afterProtection } })
+      }
+    }
+
+    if (beforeVolume !== afterVolume && /fullyencrypted/i.test(afterVolume) && !(Number.isFinite(afterPct) && afterPct >= 100)) {
+      events.push({ eventType: 'bitlocker.encrypted', category: 'security', summary: 'SYSTEM: ' + key + ' finished encrypting', detail: 'BitLocker reports the volume as fully encrypted.', outcome: 'success', metadata: { drive: key, before: beforeVolume, after: afterVolume } })
+    }
+  }
+
+  const previousSoftware = Array.isArray(previous.software?.items) ? previous.software.items : []
+  const currentSoftware = Array.isArray(current.software?.items) ? current.software.items : []
+  if (previousSoftware.length && currentSoftware.length) {
+    const beforeMap = new Map(previousSoftware.map((app) => [softwareIdentity(app), app]))
+    const afterMap = new Map(currentSoftware.map((app) => [softwareIdentity(app), app]))
+    for (const [key, app] of afterMap) {
+      if (!beforeMap.has(key)) {
+        events.push({ eventType: 'software.detected', category: 'software', summary: 'SYSTEM: detected software installation “' + clean(app.name) + '”', detail: [app.version, app.publisher].filter(Boolean).join(' · '), outcome: 'info', metadata: { software: app } })
+      }
+    }
+    for (const [key, app] of beforeMap) {
+      if (!afterMap.has(key)) {
+        events.push({ eventType: 'software.removed', category: 'software', summary: 'SYSTEM: detected software removal “' + clean(app.name) + '”', detail: [app.version, app.publisher].filter(Boolean).join(' · '), outcome: 'info', metadata: { software: app } })
+      }
+    }
+  }
+
+  const beforeHost = clean(previous.summary?.hostname)
+  const afterHost = clean(current.summary?.hostname)
+  if (beforeHost && afterHost && beforeHost !== afterHost) {
+    events.push({ eventType: 'device.hostname_changed', category: 'inventory', summary: 'SYSTEM: device hostname changed to ' + afterHost, detail: beforeHost + ' → ' + afterHost, outcome: 'info', metadata: { before: beforeHost, after: afterHost } })
+  }
+
+  const beforeOs = clean(previous.summary?.os_version || previous.os?.version)
+  const afterOs = clean(current.summary?.os_version || current.os?.version)
+  const beforeBuild = clean(previous.summary?.os_build || previous.os?.build)
+  const afterBuild = clean(current.summary?.os_build || current.os?.build)
+  if (beforeOs && afterOs && (beforeOs !== afterOs || (beforeBuild && afterBuild && beforeBuild !== afterBuild))) {
+    events.push({ eventType: 'os.updated', category: 'inventory', summary: 'SYSTEM: Windows version changed to ' + afterOs, detail: [beforeOs + (beforeBuild ? ' (' + beforeBuild + ')' : ''), afterOs + (afterBuild ? ' (' + afterBuild + ')' : '')].join(' → '), outcome: 'success', metadata: { beforeVersion: beforeOs, afterVersion: afterOs, beforeBuild, afterBuild } })
+  }
+
+  const beforeMemory = Number(previous.summary?.total_memory_bytes ?? previous.memory?.total_bytes)
+  const afterMemory = Number(current.summary?.total_memory_bytes ?? current.memory?.total_bytes)
+  if (Number.isFinite(beforeMemory) && Number.isFinite(afterMemory) && beforeMemory > 0 && afterMemory > 0 && beforeMemory !== afterMemory) {
+    events.push({ eventType: 'hardware.memory_changed', category: 'inventory', summary: 'SYSTEM: installed memory changed', detail: Math.round(beforeMemory / 1073741824) + ' GB → ' + Math.round(afterMemory / 1073741824) + ' GB', outcome: 'info', metadata: { beforeBytes: beforeMemory, afterBytes: afterMemory } })
+  }
+
+  const beforeUser = clean(previous.summary?.logged_in_user || previous.sessions?.active_console_user || previous.sessions?.current_user)
+  const afterUser = clean(current.summary?.logged_in_user || current.sessions?.active_console_user || current.sessions?.current_user)
+  if (beforeUser && afterUser && beforeUser !== afterUser) {
+    events.push({ eventType: 'session.console_user_changed', category: 'session', summary: 'SYSTEM: active console user changed to ' + afterUser, detail: beforeUser + ' → ' + afterUser, outcome: 'info', metadata: { before: beforeUser, after: afterUser } })
+  }
+
+  const securityFields = [
+    ['firewall_enabled', 'Windows Firewall', 'security.firewall_changed'],
+    ['defender_enabled', 'Microsoft Defender', 'security.defender_changed'],
+    ['defender_realtime_enabled', 'Defender real-time protection', 'security.defender_realtime_changed'],
+    ['secure_boot_enabled', 'Secure Boot', 'security.secure_boot_changed'],
+  ]
+  for (const [field, label, eventType] of securityFields) {
+    const before = previous.security?.[field]
+    const after = current.security?.[field]
+    if (typeof before === 'boolean' && typeof after === 'boolean' && before !== after) {
+      events.push({ eventType, category: 'security', summary: 'SYSTEM: ' + label + ' was ' + (after ? 'enabled' : 'disabled'), detail: String(before) + ' → ' + String(after), outcome: after ? 'success' : 'info', severity: after ? 'info' : 'warning', metadata: { before, after } })
+    }
+  }
+
+  const beforeAdmins = Number(previous.security?.local_admin_count)
+  const afterAdmins = Number(current.security?.local_admin_count)
+  if (Number.isFinite(beforeAdmins) && Number.isFinite(afterAdmins) && beforeAdmins !== afterAdmins) {
+    events.push({ eventType: 'security.local_admins_changed', category: 'security', summary: 'SYSTEM: local administrator membership changed', detail: beforeAdmins + ' → ' + afterAdmins + ' members', outcome: 'info', severity: afterAdmins > beforeAdmins ? 'warning' : 'info', metadata: { before: beforeAdmins, after: afterAdmins } })
+  }
+
+  const beforePending = Number(previous.windows_updates?.pending_count)
+  const afterPending = Number(current.windows_updates?.pending_count)
+  if (Number.isFinite(beforePending) && Number.isFinite(afterPending) && beforePending !== afterPending) {
+    events.push({ eventType: 'windows_updates.pending_changed', category: 'updates', summary: 'SYSTEM: Windows Update pending count changed to ' + afterPending, detail: beforePending + ' → ' + afterPending + ' pending update' + (afterPending === 1 ? '' : 's'), outcome: afterPending < beforePending ? 'success' : 'info', metadata: { before: beforePending, after: afterPending } })
+  }
+
+  return events.slice(0, 50)
+}
+
 async function ingestInventory(agent, payload) {
   const summary = payload?.summary && typeof payload.summary === 'object' ? payload.summary : {}
   const hardware = payload?.hardware && typeof payload.hardware === 'object' ? payload.hardware : {}
@@ -71,6 +204,14 @@ async function ingestInventory(agent, payload) {
   const collectedAt = clean(payload?.collected_at) || new Date().toISOString()
   const hostname = clean(summary.hostname) || agent.name || 'Windows device'
   await withTransaction(async (client) => {
+    const previousResult = await client.query(
+      'SELECT source_payload FROM rmm_device_inventory WHERE id=$1 FOR UPDATE',
+      [agent.inventory_id],
+    )
+    const previousPayload = previousResult.rows[0]?.source_payload && typeof previousResult.rows[0].source_payload === 'object'
+      ? previousResult.rows[0].source_payload
+      : {}
+
     await client.query(
       `UPDATE rmm_device_inventory SET
          name=$2,
@@ -102,6 +243,17 @@ async function ingestInventory(agent, payload) {
        WHERE id=$1`,
       [agent.id, clean(agentInfo.version), collectedAt],
     )
+
+    for (const event of inventoryDeltaEvents(previousPayload, payload)) {
+      await recordRmmActivity({
+        tenantId: agent.tenant_id,
+        agentDeviceId: agent.id,
+        inventoryId: agent.inventory_id,
+        actorType: 'system',
+        actorLabel: 'SYSTEM',
+        ...event,
+      }, client)
+    }
   })
 }
 
@@ -206,6 +358,18 @@ export function registerRmmAgentRoutes(app) {
       return { deviceId, deviceKey, tenantId: pkg.tenant_id, packageId: pkg.id, reference }
     })
     if (enrolled.error) return c.json({ success: false, error: enrolled.error }, enrolled.status)
+    recordRmmActivity({
+      tenantId: enrolled.tenantId,
+      agentDeviceId: enrolled.deviceId,
+      actorType: 'agent',
+      actorLabel: 'SYSTEM',
+      eventType: 'device.enrolled',
+      category: 'device',
+      summary: 'SYSTEM: Hi5Central Agent enrolled ' + hostname,
+      detail: 'Device reference ' + enrolled.reference,
+      outcome: 'success',
+      metadata: { hostname, architecture, agentVersion, reference: enrolled.reference },
+    }).catch(() => {})
     return c.json({
       success: true,
       device_id: enrolled.deviceId,
@@ -268,14 +432,21 @@ export function registerRmmAgentRoutes(app) {
     if (!agent) return c.json({ success: false, error: 'Agent authentication failed.' }, 401)
     const body = await c.req.json().catch(() => ({}))
     const success = Boolean(body.success)
+    const resultPayload = body.result && typeof body.result === 'object' ? body.result : {}
+    const errorMessage = clean(body.error).slice(0, 2000) || null
     const result = await pool.query(
       `UPDATE rmm_agent_jobs
           SET status=$4,result=$5::jsonb,error_message=$6,completed_at=now(),updated_at=now()
         WHERE id=$1 AND agent_device_id=$2 AND tenant_id=$3 AND status IN ('claimed','queued')
-        RETURNING id`,
-      [clean(c.req.param('jobId')), agent.id, agent.tenant_id, success ? 'completed' : 'failed', JSON.stringify(body.result && typeof body.result === 'object' ? body.result : {}), clean(body.error).slice(0, 2000) || null],
+        RETURNING id,tenant_id,agent_device_id,job_type,payload,status,result,error_message,
+                  queued_by_user_id,initiated_by,initiated_by_label,correlation_id,request_metadata,created_at,claimed_at,completed_at`,
+      [clean(c.req.param('jobId')), agent.id, agent.tenant_id, success ? 'completed' : 'failed', JSON.stringify(resultPayload), errorMessage],
     )
     if (!result.rowCount) return c.json({ success: false, error: 'Job not found or already completed.' }, 404)
+    const completedJob = { ...result.rows[0], inventory_id: agent.inventory_id }
+    await recordJobCompletionActivity(completedJob, success, resultPayload, errorMessage).catch((error) => {
+      console.error('RMM activity job logging failed', completedJob.id, error.message)
+    })
     await pool.query(`UPDATE rmm_agent_devices SET last_authenticated_at=now(),updated_at=now() WHERE id=$1`, [agent.id])
     return c.json({ success: true })
   })
@@ -339,6 +510,19 @@ export function attachRmmAgentWebSocket(server) {
       `UPDATE rmm_agent_devices SET websocket_status='Connected',websocket_connected_at=now(),last_authenticated_at=now(),updated_at=now() WHERE id=$1`,
       [agent.id],
     ).catch(() => {})
+    recordRmmActivity({
+      tenantId: agent.tenant_id,
+      agentDeviceId: agent.id,
+      inventoryId: agent.inventory_id,
+      actorType: 'agent',
+      actorLabel: 'SYSTEM',
+      eventType: 'agent.connected',
+      category: 'device',
+      summary: 'SYSTEM: Hi5Central Agent connected',
+      detail: agent.name || agent.reference || '',
+      outcome: 'success',
+      metadata: { reference: agent.reference || '', deviceName: agent.name || '' },
+    }).catch(() => {})
     ws.on('message', (buffer) => {
       const text = Buffer.isBuffer(buffer) ? buffer.toString('utf8') : String(buffer)
       let payload
@@ -368,6 +552,20 @@ export function attachRmmAgentWebSocket(server) {
         `UPDATE rmm_agent_devices SET websocket_status='Disconnected',websocket_disconnected_at=now(),updated_at=now() WHERE id=$1`,
         [agent.id],
       ).catch(() => {})
+      recordRmmActivity({
+        tenantId: agent.tenant_id,
+        agentDeviceId: agent.id,
+        inventoryId: agent.inventory_id,
+        actorType: 'agent',
+        actorLabel: 'SYSTEM',
+        eventType: 'agent.disconnected',
+        category: 'device',
+        summary: 'SYSTEM: Hi5Central Agent disconnected',
+        detail: agent.name || agent.reference || '',
+        outcome: 'info',
+        severity: 'warning',
+        metadata: { reference: agent.reference || '', deviceName: agent.name || '' },
+      }).catch(() => {})
     })
   })
 

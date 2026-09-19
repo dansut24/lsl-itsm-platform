@@ -11,6 +11,7 @@ import { registerLicensingRoutes } from './licensing.js'
 import { registerMicrosoftRoutes, startMicrosoftSyncScheduler } from './microsoftIntegration.js'
 import { attachRmmAgentWebSocket, registerRmmAgentRoutes } from './rmmAgent.js'
 import { registerRmmAutomationRoutes } from './rmmAutomation.js'
+import { registerRmmActivityRoutes } from './rmmActivity.js'
 import { attachRmmDeviceToolWebSocket, registerRmmDeviceToolRoutes } from './rmmDeviceTools.js'
 import { attachRmmViewerWebSocket, registerRmmRemoteRoutes } from './rmmRemote.js'
 import {
@@ -384,6 +385,7 @@ registerSettingsRoutes(app)
 registerMicrosoftRoutes(app)
 registerRmmAgentRoutes(app)
 registerRmmAutomationRoutes(app)
+registerRmmActivityRoutes(app)
 registerRmmDeviceToolRoutes(app)
 registerRmmRemoteRoutes(app)
 

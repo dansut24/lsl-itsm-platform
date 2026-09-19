@@ -108,6 +108,7 @@ const permissionCatalog = [
   ['rmm.software.manage', 'RMM', 'Manage software deployment'],
   ['rmm.scripts.manage', 'RMM', 'Manage scripts and automations'],
   ['rmm.alerts.manage', 'RMM', 'Manage alerts and remediation'],
+  ['rmm.audit.view', 'RMM', 'View tenant-wide RMM activity and audit history'],
   ['audit.view', 'Security', 'View audit and security events'],
   ['billing.view', 'Billing', 'View subscription and billing information'],
   ['tenant.owner.transfer', 'Ownership', 'Transfer tenant ownership'],
