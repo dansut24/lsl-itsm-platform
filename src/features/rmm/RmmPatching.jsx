@@ -252,6 +252,8 @@ export function RmmPatching({ devices = [] }) {
   }, [])
 
   const applications = bundle?.applications || []
+  const catalogueCandidates = bundle?.catalogueCandidates || []
+  const patchObservations = bundle?.patchObservations || []
   const policies = bundle?.policies || []
   const assignments = bundle?.assignments || []
   const overview = bundle?.overview || {}
@@ -259,6 +261,7 @@ export function RmmPatching({ devices = [] }) {
   const mappedApps = applications.filter((item) => item.catalogue)
   const windowsReported = devices.filter((device) => device.pendingPatches != null)
   const windowsPending = windowsReported.reduce((sum, device) => sum + Number(device.pendingPatches || 0), 0)
+  const patchHostReady = (bundle?.devices || []).filter((device) => device.patchCapabilities?.softwareDiscovery).length
 
   async function saveMapping(form) {
     setSaving(true)
@@ -352,7 +355,7 @@ export function RmmPatching({ devices = [] }) {
     </nav>
 
     {tab === 'software' && <section className="rmm-patch-panel">
-      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Software patch catalogue</span><h2>Patchability by application</h2><p>{mappedApps.length} mapped application{mappedApps.length === 1 ? '' : 's'} · {applications.length - mappedApps.length} awaiting mapping.</p></div></div>
+      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Software patch catalogue</span><h2>Patchability by application</h2><p>{mappedApps.length} mapped application{mappedApps.length === 1 ? '' : 's'} · {applications.length - mappedApps.length} awaiting mapping · {catalogueCandidates.length} automatically discovered package{catalogueCandidates.length === 1 ? '' : 's'}.</p></div></div>
       <div className="rmm-patch-table software">
         <div className="head"><span>Application</span><span>Installed</span><span>Target</span><span>Exposure</span><span>Provider</span><span /></div>
         {applications.map((application) => {
@@ -368,7 +371,21 @@ export function RmmPatching({ devices = [] }) {
         })}
       </div>
       {!applications.length && <div className="rmm-empty"><Box size={24} /><strong>{loading ? 'Loading software inventory…' : 'No software inventory'}</strong><span>Patchability appears after an Agent reports installed applications.</span></div>}
-      <div className="rmm-patch-execution-gate"><Clock3 size={17} /><div><strong>Deployment intentionally gated</strong><span>Patch intelligence is live first. Software deployment controls will enable only after the endpoint reports a compatible Hi5CentralPatchHost capability.</span></div></div>
+      {!!catalogueCandidates.length && <div className="rmm-patch-candidate-section">
+        <div><span className="rmm-eyebrow">PatchHost discovery</span><h3>Automatically learned package mappings</h3><p>These package IDs came from WinGet matching on managed endpoints. They are catalogue candidates, not manually entered records.</p></div>
+        <div className="rmm-patch-table candidates">
+          <div className="head"><span>Package</span><span>Provider ID</span><span>Devices</span><span>Updates</span><span>Latest observed</span></div>
+          {catalogueCandidates.map((candidate) => <div className="row" key={candidate.id}>
+            <span><strong>{candidate.display_name || candidate.provider_package_id}</strong><small>{candidate.publisher || 'Publisher pending enrichment'}</small></span>
+            <span><strong>{candidate.provider_package_id}</strong><small>{candidate.provider}</small></span>
+            <span><strong>{candidate.devices_seen}</strong></span>
+            <span><StatusPill tone={candidate.updates_seen > 0 ? 'warning' : 'healthy'}>{candidate.updates_seen}</StatusPill></span>
+            <span><strong>{candidate.latest_observed_version || 'Not reported'}</strong><small>{candidate.state}</small></span>
+          </div>)}
+        </div>
+        <small className="rmm-patch-candidate-footnote">{patchObservations.length} endpoint package observation{patchObservations.length === 1 ? '' : 's'} currently back these candidates.</small>
+      </div>}
+      <div className="rmm-patch-execution-gate"><Clock3 size={17} /><div><strong>Deployment intentionally gated</strong><span>{patchHostReady} endpoint{patchHostReady === 1 ? '' : 's'} currently report PatchHost software-discovery capability. Software deployment controls will enable only when the endpoint reports the later install capability too.</span></div></div>
     </section>}
 
     {tab === 'vulnerabilities' && <section className="rmm-patch-panel">

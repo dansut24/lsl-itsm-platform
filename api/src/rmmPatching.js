@@ -1,6 +1,7 @@
 import { hasPermission } from './access.js'
 import { originMatchesTenant } from './deploymentConfig.js'
-import { pool } from './db.js'
+import { pool, withTransaction } from './db.js'
+import { authenticateAgent } from './rmmAgent.js'
 import { recordRmmActivity } from './rmmActivity.js'
 import { recentVulnerabilities, vulnerabilitySummary } from './rmmVulnerabilityIntel.js'
 import { resolveSession } from './session.js'
@@ -65,6 +66,7 @@ async function patchDeviceRows(tenantId) {
   const result = await pool.query(
     `SELECT i.id AS inventory_id,i.reference,i.name,i.source_payload,
             a.id AS agent_device_id,a.agent_version,a.websocket_status,a.last_telemetry_at,
+            a.patch_capabilities,a.patch_capabilities_at,a.patch_discovery_at,
             p.name AS assigned_person_name,p.email AS assigned_person_email,
             s.external_key AS site_id,s.name AS site_name,
             CASE WHEN a.websocket_status='Connected' AND a.last_telemetry_at>now()-interval '90 seconds'
@@ -92,6 +94,31 @@ async function catalogueRows(tenantId) {
   )
   return result.rows
 }
+async function patchDiscoveryRows(tenantId) {
+  const [observations, candidates] = await Promise.all([
+    pool.query(
+      `SELECT o.inventory_id,o.application_name,o.display_name,o.publisher,o.installed_version,
+              o.provider,o.provider_package_id,o.available_version,o.patch_status,o.source_name,
+              o.discovery_method,o.match_confidence,o.observed_at,
+              i.reference AS device_reference,i.name AS device_name
+         FROM rmm_software_patch_observations o
+         JOIN rmm_device_inventory i ON i.id=o.inventory_id
+        WHERE o.tenant_id=$1
+        ORDER BY o.patch_status='update_available' DESC,lower(o.application_name),lower(i.name)`,
+      [tenantId],
+    ),
+    pool.query(
+      `SELECT id,provider,provider_package_id,display_name,publisher,latest_observed_version,
+              devices_seen,updates_seen,first_seen_at,last_seen_at,state,metadata
+         FROM rmm_patch_catalogue_candidates
+        WHERE tenant_id=$1
+        ORDER BY updates_seen DESC,devices_seen DESC,lower(display_name),lower(provider_package_id)`,
+      [tenantId],
+    ),
+  ])
+  return { observations: observations.rows, candidates: candidates.rows }
+}
+
 async function policyRows(tenantId) {
   const result = await pool.query(
     `SELECT id,name,description,software_enabled,windows_enabled,approval_mode,deployment_delay_days,
@@ -226,12 +253,13 @@ function buildSoftware(devices, catalogue) {
 }
 
 async function patchBundle(tenantId) {
-  const [devices, catalogue, policies, assignments, vulnerabilities] = await Promise.all([
+  const [devices, catalogue, policies, assignments, vulnerabilities, discovery] = await Promise.all([
     patchDeviceRows(tenantId),
     catalogueRows(tenantId),
     policyRows(tenantId),
     assignmentRows(tenantId),
     vulnerabilitySummary(),
+    patchDiscoveryRows(tenantId),
   ])
   const software = buildSoftware(devices, catalogue)
   const updateAvailable = software.deviceSoftware.filter((item) => item.patchStatus === 'update_available').length
@@ -243,8 +271,12 @@ async function patchBundle(tenantId) {
       mappedInstallations: mapped,
       updateAvailable,
       unmappedInstallations: software.deviceSoftware.length - mapped,
+      autoDiscoveredPackages: discovery.candidates.length,
+      autoDiscoveredUpdates: discovery.observations.filter((item) => item.patch_status === 'update_available').length,
     },
     catalogue: catalogue.map(publicCatalogue),
+    catalogueCandidates: discovery.candidates,
+    patchObservations: discovery.observations,
     applications: software.applications,
     deviceSoftware: software.deviceSoftware,
     policies,
@@ -259,9 +291,123 @@ async function patchBundle(tenantId) {
       siteId: device.site_id || '',
       site: device.site_name || '',
       agentVersion: device.agent_version || '',
+      patchCapabilities: object(device.patch_capabilities),
+      patchCapabilitiesAt: device.patch_capabilities_at,
+      patchDiscoveryAt: device.patch_discovery_at,
     })),
   }
 }
+function normalizePatchDiscoveryPackage(value = {}) {
+  const packageId = clean(value.packageId || value.id)
+  if (!packageId || packageId.length > 240) return null
+  const installedVersion = clean(value.installedVersion || value.version).slice(0, 120)
+  const availableVersion = clean(value.availableVersion).slice(0, 120)
+  return {
+    packageId,
+    name: clean(value.name || value.displayName || packageId).slice(0, 320),
+    publisher: clean(value.publisher).slice(0, 240),
+    installedVersion,
+    availableVersion,
+    source: clean(value.source || 'winget').slice(0, 80),
+    scope: clean(value.scope).slice(0, 80),
+    architecture: clean(value.architecture).slice(0, 80),
+  }
+}
+
+async function ingestPatchDiscovery(agent, body = {}) {
+  const packages = array(body.packages)
+    .slice(0, 2500)
+    .map(normalizePatchDiscoveryPackage)
+    .filter(Boolean)
+  const capabilities = object(body.capabilities)
+  const hostVersion = clean(capabilities.patchHostVersion || capabilities.version).slice(0, 80)
+
+  await withTransaction(async (client) => {
+    await client.query(
+      `UPDATE rmm_agent_devices
+          SET patch_capabilities=$2::jsonb,patch_capabilities_at=now(),patch_discovery_at=now(),updated_at=now()
+        WHERE id=$1`,
+      [agent.id, JSON.stringify({ ...capabilities, patchHostVersion: hostVersion })],
+    )
+
+    await client.query(
+      `DELETE FROM rmm_software_patch_observations
+        WHERE tenant_id=$1 AND inventory_id=$2 AND discovery_method='patchhost_winget'`,
+      [agent.tenant_id, agent.inventory_id],
+    )
+
+    for (const item of packages) {
+      const applicationKey = 'winget|' + lower(item.packageId)
+      const catalogue = await client.query(
+        `SELECT id,target_version
+           FROM rmm_software_catalogue
+          WHERE status='active' AND provider='winget' AND lower(provider_package_id)=lower($2)
+            AND (tenant_id=$1 OR tenant_id IS NULL)
+          ORDER BY tenant_id NULLS LAST
+          LIMIT 1`,
+        [agent.tenant_id, item.packageId],
+      )
+      const targetVersion = clean(catalogue.rows[0]?.target_version)
+      const availableVersion = item.availableVersion || targetVersion
+      const comparison = availableVersion ? compareVersions(item.installedVersion, availableVersion) : null
+      const patchStatus = availableVersion && comparison != null
+        ? (comparison < 0 ? 'update_available' : 'current')
+        : 'current'
+
+      await client.query(
+        `INSERT INTO rmm_software_patch_observations
+          (tenant_id,inventory_id,catalogue_id,application_key,application_name,display_name,publisher,
+           installed_version,provider,provider_package_id,available_version,patch_status,evidence,
+           source_name,discovery_method,match_confidence,observed_at,updated_at)
+         VALUES ($1,$2,$3,$4,$5,$5,$6,$7,'winget',$8,$9,$10,$11::jsonb,$12,'patchhost_winget','source',now(),now())
+         ON CONFLICT (tenant_id,inventory_id,application_key) DO UPDATE SET
+           catalogue_id=EXCLUDED.catalogue_id,application_name=EXCLUDED.application_name,display_name=EXCLUDED.display_name,
+           publisher=EXCLUDED.publisher,installed_version=EXCLUDED.installed_version,provider=EXCLUDED.provider,
+           provider_package_id=EXCLUDED.provider_package_id,available_version=EXCLUDED.available_version,
+           patch_status=EXCLUDED.patch_status,evidence=EXCLUDED.evidence,source_name=EXCLUDED.source_name,
+           discovery_method=EXCLUDED.discovery_method,match_confidence=EXCLUDED.match_confidence,
+           observed_at=now(),updated_at=now()`,
+        [
+          agent.tenant_id,
+          agent.inventory_id,
+          catalogue.rows[0]?.id || null,
+          applicationKey,
+          item.name,
+          item.publisher,
+          item.installedVersion,
+          item.packageId,
+          availableVersion,
+          patchStatus,
+          JSON.stringify({ scope: item.scope, architecture: item.architecture, patchHostVersion: hostVersion }),
+          item.source,
+        ],
+      )
+    }
+
+    await client.query(
+      `INSERT INTO rmm_patch_catalogue_candidates
+        (tenant_id,provider,provider_package_id,display_name,publisher,latest_observed_version,devices_seen,updates_seen,last_seen_at,metadata)
+       SELECT tenant_id,'winget',provider_package_id,
+              max(NULLIF(display_name,'')),max(NULLIF(publisher,'')),
+              COALESCE(max(NULLIF(available_version,'')),max(NULLIF(installed_version,'')),''),
+              count(DISTINCT inventory_id)::int,
+              count(*) FILTER (WHERE patch_status='update_available')::int,
+              now(),jsonb_build_object('discovery','patchhost_winget')
+         FROM rmm_software_patch_observations
+        WHERE tenant_id=$1 AND provider='winget' AND provider_package_id<>''
+        GROUP BY tenant_id,provider_package_id
+       ON CONFLICT (tenant_id,provider,provider_package_id) DO UPDATE SET
+         display_name=EXCLUDED.display_name,publisher=EXCLUDED.publisher,
+         latest_observed_version=EXCLUDED.latest_observed_version,devices_seen=EXCLUDED.devices_seen,
+         updates_seen=EXCLUDED.updates_seen,last_seen_at=now(),
+         metadata=rmm_patch_catalogue_candidates.metadata || EXCLUDED.metadata`,
+      [agent.tenant_id],
+    )
+  })
+
+  return { packages: packages.length, patchHostVersion: hostVersion }
+}
+
 function validProvider(value) {
   return ['winget', 'managed', 'vendor'].includes(value) ? value : 'winget'
 }
@@ -279,6 +425,27 @@ function priorityForScope(scopeType) {
 }
 
 export function registerRmmPatchingRoutes(app) {
+  app.post('/api/v1/agent/devices/patch-discovery', async (c) => {
+    const agent = await authenticateAgent(c.req.header('x-hi5-device-id'), c.req.header('x-hi5-agent-secret'))
+    if (!agent) return c.json({ success: false, error: 'Agent authentication failed.' }, 401)
+    const body = await c.req.json().catch(() => ({}))
+    const result = await ingestPatchDiscovery(agent, body)
+    await recordRmmActivity({
+      tenantId: agent.tenant_id,
+      agentDeviceId: agent.id,
+      inventoryId: agent.inventory_id,
+      actorType: 'agent',
+      actorLabel: 'SYSTEM',
+      eventType: 'patch.discovery',
+      category: 'patching',
+      summary: 'SYSTEM: PatchHost refreshed software patch discovery',
+      detail: result.packages + ' WinGet package mappings reported',
+      outcome: 'success',
+      metadata: result,
+    }).catch(() => null)
+    return c.json({ success: true, ...result })
+  })
+
   app.get('/api/v1/rmm/patching', async (c) => {
     const auth = await requirePatchAccess(c)
     if (auth.error) return auth.error

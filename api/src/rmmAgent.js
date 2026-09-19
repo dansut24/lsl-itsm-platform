@@ -34,7 +34,7 @@ async function requireRmmManager(c) {
   return { session }
 }
 
-async function authenticateAgent(deviceId, deviceSecret) {
+export async function authenticateAgent(deviceId, deviceSecret) {
   const id = clean(deviceId)
   const rawSecret = clean(deviceSecret)
   if (!id || !rawSecret) return null
