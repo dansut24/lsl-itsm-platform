@@ -254,6 +254,8 @@ export function RmmPatching({ devices = [] }) {
   const applications = bundle?.applications || []
   const catalogueCandidates = bundle?.catalogueCandidates || []
   const patchObservations = bundle?.patchObservations || []
+  const vendorSources = bundle?.vendorIntel?.sources || []
+  const vendorLatest = bundle?.vendorIntel?.latest || []
   const policies = bundle?.policies || []
   const assignments = bundle?.assignments || []
   const overview = bundle?.overview || {}
@@ -356,6 +358,19 @@ export function RmmPatching({ devices = [] }) {
 
     {tab === 'software' && <section className="rmm-patch-panel">
       <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Software patch catalogue</span><h2>Patchability by application</h2><p>{mappedApps.length} mapped application{mappedApps.length === 1 ? '' : 's'} · {applications.length - mappedApps.length} awaiting mapping · {catalogueCandidates.length} automatically discovered package{catalogueCandidates.length === 1 ? '' : 's'}.</p></div></div>
+      {!!vendorSources.length && <div className="rmm-patch-vendor-section">
+        <div><span className="rmm-eyebrow">Vendor-first freshness</span><h3>Authoritative software sources</h3><p>Vendor releases establish the newest known version. WinGet remains the preferred execution metadata where its manifest is current.</p></div>
+        <div className="rmm-patch-vendor-grid">
+          {vendorSources.map((source) => {
+            const latest = vendorLatest.find((item) => item.source_key === source.source_key)
+            return <article key={source.source_key}>
+              <div><strong>{source.display_name}</strong><small>{source.source_type.replaceAll('_', ' ')} · every {source.poll_minutes} min</small></div>
+              <span><strong>{latest?.version || source.cursor_value || 'Pending first sync'}</strong><small>{latest?.channel || ''}{latest?.release_date ? ' · ' + new Date(latest.release_date).toLocaleDateString() : ''}</small></span>
+              <StatusPill tone={source.last_error ? 'warning' : source.last_success_at ? 'healthy' : 'neutral'}>{source.last_error ? 'Attention' : source.last_success_at ? 'Live' : 'Pending'}</StatusPill>
+            </article>
+          })}
+        </div>
+      </div>}
       <div className="rmm-patch-table software">
         <div className="head"><span>Application</span><span>Installed</span><span>Target</span><span>Exposure</span><span>Provider</span><span /></div>
         {applications.map((application) => {

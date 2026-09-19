@@ -4,6 +4,7 @@ import { pool, withTransaction } from './db.js'
 import { authenticateAgent } from './rmmAgent.js'
 import { recordRmmActivity } from './rmmActivity.js'
 import { recentVulnerabilities, vulnerabilitySummary } from './rmmVulnerabilityIntel.js'
+import { softwareVendorSummary } from './rmmSoftwareVendorIntel.js'
 import { resolveSession } from './session.js'
 
 function clean(value = '') { return String(value ?? '').trim() }
@@ -253,13 +254,14 @@ function buildSoftware(devices, catalogue) {
 }
 
 async function patchBundle(tenantId) {
-  const [devices, catalogue, policies, assignments, vulnerabilities, discovery] = await Promise.all([
+  const [devices, catalogue, policies, assignments, vulnerabilities, discovery, vendorIntel] = await Promise.all([
     patchDeviceRows(tenantId),
     catalogueRows(tenantId),
     policyRows(tenantId),
     assignmentRows(tenantId),
     vulnerabilitySummary(),
     patchDiscoveryRows(tenantId),
+    softwareVendorSummary(),
   ])
   const software = buildSoftware(devices, catalogue)
   const updateAvailable = software.deviceSoftware.filter((item) => item.patchStatus === 'update_available').length
@@ -282,6 +284,7 @@ async function patchBundle(tenantId) {
     policies,
     assignments,
     vulnerabilities,
+    vendorIntel,
     devices: devices.map((device) => ({
       id: device.reference,
       inventoryId: device.inventory_id,
@@ -349,7 +352,7 @@ async function ingestPatchDiscovery(agent, body = {}) {
       )
 
       if (!catalogue.rowCount) {
-        const automaticTarget = item.availableVersion || item.installedVersion
+        const automaticTarget = item.availableVersion
         catalogue = await client.query(
           `INSERT INTO rmm_software_catalogue
             (tenant_id,canonical_name,publisher,name_pattern,publisher_pattern,provider,provider_package_id,
