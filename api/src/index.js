@@ -15,6 +15,8 @@ import { registerRmmActivityRoutes } from './rmmActivity.js'
 import { attachRmmDeviceToolWebSocket, registerRmmDeviceToolRoutes } from './rmmDeviceTools.js'
 import { attachRmmViewerWebSocket, registerRmmRemoteRoutes } from './rmmRemote.js'
 import { registerRmmScopeRoutes } from './rmmScope.js'
+import { registerRmmPatchingRoutes } from './rmmPatching.js'
+import { startRmmVulnerabilitySyncScheduler } from './rmmVulnerabilityIntel.js'
 import {
   allowedRequestOrigin,
   deployment,
@@ -102,7 +104,7 @@ async function deliverVerification({ token, email, name, companyName, tenantUrl 
 app.use('*', secureHeaders())
 app.use('/api/*', cors({
   origin: allowedOrigin,
-  allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'OPTIONS'],
+  allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
   maxAge: 600,
@@ -390,6 +392,7 @@ registerRmmActivityRoutes(app)
 registerRmmDeviceToolRoutes(app)
 registerRmmRemoteRoutes(app)
 registerRmmScopeRoutes(app)
+registerRmmPatchingRoutes(app)
 
 app.notFound((c) => c.json({ error: 'Not found' }, 404))
 app.onError((error, c) => {
@@ -401,6 +404,7 @@ app.onError((error, c) => {
 await pool.query('SELECT 1')
 await ensureRedisConnected()
 startMicrosoftSyncScheduler()
+startRmmVulnerabilitySyncScheduler()
 const server = serve({ fetch: app.fetch, hostname: '0.0.0.0', port })
 attachRmmAgentWebSocket(server)
 attachRmmViewerWebSocket(server)

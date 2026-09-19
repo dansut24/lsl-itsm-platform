@@ -58,6 +58,7 @@ import {
   RmmSitesManagement,
 } from './RmmEstateManagement.jsx'
 import { RmmMonitoringPolicies } from './RmmMonitoringPolicies.jsx'
+import { RmmPatching as RmmPatchingWorkspace } from './RmmPatching.jsx'
 import { RmmAgentDeployment } from './RmmAgentDeployment.jsx'
 import { RmmAutomation } from './RmmAutomationWorkspace.jsx'
 import { DeviceActivityTimeline, DeviceJobsPanel, RmmAuditActivity, prefetchDeviceHistory } from './RmmActivityViews.jsx'
@@ -669,14 +670,6 @@ function RmmAlerts({ onCreateIncident, openDevice, query }) {
   return <><PageHeading activeView="alerts" action={<button className="rmm-primary compact" type="button"><CheckCircle2 size={16} /> Acknowledge selected</button>} /><div className="rmm-list-toolbar"><div className="rmm-filter-pills">{['All', 'Critical', 'High', 'Medium'].map((value) => <button className={severity === value ? 'active' : ''} key={value} onClick={() => setSeverity(value)} type="button">{value}</button>)}</div><span>{visible.filter((alert) => alert.status === 'Open').length} open</span></div><div className="rmm-alert-list">{visible.map((alert) => <article className="rmm-card" key={alert.id}><div className={`rmm-alert-severity ${healthClass(alert.severity)}`}><AlertTriangle size={19} /></div><div className="rmm-alert-copy"><div><span className="rmm-eyebrow">{alert.id} · {alert.policy}</span><h2>{alert.title}</h2><p>{alert.detail}</p></div><button onClick={() => openDevice(rmmDevices.find((device) => device.id === alert.deviceId))} type="button"><Monitor size={14} /> {alert.device}</button></div><div className="rmm-alert-meta"><StatusPill tone={healthClass(alert.severity)}>{alert.severity}</StatusPill><span>{alert.raised}</span><button onClick={() => onCreateIncident?.({ alert, device: rmmDevices.find((device) => device.id === alert.deviceId) })} type="button">Create incident</button><button type="button">Acknowledge</button><button type="button"><MoreHorizontal size={16} /></button></div></article>)}</div></>
 }
 
-function RmmPatching({ devices = [] }) {
-  const reported = devices.filter((device) => device.pendingPatches != null)
-  const pending = reported.reduce((sum, device) => sum + Number(device.pendingPatches || 0), 0)
-  const current = reported.filter((device) => Number(device.pendingPatches || 0) === 0).length
-  const atRisk = reported.filter((device) => Number(device.pendingPatches || 0) > 0)
-  return <><PageHeading activeView="patching" /><div className="rmm-request-stats"><div><strong>{reported.length}</strong><span>Devices reporting updates</span></div><div><strong>{pending}</strong><span>Pending updates</span></div><div><strong>{current}</strong><span>No pending updates</span></div><div><strong>{devices.length - reported.length}</strong><span>Not yet reported</span></div></div><section className="rmm-table-card"><div className="rmm-table rmm-software-table"><div className="rmm-table-head"><span>Device</span><span>Pending</span><span>Last seen</span><span>Source</span><span>Status</span><span /></div>{reported.map((device) => <div className="rmm-table-row" key={device.id}><span className="rmm-device-cell"><span className="rmm-device-icon neutral"><Monitor size={16} /></span><span><strong>{device.name}</strong><small>{device.user} · {device.site || 'No site'}</small></span></span><span><strong>{device.pendingPatches}</strong></span><span><strong>{device.lastSeen}</strong></span><span><strong>{device.agent}</strong></span><span><StatusPill tone={device.pendingPatches > 0 ? 'warning' : 'healthy'}>{device.pendingPatches > 0 ? 'Updates pending' : 'Current'}</StatusPill></span><span /></div>)}</div>{!reported.length && <div className="rmm-empty"><ShieldCheck size={24} /><strong>No Windows Update inventory yet</strong><span>Pending update counts will appear after the Hi5Central Agent completes an inventory scan.</span></div>}</section>{atRisk.length > 0 && <div className="rmm-scope-explainer"><AlertTriangle size={18} /><div><strong>{atRisk.length} device{atRisk.length === 1 ? '' : 's'} require patch attention</strong><span>This view is using the live Windows Update inventory reported by each device; no placeholder compliance figures are inserted.</span></div></div>}</>
-}
-
 function RmmSoftware({ devices = [] }) {
   const applications = useMemo(() => {
     const map = new Map()
@@ -853,7 +846,7 @@ export function RmmPlatformApp({ accent, canAudit = false, canBackstageRemote = 
     if (activeView === 'groups') return <RmmDeviceGroupsManagement devices={devices} query={query} sites={sites} onViewDevices={openScopedInventory} />
     if (activeView === 'alerts') return <RmmAlerts onCreateIncident={createItsmIncident} openDevice={openDevice} query={query} />
     if (activeView === 'remote') return <RmmDeviceInventory devices={devices} sites={sites} openDevice={openDevice} query={query} preset={inventoryPreset} onPresetApplied={() => setInventoryPreset(null)} />
-    if (activeView === 'patching') return <RmmPatching devices={devices} />
+    if (activeView === 'patching') return <RmmPatchingWorkspace devices={devices} />
     if (activeView === 'software') return <RmmSoftware devices={devices} />
     if (activeView === 'automation') return <RmmAutomation />
     if (activeView === 'policies') return <RmmMonitoringPolicies devices={devices} openDevice={openDevice} sites={sites} />
