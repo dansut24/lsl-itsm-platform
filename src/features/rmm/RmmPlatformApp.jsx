@@ -697,7 +697,8 @@ export function RmmPlatformApp({ accent, currentUser, devices = rmmDevices, site
   }, [toast])
 
   function createItsmIncident(context) {
-    const created = onCreateItsmIncident?.(context)    if (created?.id) setToast(`${created.id} created in Hi5Central ITSM`)
+    const created = onCreateItsmIncident?.(context)
+    if (created?.id) setToast(`${created.id} created in Hi5Central ITSM`)
     return created
   }
 

@@ -565,3 +565,4 @@ export function RmmDeviceToolWorkspace({ device, initialTool = 'powershell', onC
     </section>
   </div>
 }
+

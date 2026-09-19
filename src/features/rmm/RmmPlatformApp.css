@@ -697,7 +697,8 @@ button.rmm-table-row { width: 100%; border: 0; text-align: left; cursor: pointer
 }
 
 /* Desktop RMM scale: 100% browser zoom is the design baseline. Mobile keeps its existing density. */
-@media (min-width: 901px) {  .rmm-app { grid-template-columns: 264px minmax(0, 1fr); font-size: 14px; }
+@media (min-width: 901px) {
+  .rmm-app { grid-template-columns: 264px minmax(0, 1fr); font-size: 14px; }
   .rmm-shell-main { grid-template-rows: 68px minmax(0, 1fr); }
   .rmm-sidebar { padding: 17px 14px 14px; }
   .rmm-nav-section > span { font-size: 10px; }
