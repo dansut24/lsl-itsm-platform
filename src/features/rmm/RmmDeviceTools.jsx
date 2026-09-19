@@ -35,7 +35,7 @@ async function waitForJob(jobId, timeoutMs = 150000) {
     const payload = await response.json().catch(() => ({}))
     if (!response.ok) throw new Error(payload.error || 'Unable to read device action status.')
     if (['completed', 'failed', 'cancelled'].includes(payload.job?.status)) return payload.job
-    await new Promise((resolve) => window.setTimeout(resolve, 1000))
+    await new Promise((resolve) => window.setTimeout(resolve, 400))
   }
   throw new Error('The device action is still running. Check Jobs for its final result.')
 }
@@ -50,6 +50,7 @@ async function runAction(device, type, payload = {}, timeoutMs) {
   })
   const result = await response.json().catch(() => ({}))
   if (!response.ok) throw new Error(result.error || 'Unable to queue the device action.')
+  if (result.job && ['completed', 'failed', 'cancelled'].includes(result.job.status)) return result.job
   return waitForJob(result.job?.id, timeoutMs)
 }
 
@@ -71,6 +72,15 @@ function Empty({ children }) {
 
 function ToolSearch({ value, onChange, placeholder }) {
   return <label className="rmm-tool-search"><Search size={15} /><input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /></label>
+}
+
+const liveToolCache = new Map()
+function cachedToolValue(key, maxAgeMs = 60000) {
+  const item = liveToolCache.get(key)
+  return item && Date.now() - item.savedAt <= maxAgeMs ? item.value : null
+}
+function rememberToolValue(key, value) {
+  liveToolCache.set(key, { value, savedAt: Date.now() })
 }
 
 function TerminalTool({ device, shell }) {
@@ -299,17 +309,21 @@ function FilesTool({ device }) {
 }
 
 function ProcessesTool({ device }) {
-  const [rows, setRows] = useState([])
+  const cacheKey = `processes:${device.agentDeviceId}`
+  const cachedRows = cachedToolValue(cacheKey, 30000)
+  const [rows, setRows] = useState(() => cachedRows || [])
   const [search, setSearch] = useState('')
-  const [state, setState] = useState('')
+  const [state, setState] = useState(cachedRows ? 'Showing recent process list · refreshing…' : '')
   const [busy, setBusy] = useState(false)
 
   async function load() {
-    setBusy(true); setState('Loading processes…')
+    setBusy(true); setState(rows.length ? 'Refreshing processes…' : 'Loading processes…')
     try {
       const job = await runAction(device, 'processes.list', {})
       if (job.status !== 'completed') throw new Error(job.error_message || 'Process inventory failed.')
-      setRows(job.result?.processes || [])
+      const nextRows = job.result?.processes || []
+      setRows(nextRows)
+      rememberToolValue(cacheKey, nextRows)
       setState('Live process list refreshed')
     } catch (error) { setState(error.message) } finally { setBusy(false) }
   }
@@ -337,17 +351,29 @@ function ProcessesTool({ device }) {
 }
 
 function ServicesTool({ device }) {
-  const [rows, setRows] = useState([])
+  const cacheKey = `services:${device.agentDeviceId}`
+  const cachedRows = cachedToolValue(cacheKey, 60000)
+  const [rows, setRows] = useState(() => cachedRows || [])
   const [search, setSearch] = useState('')
-  const [state, setState] = useState('')
+  const [state, setState] = useState(cachedRows ? 'Showing recent service list · refreshing…' : '')
   const [busy, setBusy] = useState('')
 
+  function startupValue(row) {
+    const raw = String(row.start_mode || 'Manual').toLowerCase()
+    if (raw.includes('delay')) return 'AutomaticDelayed'
+    if (raw === 'auto' || raw === 'automatic') return 'Automatic'
+    if (raw === 'disabled') return 'Disabled'
+    return 'Manual'
+  }
+
   async function load() {
-    setState('Loading services…')
+    setState(rows.length ? 'Refreshing services…' : 'Loading services…')
     try {
       const job = await runAction(device, 'services.list', {})
       if (job.status !== 'completed') throw new Error(job.error_message || 'Service inventory failed.')
-      setRows(job.result?.services || [])
+      const nextRows = job.result?.services || []
+      setRows(nextRows)
+      rememberToolValue(cacheKey, nextRows)
       setState('Service list refreshed')
     } catch (error) { setState(error.message) }
   }
@@ -370,7 +396,7 @@ function ServicesTool({ device }) {
     <div className="rmm-tool-table-body">{visible.map((row) => <div className="rmm-tool-table-row services" key={row.name}>
       <span><strong>{row.display_name || row.name}</strong><small>{row.name} · {row.description || row.path_name}</small></span>
       <span>{row.state}</span>
-      <span><select value={String(row.start_mode || 'Manual').replace('Auto', 'Automatic')} onChange={(event) => control('services.set_start_type', row, { startType: event.target.value })}><option value="Automatic">Automatic</option><option value="AutomaticDelayed">Automatic (Delayed)</option><option value="Manual">Manual</option><option value="Disabled">Disabled</option></select></span>
+      <span><select value={startupValue(row)} onChange={(event) => control('services.set_start_type', row, { startType: event.target.value })}><option value="Automatic">Automatic</option><option value="AutomaticDelayed">Automatic (Delayed)</option><option value="Manual">Manual</option><option value="Disabled">Disabled</option></select></span>
       <span>{row.start_name || '—'}</span>
       <span className="rmm-row-actions"><button disabled={busy || row.state === 'Running'} onClick={() => control('services.start', row)} title="Start" type="button"><Play size={14} /></button><button disabled={busy || row.state !== 'Running'} onClick={() => control('services.stop', row)} title="Stop" type="button"><Power size={14} /></button><button disabled={busy} onClick={() => control('services.restart', row)} title="Restart" type="button"><RotateCw size={14} /></button></span>
     </div>)}</div>
@@ -386,17 +412,28 @@ function parentRegistryPath(path) {
 }
 
 function RegistryTool({ device }) {
-  const [path, setPath] = useState('HKLM:\\')
-  const [data, setData] = useState({ subkeys: [], values: [] })
-  const [state, setState] = useState('')
+  const initialPath = 'HKLM:\\'
+  const initialCacheKey = `registry:${device.agentDeviceId}:${initialPath}`
+  const cachedInitial = cachedToolValue(initialCacheKey, 30000)
+  const [path, setPath] = useState(initialPath)
+  const [data, setData] = useState(() => cachedInitial || { subkeys: [], values: [] })
+  const [state, setState] = useState(cachedInitial ? 'Showing recent registry data · refreshing…' : '')
   const [busy, setBusy] = useState(false)
 
   async function load(nextPath = path) {
-    setBusy(true); setState('Reading registry…')
+    const cacheKey = `registry:${device.agentDeviceId}:${nextPath}`
+    const cached = cachedToolValue(cacheKey, 30000)
+    if (cached) {
+      setData(cached)
+      setPath(nextPath)
+    }
+    setBusy(true); setState(cached ? 'Refreshing registry…' : 'Reading registry…')
     try {
       const job = await runAction(device, 'registry.list', { path: nextPath })
       if (job.status !== 'completed') throw new Error(job.error_message || job.result?.error || 'Registry read failed.')
-      setData({ subkeys: job.result?.subkeys || [], values: job.result?.values || [] })
+      const nextData = { subkeys: job.result?.subkeys || [], values: job.result?.values || [] }
+      setData(nextData)
+      rememberToolValue(cacheKey, nextData)
       setPath(nextPath)
       setState('Registry loaded')
     } catch (error) { setState(error.message) } finally { setBusy(false) }
@@ -447,23 +484,30 @@ function SessionsTool({ device }) {
 }
 
 function EventsTool({ device }) {
+  const initialCacheKey = `events:${device.agentDeviceId}:System:All`
+  const cachedInitial = cachedToolValue(initialCacheKey, 30000)
   const [logName, setLogName] = useState('System')
   const [level, setLevel] = useState('All')
-  const [events, setEvents] = useState([])
+  const [events, setEvents] = useState(() => cachedInitial || [])
   const [search, setSearch] = useState('')
-  const [state, setState] = useState('')
+  const [state, setState] = useState(cachedInitial ? 'Showing recent events · refreshing…' : '')
   const [busy, setBusy] = useState(false)
 
   async function load(nextLog = logName, nextLevel = level) {
+    const cacheKey = `events:${device.agentDeviceId}:${nextLog}:${nextLevel}`
+    const cached = cachedToolValue(cacheKey, 30000)
+    if (cached) setEvents(cached)
     setBusy(true)
-    setState('Reading ' + nextLog + ' events…')
+    setState(cached ? 'Refreshing ' + nextLog + ' events…' : 'Reading ' + nextLog + ' events…')
     try {
-      const job = await runAction(device, 'events.list', { logName: nextLog, level: nextLevel, maxEvents: 250 }, 210000)
+      const job = await runAction(device, 'events.list', { logName: nextLog, level: nextLevel, maxEvents: 100 }, 210000)
       if (job.status !== 'completed') throw new Error(job.error_message || job.result?.error || 'Event log read failed.')
-      setEvents(job.result?.events || [])
-      setState((job.result?.events || []).length + ' events loaded')
+      const nextEvents = job.result?.events || []
+      setEvents(nextEvents)
+      rememberToolValue(cacheKey, nextEvents)
+      setState(nextEvents.length + ' events loaded')
     } catch (error) {
-      setEvents([])
+      if (!cached) setEvents([])
       setState(error.message)
     } finally {
       setBusy(false)
@@ -521,4 +565,3 @@ export function RmmDeviceToolWorkspace({ device, initialTool = 'powershell', onC
     </section>
   </div>
 }
-

@@ -697,8 +697,7 @@ button.rmm-table-row { width: 100%; border: 0; text-align: left; cursor: pointer
 }
 
 /* Desktop RMM scale: 100% browser zoom is the design baseline. Mobile keeps its existing density. */
-@media (min-width: 901px) {
-  .rmm-app { grid-template-columns: 264px minmax(0, 1fr); font-size: 14px; }
+@media (min-width: 901px) {  .rmm-app { grid-template-columns: 264px minmax(0, 1fr); font-size: 14px; }
   .rmm-shell-main { grid-template-rows: 68px minmax(0, 1fr); }
   .rmm-sidebar { padding: 17px 14px 14px; }
   .rmm-nav-section > span { font-size: 10px; }
@@ -843,4 +842,31 @@ button.rmm-table-row { width: 100%; border: 0; text-align: left; cursor: pointer
   .rmm-device-tools-menu { width: 100%; }
   .rmm-device-tools-menu > button { width: 100%; justify-content: center; }
   .rmm-device-tools-popover { position: fixed; top: auto; right: 12px; bottom: 12px; left: 12px; width: auto; max-height: 72dvh; }
+}
+
+.rmm-software-load-more {
+  display: flex;
+  justify-content: center;
+  border-top: 1px solid var(--rmm-border);
+  padding: 12px;
+}
+.rmm-software-load-more button {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--rmm-border);
+  border-radius: 8px;
+  padding: 0 14px;
+  background: var(--rmm-surface);
+  color: var(--rmm-text);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.rmm-software-load-more button span {
+  color: var(--rmm-muted);
+  font-size: 9px;
+  font-weight: 650;
 }

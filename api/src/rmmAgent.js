@@ -235,6 +235,13 @@ export function registerRmmAgentRoutes(app) {
     const agent = await authenticateAgent(c.req.header('x-hi5-device-id'), c.req.header('x-hi5-agent-secret'))
     if (!agent) return c.json({ success: false, error: 'Agent authentication failed.' }, 401)
     const jobs = await withTransaction(async (client) => {
+      await client.query(
+        `UPDATE rmm_agent_jobs
+            SET status='queued',claimed_at=NULL,updated_at=now()
+          WHERE agent_device_id=$1 AND status='claimed'
+            AND claimed_at < now()-interval '2 minutes'`,
+        [agent.id],
+      )
       const result = await client.query(
         `WITH picked AS (
            SELECT id FROM rmm_agent_jobs

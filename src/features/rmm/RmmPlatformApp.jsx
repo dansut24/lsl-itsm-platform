@@ -329,6 +329,7 @@ function DeviceSoftware({ device }) {
   const [busyKey, setBusyKey] = useState('')
   const [removedKeys, setRemovedKeys] = useState([])
   const [resultByKey, setResultByKey] = useState({})
+  const [visibleLimit, setVisibleLimit] = useState(120)
   const apiBase = window.__HI5_API_BASE__ || deploymentConfig().apiUrl
 
   function softwareKey(app) {
@@ -363,7 +364,7 @@ function DeviceSoftware({ device }) {
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(payload.error || 'Unable to read uninstall status.')
       if (['completed', 'failed', 'cancelled'].includes(payload.job?.status)) return payload.job
-      await new Promise((resolve) => window.setTimeout(resolve, 2000))
+      await new Promise((resolve) => window.setTimeout(resolve, 500))
     }
     throw new Error('The uninstall is still running. Check Jobs for its final result.')
   }
@@ -405,16 +406,17 @@ function DeviceSoftware({ device }) {
     if (removedKeys.includes(key)) return false
     return !normalized || [app.name, app.version, app.publisher, app.installLocation].join(' ').toLowerCase().includes(normalized)
   })
+  const renderedSoftware = visibleSoftware.slice(0, visibleLimit)
 
   return (
     <section className="rmm-table-card">
       <div className="rmm-device-section-heading">
         <div><span className="rmm-eyebrow">Inventory</span><h2>Installed software</h2><p>{visibleSoftware.length} applications are reported by the latest real device inventory.</p></div>
-        <label className="rmm-device-inline-search"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search installed software…" /></label>
+        <label className="rmm-device-inline-search"><Search size={15} /><input value={search} onChange={(event) => { setSearch(event.target.value); setVisibleLimit(120) }} placeholder="Search installed software…" /></label>
       </div>
       <div className="rmm-table rmm-device-software-table">
         <div className="rmm-table-head"><span>Application</span><span>Version</span><span>Publisher</span><span>Installed</span><span>Removal</span></div>
-        {visibleSoftware.map((app) => {
+        {renderedSoftware.map((app) => {
           const key = softwareKey(app)
           const protectedApp = protectedSoftware(app)
           const status = resultByKey[key]
@@ -427,6 +429,7 @@ function DeviceSoftware({ device }) {
           </div>
         })}
       </div>
+      {visibleSoftware.length > renderedSoftware.length && <div className="rmm-software-load-more"><button type="button" onClick={() => setVisibleLimit((current) => current + 120)}>Show 120 more <span>{renderedSoftware.length} of {visibleSoftware.length}</span></button></div>}
       {!visibleSoftware.length && <div className="rmm-empty"><Package size={24} /><strong>{search ? 'No software matches this search' : 'No software inventory'}</strong><span>{search ? 'Try another application, version or publisher.' : 'This device does not report installed application inventory.'}</span></div>}
     </section>
   )
@@ -694,8 +697,7 @@ export function RmmPlatformApp({ accent, currentUser, devices = rmmDevices, site
   }, [toast])
 
   function createItsmIncident(context) {
-    const created = onCreateItsmIncident?.(context)
-    if (created?.id) setToast(`${created.id} created in Hi5Central ITSM`)
+    const created = onCreateItsmIncident?.(context)    if (created?.id) setToast(`${created.id} created in Hi5Central ITSM`)
     return created
   }
 

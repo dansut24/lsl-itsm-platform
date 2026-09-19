@@ -16,6 +16,17 @@ function boundedInteger(value, min, max) {
   if (!Number.isFinite(number)) return null
   return Math.min(max, Math.max(min, Math.trunc(number)))
 }
+function versionAtLeast(value, minimum) {
+  const parse = (input) => String(input || '').match(/\d+/g)?.slice(0, 3).map(Number) || []
+  const actual = parse(value)
+  const required = parse(minimum)
+  for (let index = 0; index < 3; index += 1) {
+    const left = actual[index] || 0
+    const right = required[index] || 0
+    if (left !== right) return left > right
+  }
+  return true
+}
 
 async function requireDeviceControl(c) {
   const session = await resolveSession(c)
@@ -94,7 +105,7 @@ function payloadForAction(type, body = {}) {
 
 async function managedAgent(tenantId, agentDeviceId) {
   const result = await pool.query(
-    "SELECT a.id,i.name,i.reference " +
+    "SELECT a.id,a.agent_version,i.name,i.reference " +
     "FROM rmm_agent_devices a " +
     "JOIN rmm_device_inventory i ON i.id=a.inventory_id " +
     "WHERE a.id::text=$1 AND a.tenant_id=$2 AND a.disabled_at IS NULL AND i.active=true LIMIT 1",
@@ -118,6 +129,23 @@ export function registerRmmDeviceToolRoutes(app) {
     const device = await managedAgent(auth.session.tenant_id, agentDeviceId)
     if (!device) return c.json({ error: 'Managed Agent not found for this device.' }, 404)
 
+    const cacheSeconds = {
+      'processes.list': 8,
+      'services.list': 15,
+      'registry.list': 6,
+      'events.list': 8,
+    }[type] || 0
+    if (cacheSeconds > 0) {
+      const cached = await pool.query(
+        "SELECT id,job_type,status,result,error_message,created_at,claimed_at,completed_at,updated_at " +
+        "FROM rmm_agent_jobs WHERE tenant_id=$1 AND agent_device_id=$2 AND job_type=$3 AND payload=$4::jsonb " +
+        "AND status='completed' AND completed_at > now()-($5::int * interval '1 second') " +
+        "ORDER BY completed_at DESC LIMIT 1",
+        [auth.session.tenant_id, device.id, type, JSON.stringify(payload), cacheSeconds],
+      )
+      if (cached.rowCount) return c.json({ job: cached.rows[0], cached: true })
+    }
+
     const label = clean(auth.session.name || auth.session.email || 'Technician').slice(0, 255)
     const inserted = await pool.query(
       "INSERT INTO rmm_agent_jobs " +
@@ -134,7 +162,34 @@ export function registerRmmDeviceToolRoutes(app) {
         JSON.stringify({ source: 'device_details', device_name: device.name, device_reference: device.reference }),
       ],
     )
-    return c.json({ job: inserted.rows[0] }, 202)
+
+    const job = inserted.rows[0]
+    if (versionAtLeast(device.agent_version, '0.1.63')) {
+      const claimed = await pool.query(
+        "UPDATE rmm_agent_jobs SET status='claimed',claimed_at=now(),updated_at=now() " +
+        "WHERE id=$1 AND tenant_id=$2 AND status='queued' RETURNING status,claimed_at,updated_at",
+        [job.id, auth.session.tenant_id],
+      )
+      if (claimed.rowCount) {
+        job.status = 'claimed'
+        job.claimed_at = claimed.rows[0].claimed_at
+        job.updated_at = claimed.rows[0].updated_at
+        const pushed = sendAgentMessage(device.id, {
+          type: 'job_execute',
+          job: { id: job.id, job_type: type, payload, created_at: job.created_at },
+        })
+        if (pushed) return c.json({ job, dispatched: 'websocket' }, 202)
+
+        await pool.query(
+          "UPDATE rmm_agent_jobs SET status='queued',claimed_at=NULL,updated_at=now() WHERE id=$1 AND tenant_id=$2 AND status='claimed'",
+          [job.id, auth.session.tenant_id],
+        )
+        job.status = 'queued'
+        delete job.claimed_at
+      }
+    }
+
+    return c.json({ job, dispatched: 'poll' }, 202)
   })
 
   app.get('/api/v1/rmm/device-actions/:jobId', async (c) => {
@@ -307,4 +362,3 @@ export function attachRmmDeviceToolWebSocket(server) {
     })
   })
 }
-
