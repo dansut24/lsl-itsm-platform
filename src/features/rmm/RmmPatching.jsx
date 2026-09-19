@@ -299,6 +299,8 @@ export function RmmPatching({ devices = [] }) {
   const assignments = bundle?.assignments || []
   const deviceSoftware = bundle?.deviceSoftware || []
   const deployments = bundle?.deployments || []
+  const softwareVulnerabilityExposures = bundle?.softwareVulnerabilityExposures || []
+  const exposureSummary = bundle?.vulnerabilityExposures || {}
   const overview = bundle?.overview || {}
   const exposedApps = applications.filter((item) => item.updateAvailable > 0)
   const mappedApps = applications.filter((item) => item.catalogue)
@@ -306,6 +308,22 @@ export function RmmPatching({ devices = [] }) {
   const windowsPending = windowsReported.reduce((sum, device) => sum + Number(device.pendingPatches || 0), 0)
   const patchHostReady = (bundle?.devices || []).filter((device) => device.patchCapabilities?.softwareDiscovery).length
   const patchHostInstallReady = (bundle?.devices || []).filter((device) => device.patchCapabilities?.softwareInstall).length
+
+  function exposureForApplication(application) {
+    const installationKeys = new Set(
+      deviceSoftware
+        .filter((item) => item.key === application.key && item.catalogue?.id)
+        .map((item) => item.inventoryId + '|' + item.catalogue.id),
+    )
+    return softwareVulnerabilityExposures
+      .filter((item) => installationKeys.has(item.inventory_id + '|' + item.catalogue_id))
+      .reduce((summary, item) => ({
+        open: summary.open + Number(item.open_count || 0),
+        kev: summary.kev + Number(item.kev_count || 0),
+        critical: summary.critical + Number(item.critical_count || 0),
+        maxCvss: Math.max(summary.maxCvss, Number(item.max_cvss || 0)),
+      }), { open: 0, kev: 0, critical: 0, maxCvss: 0 })
+  }
 
   async function saveMapping(form) {
     setSaving(true)
@@ -395,7 +413,7 @@ export function RmmPatching({ devices = [] }) {
     <div className="rmm-patch-metrics">
       <Metric icon={PackageCheck} label="Software installations" value={loading ? '…' : overview.softwareInstallations ?? 0} />
       <Metric icon={AlertTriangle} label="Software updates available" value={loading ? '…' : overview.updateAvailable ?? 0} tone="warning" />
-      <Metric icon={ShieldCheck} label="Known exploited CVEs" value={loading ? '…' : bundle?.vulnerabilities?.kev ?? 0} tone="critical" />
+      <Metric icon={ShieldCheck} label="Open CVE exposures" value={loading ? '…' : exposureSummary.open ?? 0} tone={Number(exposureSummary.open || 0) > 0 ? 'critical' : ''} />
       <Metric icon={Monitor} label="Windows updates pending" value={windowsPending} />
     </div>
     <section className="rmm-patch-security-banner">
@@ -417,14 +435,16 @@ export function RmmPatching({ devices = [] }) {
     {tab === 'software' && <section className="rmm-patch-panel">
       <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Software patch catalogue</span><h2>Patchability by application</h2><p>{mappedApps.length} mapped application{mappedApps.length === 1 ? '' : 's'} · {applications.length - mappedApps.length} awaiting mapping · {catalogueCandidates.length} automatically discovered package{catalogueCandidates.length === 1 ? '' : 's'}.</p></div></div>
       <div className="rmm-patch-table software">
-        <div className="head"><span>Application</span><span>Installed</span><span>Target</span><span>Exposure</span><span>Provider</span><span /></div>
+        <div className="head"><span>Application</span><span>Installed</span><span>Target</span><span>Patch state</span><span>Vulnerabilities</span><span>Provider</span><span /></div>
         {applications.map((application) => {
           const status = application.updateAvailable ? 'update_available' : application.catalogue?.targetVersion ? 'current' : application.catalogue ? 'detection_pending' : 'unmapped'
+          const exposure = exposureForApplication(application)
           return <div className="row" key={application.key}>
             <span><strong>{application.name}</strong><small>{application.publisher || 'Publisher not reported'} · {application.deviceCount} device{application.deviceCount === 1 ? '' : 's'}</small></span>
             <span><strong>{application.versions?.map((version) => version.version).slice(0, 2).join(', ') || 'Not reported'}</strong></span>
             <span><strong>{application.catalogue?.targetVersion || 'Not set'}</strong><small>{application.catalogue?.packageId || 'No package ID'}</small></span>
             <span><StatusPill tone={patchTone(status)}>{patchLabel(status)}</StatusPill>{application.updateAvailable > 0 && <small>{application.updateAvailable} install{application.updateAvailable === 1 ? '' : 's'} behind</small>}</span>
+            <span>{exposure.open > 0 ? <StatusPill tone={exposure.kev > 0 || exposure.critical > 0 ? 'critical' : 'warning'}>{exposure.open} open</StatusPill> : <StatusPill tone={application.catalogue ? 'healthy' : 'neutral'}>{application.catalogue ? 'None known' : 'Unmapped'}</StatusPill>}<small>{exposure.kev > 0 ? exposure.kev + ' CISA KEV' : exposure.maxCvss > 0 ? 'Max CVSS ' + exposure.maxCvss : ''}</small></span>
             <span><strong>{application.catalogue?.provider || 'Unmapped'}</strong><small>{application.catalogue?.builtIn ? 'Hi5Central catalogue' : application.catalogue ? 'Tenant mapping' : 'Needs mapping'}</small></span>
             <span className="actions">{application.catalogue ? <>
               <button disabled={saving || application.updateAvailable < 1} onClick={() => setPatchApp(application)} type="button"><PackageCheck size={14} /> Patch</button>
@@ -492,7 +512,13 @@ export function RmmPatching({ devices = [] }) {
     </section>}
 
     {tab === 'vulnerabilities' && <section className="rmm-patch-panel">
-      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Threat intelligence</span><h2>Vulnerability intelligence</h2><p>CISA KEV is ingested centrally now; NVD, MSRC, OSV and vendor adapters share the same source-health model.</p></div></div>
+      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Threat intelligence</span><h2>Vulnerability intelligence</h2><p>Global feeds are correlated through verified Hi5 catalogue identities to the software actually installed on managed endpoints.</p></div></div>
+      <div className="rmm-vuln-exposure-summary">
+        <div><small>Open exposures</small><strong>{exposureSummary.open ?? 0}</strong></div>
+        <div><small>CISA KEV exposures</small><strong>{exposureSummary.kev_open ?? 0}</strong></div>
+        <div><small>CVSS 9+ exposures</small><strong>{exposureSummary.critical_open ?? 0}</strong></div>
+        <div><small>Remediated</small><strong>{exposureSummary.remediated ?? 0}</strong></div>
+      </div>
       <div className="rmm-vuln-source-grid">
         {(bundle?.vulnerabilities?.sources || []).map((source) => <article key={source.source}><span><CheckCircle2 size={16} /></span><div><strong>{source.source.replaceAll('_', ' ').toUpperCase()}</strong><small>{source.last_success_at ? 'Last successful sync ' + new Date(source.last_success_at).toLocaleString() : 'Awaiting first successful sync'}</small></div><StatusPill tone={source.last_error ? 'warning' : source.last_success_at ? 'healthy' : 'neutral'}>{source.last_error ? 'Attention' : source.last_success_at ? 'Live' : 'Pending'}</StatusPill></article>)}
       </div>

@@ -5,7 +5,7 @@ import { agentSocketForDevice, authenticateAgent, sendAgentMessage } from './rmm
 import { recordRmmActivity } from './rmmActivity.js'
 import { recentVulnerabilities, vulnerabilitySummary } from './rmmVulnerabilityIntel.js'
 import { softwareVendorSummary } from './rmmSoftwareVendorIntel.js'
-import { vulnerabilityExposureSummary } from './rmmVulnerabilityExposure.js'
+import { vulnerabilityExposureByInstallation, vulnerabilityExposureSummary } from './rmmVulnerabilityExposure.js'
 import { resolveSession } from './session.js'
 
 function clean(value = '') { return String(value ?? '').trim() }
@@ -255,7 +255,7 @@ function buildSoftware(devices, catalogue) {
 }
 
 async function patchBundle(tenantId) {
-  const [devices, catalogue, policies, assignments, vulnerabilities, discovery, vendorIntel, exposureSummary, deployments] = await Promise.all([
+  const [devices, catalogue, policies, assignments, vulnerabilities, discovery, vendorIntel, exposureSummary, softwareVulnerabilityExposures, deployments] = await Promise.all([
     patchDeviceRows(tenantId),
     catalogueRows(tenantId),
     policyRows(tenantId),
@@ -264,6 +264,7 @@ async function patchBundle(tenantId) {
     patchDiscoveryRows(tenantId),
     softwareVendorSummary(),
     vulnerabilityExposureSummary(tenantId),
+    vulnerabilityExposureByInstallation(tenantId),
     patchDeploymentRows(tenantId),
   ])
   const software = buildSoftware(devices, catalogue)
@@ -289,6 +290,7 @@ async function patchBundle(tenantId) {
     deployments,
     vulnerabilities,
     vulnerabilityExposures: exposureSummary,
+    softwareVulnerabilityExposures,
     vendorIntel,
     devices: devices.map((device) => ({
       id: device.reference,
