@@ -192,6 +192,20 @@ jobs:
 
           grep -q 'Service Desk' /tmp/organisation-teams-put.json
 
+          PGPASSWORD=hi5central-ci psql \
+            -h 127.0.0.1 \
+            -U hi5central \
+            -d hi5central \
+            -v ON_ERROR_STOP=1 \
+            -c "INSERT INTO organisation_team_memberships (tenant_id, person_id, team_id, role, is_primary)
+                SELECT p.tenant_id, p.id, t.id, 'member', true
+                FROM organisation_people p
+                JOIN organisation_teams t ON t.tenant_id=p.tenant_id
+                WHERE p.tenant_id='00000000-0000-4000-8000-000000000101'::uuid
+                  AND p.external_key='USR-00000000-000'
+                  AND t.external_key='TEAM-CI-SERVICE-DESK'
+                ON CONFLICT (person_id, team_id) DO UPDATE SET is_primary=true;"
+
           curl -fsS \
             -X PUT \
             -H "Cookie: $ORG_COOKIE" \
