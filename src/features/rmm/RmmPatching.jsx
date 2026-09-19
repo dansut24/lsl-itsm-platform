@@ -350,6 +350,7 @@ export function RmmPatching({ devices = [] }) {
     <nav className="rmm-patch-tabs">
       {[
         ['software', 'Software', exposedApps.length],
+        ['vendors', 'Vendors', vendorSources.length],
         ['vulnerabilities', 'Vulnerabilities', bundle?.vulnerabilities?.kev || 0],
         ['windows', 'Windows Update', windowsPending],
         ['policies', 'Policies', policies.length],
@@ -358,19 +359,6 @@ export function RmmPatching({ devices = [] }) {
 
     {tab === 'software' && <section className="rmm-patch-panel">
       <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Software patch catalogue</span><h2>Patchability by application</h2><p>{mappedApps.length} mapped application{mappedApps.length === 1 ? '' : 's'} · {applications.length - mappedApps.length} awaiting mapping · {catalogueCandidates.length} automatically discovered package{catalogueCandidates.length === 1 ? '' : 's'}.</p></div></div>
-      {!!vendorSources.length && <div className="rmm-patch-vendor-section">
-        <div><span className="rmm-eyebrow">Vendor-first freshness</span><h3>Authoritative software sources</h3><p>Vendor releases establish the newest known version. WinGet remains the preferred execution metadata where its manifest is current.</p></div>
-        <div className="rmm-patch-vendor-grid">
-          {vendorSources.map((source) => {
-            const latest = vendorLatest.find((item) => item.source_key === source.source_key)
-            return <article key={source.source_key}>
-              <div><strong>{source.display_name}</strong><small>{source.source_type.replaceAll('_', ' ')} · every {source.poll_minutes} min</small></div>
-              <span><strong>{latest?.version || source.cursor_value || 'Pending first sync'}</strong><small>{latest?.channel || ''}{latest?.release_date ? ' · ' + new Date(latest.release_date).toLocaleDateString() : ''}</small></span>
-              <StatusPill tone={source.last_error ? 'warning' : source.last_success_at ? 'healthy' : 'neutral'}>{source.last_error ? 'Attention' : source.last_success_at ? 'Live' : 'Pending'}</StatusPill>
-            </article>
-          })}
-        </div>
-      </div>}
       <div className="rmm-patch-table software">
         <div className="head"><span>Application</span><span>Installed</span><span>Target</span><span>Exposure</span><span>Provider</span><span /></div>
         {applications.map((application) => {
@@ -401,6 +389,33 @@ export function RmmPatching({ devices = [] }) {
         <small className="rmm-patch-candidate-footnote">{patchObservations.length} endpoint package observation{patchObservations.length === 1 ? '' : 's'} currently back these candidates.</small>
       </div>}
       <div className="rmm-patch-execution-gate"><Clock3 size={17} /><div><strong>Deployment intentionally gated</strong><span>{patchHostReady} endpoint{patchHostReady === 1 ? '' : 's'} currently report PatchHost software-discovery capability. Software deployment controls will enable only when the endpoint reports the later install capability too.</span></div></div>
+    </section>}
+
+    {tab === 'vendors' && <section className="rmm-patch-panel">
+      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Vendor-first freshness</span><h2>Vendor software catalogue</h2><p>Authoritative vendor releases establish the newest known version independently of WinGet. WinGet remains the preferred execution metadata when its package manifest is current.</p></div></div>
+      <div className="rmm-patch-vendor-section standalone">
+        <div className="rmm-patch-vendor-grid">
+          {vendorSources.map((source) => {
+            const latest = vendorLatest.find((item) => item.source_key === source.source_key)
+            return <article key={source.source_key}>
+              <div><strong>{source.display_name}</strong><small>{source.source_type.replaceAll('_', ' ')} · every {source.poll_minutes} min</small></div>
+              <span><strong>{latest?.version || source.cursor_value || 'Pending first sync'}</strong><small>{latest?.channel || ''}{latest?.release_date ? ' · ' + new Date(latest.release_date).toLocaleDateString() : ''}</small></span>
+              <StatusPill tone={source.last_error ? 'warning' : source.last_success_at ? 'healthy' : 'neutral'}>{source.last_error ? 'Attention' : source.last_success_at ? 'Live' : 'Pending'}</StatusPill>
+            </article>
+          })}
+        </div>
+      </div>
+      <div className="rmm-patch-table vendors">
+        <div className="head"><span>Application</span><span>Package ID</span><span>Vendor latest</span><span>Published</span><span>Installer</span></div>
+        {vendorLatest.map((item) => <div className="row" key={item.source_key + ':' + item.provider_package_id}>
+          <span><strong>{item.canonical_name}</strong><small>{item.publisher || item.source_key}</small></span>
+          <span><strong>{item.provider_package_id}</strong><small>{item.channel} · {item.architecture}</small></span>
+          <span><strong>{item.version}</strong><small>{item.source_key.replaceAll('_', ' ')}</small></span>
+          <span><strong>{item.release_date ? new Date(item.release_date).toLocaleDateString() : 'Not published'}</strong><small>{item.last_seen_at ? 'Seen ' + new Date(item.last_seen_at).toLocaleString() : ''}</small></span>
+          <span>{item.installer_url ? <StatusPill tone="healthy">{item.installer_type ? item.installer_type.toUpperCase() : 'Vendor'}</StatusPill> : <StatusPill tone="neutral">Version feed</StatusPill>}<small>{item.installer_sha256 ? 'SHA-256 supplied' : 'Installer metadata via execution provider'}</small></span>
+        </div>)}
+      </div>
+      {!vendorSources.length && <div className="rmm-empty"><PackageCheck size={24} /><strong>No vendor sources configured</strong><span>Vendor adapters will appear here as they are added to the Hi5Central global catalogue.</span></div>}
     </section>}
 
     {tab === 'vulnerabilities' && <section className="rmm-patch-panel">

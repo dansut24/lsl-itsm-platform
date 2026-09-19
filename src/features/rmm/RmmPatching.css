@@ -38,6 +38,7 @@
 .rmm-patch-table .head,.rmm-patch-table .row,.rmm-vuln-table .head,.rmm-vuln-table .row,.rmm-patch-assignments .head,.rmm-patch-assignments .row { display:grid; align-items:center; min-width:900px; gap:10px; padding:9px 12px; border-bottom:1px solid var(--rmm-border); }
 .rmm-patch-table.software .head,.rmm-patch-table.software .row { grid-template-columns:minmax(220px,1.5fr) minmax(130px,.8fr) minmax(130px,.8fr) 130px minmax(130px,.8fr) 90px; }
 .rmm-patch-table.windows .head,.rmm-patch-table.windows .row { grid-template-columns:minmax(240px,1.5fr) 90px 140px 120px 130px; }
+.rmm-patch-table.vendors .head,.rmm-patch-table.vendors .row { grid-template-columns:minmax(220px,1.3fr) minmax(220px,1.2fr) 130px 140px minmax(160px,.9fr); }
 .rmm-vuln-table .head,.rmm-vuln-table .row { grid-template-columns:130px 105px 105px 150px minmax(320px,2fr); }
 .rmm-patch-assignments .head,.rmm-patch-assignments .row { grid-template-columns:minmax(220px,1fr) minmax(220px,1fr) 100px 45px; min-width:650px; }
 .rmm-patch-table .head,.rmm-vuln-table .head,.rmm-patch-assignments .head { background:var(--rmm-soft); color:var(--rmm-muted); font-size:7px; font-weight:850; text-transform:uppercase; }
@@ -112,7 +113,7 @@
   .rmm-patch-table,.rmm-vuln-table,.rmm-patch-assignments { overflow:visible; }
   .rmm-patch-table .head,.rmm-vuln-table .head,.rmm-patch-assignments .head { display:none; }
   .rmm-patch-table .row,.rmm-vuln-table .row,.rmm-patch-assignments .row { min-width:0; grid-template-columns:1fr 1fr; margin:8px; border:1px solid var(--rmm-border); border-radius:9px; padding:9px; }
-  .rmm-patch-table.software .row,.rmm-patch-table.windows .row,.rmm-vuln-table .row,.rmm-patch-assignments .row { grid-template-columns:1fr 1fr; }
+  .rmm-patch-table.software .row,.rmm-patch-table.windows .row,.rmm-patch-table.vendors .row,.rmm-vuln-table .row,.rmm-patch-assignments .row { grid-template-columns:1fr 1fr; }
   .rmm-patch-table .row > span:first-child,.rmm-vuln-table .row > span:first-child,.rmm-vuln-table .row > span:last-child,.rmm-patch-assignments .row > span:first-child { grid-column:1/-1; }
   .rmm-patch-table .actions { justify-content:flex-start; }
   .rmm-vuln-source-grid,.rmm-patch-policy-grid { grid-template-columns:1fr; }
