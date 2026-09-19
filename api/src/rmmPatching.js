@@ -459,7 +459,8 @@ async function ingestPatchDiscovery(agent, body = {}) {
       `INSERT INTO rmm_patch_catalogue_candidates
         (tenant_id,provider,provider_package_id,display_name,publisher,latest_observed_version,devices_seen,updates_seen,last_seen_at,metadata)
        SELECT tenant_id,'winget',provider_package_id,
-              max(NULLIF(display_name,'')),max(NULLIF(publisher,'')),
+              COALESCE(max(NULLIF(display_name,'')),provider_package_id),
+              COALESCE(max(NULLIF(publisher,'')),''),
               COALESCE(max(NULLIF(available_version,'')),max(NULLIF(installed_version,'')),''),
               count(DISTINCT inventory_id)::int,
               count(*) FILTER (WHERE patch_status='update_available')::int,
