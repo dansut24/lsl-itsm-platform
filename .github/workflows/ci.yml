@@ -157,7 +157,10 @@ jobs:
 
           grep -q '"people"' /tmp/organisation.json
           grep -q 'CI Owner' /tmp/organisation.json
-          grep -q 'London HQ' /tmp/organisation.json
+          if grep -q 'London HQ' /tmp/organisation.json; then
+            echo 'Fresh tenant unexpectedly contains an auto-created organisation Site.'
+            exit 1
+          fi
 
           curl -fsS \
             -X PUT \

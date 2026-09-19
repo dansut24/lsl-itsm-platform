@@ -144,10 +144,20 @@ try {
   const complete = await json('/api/v1/onboarding/complete', { method: 'POST', cookie: ownerCookie })
   assert(complete.response.ok && complete.payload.onboarding?.completedAt, `Onboarding completion failed: ${complete.payload.error || complete.response.status}`)
 
-  console.log('4. Creating a real requester Person record')
+  console.log('4. Creating a real Site and requester Person record')
   const organisation = await json('/api/v1/organisation', { cookie: ownerCookie })
-  assert(organisation.response.ok && organisation.payload.people?.length, 'Organisation seed failed')
-  const ownerPerson = organisation.payload.people[0]
+  assert(organisation.response.ok && organisation.payload.people?.length, 'Authenticated owner Person was not created')
+  assert(!(organisation.payload.sites || []).length, 'Fresh tenant unexpectedly contains a generated Site')
+
+  const sitePut = await json('/api/v1/organisation/sites', {
+    method: 'PUT',
+    cookie: ownerCookie,
+    body: { items: [{ id: 'SITE-PORTAL-E2E', code: 'HQ', name: 'Head Office', type: 'Office', city: 'London', country: 'United Kingdom', timezone: 'Europe/London', active: true }] },
+  })
+  assert(sitePut.response.ok && sitePut.payload.sites?.some((site) => site.id === 'SITE-PORTAL-E2E'), 'Explicit tenant Site was not persisted')
+
+  const ownerPersonBase = organisation.payload.people[0]
+  const ownerPerson = { ...ownerPersonBase, siteId: 'SITE-PORTAL-E2E', location: 'Head Office' }
   const requesterPerson = {
     id: 'USR-PORTAL-E2E',
     name: 'CI Portal Requester',
@@ -156,8 +166,8 @@ try {
     role: 'Employee',
     teamId: ownerPerson.teamId || '',
     departmentId: ownerPerson.departmentId || '',
-    siteId: ownerPerson.siteId || '',
-    location: ownerPerson.location || 'Head Office',
+    siteId: ownerPerson.siteId,
+    location: ownerPerson.location,
     managerId: ownerPerson.id,
     status: 'Available',
     capacityHours: 35,
@@ -168,7 +178,7 @@ try {
     active: true,
   }
   const peoplePut = await json('/api/v1/organisation/people', {
-    method: 'PUT', cookie: ownerCookie, body: { items: [...organisation.payload.people, requesterPerson] },
+    method: 'PUT', cookie: ownerCookie, body: { items: [ownerPerson, ...organisation.payload.people.slice(1), requesterPerson] },
   })
   assert(peoplePut.response.ok && peoplePut.payload.people?.some((person) => person.email === requesterEmail), 'Requester Person was not persisted')
 
