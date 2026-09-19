@@ -180,6 +180,18 @@ jobs:
             -c "SELECT external_key, name FROM organisation_sites WHERE tenant_id = '00000000-0000-4000-8000-000000000101'::uuid AND external_key = 'SITE-CI';" \
             | grep -q 'CI Test Site'
 
+          # Fresh tenants intentionally have no seeded teams. Create the team
+          # this smoke test actually uses instead of relying on production seed data.
+          curl -fsS \
+            -X PUT \
+            -H "Cookie: $ORG_COOKIE" \
+            -H 'Content-Type: application/json' \
+            --data '{"items":[{"id":"TEAM-CI-SERVICE-DESK","name":"Service Desk","description":"CI fulfilment team","colour":"blue","active":true}]}' \
+            http://127.0.0.1:3001/api/v1/organisation/teams \
+            | tee /tmp/organisation-teams-put.json
+
+          grep -q 'Service Desk' /tmp/organisation-teams-put.json
+
           curl -fsS \
             -X PUT \
             -H "Cookie: $ORG_COOKIE" \
