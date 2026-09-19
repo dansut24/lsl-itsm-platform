@@ -3,6 +3,7 @@ import { hasPermission } from './access.js'
 import { originMatchesTenant } from './deploymentConfig.js'
 import { pool, withTransaction } from './db.js'
 import { recordRmmActivity } from './rmmActivity.js'
+import { agentSocketForDevice } from './rmmAgent.js'
 import { resolveSession } from './session.js'
 
 function clean(value = '') { return String(value ?? '').trim() }
@@ -235,10 +236,19 @@ export function registerRmmAutomationRoutes(app) {
         [auth.session.tenant_id, requestedIds],
       )
       if (!targets.rowCount) return { status: 404, error: 'No valid managed Agent targets were found.' }
+      const onlineTargets = targets.rows.filter((target) => {
+        const socket = agentSocketForDevice(target.id)
+        return socket && socket.readyState === 1
+      })
+      const offlineTargets = targets.rows.filter((target) => !onlineTargets.some((online) => online.id === target.id))
+      if (!onlineTargets.length) {
+        return { status: 409, error: 'All selected devices are offline. No jobs were queued.', offlineDeviceIds: offlineTargets.map((target) => target.id) }
+      }
+
       const correlationId = randomUUID()
       const label = clean(auth.session.name || auth.session.email || 'Technician').slice(0, 255)
       const ids = []
-      for (const target of targets.rows) {
+      for (const target of onlineTargets) {
         const inserted = await client.query(
           `INSERT INTO rmm_agent_jobs
             (tenant_id,agent_device_id,job_type,payload,queued_by_user_id,automation_id,automation_version_id,initiated_by,initiated_by_label,correlation_id,request_metadata)
@@ -248,7 +258,14 @@ export function registerRmmAutomationRoutes(app) {
         )
         ids.push(inserted.rows[0].id)
       }
-      return { success: true, queued: ids.length, jobIds: ids, correlationId }
+      return {
+        success: true,
+        queued: ids.length,
+        jobIds: ids,
+        correlationId,
+        skippedOffline: offlineTargets.length,
+        skippedOfflineDeviceIds: offlineTargets.map((target) => target.id),
+      }
     })
     if (queued.error) return c.json({ error: queued.error }, queued.status)
     return c.json(queued, 202)

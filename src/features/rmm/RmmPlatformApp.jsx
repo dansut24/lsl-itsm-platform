@@ -41,6 +41,7 @@ import {
   Trash2,
   Users,
   Wifi,
+  WifiOff,
   X,
   Zap,
 } from 'lucide-react'
@@ -94,6 +95,10 @@ const pageMeta = {
   'activity-audit': ['Administration', 'Activity audit', 'Search the tenant-wide RMM operational and technician audit history.'],
   'agent-deployment': ['Administration', 'Agent deployment', 'Download the Windows agent and create secure, expiring enrollment packages.'],
   settings: ['Administration', 'RMM settings', 'Agent, sites, credentials, maintenance and integration configuration.'],
+}
+
+function deviceIsOnline(device) {
+  return Boolean(device?.agentDeviceId) && String(device?.status || '').toLowerCase() === 'online'
 }
 
 function healthClass(value = '') {
@@ -334,6 +339,7 @@ function DeviceHardware({ device }) {
 }
 
 function DeviceSoftware({ device }) {
+  const deviceOnline = deviceIsOnline(device)
   const [search, setSearch] = useState('')
   const [busyKey, setBusyKey] = useState('')
   const [removedKeys, setRemovedKeys] = useState([])
@@ -379,7 +385,7 @@ function DeviceSoftware({ device }) {
   }
 
   async function uninstallSoftware(app) {
-    if (!device.agentDeviceId || busyKey || protectedSoftware(app)) return
+    if (!deviceOnline || !device.agentDeviceId || busyKey || protectedSoftware(app)) return
     const key = softwareKey(app)
     if (!window.confirm(`Uninstall ${app.name} silently from ${device.name}? Hi5Central will try the vendor command first, verify removal, then try recognised silent fallbacks if needed.`)) return
     setBusyKey(key)
@@ -434,7 +440,7 @@ function DeviceSoftware({ device }) {
             <span><strong>{app.version || 'Not reported'}</strong></span>
             <span><strong>{app.publisher || 'Not reported'}</strong></span>
             <span><strong>{app.installed || 'Not reported'}</strong></span>
-            <span>{protectedApp ? <StatusPill tone="neutral">Protected</StatusPill> : device.agentDeviceId ? <button className="rmm-software-uninstall" disabled={busyKey === key} onClick={() => uninstallSoftware(app)} type="button"><Trash2 size={13} /> {busyKey === key ? 'Uninstalling…' : 'Uninstall'}</button> : <StatusPill tone="neutral">Agent required</StatusPill>}</span>
+            <span>{protectedApp ? <StatusPill tone="neutral">Protected</StatusPill> : !device.agentDeviceId ? <StatusPill tone="neutral">Agent required</StatusPill> : !deviceOnline ? <button className="rmm-software-uninstall" disabled title="Device is offline" type="button"><WifiOff size={13} /> Offline</button> : <button className="rmm-software-uninstall" disabled={busyKey === key} onClick={() => uninstallSoftware(app)} type="button"><Trash2 size={13} /> {busyKey === key ? 'Uninstalling…' : 'Uninstall'}</button>}</span>
           </div>
         })}
       </div>
@@ -490,6 +496,9 @@ function DeviceItsm({ relatedTickets, onCreateIncident }) {
 
 function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device, onBack, navigate, onCreateIncident, tickets = [] }) {
   const [section, setSection] = useState('overview')
+  const hasLiveAgent = Boolean(device.agentDeviceId)
+  const deviceOnline = deviceIsOnline(device)
+  const deviceOffline = hasLiveAgent && !deviceOnline
   const [tool, setTool] = useState('')
   const [toolsOpen, setToolsOpen] = useState(false)
   const [remoteState, setRemoteState] = useState('')
@@ -526,16 +535,20 @@ function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device
   }
 
   async function startRemote(mode = 'console') {
+    if (!hasLiveAgent) {
+      setRemoteState('Remote tools require the Hi5Central Agent on this device.')
+      return
+    }
+    if (!deviceOnline) {
+      setRemoteState('This device is offline. Live remote sessions cannot be started.')
+      return
+    }
     if (mode === 'backstage' && !canBackstageRemote) {
       setRemoteState('Your role does not include Background remote access.')
       return
     }
     if (mode === 'console' && !canRemote) {
       setRemoteState('Your role does not include unattended remote access.')
-      return
-    }
-    if (!device.agentDeviceId) {
-      setRemoteState('Remote tools require the Hi5Central Agent on this device.')
       return
     }
     setRemoteBusy(true)
@@ -563,6 +576,14 @@ function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device
 
   function openTool(nextTool) {
     setToolsOpen(false)
+    if (!hasLiveAgent) {
+      setRemoteState('Live device tools require the Hi5Central Agent.')
+      return
+    }
+    if (!deviceOnline) {
+      setRemoteState('This device is offline. Live device tools are unavailable until the Agent reconnects.')
+      return
+    }
     setTool(nextTool)
   }
 
@@ -577,7 +598,7 @@ function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device
   else content = <DeviceOverview device={device} deviceAlerts={deviceAlerts} monitoringResolution={monitoringResolution} navigate={navigate} onCreateIncident={createIncident} relatedTickets={relatedTickets} />
 
   return (
-    <div className="rmm-device-detail">
+    <div className={`rmm-device-detail ${deviceOnline ? 'is-online' : deviceOffline ? 'is-offline' : 'is-agentless'}`}>
       <button className="rmm-back" onClick={onBack} type="button"><ChevronRight size={15} /> Back to devices</button>
       <header className="rmm-device-hero">
         <div className={'rmm-device-hero-icon ' + healthClass(device.health)}><DeviceIcon device={device} size={28} /></div>
@@ -589,9 +610,9 @@ function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device
           {remoteState && <small className="rmm-device-action-message">{remoteState}</small>}
         </div>
         <div className="rmm-device-actions">
-          <button className="rmm-primary compact" disabled={remoteBusy || !device.agentDeviceId || !canRemote} title={canRemote ? 'Start unattended console remote session' : 'Your role does not include unattended remote access'} onClick={() => startRemote('console')} type="button"><Monitor size={16} /> {remoteBusy ? 'Starting…' : 'Remote desktop'}</button>
+          <button className="rmm-primary compact" disabled={remoteBusy || !hasLiveAgent || !canRemote || !deviceOnline} title={!hasLiveAgent ? 'Hi5Central Agent required' : !deviceOnline ? 'Device is offline' : canRemote ? 'Start unattended console remote session' : 'Your role does not include unattended remote access'} onClick={() => startRemote('console')} type="button"><Monitor size={16} /> {remoteBusy ? 'Starting…' : 'Remote desktop'}</button>
           <div className="rmm-device-tools-menu">
-            <button onClick={() => setToolsOpen((value) => !value)} type="button"><TerminalSquare size={16} /> Tools <MoreHorizontal size={14} /></button>
+            <button disabled={!deviceOnline || !hasLiveAgent} title={!hasLiveAgent ? 'Hi5Central Agent required' : deviceOnline ? 'Open live device tools' : 'Device is offline'} onClick={() => setToolsOpen((value) => !value)} type="button"><TerminalSquare size={16} /> Tools <MoreHorizontal size={14} /></button>
             {toolsOpen && <div className="rmm-device-tools-popover">
               <button onClick={() => openTool('powershell')} type="button"><TerminalSquare size={15} /><span><strong>PowerShell</strong><small>Native ConPTY</small></span></button>
               <button onClick={() => openTool('cmd')} type="button"><Code2 size={15} /><span><strong>Command Prompt</strong><small>Native ConPTY</small></span></button>
@@ -602,12 +623,15 @@ function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device
               <button onClick={() => openTool('disks')} type="button"><HardDrive size={15} /><span><strong>Disk Management</strong><small>Volumes and BitLocker state</small></span></button>
               <button onClick={() => openTool('sessions')} type="button"><Users size={15} /><span><strong>Users & Sessions</strong><small>Interactive and RDP sessions</small></span></button>
               <button onClick={() => openTool('events')} type="button"><History size={15} /><span><strong>Event Logs</strong><small>Event health and diagnostics</small></span></button>
-              {canBackstageRemote && <button onClick={() => { setToolsOpen(false); startRemote('backstage') }} type="button"><Monitor size={15} /><span><strong>Background Mode</strong><small>Private Hi5 maintenance desktop</small></span></button>}
+              {canBackstageRemote && <button disabled={!deviceOnline} onClick={() => { setToolsOpen(false); startRemote('backstage') }} type="button"><Monitor size={15} /><span><strong>Background Mode</strong><small>Private Hi5 maintenance desktop</small></span></button>}
             </div>}
           </div>
           <button onClick={() => createIncident()} type="button"><AlertTriangle size={16} /> ITSM incident</button>
         </div>
       </header>
+
+      {deviceOffline && <div className="rmm-device-offline-banner"><WifiOff size={17} /><div><strong>Device offline</strong><span>Live controls are disabled and no new Agent jobs will be queued. Last-known inventory, Activity, Jobs and ITSM history remain available.</span></div><small>Last seen {device.lastSeen || 'not reported'}</small></div>}
+      {!hasLiveAgent && <div className="rmm-device-offline-banner agentless"><Monitor size={17} /><div><strong>Hi5Central Agent not installed</strong><span>This device can show synchronized inventory, but live RMM controls require the Hi5Central Agent.</span></div></div>}
 
       <div className="rmm-device-metric-grid">
         <DeviceMetric icon={CircleGauge} label="CPU" value={device.cpu} tone={metricTone(device.cpu)} />

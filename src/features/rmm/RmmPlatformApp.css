@@ -1085,3 +1085,48 @@ button.rmm-table-row { width: 100%; border: 0; text-align: left; cursor: pointer
   .rmm-page-skeleton-row span:nth-of-type(2),
   .rmm-page-skeleton-row span:nth-of-type(3) { display: none; }
 }
+
+/* Offline device state: preserve last-known information, disable all live control affordances. */
+.rmm-device-offline-banner {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  margin: 0 0 14px;
+  border: 1px solid var(--rmm-border);
+  border-radius: 10px;
+  padding: 11px 13px;
+  background: var(--rmm-soft);
+  color: var(--rmm-muted);
+}
+.rmm-device-offline-banner > svg {
+  width: 30px;
+  height: 30px;
+  padding: 7px;
+  border-radius: 8px;
+  background: var(--rmm-surface);
+}
+.rmm-device-offline-banner > div { min-width: 0; display: grid; gap: 2px; }
+.rmm-device-offline-banner strong { color: var(--rmm-text); font-size: 11px; }
+.rmm-device-offline-banner span,
+.rmm-device-offline-banner small { font-size: 9px; line-height: 1.45; }
+.rmm-device-detail.is-offline .rmm-device-metric-grid { opacity: .72; }
+.rmm-device-detail.is-offline .rmm-device-actions button:disabled,
+.rmm-device-detail.is-offline .rmm-device-tools-menu > button:disabled,
+.rmm-software-uninstall:disabled {
+  opacity: .42;
+  cursor: not-allowed;
+  filter: grayscale(.35);
+}
+.rmm-device-tools-menu > button:disabled:hover { background: var(--rmm-surface); }
+
+@media (max-width: 700px) {
+  .rmm-device-offline-banner {
+    grid-template-columns: 30px minmax(0,1fr);
+    align-items: start;
+    padding: 10px 11px;
+  }
+  .rmm-device-offline-banner > small {
+    grid-column: 2;
+  }
+}

@@ -142,6 +142,10 @@ export function registerRmmDeviceToolRoutes(app) {
 
     const device = await managedAgent(auth.session.tenant_id, agentDeviceId)
     if (!device) return c.json({ error: 'Managed Agent not found for this device.' }, 404)
+    const liveSocket = agentSocketForDevice(device.id)
+    if (!liveSocket || liveSocket.readyState !== 1) {
+      return c.json({ error: 'This device is offline. No job was queued.', offline: true }, 409)
+    }
 
     const cacheSeconds = {
       'processes.list': 8,
@@ -195,11 +199,26 @@ export function registerRmmDeviceToolRoutes(app) {
         if (pushed) return c.json({ job, dispatched: 'websocket' }, 202)
 
         await pool.query(
-          "UPDATE rmm_agent_jobs SET status='queued',claimed_at=NULL,updated_at=now() WHERE id=$1 AND tenant_id=$2 AND status='claimed'",
-          [job.id, auth.session.tenant_id],
+          "UPDATE rmm_agent_jobs SET status='cancelled',claimed_at=NULL,completed_at=now(),error_message=$3,updated_at=now() WHERE id=$1 AND tenant_id=$2 AND status='claimed'",
+          [job.id, auth.session.tenant_id, 'Device went offline before the action could be dispatched. The job was not retained for later execution.'],
         )
-        job.status = 'queued'
-        delete job.claimed_at
+        recordRmmActivity({
+          tenantId: auth.session.tenant_id,
+          agentDeviceId: device.id,
+          inventoryId: device.inventory_id,
+          actorUserId: auth.session.user_id,
+          actorType: 'technician',
+          actorLabel: label,
+          eventType: 'job.cancelled_offline',
+          category: 'job',
+          summary: label + ' action was cancelled because the device went offline',
+          detail: type,
+          outcome: 'cancelled',
+          severity: 'warning',
+          jobId: job.id,
+          metadata: { jobType: type, reason: 'device_offline_before_dispatch' },
+        }).catch(() => {})
+        return c.json({ error: 'The device went offline before the action could start. No job was queued for later.', offline: true, job: { ...job, status: 'cancelled' } }, 409)
       }
     }
 
@@ -563,4 +582,3 @@ export function attachRmmDeviceToolWebSocket(server) {
     })
   })
 }
-

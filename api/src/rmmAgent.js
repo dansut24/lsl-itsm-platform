@@ -552,6 +552,30 @@ export function attachRmmAgentWebSocket(server) {
         `UPDATE rmm_agent_devices SET websocket_status='Disconnected',websocket_disconnected_at=now(),updated_at=now() WHERE id=$1`,
         [agent.id],
       ).catch(() => {})
+      pool.query(
+        `UPDATE rmm_agent_jobs
+            SET status='cancelled',completed_at=now(),updated_at=now(),
+                error_message=COALESCE(error_message,'Device went offline before the job started. The job was not retained for reconnect.')
+          WHERE agent_device_id=$1 AND tenant_id=$2 AND status='queued'
+          RETURNING id,job_type,initiated_by_label,queued_by_user_id,correlation_id`,
+        [agent.id, agent.tenant_id],
+      ).then((cancelled) => Promise.all(cancelled.rows.map((job) => recordRmmActivity({
+        tenantId: agent.tenant_id,
+        agentDeviceId: agent.id,
+        inventoryId: agent.inventory_id,
+        actorUserId: job.queued_by_user_id,
+        actorType: 'system',
+        actorLabel: 'SYSTEM',
+        eventType: 'job.cancelled_offline',
+        category: 'job',
+        summary: 'SYSTEM: cancelled queued ' + job.job_type + ' because the device went offline',
+        detail: job.initiated_by_label ? 'Originally requested by ' + job.initiated_by_label + '.' : 'The job had not started.',
+        outcome: 'cancelled',
+        severity: 'warning',
+        jobId: job.id,
+        correlationId: job.correlation_id,
+        metadata: { reason: 'device_offline_before_start', requestedBy: job.initiated_by_label || '' },
+      })))).catch(() => {})
       recordRmmActivity({
         tenantId: agent.tenant_id,
         agentDeviceId: agent.id,

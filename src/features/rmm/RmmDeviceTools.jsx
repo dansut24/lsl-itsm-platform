@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import {
   ArrowLeft, ChevronRight, CircleStop, Command, Download, Folder, FolderPlus,
   HardDrive, ListTree, Play, Power, RefreshCw, RotateCw, Search,
-  Server, Settings2, SquareTerminal, Trash2, Upload, Users, X,
+  Server, Settings2, SquareTerminal, Trash2, Upload, Users, WifiOff, X,
 } from 'lucide-react'
 import { deploymentConfig } from '../../lib/deploymentConfig.js'
 import './RmmDeviceTools.css'
@@ -42,6 +42,7 @@ async function waitForJob(jobId, timeoutMs = 150000) {
 
 async function runAction(device, type, payload = {}, timeoutMs) {
   if (!device?.agentDeviceId) throw new Error('This device does not have a connected Hi5Central Agent.')
+  if (String(device?.status || '').toLowerCase() !== 'online') throw new Error('This device is offline. No job was queued.')
   const response = await fetch(apiBase() + '/api/v1/rmm/devices/' + encodeURIComponent(device.agentDeviceId) + '/actions', {
     method: 'POST',
     credentials: 'include',
@@ -55,6 +56,7 @@ async function runAction(device, type, payload = {}, timeoutMs) {
 }
 
 async function createToolSession(device, tool, shell) {
+  if (String(device?.status || '').toLowerCase() !== 'online') throw new Error('This device is offline. Live tools are unavailable.')
   const response = await fetch(apiBase() + '/api/v1/rmm/devices/' + encodeURIComponent(device.agentDeviceId) + '/tool-sessions', {
     method: 'POST',
     credentials: 'include',
@@ -558,6 +560,7 @@ const TOOLS = [
 export function RmmDeviceToolWorkspace({ device, initialTool = 'powershell', onClose }) {
   const [tool, setTool] = useState(initialTool)
   const selected = TOOLS.find((item) => item[0] === tool) || TOOLS[0]
+  const online = Boolean(device?.agentDeviceId) && String(device?.status || '').toLowerCase() === 'online'
   let content = null
   if (tool === 'powershell' || tool === 'cmd') content = <TerminalTool device={device} shell={tool} />
   else if (tool === 'files') content = <FilesTool device={device} />
@@ -570,9 +573,10 @@ export function RmmDeviceToolWorkspace({ device, initialTool = 'powershell', onC
 
   return <div className="rmm-tool-backdrop" role="presentation">
     <section className="rmm-device-tool-workspace" role="dialog" aria-modal="true" aria-label={selected[1]}>
-      <header><div><span className="rmm-eyebrow">{device.name}</span><h2>{selected[1]}</h2><p>Live management from the device details page</p></div><button aria-label="Close device tool" onClick={onClose} type="button"><X size={19} /></button></header>
-      <div className="rmm-device-tool-body"><nav>{TOOLS.map(([id, label, Icon]) => <button className={tool === id ? 'active' : ''} key={id} onClick={() => setTool(id)} type="button"><Icon size={16} /><span>{label}</span><ChevronRight size={13} /></button>)}</nav><main>{content}</main></div>
+      <header><div><span className="rmm-eyebrow">{device.name}</span><h2>{selected[1]}</h2><p>{online ? 'Live management from the device details page' : 'Device is offline'}</p></div><button aria-label="Close device tool" onClick={onClose} type="button"><X size={19} /></button></header>
+      {online
+        ? <div className="rmm-device-tool-body"><nav>{TOOLS.map(([id, label, Icon]) => <button className={tool === id ? 'active' : ''} key={id} onClick={() => setTool(id)} type="button"><Icon size={16} /><span>{label}</span><ChevronRight size={13} /></button>)}</nav><main>{content}</main></div>
+        : <div className="rmm-device-tool-offline"><WifiOff size={28} /><strong>Live tools are unavailable while this device is offline</strong><span>No Agent job or tool session will be queued. Close this window and retry after the device reconnects.</span></div>}
     </section>
   </div>
 }
-

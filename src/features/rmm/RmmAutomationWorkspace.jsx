@@ -87,6 +87,8 @@ function AutomationEditor({ automation, onClose, onSaved }) {
 
 function RunPanel({ automation, devices, onClose, onQueued }) {
   const available = useMemo(() => devices.filter((device) => device.agent_device_id), [devices])
+  const onlineAvailable = useMemo(() => available.filter((device) => device.agent_online), [available])
+  const offlineCount = available.length - onlineAvailable.length
   const [selected, setSelected] = useState([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -104,10 +106,12 @@ function RunPanel({ automation, devices, onClose, onQueued }) {
     <section className="rmm-auto-run-panel" role="dialog" aria-modal="true">
       <header><div><span className="rmm-eyebrow">Run published automation</span><h2>{automation.name}</h2><p>Version {automation.published_version_number} · {shortHash(automation.published_sha256)}</p></div><button onClick={onClose} type="button"><X size={18} /></button></header>
       {error ? <div className="rmm-auto-error">{error}</div> : null}
-      <div className="rmm-auto-target-toolbar"><strong>{selected.length} selected</strong><button onClick={() => setSelected(available.map((device) => device.agent_device_id))} type="button">Select all</button><button onClick={() => setSelected([])} type="button">Clear</button></div>
-      <div className="rmm-auto-target-list">{available.map((device) => <label key={device.agent_device_id}><input checked={selected.includes(device.agent_device_id)} onChange={() => toggle(device.agent_device_id)} type="checkbox" /><span className="rmm-device-icon neutral"><Laptop size={16} /></span><span><strong>{device.name}</strong><small>{device.user_display_name || device.agent_active_user || device.reference} · {device.agent_online ? 'Online' : 'Offline / queued when reachable'}</small></span></label>)}</div>
+      <div className="rmm-auto-target-toolbar"><strong>{selected.length} selected</strong><button disabled={!onlineAvailable.length} onClick={() => setSelected(onlineAvailable.map((device) => device.agent_device_id))} type="button">Select all online</button><button onClick={() => setSelected([])} type="button">Clear</button></div>
+      {offlineCount > 0 ? <div className="rmm-auto-offline-note">{offlineCount} offline device{offlineCount === 1 ? '' : 's'} cannot be selected. Hi5Central will not queue work for reconnect.</div> : null}
+      <div className="rmm-auto-target-list">{available.map((device) => <label className={device.agent_online ? '' : 'is-offline'} key={device.agent_device_id}><input checked={selected.includes(device.agent_device_id)} disabled={!device.agent_online} onChange={() => toggle(device.agent_device_id)} type="checkbox" /><span className="rmm-device-icon neutral"><Laptop size={16} /></span><span><strong>{device.name}</strong><small>{device.user_display_name || device.agent_active_user || device.reference} · {device.agent_online ? 'Online' : 'Offline · live actions disabled'}</small></span></label>)}</div>
       {!available.length ? <div className="rmm-auto-empty">No enrolled Hi5Central Agent devices are available.</div> : null}
-      <footer><button onClick={onClose} type="button">Cancel</button><button className="rmm-primary compact" disabled={busy || !selected.length} onClick={run} type="button"><Play size={15} /> {busy ? 'Queueing…' : `Run on ${selected.length || 0} device${selected.length === 1 ? '' : 's'}`}</button></footer>
+      {available.length > 0 && !onlineAvailable.length ? <div className="rmm-auto-empty">All enrolled Agent devices are offline. No jobs can be started.</div> : null}
+      <footer><button onClick={onClose} type="button">Cancel</button><button className="rmm-primary compact" disabled={busy || !selected.length} onClick={run} type="button"><Play size={15} /> {busy ? 'Starting…' : `Run on ${selected.length || 0} online device${selected.length === 1 ? '' : 's'}`}</button></footer>
     </section>
   </div>
 }
@@ -194,7 +198,7 @@ export function RmmAutomation() {
     {tab === 'library' ? <section className="rmm-auto-library">{automations.map((item) => <article className="rmm-auto-card" key={item.id}><header><span className="rmm-script-icon"><Code2 size={19} /></span><div><div><span className="rmm-eyebrow">{item.category} · Windows</span><Status>{item.status}</Status></div><h2>{item.name}</h2><p>{item.description || 'No description yet.'}</p></div></header><div className="rmm-auto-version-row"><span><small>Published</small><strong>{item.published_version_number ? `v${item.published_version_number}` : 'Not published'}</strong></span><span><small>Latest</small><strong>v{item.latest_version_number || 1} · {item.latest_version_state}</strong></span><span><small>SHA-256</small><strong>{shortHash(item.published_sha256 || item.latest_sha256)}</strong></span><span><small>Timeout</small><strong>{item.latest_timeout_seconds || 120}s</strong></span></div><footer><button onClick={() => setEditor(item)} type="button">Edit draft</button>{item.latest_version_state === 'draft' ? <button disabled={busyId === item.id} onClick={() => publish(item)} type="button"><Upload size={14} /> Publish</button> : null}<button className="rmm-primary compact" disabled={!item.published_version_id} onClick={() => setRunAutomation(item)} type="button"><Play size={14} /> Run</button></footer></article>)}</section> : <TrayPolicy automations={automations} policy={policy} onSaved={(next) => { setPolicy(next); setNotice('System tray policy saved.') }} />}
     {!automations.length && tab === 'library' ? <div className="rmm-auto-empty large"><Code2 size={26} /><strong>No automations yet</strong><span>Create a PowerShell automation, save it as a draft, then explicitly publish the version you want devices to run.</span></div> : null}
     {editor ? <AutomationEditor automation={editor.new ? null : editor} onClose={() => setEditor(null)} onSaved={async () => { setEditor(null); setNotice('Draft saved.'); await load() }} /> : null}
-    {runAutomation ? <RunPanel automation={runAutomation} devices={devices} onClose={() => setRunAutomation(null)} onQueued={(result) => { setRunAutomation(null); setNotice(`${result.queued} job${result.queued === 1 ? '' : 's'} queued successfully.`) }} /> : null}
+    {runAutomation ? <RunPanel automation={runAutomation} devices={devices} onClose={() => setRunAutomation(null)} onQueued={(result) => { setRunAutomation(null); setNotice(result.queued + ' job' + (result.queued === 1 ? '' : 's') + ' started for online devices.' + (result.skippedOffline ? ' ' + result.skippedOffline + ' offline device' + (result.skippedOffline === 1 ? '' : 's') + ' skipped.' : '')) }} /> : null}
   </>
 }
 

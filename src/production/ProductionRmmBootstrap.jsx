@@ -82,22 +82,37 @@ export function ProductionRmmBootstrap() {
   useEffect(() => {
     if (!session) return undefined
     let active = true
-    setDataLoading(true)
-    Promise.all([
-      fetch(`${API_BASE}/api/v1/rmm/devices`, { credentials: 'include' }).then(async (response) => ({ response, payload: await response.json().catch(() => ({})) })),
-      fetch(`${API_BASE}/api/v1/organisation`, { credentials: 'include' }).then(async (response) => ({ response, payload: await response.json().catch(() => ({})) })),
-    ]).then(([deviceResult, organisationResult]) => {
-      if (!active) return
-      setDevices(deviceResult.response.ok ? (deviceResult.payload.devices || []).map(deviceToRmm) : [])
-      setSites(organisationResult.response.ok ? (organisationResult.payload.sites || []).filter((site) => site.active !== false) : [])
-    }).catch(() => {
-      if (!active) return
-      setDevices([])
-      setSites([])
-    }).finally(() => {
-      if (active) setDataLoading(false)
-    })
-    return () => { active = false }
+
+    async function loadEstate(initial = false) {
+      if (initial) setDataLoading(true)
+      try {
+        const [deviceResult, organisationResult] = await Promise.all([
+          fetch(`${API_BASE}/api/v1/rmm/devices`, { credentials: 'include', cache: 'no-store' }).then(async (response) => ({ response, payload: await response.json().catch(() => ({})) })),
+          fetch(`${API_BASE}/api/v1/organisation`, { credentials: 'include', cache: 'no-store' }).then(async (response) => ({ response, payload: await response.json().catch(() => ({})) })),
+        ])
+        if (!active) return
+        if (deviceResult.response.ok) setDevices((deviceResult.payload.devices || []).map(deviceToRmm))
+        else if (initial) setDevices([])
+        if (organisationResult.response.ok) setSites((organisationResult.payload.sites || []).filter((site) => site.active !== false))
+        else if (initial) setSites([])
+      } catch {
+        if (!active || !initial) return
+        setDevices([])
+        setSites([])
+      } finally {
+        if (active && initial) setDataLoading(false)
+      }
+    }
+
+    loadEstate(true)
+    const timer = window.setInterval(() => loadEstate(false), 15000)
+    const refreshOnFocus = () => loadEstate(false)
+    window.addEventListener('focus', refreshOnFocus)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+      window.removeEventListener('focus', refreshOnFocus)
+    }
   }, [session])
 
   async function login(event) {

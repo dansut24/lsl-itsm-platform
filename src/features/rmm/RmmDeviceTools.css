@@ -518,3 +518,28 @@
 @media (max-width: 900px) {
   .rmm-tool-loading-rows { min-width: 720px; }
 }
+
+.rmm-device-tool-offline {
+  min-height: 340px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 32px;
+  text-align: center;
+  color: var(--rmm-muted);
+}
+.rmm-device-tool-offline > svg {
+  width: 52px;
+  height: 52px;
+  padding: 13px;
+  border-radius: 14px;
+  background: var(--rmm-soft);
+  color: var(--rmm-muted);
+}
+.rmm-device-tool-offline strong { color: var(--rmm-text); font-size: 14px; }
+.rmm-device-tool-offline span { max-width: 520px; font-size: 10px; line-height: 1.55; }
+@media (max-width: 700px) {
+  .rmm-device-tool-offline { min-height: 55dvh; padding: 24px 18px; }
+}

@@ -759,7 +759,11 @@ export function registerMicrosoftRoutes(app) {
               COALESCE(self_agent.websocket_status,agent_match.websocket_status) AS agent_websocket_status,
               COALESCE(self_agent.agent_version,agent_match.agent_version) AS agent_version,
               COALESCE(self_agent.last_telemetry_at,agent_match.last_telemetry_at) AS agent_last_telemetry_at,
-              CASE WHEN COALESCE(self_agent.last_telemetry_at,agent_match.last_telemetry_at) > now()-interval '90 seconds' THEN true ELSE false END AS agent_online,
+              CASE
+                WHEN COALESCE(self_agent.websocket_status,agent_match.websocket_status)='Connected'
+                 AND COALESCE(self_agent.last_telemetry_at,agent_match.last_telemetry_at) > now()-interval '90 seconds'
+                THEN true ELSE false
+              END AS agent_online,
               CASE WHEN d.source='hi5central_agent' THEN d.source_payload ELSE agent_match.agent_inventory_payload END AS agent_inventory_payload
        FROM rmm_device_inventory d
        LEFT JOIN organisation_people p ON p.tenant_id=d.tenant_id AND p.id=d.assigned_person_id
