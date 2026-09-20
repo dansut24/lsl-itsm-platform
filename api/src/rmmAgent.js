@@ -452,6 +452,14 @@ export function registerRmmAgentRoutes(app) {
     if (completedJob.job_type === 'patch.software') {
       const rebootRequired = Boolean(resultPayload.rebootRequired || resultPayload.reboot_required)
       const verificationFailed = Boolean(resultPayload.verificationFailed || resultPayload.verification_failed)
+      const installerOutput = clean(resultPayload.installerOutput || resultPayload.installer_output).toLowerCase()
+      const providerNoUpgrade = verificationFailed
+        && clean(resultPayload.provider).toLowerCase() === 'winget'
+        && (
+          clean(resultPayload.error).toLowerCase() === 'provider_no_upgrade'
+          || installerOutput.includes('no available upgrade found')
+          || installerOutput.includes('no newer package versions are available')
+        )
       const deploymentStatus = success
         ? (rebootRequired ? 'reboot_required' : 'succeeded')
         : (verificationFailed ? 'verification_failed' : 'failed')
@@ -471,6 +479,26 @@ export function registerRmmAgentRoutes(app) {
                 AND status='open' AND remediation_state='in_progress'`,
             [agent.tenant_id, agent.inventory_id, deployment.rows[0].catalogue_id],
           )
+        }
+
+        if (providerNoUpgrade) {
+          const packageId = clean(resultPayload.packageId || completedJob.payload?.packageId)
+          if (packageId) {
+            await client.query(
+              `UPDATE rmm_software_patch_observations
+                  SET patch_status='provider_blocked',
+                      evidence=evidence || jsonb_build_object(
+                        'providerBlockedReason','winget_no_available_upgrade',
+                        'providerBlockedAt',now(),
+                        'providerBlockedJobId',$4,
+                        'providerBlockedDetail','WinGet reports no available upgrade while exact-package verification still finds an instance below target.'
+                      ),
+                      updated_at=now()
+                WHERE tenant_id=$1 AND inventory_id=$2
+                  AND lower(provider_package_id)=lower($3)`,
+              [agent.tenant_id, agent.inventory_id, packageId, completedJob.id],
+            )
+          }
         }
       }).catch((error) => console.error('RMM patch deployment result update failed', completedJob.id, error.message))
     }

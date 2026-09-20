@@ -74,16 +74,38 @@ export function jobActivityDescriptor(job, success, result = {}, errorMessage = 
   if (type === 'patch.software') {
     const name = clean(result.applicationName || result.application_name || payload.applicationName) || 'software'
     const fromVersion = clean(result.installedVersion || result.installed_version || payload.installedVersion)
-    const toVersion = clean(result.verifiedVersion || result.verified_version || result.targetVersion || result.target_version || payload.targetVersion)
+    const targetVersion = clean(payload.targetVersion || result.targetVersion || result.target_version)
+    const verifiedVersion = clean(result.verifiedVersion || result.verified_version)
     const provider = clean(result.provider || payload.provider)
-    const detailParts = [fromVersion && toVersion ? fromVersion + ' → ' + toVersion : '', provider ? 'Provider: ' + provider : '', suffix].filter(Boolean)
+    const verificationFailed = Boolean(result.verificationFailed || result.verification_failed)
+    const installerOutput = clean(result.installerOutput || result.installer_output).toLowerCase()
+    const providerBlocked = verificationFailed
+      && provider.toLowerCase() === 'winget'
+      && (
+        clean(result.error).toLowerCase() === 'provider_no_upgrade'
+        || installerOutput.includes('no available upgrade found')
+        || installerOutput.includes('no newer package versions are available')
+      )
+    const patchSuffix = ok
+      ? 'Job successful · See details'
+      : providerBlocked
+        ? 'Verification failed · WinGet reports no applicable upgrade · See details'
+        : verificationFailed
+          ? 'Verification failed · See details'
+          : suffix
+    const detailParts = [
+      fromVersion && targetVersion ? fromVersion + ' → ' + targetVersion : '',
+      provider ? 'Provider: ' + provider : '',
+      verifiedVersion && verifiedVersion !== targetVersion ? 'Verified: ' + verifiedVersion : '',
+      patchSuffix,
+    ].filter(Boolean)
     return {
       ...common,
       eventType: type,
       category: 'patching',
       summary: ok ? actor.actorLabel + ' patched ' + quoted(name) : actor.actorLabel + ' failed to patch ' + quoted(name),
       detail: detailParts.join(' · '),
-      metadata: { software: name, installedVersion: fromVersion, targetVersion: toVersion, provider, result },
+      metadata: { software: name, installedVersion: fromVersion, targetVersion, verifiedVersion, provider, providerBlocked, result },
     }
   }
   if (type === 'process.kill') {

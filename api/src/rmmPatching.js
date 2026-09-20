@@ -109,7 +109,7 @@ async function patchDiscoveryRows(tenantId) {
   const [observations, candidates] = await Promise.all([
     pool.query(
       `SELECT o.inventory_id,o.application_name,o.display_name,o.publisher,o.installed_version,
-              o.provider,o.provider_package_id,o.available_version,o.patch_status,o.source_name,
+              o.provider,o.provider_package_id,o.available_version,o.patch_status,o.evidence,o.source_name,
               o.discovery_method,o.match_confidence,o.observed_at,
               i.reference AS device_reference,i.name AS device_name
          FROM rmm_software_patch_observations o
@@ -205,12 +205,24 @@ function publicCatalogue(entry) {
     status: entry.status,
   }
 }
-function buildSoftware(devices, catalogue) {
+function buildSoftware(devices, catalogue, observations = []) {
   const applications = new Map()
   const deviceSoftware = []
+  const observationMap = new Map(
+    observations.map((item) => [
+      item.inventory_id + '|' + lower(item.provider_package_id),
+      item,
+    ]),
+  )
   for (const device of devices) {
     for (const app of softwareItems(device)) {
       const state = classifyInstallation(app, catalogue)
+      const observation = state.catalogue?.provider_package_id
+        ? observationMap.get(device.inventory_id + '|' + lower(state.catalogue.provider_package_id))
+        : null
+      if (state.patchStatus === 'update_available' && observation?.patch_status === 'provider_blocked') {
+        state.patchStatus = 'provider_blocked'
+      }
       const key = appIdentity(app)
       const row = {
         key,
@@ -226,6 +238,9 @@ function buildSoftware(devices, catalogue) {
         registryKey: clean(app.registry_key),
         patchStatus: state.patchStatus,
         targetVersion: state.targetVersion,
+        providerBlockedReason: state.patchStatus === 'provider_blocked'
+          ? clean(object(observation?.evidence).providerBlockedDetail || object(observation?.evidence).providerBlockedReason)
+          : '',
         catalogue: publicCatalogue(state.catalogue),
       }
       deviceSoftware.push(row)
@@ -237,6 +252,7 @@ function buildSoftware(devices, catalogue) {
         deviceIds: new Set(),
         versions: new Map(),
         updateAvailable: 0,
+        providerBlocked: 0,
         current: 0,
         detectionPending: 0,
         unmapped: 0,
@@ -246,6 +262,7 @@ function buildSoftware(devices, catalogue) {
       grouped.deviceIds.add(row.deviceId)
       grouped.versions.set(row.installedVersion || 'Not reported', (grouped.versions.get(row.installedVersion || 'Not reported') || 0) + 1)
       if (state.patchStatus === 'update_available') grouped.updateAvailable += 1
+      else if (state.patchStatus === 'provider_blocked') grouped.providerBlocked += 1
       else if (state.patchStatus === 'current') grouped.current += 1
       else if (state.patchStatus === 'detection_pending') grouped.detectionPending += 1
       else grouped.unmapped += 1
@@ -279,7 +296,7 @@ async function patchBundle(tenantId) {
     vulnerabilityExposureRows(tenantId, 250),
     patchDeploymentRows(tenantId),
   ])
-  const software = buildSoftware(devices, catalogue)
+  const software = buildSoftware(devices, catalogue, discovery.observations)
   const updateAvailable = software.deviceSoftware.filter((item) => item.patchStatus === 'update_available').length
   const mapped = software.deviceSoftware.filter((item) => item.catalogue).length
   return {
@@ -453,7 +470,26 @@ async function ingestPatchDiscovery(agent, body = {}) {
            catalogue_id=EXCLUDED.catalogue_id,application_name=EXCLUDED.application_name,display_name=EXCLUDED.display_name,
            publisher=EXCLUDED.publisher,installed_version=EXCLUDED.installed_version,provider=EXCLUDED.provider,
            provider_package_id=EXCLUDED.provider_package_id,available_version=EXCLUDED.available_version,
-           patch_status=EXCLUDED.patch_status,evidence=EXCLUDED.evidence,source_name=EXCLUDED.source_name,
+           patch_status=CASE
+             WHEN rmm_software_patch_observations.patch_status='provider_blocked'
+               AND rmm_software_patch_observations.available_version=EXCLUDED.available_version
+               AND rmm_software_patch_observations.evidence->'installedInstances'=EXCLUDED.evidence->'installedInstances'
+             THEN 'provider_blocked'
+             ELSE EXCLUDED.patch_status
+           END,
+           evidence=CASE
+             WHEN rmm_software_patch_observations.patch_status='provider_blocked'
+               AND rmm_software_patch_observations.available_version=EXCLUDED.available_version
+               AND rmm_software_patch_observations.evidence->'installedInstances'=EXCLUDED.evidence->'installedInstances'
+             THEN EXCLUDED.evidence || jsonb_build_object(
+               'providerBlockedReason',rmm_software_patch_observations.evidence->>'providerBlockedReason',
+               'providerBlockedAt',rmm_software_patch_observations.evidence->>'providerBlockedAt',
+               'providerBlockedJobId',rmm_software_patch_observations.evidence->>'providerBlockedJobId',
+               'providerBlockedDetail',rmm_software_patch_observations.evidence->>'providerBlockedDetail'
+             )
+             ELSE EXCLUDED.evidence
+           END,
+           source_name=EXCLUDED.source_name,
            discovery_method=EXCLUDED.discovery_method,match_confidence=EXCLUDED.match_confidence,
            observed_at=now(),updated_at=now()`,
         [
@@ -590,6 +626,28 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId) {
   const installedVersion = clean(installed.version)
   const targetVersion = clean(row.target_version)
   if (!targetVersion) return { error: 'The software catalogue does not have an approved target version.', status: 409 }
+
+  if (clean(row.provider_package_id)) {
+    const blocked = await pool.query(
+      `SELECT patch_status,available_version,evidence
+         FROM rmm_software_patch_observations
+        WHERE tenant_id=$1 AND inventory_id=$2
+          AND lower(provider_package_id)=lower($3)
+        ORDER BY observed_at DESC
+        LIMIT 1`,
+      [tenantId, row.inventory_id, clean(row.provider_package_id)],
+    )
+    const observation = blocked.rows[0]
+    if (observation?.patch_status === 'provider_blocked'
+      && clean(observation.available_version) === targetVersion) {
+      return {
+        error: clean(object(observation.evidence).providerBlockedDetail)
+          || 'The selected deployment provider cannot currently remediate this detected update.',
+        status: 409,
+        providerBlocked: true,
+      }
+    }
+  }
 
   const comparison = compareVersions(installedVersion, targetVersion)
   if (comparison != null && comparison >= 0) {
