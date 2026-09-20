@@ -52,6 +52,13 @@ export const expandedSoftwareCatalogue = [
     "displayName": "Signal Desktop",
     "canonicalName": "Signal Desktop",
     "publisher": "Signal Messenger, LLC",
+    "namePattern": "Signal",
+    "publisherPattern": "Signal Messenger, LLC",
+    "verificationConfig": {
+      "method": "uninstall_registry",
+      "displayNameContains": "Signal",
+      "publisherContains": "Signal Messenger, LLC"
+    },
     "sourceType": "vendor_text",
     "sourceUrl": "https://updates.signal.org/desktop/latest.yml",
     "adapter": "signal_yaml",
