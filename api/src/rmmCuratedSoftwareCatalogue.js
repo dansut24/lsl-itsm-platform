@@ -1,12 +1,24 @@
 import { pool, withTransaction } from './db.js'
 import {
   normalizedSha256,
-  publicHttpsUrl,
   repositoryName,
 } from './rmmTenantVendorSources.js'
 
 function clean(value = '') { return String(value ?? '').trim() }
 function object(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {} }
+function curatedHttpsUrl(value = '') {
+  let url
+  try { url = new URL(clean(value)) } catch { throw new Error('A valid HTTPS URL is required.') }
+  if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443')) {
+    throw new Error('Curated source URLs must use HTTPS without embedded credentials or custom ports.')
+  }
+  const host = url.hostname.toLowerCase().replace(/\.$/, '')
+  if (!host || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal')
+    || /^\d+(?:\.\d+){3}$/.test(host) || host.includes(':')) {
+    throw new Error('Curated source URLs must use a public DNS hostname, not a local or literal IP address.')
+  }
+  return url
+}
 
 function sourceKey(value = '') {
   const key = clean(value).toLowerCase().replace(/[^a-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '')
@@ -70,7 +82,7 @@ async function normalizeEntry(raw = {}) {
   if (sourceType === 'github_releases' && !sourceUrl) sourceUrl = 'https://github.com/' + repository
   if (!sourceUrl && sourceType === 'static_release') sourceUrl = clean(raw.staticReleaseUrl || raw.releaseUrl)
   if (!sourceUrl) throw new Error(key + ': sourceUrl is required.')
-  sourceUrl = (await publicHttpsUrl(sourceUrl)).toString()
+  sourceUrl = curatedHttpsUrl(sourceUrl).toString()
 
   const parserInput = object(raw.parserConfig)
   const parserConfig = {
@@ -91,8 +103,8 @@ async function normalizeEntry(raw = {}) {
     if (!staticVersion || !staticInstallerUrl || !staticSha256) {
       throw new Error(key + ': static_release requires version, installerUrl and SHA-256.')
     }
-    await publicHttpsUrl(staticInstallerUrl)
-    if (staticReleaseUrl) await publicHttpsUrl(staticReleaseUrl)
+    curatedHttpsUrl(staticInstallerUrl)
+    if (staticReleaseUrl) curatedHttpsUrl(staticReleaseUrl)
   }
 
   const installerType = clean(raw.installerType).toLowerCase()
@@ -122,6 +134,7 @@ async function normalizeEntry(raw = {}) {
     repository,
     adapter,
     parserConfig,
+    releaseTagPattern: clean(raw.releaseTagPattern).slice(0, 240),
     assetPattern: clean(raw.assetPattern).slice(0, 240),
     checksumAssetPattern: clean(raw.checksumAssetPattern).slice(0, 240),
     staticVersion,
@@ -146,6 +159,7 @@ async function normalizeEntry(raw = {}) {
     repository,
     adapter,
     parserConfig,
+    releaseTagPattern: sourceMetadata.releaseTagPattern,
     assetPattern: sourceMetadata.assetPattern,
     checksumAssetPattern: sourceMetadata.checksumAssetPattern,
     staticVersion,
@@ -258,6 +272,7 @@ export async function importCuratedSoftwareCatalogue(entries = [], { dryRun = fa
            name_pattern=EXCLUDED.name_pattern,publisher_pattern=EXCLUDED.publisher_pattern,platform=EXCLUDED.platform,
            provider=EXCLUDED.provider,release_channel=EXCLUDED.release_channel,installer_type=EXCLUDED.installer_type,
            verification=EXCLUDED.verification,execution=EXCLUDED.execution,
+           target_version=CASE WHEN EXCLUDED.source_metadata->>'sourceEnabled'='false' THEN '' ELSE rmm_software_catalogue.target_version END,
            source_metadata=EXCLUDED.source_metadata,status='active',updated_at=now()`,
         [
           item.canonicalName,item.publisher,item.namePattern,item.publisherPattern,item.platform,
@@ -268,6 +283,7 @@ export async function importCuratedSoftwareCatalogue(entries = [], { dryRun = fa
             preseeded: true,
             latestSource: item.sourceKey,
             sourceType: item.sourceType,
+            sourceEnabled: item.enabled,
             deploymentMode: item.deploymentMode,
             expectedSigner: item.expectedSigner,
             trustState: 'pending_source_sync',

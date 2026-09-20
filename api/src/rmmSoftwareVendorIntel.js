@@ -224,6 +224,28 @@ async function latestGithubTagViaRedirect(repository) {
   throw new Error('GitHub latest release redirected too many times')
 }
 
+function normalizedGithubVersion(value = '') {
+  const raw = clean(value)
+  if (/^v?\d/i.test(raw)) return releaseVersion(raw)
+  const numeric = raw.match(/\d+(?:[._]\d+)+/)
+  return numeric ? numeric[0].replaceAll('_', '.') : releaseVersion(raw)
+}
+
+async function matchingGithubRelease(repository, pattern) {
+  const matcher = globMatcher(pattern)
+  if (!matcher) throw new Error(repository + ' has an invalid releaseTagPattern')
+  const response = await fetch('https://api.github.com/repos/' + repository + '/releases?per_page=50', {
+    headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Hi5Central-Software-Catalogue/1.0' },
+    signal: AbortSignal.timeout(30_000),
+  })
+  if (!response.ok) throw new Error('GitHub Releases HTTP ' + response.status)
+  const releases = await response.json()
+  const release = (Array.isArray(releases) ? releases : [])
+    .find((item) => !item?.draft && matcher.test(clean(item?.tag_name)))
+  if (!release) throw new Error(repository + ' has no release matching ' + pattern)
+  return release
+}
+
 async function syncGenericConfigured(sourceKey, state) {
   const b = await binding(sourceKey)
   if (!b) return null
@@ -241,14 +263,16 @@ async function syncGenericConfigured(sourceKey, state) {
   if (state.source_type === 'github_releases') {
     const repository = repositoryName(config.repository || state.source_url)
     if (!repository) throw new Error(sourceKey + ' has no valid GitHub repository')
-    if (!clean(config.assetPattern) && !clean(config.checksumAssetPattern)) {
+    if (!clean(config.releaseTagPattern) && !clean(config.assetPattern) && !clean(config.checksumAssetPattern)) {
       const lightweight = await latestGithubTagViaRedirect(repository)
-      version = releaseVersion(lightweight.tag)
+      version = normalizedGithubVersion(lightweight.tag)
       releaseUrl = lightweight.releaseUrl
       payload = { github: { tag_name: lightweight.tag, html_url: lightweight.releaseUrl, lightweight: true } }
     } else {
-      const release = await latestGithubRelease(repository)
-      version = releaseVersion(release?.tag_name || release?.name)
+      const release = clean(config.releaseTagPattern)
+        ? await matchingGithubRelease(repository, config.releaseTagPattern)
+        : await latestGithubRelease(repository)
+      version = normalizedGithubVersion(release?.tag_name || release?.name)
       releaseDate = normalizedReleaseDate(release?.published_at || release?.created_at)
       releaseUrl = clean(release?.html_url)
       const assets = Array.isArray(release?.assets) ? release.assets : []
@@ -259,7 +283,13 @@ async function syncGenericConfigured(sourceKey, state) {
       installerUrl = clean(installer?.browser_download_url)
       if (installer && checksum) installerSha256 = await publishedChecksum(checksum.browser_download_url, installer.name)
       resolvedInstallerType = detectInstallerType(installer?.name, resolvedInstallerType)
-      payload = { github: { id: release?.id, tag_name: release?.tag_name, html_url: release?.html_url, lightweight: false } }
+      payload = { github: {
+        id: release?.id,
+        tag_name: release?.tag_name,
+        html_url: release?.html_url,
+        lightweight: false,
+        releaseTagPattern: clean(config.releaseTagPattern),
+      } }
     }
   } else if (state.source_type === 'gitlab_releases') {
     const releases = await fetchPublicJson(state.source_url)

@@ -995,7 +995,8 @@ export const expandedSoftwareCatalogue = [
     "repository": "wireapp/wire-desktop",
     "deploymentMode": "intelligence_only",
     "pollMinutes": 60,
-    "enabled": true
+    "enabled": true,
+    "releaseTagPattern": "windows/*"
   },
   {
     "sourceKey": "gh_jitsi_jitsi_meet_electron",
@@ -1095,7 +1096,8 @@ export const expandedSoftwareCatalogue = [
     "repository": "bitwarden/clients",
     "deploymentMode": "intelligence_only",
     "pollMinutes": 60,
-    "enabled": true
+    "enabled": true,
+    "releaseTagPattern": "desktop-v*"
   },
   {
     "sourceKey": "gh_nationalsecurityagency_ghidra",
@@ -1725,7 +1727,7 @@ export const expandedSoftwareCatalogue = [
     "repository": "stenzek/duckstation",
     "deploymentMode": "intelligence_only",
     "pollMinutes": 60,
-    "enabled": true
+    "enabled": false
   },
   {
     "sourceKey": "gh_cemu_project_cemu",
