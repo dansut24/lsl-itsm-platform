@@ -1389,6 +1389,8 @@ export const expandedSoftwareCatalogue = [
     "sourceKey": "gh_microsoft_powertoys",
     "displayName": "Microsoft PowerToys",
     "canonicalName": "Microsoft PowerToys",
+    "namePattern": "PowerToys",
+    "publisherPattern": "Microsoft",
     "sourceType": "github_releases",
     "repository": "microsoft/PowerToys",
     "deploymentMode": "winget_preferred",
