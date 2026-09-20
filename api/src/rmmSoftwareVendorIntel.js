@@ -173,9 +173,30 @@ async function upsertRelease({
          installer_type=EXCLUDED.installer_type,
          release_url=EXCLUDED.release_url,
          asset_name=EXCLUDED.asset_name,
-         trust_state=EXCLUDED.trust_state,trust_evidence=EXCLUDED.trust_evidence,
-         source_priority=EXCLUDED.source_priority,source_payload=EXCLUDED.source_payload,last_seen_at=now()
-       RETURNING id`,
+         trust_state=CASE
+           WHEN rmm_software_vendor_releases.trust_state IN ('rejected','signer_review_required')
+             THEN rmm_software_vendor_releases.trust_state
+           WHEN rmm_software_vendor_releases.trust_state='direct_ready'
+             AND EXCLUDED.trust_state<>'direct_ready'
+             THEN 'direct_ready'
+           ELSE EXCLUDED.trust_state
+         END,
+         trust_evidence=rmm_software_vendor_releases.trust_evidence || EXCLUDED.trust_evidence,
+         source_priority=EXCLUDED.source_priority,
+         source_payload=(rmm_software_vendor_releases.source_payload || EXCLUDED.source_payload)
+           || jsonb_build_object(
+             'trustState',
+             CASE
+               WHEN rmm_software_vendor_releases.trust_state IN ('rejected','signer_review_required')
+                 THEN rmm_software_vendor_releases.trust_state
+               WHEN rmm_software_vendor_releases.trust_state='direct_ready'
+                 AND EXCLUDED.trust_state<>'direct_ready'
+                 THEN 'direct_ready'
+               ELSE EXCLUDED.trust_state
+             END
+           ),
+         last_seen_at=now()
+       RETURNING id,trust_state,trust_evidence,source_payload`,
       [
         sourceKey, packageId, canonicalName, publisher, channel, platform, architecture,
         normalizedVersion, releaseDate, installerUrl, installerSha256, installerType,
@@ -197,9 +218,31 @@ async function upsertRelease({
                 name_pattern=COALESCE(NULLIF($8,''),$2),publisher_pattern=COALESCE(NULLIF($9,''),$3),
                 provider=$10,provider_package_id=$1,target_version=$4,
                 release_channel=$5,installer_type=$11,verification=$12::jsonb,execution=$13::jsonb,source_revision=$4,
-                source_metadata=source_metadata || $6::jsonb || $14::jsonb,
+                source_metadata=(source_metadata || $6::jsonb || $14::jsonb)
+                  || jsonb_build_object(
+                    'trustState',
+                    CASE
+                      WHEN source_metadata->>'trustState' IN ('rejected','signer_review_required')
+                        THEN source_metadata->>'trustState'
+                      WHEN source_metadata->>'trustState'='direct_ready'
+                        AND COALESCE($14::jsonb->>'trustState','')<>'direct_ready'
+                        THEN 'direct_ready'
+                      ELSE COALESCE(NULLIF($14::jsonb->>'trustState',''),source_metadata->>'trustState','version_only')
+                    END,
+                    'deploymentMode',
+                    CASE
+                      WHEN source_metadata->>'trustState' IN ('rejected','signer_review_required')
+                        THEN 'intelligence_only'
+                      WHEN source_metadata->>'trustState'='direct_ready'
+                        AND COALESCE($14::jsonb->>'trustState','')<>'direct_ready'
+                        THEN 'vendor_direct'
+                      ELSE COALESCE(NULLIF($14::jsonb->>'deploymentMode',''),source_metadata->>'deploymentMode','intelligence_only')
+                    END
+                  ),
                 qualification_state=CASE
                   WHEN qualification_state IN ('qualified','blocked') THEN qualification_state
+                  WHEN source_metadata->>'trustState'='direct_ready' THEN 'deployment_candidate'
+                  WHEN source_metadata->>'trustState' IN ('rejected','signer_review_required') THEN 'intelligence_only'
                   ELSE $15
                 END,
                 qualification_evidence=qualification_evidence || $16::jsonb,
