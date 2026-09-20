@@ -721,9 +721,20 @@ export function RmmPatching({ devices = [] }) {
             const blockers = Array.isArray(source.last_test_result?.blockers) ? source.last_test_result.blockers : []
             const stateTone = source.status === 'active' ? 'healthy' : source.status === 'quarantined' ? 'critical' : source.status === 'tested' ? 'running' : 'neutral'
             const trustTone = source.trust_state === 'direct_ready' || source.trust_state === 'winget_ready' ? 'healthy' : source.trust_state === 'quarantined' ? 'critical' : 'neutral'
+            const recommendation = source.verification_recommendation
+            const recommendationLabel = recommendation?.recommendedVariant
+              ? recommendation.recommendedVariant.replaceAll('_', ' ')
+              : recommendation?.recommendedMethod?.replaceAll('_', ' ')
+            const recommendationState = recommendation?.validated
+              ? 'validated'
+              : recommendation?.autoProbeRecommended
+                ? 'probe needed'
+                : recommendation?.recommendedMethod
+                  ? 'awaiting endpoint'
+                  : 'not available'
             return <div className="row" key={source.id}>
               <span><strong>{source.display_name}</strong><small>{source.source_type === 'github_releases' ? source.repository : source.source_url || source.parser_config?.staticReleaseUrl || 'Manual release'} · {(source.source_type || 'github_releases').replaceAll('_', ' ')} · every {source.poll_minutes} min</small></span>
-              <span><strong>{(source.deployment_mode || '').replaceAll('_', ' ')}</strong><small>{source.provider_package_id || 'No WinGet fallback'} · verify {(source.verification_config?.method || 'winget').replaceAll('_', ' ')}</small></span>
+              <span><strong>{(source.deployment_mode || '').replaceAll('_', ' ')}</strong><small>{source.provider_package_id || 'No WinGet fallback'} · configured {(source.verification_config?.method || 'winget').replaceAll('_', ' ')}</small>{recommendationLabel && <small><b>Recommended:</b> {recommendationLabel} · {recommendationState}</small>}</span>
               <span><strong>{source.release_version || source.latest_version || 'Not tested'}</strong><small>{source.release_date ? new Date(source.release_date).toLocaleDateString() : source.last_success_at ? 'Tested ' + new Date(source.last_success_at).toLocaleString() : 'Awaiting test'}</small></span>
               <span><StatusPill tone={trustTone}>{(source.trust_state || 'untested').replaceAll('_', ' ')}</StatusPill><small>{source.installer_sha256 ? (source.source_type === 'static_release' ? 'SHA-256 pinned from vendor release evidence' : 'SHA-256 verified from release metadata') : blockers[0] || (source.deployment_mode === 'vendor_direct' ? 'Direct-install trust incomplete' : 'Execution provider performs install verification')}</small></span>
               <span><StatusPill tone={stateTone}>{source.status}</StatusPill><small>{source.last_error || (source.approved_at ? 'Approved ' + new Date(source.approved_at).toLocaleDateString() : '')}</small></span>

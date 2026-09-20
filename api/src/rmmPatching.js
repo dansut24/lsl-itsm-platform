@@ -10,6 +10,7 @@ import {
   archiveTenantVendorSource,
   createTenantVendorSource,
   listTenantVendorSources,
+  tenantVendorVerificationRecommendation,
   testTenantVendorSource,
   updateTenantVendorSource,
 } from './rmmTenantVendorSources.js'
@@ -84,25 +85,42 @@ function fileVersionProbeScript(filePath) {
   ].join('\n')
 }
 
-export async function queueVendorVerificationProbe({ tenantId, userId = null, actorLabel = 'Technician', sourceId, agentDeviceId }) {
+export async function queueVendorVerificationProbe({ tenantId, userId = null, actorLabel = 'Technician', initiatedBy = 'technician', sourceId, agentDeviceId = '' }) {
   const selected = await pool.query(
     `SELECT s.id AS source_id,s.display_name,s.status,s.verification_config,
             a.id AS agent_device_id,a.inventory_id,a.websocket_status,a.last_telemetry_at,
             i.name AS device_name,i.reference AS device_reference
        FROM rmm_tenant_vendor_sources s
-       JOIN rmm_agent_devices a ON a.tenant_id=s.tenant_id AND a.id=$3 AND a.disabled_at IS NULL
+       JOIN rmm_agent_devices a ON a.tenant_id=s.tenant_id AND a.disabled_at IS NULL
        JOIN rmm_device_inventory i ON i.id=a.inventory_id AND i.active=true
       WHERE s.tenant_id=$1 AND s.id=$2 AND s.status IN ('tested','active')
+        AND (
+          ($3<>'' AND a.id::text=$3)
+          OR
+          ($3='' AND EXISTS (
+            SELECT 1
+              FROM jsonb_array_elements(
+                CASE WHEN jsonb_typeof(i.source_payload->'software'->'items')='array'
+                  THEN i.source_payload->'software'->'items'
+                  ELSE '[]'::jsonb END
+              ) item
+             WHERE lower(COALESCE(item->>'name','')) LIKE '%' || lower(COALESCE(NULLIF(s.name_pattern,''),s.canonical_name)) || '%'
+               AND (
+                 COALESCE(NULLIF(s.publisher_pattern,''),s.publisher,'')=''
+                 OR lower(COALESCE(item->>'publisher','')) LIKE '%' || lower(COALESCE(NULLIF(s.publisher_pattern,''),s.publisher)) || '%'
+               )
+          ))
+        )
+      ORDER BY
+        (a.websocket_status='Connected' AND a.last_telemetry_at > now()-interval '90 seconds') DESC,
+        a.last_telemetry_at DESC NULLS LAST
       LIMIT 1`,
-    [tenantId, sourceId, agentDeviceId],
+    [tenantId, sourceId, clean(agentDeviceId)],
   )
   const row = selected.rows[0]
   if (!row) return { error: 'Vendor source or managed endpoint was not found.', status: 404 }
 
   const verification = object(row.verification_config)
-  if (clean(verification.method) !== 'file_version') {
-    return { error: 'This probe currently supports file-version verification sources only.', status: 409 }
-  }
   const filePath = clean(verification.filePath)
   if (!safeVerificationFilePath(filePath)) {
     return { error: 'The configured verification file path is not allowed.', status: 409 }
@@ -119,7 +137,7 @@ export async function queueVendorVerificationProbe({ tenantId, userId = null, ac
         AND request_metadata->>'vendor_source_id'=$3
         AND status IN ('queued','claimed')
       ORDER BY created_at DESC LIMIT 1`,
-    [tenantId, agentDeviceId, sourceId],
+    [tenantId, row.agent_device_id, sourceId],
   )
   if (existing.rowCount) return { error: 'A verification probe is already running for this source and device.', status: 409, jobId: existing.rows[0].id }
 
@@ -127,13 +145,14 @@ export async function queueVendorVerificationProbe({ tenantId, userId = null, ac
   const inserted = await pool.query(
     `INSERT INTO rmm_agent_jobs
       (tenant_id,agent_device_id,job_type,payload,queued_by_user_id,initiated_by,initiated_by_label,request_metadata)
-     VALUES ($1,$2,'custom.command',$3::jsonb,$4,'technician',$5,$6::jsonb)
+     VALUES ($1,$2,'custom.command',$3::jsonb,$4,$5,$6,$7::jsonb)
      RETURNING id,status,created_at`,
     [
       tenantId,
-      agentDeviceId,
+      row.agent_device_id,
       JSON.stringify({ command, timeout_seconds: 30 }),
       userId,
+      ['system','technician'].includes(clean(initiatedBy)) ? clean(initiatedBy) : 'technician',
       clean(actorLabel || 'Technician').slice(0, 255),
       JSON.stringify({
         source: 'vendor_verification_probe',
@@ -147,10 +166,10 @@ export async function queueVendorVerificationProbe({ tenantId, userId = null, ac
   )
   await recordRmmActivity({
     tenantId,
-    agentDeviceId,
+    agentDeviceId: row.agent_device_id,
     inventoryId: row.inventory_id,
     actorUserId: userId,
-    actorType: 'technician',
+    actorType: clean(initiatedBy) === 'system' ? 'system' : 'technician',
     actorLabel: clean(actorLabel || 'Technician').slice(0, 255),
     eventType: 'patch.vendor_verification_probe.requested',
     category: 'patching',
@@ -161,6 +180,62 @@ export async function queueVendorVerificationProbe({ tenantId, userId = null, ac
     metadata: { sourceId, method: 'file_version', filePath },
   }).catch(() => null)
   return { success: true, job: inserted.rows[0], filePath, deviceName: row.device_name }
+}
+
+async function queueAutomaticVendorVerificationProbes(tenantId) {
+  const candidates = await pool.query(
+    `SELECT s.id
+       FROM rmm_tenant_vendor_sources s
+      WHERE s.tenant_id=$1
+        AND s.status IN ('tested','active')
+        AND COALESCE(s.verification_config->>'filePath','')<>''
+        AND EXISTS (
+          SELECT 1
+            FROM rmm_agent_devices a
+            JOIN rmm_device_inventory i ON i.id=a.inventory_id AND i.active=true
+           WHERE a.tenant_id=s.tenant_id
+             AND a.disabled_at IS NULL
+             AND a.websocket_status='Connected'
+             AND a.last_telemetry_at > now()-interval '90 seconds'
+             AND EXISTS (
+               SELECT 1
+                 FROM jsonb_array_elements(
+                   CASE WHEN jsonb_typeof(i.source_payload->'software'->'items')='array'
+                     THEN i.source_payload->'software'->'items'
+                     ELSE '[]'::jsonb END
+                 ) item
+                WHERE lower(COALESCE(item->>'name','')) LIKE '%' || lower(COALESCE(NULLIF(s.name_pattern,''),s.canonical_name)) || '%'
+                  AND (
+                    COALESCE(NULLIF(s.publisher_pattern,''),s.publisher,'')=''
+                    OR lower(COALESCE(item->>'publisher','')) LIKE '%' || lower(COALESCE(NULLIF(s.publisher_pattern,''),s.publisher)) || '%'
+                  )
+             )
+        )
+        AND NOT EXISTS (
+          SELECT 1
+            FROM rmm_agent_jobs j
+           WHERE j.tenant_id=s.tenant_id
+             AND j.job_type='custom.command'
+             AND j.request_metadata->>'source'='vendor_verification_probe'
+             AND j.request_metadata->>'vendor_source_id'=s.id::text
+             AND j.request_metadata->>'verification_file_path'=s.verification_config->>'filePath'
+             AND j.status IN ('queued','claimed','completed','failed')
+        )
+      ORDER BY s.updated_at
+      LIMIT 5`,
+    [tenantId],
+  )
+  const queued = []
+  for (const candidate of candidates.rows) {
+    const result = await queueVendorVerificationProbe({
+      tenantId,
+      sourceId: candidate.id,
+      actorLabel: 'SYSTEM',
+      initiatedBy: 'system',
+    })
+    if (result?.success) queued.push({ sourceId: candidate.id, jobId: result.job?.id, deviceName: result.deviceName })
+  }
+  return queued
 }
 
 function versionParts(value) {
@@ -1263,6 +1338,8 @@ export function registerRmmPatchingRoutes(app) {
     if (!agent) return c.json({ success: false, error: 'Agent authentication failed.' }, 401)
     const body = await c.req.json().catch(() => ({}))
     const result = await ingestPatchDiscovery(agent, body)
+    const automaticVerificationProbes = await queueAutomaticVendorVerificationProbes(agent.tenant_id).catch(() => [])
+    const discoveryResult = { ...result, automaticVerificationProbes }
     await recordRmmActivity({
       tenantId: agent.tenant_id,
       agentDeviceId: agent.id,
@@ -1272,11 +1349,14 @@ export function registerRmmPatchingRoutes(app) {
       eventType: 'patch.discovery',
       category: 'patching',
       summary: 'SYSTEM: PatchHost refreshed software patch discovery',
-      detail: result.packages + ' WinGet package mappings reported',
+      detail: [
+        result.packages + ' WinGet package mappings reported',
+        automaticVerificationProbes.length ? automaticVerificationProbes.length + ' vendor verification probe(s) queued' : '',
+      ].filter(Boolean).join(' · '),
       outcome: 'success',
-      metadata: result,
+      metadata: discoveryResult,
     }).catch(() => null)
-    return c.json({ success: true, ...result })
+    return c.json({ success: true, ...discoveryResult })
   })
 
   app.get('/api/v1/rmm/patching', async (c) => {
@@ -1315,9 +1395,33 @@ export function registerRmmPatchingRoutes(app) {
     const auth = await requirePatchAccess(c, 'software')
     if (auth.error) return auth.error
     try {
-      const result = await testTenantVendorSource(auth.session.tenant_id, clean(c.req.param('sourceId')))
-      await audit(auth.session, 'patch.vendor_source.tested', 'Tested vendor source', result.version + ' · ' + result.trustState, { sourceId: result.sourceId, result })
-      return c.json({ success: true, result, bundle: await patchBundle(auth.session.tenant_id) })
+      const sourceId = clean(c.req.param('sourceId'))
+      const result = await testTenantVendorSource(auth.session.tenant_id, sourceId)
+      let verificationProbe = null
+      if (result.verificationRecommendation?.autoProbeRecommended) {
+        verificationProbe = await queueVendorVerificationProbe({
+          tenantId: auth.session.tenant_id,
+          userId: auth.session.user_id,
+          actorLabel: auth.session.name || auth.session.email || 'Technician',
+          sourceId,
+        })
+        if (verificationProbe?.error && [404, 409].includes(verificationProbe.status)) verificationProbe = { queued: false, reason: verificationProbe.error }
+        else if (verificationProbe?.success) verificationProbe = { queued: true, ...verificationProbe }
+      }
+      const recommendation = await tenantVendorVerificationRecommendation(auth.session.tenant_id, sourceId)
+      await audit(
+        auth.session,
+        'patch.vendor_source.tested',
+        'Tested vendor source',
+        [
+          result.version,
+          result.trustState,
+          recommendation.recommendedMethod ? 'Recommended: ' + recommendation.recommendedMethod.replaceAll('_', ' ') : '',
+          recommendation.validated ? 'Validated' : recommendation.autoProbeRecommended ? 'Validation queued' : 'Awaiting validation',
+        ].filter(Boolean).join(' · '),
+        { sourceId: result.sourceId, result, recommendation, verificationProbe },
+      )
+      return c.json({ success: true, result: { ...result, verificationRecommendation: recommendation }, verificationProbe, bundle: await patchBundle(auth.session.tenant_id) })
     } catch (error) {
       return c.json({ error: clean(error?.message || error) || 'Vendor source test failed.' }, 409)
     }

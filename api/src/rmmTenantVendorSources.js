@@ -545,6 +545,225 @@ function verificationForRelease(source, release) {
   return verification
 }
 
+async function verificationRecommendation(source, release) {
+  const verification = verificationForRelease(source, release)
+  const packageId = clean(verification.packageId || source.provider_package_id)
+  const productCode = clean(verification.productCode)
+  const vendorProductCode = clean(release.verificationProductCode)
+  const filePath = clean(verification.filePath)
+  const displayName = clean(verification.displayNameContains || source.name_pattern || source.canonical_name)
+  const publisher = clean(verification.publisherContains || source.publisher_pattern || source.publisher)
+
+  const inventory = await pool.query(
+    `WITH software AS (
+       SELECT item
+         FROM rmm_device_inventory i
+         CROSS JOIN LATERAL jsonb_array_elements(
+           CASE WHEN jsonb_typeof(i.source_payload->'software'->'items')='array'
+             THEN i.source_payload->'software'->'items'
+             ELSE '[]'::jsonb END
+         ) item
+        WHERE i.tenant_id=$1 AND i.active=true
+     )
+     SELECT
+       count(*) FILTER (
+         WHERE ($2='' OR lower(item->>'name') LIKE '%' || lower($2) || '%')
+           AND ($3='' OR lower(COALESCE(item->>'publisher','')) LIKE '%' || lower($3) || '%')
+       )::int AS registry_matches,
+       count(*) FILTER (
+         WHERE $4<>'' AND lower(COALESCE(item->>'registry_key',''))=lower($4)
+       )::int AS product_code_matches
+       FROM software`,
+    [source.tenant_id, displayName, publisher, productCode],
+  )
+  const inventoryEvidence = inventory.rows[0] || { registry_matches: 0, product_code_matches: 0 }
+
+  let fileProbe = null
+  if (filePath) {
+    const probe = await pool.query(
+      `SELECT id,status,result,error_message,completed_at
+         FROM rmm_agent_jobs
+        WHERE tenant_id=$1
+          AND job_type='custom.command'
+          AND request_metadata->>'source'='vendor_verification_probe'
+          AND request_metadata->>'vendor_source_id'=$2
+          AND request_metadata->>'verification_file_path'=$3
+          AND status IN ('completed','failed')
+        ORDER BY completed_at DESC NULLS LAST,created_at DESC
+        LIMIT 1`,
+      [source.tenant_id, source.id, filePath],
+    )
+    if (probe.rowCount) {
+      const row = probe.rows[0]
+      const parsed = row.result?.parsed && typeof row.result.parsed === 'object' ? row.result.parsed : {}
+      const version = clean(parsed.file_version || parsed.product_version || row.result?.file_version || row.result?.product_version)
+      fileProbe = {
+        jobId: row.id,
+        status: row.status,
+        completedAt: row.completed_at,
+        version,
+        valid: row.status === 'completed' && Boolean(version),
+        error: clean(row.error_message),
+      }
+    }
+  }
+
+  let wingetEvidence = 0
+  if (packageId) {
+    const observed = await pool.query(
+      `SELECT count(*)::int AS matches
+         FROM rmm_software_patch_observations
+        WHERE tenant_id=$1 AND lower(provider_package_id)=lower($2)`,
+      [source.tenant_id, packageId],
+    )
+    wingetEvidence = Number(observed.rows[0]?.matches || 0)
+  }
+
+  const candidates = []
+  if (productCode) {
+    const validated = Boolean(vendorProductCode) || Number(inventoryEvidence.product_code_matches || 0) > 0
+    candidates.push({
+      method: 'uninstall_registry',
+      variant: 'exact_product_code',
+      strength: 100,
+      available: true,
+      validated,
+      validation: vendorProductCode
+        ? 'vendor_release_product_code'
+        : validated ? 'endpoint_product_code_match' : 'configured_product_code_needs_endpoint',
+      evidence: {
+        productCode,
+        vendorMetadata: Boolean(vendorProductCode),
+        matchingEndpoints: Number(inventoryEvidence.product_code_matches || 0),
+      },
+      config: {
+        method: 'uninstall_registry',
+        packageId,
+        productCode,
+        displayNameContains: displayName,
+        publisherContains: publisher,
+        filePath: '',
+      },
+    })
+  }
+  if (filePath) {
+    candidates.push({
+      method: 'file_version',
+      variant: 'windows_versioninfo',
+      strength: 90,
+      available: true,
+      validated: Boolean(fileProbe?.valid),
+      validation: fileProbe?.valid ? 'endpoint_versioninfo_probe' : fileProbe ? 'probe_failed_or_unusable' : 'needs_probe',
+      evidence: {
+        filePath,
+        probe: fileProbe,
+      },
+      config: {
+        method: 'file_version',
+        packageId,
+        productCode: '',
+        displayNameContains: displayName,
+        publisherContains: publisher,
+        filePath,
+      },
+    })
+  }
+  if (displayName) {
+    const validated = Number(inventoryEvidence.registry_matches || 0) > 0
+    candidates.push({
+      method: 'uninstall_registry',
+      variant: 'display_name_publisher',
+      strength: 70,
+      available: true,
+      validated,
+      validation: validated ? 'endpoint_uninstall_registry_match' : 'needs_matching_endpoint',
+      evidence: {
+        displayNameContains: displayName,
+        publisherContains: publisher,
+        matchingEndpoints: Number(inventoryEvidence.registry_matches || 0),
+      },
+      config: {
+        method: 'uninstall_registry',
+        packageId,
+        productCode: '',
+        displayNameContains: displayName,
+        publisherContains: publisher,
+        filePath: '',
+      },
+    })
+  }
+  if (packageId) {
+    const validated = wingetEvidence > 0
+    candidates.push({
+      method: 'winget',
+      variant: 'package_identity',
+      strength: 50,
+      available: true,
+      validated,
+      validation: validated ? 'endpoint_winget_observation' : 'package_id_configured',
+      evidence: { packageId, matchingObservations: wingetEvidence },
+      config: {
+        method: 'winget',
+        packageId,
+        productCode: '',
+        displayNameContains: displayName,
+        publisherContains: publisher,
+        filePath: '',
+      },
+    })
+  }
+
+  const ranked = candidates.sort((a, b) => b.strength - a.strength)
+  const strongestValidated = ranked.find((candidate) => candidate.validated)
+  const recommended = strongestValidated || ranked[0] || null
+  const strongerUnvalidated = recommended
+    ? ranked.find((candidate) => !candidate.validated && candidate.strength > recommended.strength)
+    : ranked.find((candidate) => !candidate.validated)
+  const fileCandidate = ranked.find((candidate) => candidate.method === 'file_version')
+  return {
+    recommendedMethod: recommended?.method || '',
+    recommendedVariant: recommended?.variant || '',
+    strength: recommended?.strength || 0,
+    validated: Boolean(recommended?.validated),
+    validation: recommended?.validation || 'none_available',
+    config: recommended?.config || null,
+    candidates: ranked,
+    autoProbeRecommended: Boolean(
+      fileCandidate
+      && !fileCandidate.validated
+      && fileCandidate.validation !== 'probe_failed_or_unusable'
+      && (!strongestValidated || fileCandidate.strength > strongestValidated.strength)
+    ),
+    strongerMethodAwaitingValidation: strongerUnvalidated
+      ? { method: strongerUnvalidated.method, variant: strongerUnvalidated.variant, strength: strongerUnvalidated.strength }
+      : null,
+  }
+}
+
+export async function tenantVendorVerificationRecommendation(tenantId, sourceId) {
+  const source = await sourceById(tenantId, sourceId)
+  if (!source) throw new Error('Vendor source not found.')
+  const releaseResult = await pool.query(
+    `SELECT * FROM rmm_tenant_vendor_releases
+      WHERE tenant_id=$1 AND source_id=$2
+      ORDER BY COALESCE(release_date,last_seen_at) DESC,last_seen_at DESC LIMIT 1`,
+    [tenantId, sourceId],
+  )
+  const row = releaseResult.rows[0]
+  if (!row) return { recommendedMethod: '', validated: false, validation: 'source_not_tested', candidates: [] }
+  const release = {
+    version: row.version,
+    releaseDate: row.release_date,
+    releaseUrl: row.release_url,
+    installerUrl: row.installer_url,
+    installerSha256: row.installer_sha256,
+    installerType: row.installer_type,
+    trustState: row.trust_state,
+    verificationProductCode: clean(row.source_payload?.json?.selected?.productCode),
+  }
+  return verificationRecommendation(source, release)
+}
+
 async function applyCatalogue(source, release, db = pool) {
   const provider = source.deployment_mode === 'winget_preferred' ? 'winget' : 'vendor'
   const verification = verificationForRelease(source, release)
@@ -597,6 +816,7 @@ async function syncSourceRow(source, testOnly = false) {
   try {
     const resolved = await resolveSource(source)
     const evidence = await storeRelease(source, resolved.release, resolved.sourcePayload)
+    const recommendation = await verificationRecommendation(source, resolved.release)
     const blockers = []
     if (source.deployment_mode === 'vendor_direct' && resolved.release.trustState !== 'direct_ready') {
       if (!resolved.release.installerUrl) blockers.push('No installer URL was resolved from the source.')
@@ -617,6 +837,7 @@ async function syncSourceRow(source, testOnly = false) {
       trustState: resolved.release.trustState,
       blockers,
       evidence,
+      verificationRecommendation: recommendation,
     }
     let status = source.status
     if (testOnly && source.status !== 'active') status = blockers.length ? 'quarantined' : 'tested'
@@ -649,11 +870,11 @@ export async function listTenantVendorSources(tenantId) {
   const result = await pool.query(
     `SELECT s.*,
             r.version AS release_version,r.release_date,r.release_url,r.installer_url,
-            r.installer_sha256,r.installer_type,r.trust_state,r.trust_evidence
+            r.installer_sha256,r.installer_type,r.trust_state,r.trust_evidence,r.source_payload AS release_source_payload
        FROM rmm_tenant_vendor_sources s
        LEFT JOIN LATERAL (
          SELECT version,release_date,release_url,installer_url,installer_sha256,
-                installer_type,trust_state,trust_evidence
+                installer_type,trust_state,trust_evidence,source_payload
            FROM rmm_tenant_vendor_releases
           WHERE source_id=s.id
           ORDER BY COALESCE(release_date,last_seen_at) DESC,last_seen_at DESC
@@ -663,7 +884,21 @@ export async function listTenantVendorSources(tenantId) {
       ORDER BY s.status='quarantined' DESC,s.status='draft' DESC,lower(s.display_name)`,
     [tenantId],
   )
-  return result.rows
+  return Promise.all(result.rows.map(async (source) => {
+    if (!source.release_version) return { ...source, verification_recommendation: null }
+    const release = {
+      version: source.release_version,
+      releaseDate: source.release_date,
+      releaseUrl: source.release_url,
+      installerUrl: source.installer_url,
+      installerSha256: source.installer_sha256,
+      installerType: source.installer_type,
+      trustState: source.trust_state,
+      verificationProductCode: clean(source.release_source_payload?.json?.selected?.productCode),
+    }
+    const recommendation = await verificationRecommendation(source, release)
+    return { ...source, verification_recommendation: recommendation }
+  }))
 }
 
 export async function createTenantVendorSource(session, body) {
