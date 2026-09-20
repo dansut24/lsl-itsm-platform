@@ -294,13 +294,13 @@ export async function reconcileVendorArtifactInspections() {
 
         await client.query(
           `UPDATE rmm_software_catalogue
-              SET source_metadata=source_metadata || $3::jsonb,
+              SET source_metadata=source_metadata || $2::jsonb,
                   qualification_state=CASE
                     WHEN qualification_state IN ('qualified','blocked') THEN qualification_state
                     ELSE 'deployment_candidate'
                   END,
 
-                  qualification_evidence=qualification_evidence || $4::jsonb,
+                  qualification_evidence=qualification_evidence || $3::jsonb,
                   qualification_notes=CASE
                     WHEN qualification_notes<>'' THEN qualification_notes
                     ELSE 'Automatically promoted after non-executing PatchHost artifact trust inspection.'
@@ -312,7 +312,6 @@ export async function reconcileVendorArtifactInspections() {
               AND status='active'`,
           [
             row.provider_package_id,
-            row.release_id,
             JSON.stringify({
               deploymentMode: 'vendor_direct',
               expectedSigner,
@@ -330,7 +329,6 @@ export async function reconcileVendorArtifactInspections() {
               signer: expectedSigner,
               hashProvenance,
             }),
-
           ],
         )
       } else {
