@@ -44,6 +44,7 @@
 .rmm-patch-table .head,.rmm-vuln-table .head,.rmm-patch-assignments .head { background:var(--rmm-soft); color:var(--rmm-muted); font-size:7px; font-weight:850; text-transform:uppercase; }
 .rmm-patch-table .row > span,.rmm-vuln-table .row > span,.rmm-patch-assignments .row > span { min-width:0; display:grid; gap:2px; }
 .rmm-patch-table .row strong,.rmm-vuln-table .row strong,.rmm-patch-assignments .row strong { overflow:hidden; font-size:8px; text-overflow:ellipsis; white-space:nowrap; }
+.rmm-patch-table.software .row > span.versions strong { overflow:visible; white-space:normal; word-break:break-word; }
 .rmm-patch-table .row small,.rmm-vuln-table .row small,.rmm-patch-assignments .row small { overflow:hidden; color:var(--rmm-muted); font-size:7px; text-overflow:ellipsis; white-space:nowrap; }
 .rmm-patch-table .actions { display:flex !important; justify-content:flex-end; }
 .rmm-patch-table .actions button,.rmm-patch-assignments button { min-height:30px; display:inline-flex; align-items:center; justify-content:center; gap:5px; border:1px solid var(--rmm-border); border-radius:7px; padding:0 8px; background:var(--rmm-surface); color:var(--rmm-text); font:inherit; font-size:7px; font-weight:850; cursor:pointer; }

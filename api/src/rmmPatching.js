@@ -257,7 +257,9 @@ function buildSoftware(devices, catalogue) {
       ...item,
       deviceCount: item.deviceIds.size,
       deviceIds: [...item.deviceIds],
-      versions: [...item.versions.entries()].map(([version, count]) => ({ version, count })),
+      versions: [...item.versions.entries()]
+        .map(([version, count]) => ({ version, count }))
+        .sort((a, b) => compareVersions(a.version, b.version) ?? a.version.localeCompare(b.version)),
     })).sort((a, b) => a.name.localeCompare(b.name)),
     deviceSoftware,
   }
@@ -321,11 +323,16 @@ function normalizePatchDiscoveryPackage(value = {}) {
   if (!packageId || packageId.length > 240) return null
   const installedVersion = clean(value.installedVersion || value.version).slice(0, 120)
   const availableVersion = clean(value.availableVersion).slice(0, 120)
+  const installedInstances = array(value.installedInstances)
+    .map((version) => clean(version).slice(0, 120))
+    .filter(Boolean)
+    .slice(0, 50)
   return {
     packageId,
     name: clean(value.name || value.displayName || packageId).slice(0, 320),
     publisher: clean(value.publisher).slice(0, 240),
     installedVersion,
+    installedInstances,
     availableVersion,
     source: clean(value.source || 'winget').slice(0, 80),
     scope: clean(value.scope).slice(0, 80),
@@ -458,7 +465,12 @@ async function ingestPatchDiscovery(agent, body = {}) {
           item.packageId,
           availableVersion,
           patchStatus,
-          JSON.stringify({ scope: item.scope, architecture: item.architecture, patchHostVersion: hostVersion }),
+          JSON.stringify({
+            scope: item.scope,
+            architecture: item.architecture,
+            patchHostVersion: hostVersion,
+            installedInstances: item.installedInstances,
+          }),
           item.source,
         ],
       )
@@ -519,9 +531,25 @@ async function patchDeploymentRows(tenantId) {
 }
 
 function installedSoftwareForCatalogue(sourcePayload, catalogue) {
-  const items = array(object(sourcePayload).software?.items)
-  return items.find((item) => contains(item?.name, catalogue.name_pattern)
-    && contains(item?.publisher, catalogue.publisher_pattern)) || null
+  const matches = array(object(sourcePayload).software?.items)
+    .filter((item) => contains(item?.name, catalogue.name_pattern)
+      && contains(item?.publisher, catalogue.publisher_pattern))
+  if (!matches.length) return null
+
+  const ordered = [...matches].sort((a, b) => {
+    const comparison = compareVersions(clean(a?.version), clean(b?.version))
+    if (comparison == null) return clean(a?.version).localeCompare(clean(b?.version))
+    return comparison
+  })
+  return {
+    ...ordered[0],
+    matchingInstances: ordered.map((item) => ({
+      version: clean(item?.version),
+      scope: clean(item?.scope),
+      registryKey: clean(item?.registry_key),
+      uninstallString: clean(item?.uninstall_string),
+    })),
+  }
 }
 
 async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId) {

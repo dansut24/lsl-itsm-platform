@@ -124,7 +124,8 @@ function SoftwarePatchModal({ application, installs, devices, onClose, onPatch, 
           return <article key={install.inventoryId + ':' + install.key}>
             <div>
               <strong>{install.deviceName}</strong>
-              <small>{install.installedVersion || 'Version not reported'} → {install.targetVersion || application.catalogue?.targetVersion || 'Target pending'}</small>
+              <small>{install.installedVersions?.length > 1 ? install.installedVersions.join(' · ') : install.installedVersion || 'Version not reported'} → {install.targetVersion || application.catalogue?.targetVersion || 'Target pending'}</small>
+              {install.registrationCount > 1 && <small>{install.behindRegistrations} of {install.registrationCount} registrations behind target</small>}
             </div>
             <div className="rmm-patch-device-state">
               {!device?.online
@@ -309,6 +310,33 @@ export function RmmPatching({ devices = [] }) {
   const patchHostReady = (bundle?.devices || []).filter((device) => device.patchCapabilities?.softwareDiscovery).length
   const patchHostInstallReady = (bundle?.devices || []).filter((device) => device.patchCapabilities?.softwareInstall).length
 
+  function patchInstallsForApplication(application) {
+    const grouped = new Map()
+    for (const item of deviceSoftware.filter((entry) => entry.key === application?.key)) {
+      const key = item.agentDeviceId || item.inventoryId
+      const existing = grouped.get(key) || {
+        ...item,
+        installedVersions: [],
+        registrationCount: 0,
+        behindRegistrations: 0,
+      }
+      existing.registrationCount += 1
+      if (item.installedVersion && !existing.installedVersions.includes(item.installedVersion)) {
+        existing.installedVersions.push(item.installedVersion)
+      }
+      if (item.patchStatus === 'update_available') {
+        existing.behindRegistrations += 1
+        if (existing.behindRegistrations === 1) {
+          existing.installedVersion = item.installedVersion
+          existing.targetVersion = item.targetVersion
+          existing.patchStatus = item.patchStatus
+        }
+      }
+      grouped.set(key, existing)
+    }
+    return [...grouped.values()].filter((item) => item.behindRegistrations > 0)
+  }
+
   function exposureForApplication(application) {
     const installationKeys = new Set(
       deviceSoftware
@@ -441,7 +469,7 @@ export function RmmPatching({ devices = [] }) {
           const exposure = exposureForApplication(application)
           return <div className="row" key={application.key}>
             <span><strong>{application.name}</strong><small>{application.publisher || 'Publisher not reported'} · {application.deviceCount} device{application.deviceCount === 1 ? '' : 's'}</small></span>
-            <span><strong>{application.versions?.map((version) => version.version).slice(0, 2).join(', ') || 'Not reported'}</strong></span>
+            <span className="versions"><strong title={application.versions?.map((version) => version.version).join(' · ') || ''}>{application.versions?.map((version) => version.version).join(' · ') || 'Not reported'}</strong>{application.installs > application.deviceCount && <small>{application.installs} registrations across {application.deviceCount} device{application.deviceCount === 1 ? '' : 's'}</small>}</span>
             <span><strong>{application.catalogue?.targetVersion || 'Not set'}</strong><small>{application.catalogue?.packageId || 'No package ID'}</small></span>
             <span><StatusPill tone={patchTone(status)}>{patchLabel(status)}</StatusPill>{application.updateAvailable > 0 && <small>{application.updateAvailable} install{application.updateAvailable === 1 ? '' : 's'} behind</small>}</span>
             <span>{exposure.open > 0 ? <StatusPill tone={exposure.kev > 0 || exposure.critical > 0 ? 'critical' : 'warning'}>{exposure.open} open</StatusPill> : <StatusPill tone={application.catalogue ? 'healthy' : 'neutral'}>{application.catalogue ? 'None known' : 'Unmapped'}</StatusPill>}<small>{exposure.kev > 0 ? exposure.kev + ' CISA KEV' : exposure.maxCvss > 0 ? 'Max CVSS ' + exposure.maxCvss : ''}</small></span>
@@ -564,7 +592,7 @@ export function RmmPatching({ devices = [] }) {
     {patchApp && <SoftwarePatchModal
       application={patchApp}
       devices={bundle?.devices || []}
-      installs={deviceSoftware.filter((item) => item.key === patchApp.key && item.patchStatus === 'update_available')}
+      installs={patchInstallsForApplication(patchApp)}
       onClose={() => setPatchApp(null)}
       onPatch={runSoftwarePatch}
       saving={saving}
