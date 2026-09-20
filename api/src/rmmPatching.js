@@ -1148,20 +1148,23 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId) {
     vendor = release.rows[0] || null
   }
 
+  const deploymentMode = clean(vendor?.deployment_mode || sourceMetadata.deploymentMode || (row.provider === 'winget' ? 'winget_preferred' : ''))
   const vendorDirect = vendor
-    && clean(vendor.deployment_mode) !== 'winget_preferred'
+    && deploymentMode === 'vendor_direct'
     && clean(vendor.trust_state) === 'direct_ready'
     && /^https:\/\//i.test(clean(vendor.installer_url))
     && /^[a-f0-9]{64}$/i.test(clean(vendor.installer_sha256))
     && clean(vendor.expected_signer || row.publisher)
 
   const globalWingetFallback = clean(vendor?.winget_package_id || sourceMetadata.wingetPackageId)
-  const fallbackPackageId = tenantVendorSourceId ? clean(row.provider_package_id) : globalWingetFallback
-  const executionPackageId = vendorDirect ? (fallbackPackageId || clean(row.provider_package_id)) : clean(row.provider_package_id)
-  const provider = vendorDirect ? 'vendor_direct' : 'winget'
-  if (provider === 'winget' && !clean(row.provider_package_id)) {
+  const fallbackPackageId = tenantVendorSourceId
+    ? clean(row.provider_package_id)
+    : (globalWingetFallback || (deploymentMode === 'winget_preferred' && row.provider === 'winget' ? clean(row.provider_package_id) : ''))
+  if (!vendorDirect && !fallbackPackageId) {
     return { error: 'No safe deployment provider is available for this catalogue entry.', status: 409 }
   }
+  const executionPackageId = vendorDirect ? (fallbackPackageId || clean(row.provider_package_id)) : fallbackPackageId
+  const provider = vendorDirect ? 'vendor_direct' : 'winget'
 
   return {
     device: row,

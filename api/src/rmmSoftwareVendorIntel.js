@@ -1,6 +1,7 @@
 import { pool, withTransaction } from './db.js'
 import {
   fetchPublicJson,
+  fetchPublicText,
   globMatcher,
   installerType as detectInstallerType,
   jsonPathValue,
@@ -16,6 +17,16 @@ import { recalculateAllTenantVulnerabilityExposures } from './rmmVulnerabilityEx
 
 function clean(value = '') { return String(value ?? '').trim() }
 function object(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {} }
+function versionNumbers(value = '') { return clean(value).match(/\d+/g)?.map(Number) || [] }
+function compareVersionValues(a, b) {
+  const left = versionNumbers(a), right = versionNumbers(b)
+  const size = Math.max(left.length, right.length)
+  for (let i = 0; i < size; i += 1) {
+    const delta = (left[i] || 0) - (right[i] || 0)
+    if (delta) return delta
+  }
+  return clean(a).localeCompare(clean(b))
+}
 
 async function fetchText(url, accept = '*/*') {
   const response = await fetch(url, {
@@ -188,6 +199,31 @@ async function binding(sourceKey) {
   return result.rows[0] || null
 }
 
+async function latestGithubTagViaRedirect(repository) {
+  let current = await publicHttpsUrl('https://github.com/' + repository + '/releases/latest')
+  for (let redirects = 0; redirects <= 3; redirects += 1) {
+    const response = await fetch(current, {
+      headers: { 'User-Agent': 'Hi5Central-Software-Catalogue/1.0' },
+      redirect: 'manual',
+      signal: AbortSignal.timeout(30_000),
+    })
+    if ([301,302,303,307,308].includes(response.status)) {
+      const location = clean(response.headers.get('location'))
+      if (!location) throw new Error('GitHub latest release redirected without a location')
+      current = await publicHttpsUrl(new URL(location, current).toString())
+      continue
+    }
+    if (!response.ok) throw new Error('GitHub latest release HTTP ' + response.status)
+    const match = current.pathname.match(/\/releases\/tag\/(.+)$/)
+    if (!match) throw new Error(repository + ' has no usable latest GitHub release')
+    return {
+      tag: decodeURIComponent(match[1]),
+      releaseUrl: current.toString(),
+    }
+  }
+  throw new Error('GitHub latest release redirected too many times')
+}
+
 async function syncGenericConfigured(sourceKey, state) {
   const b = await binding(sourceKey)
   if (!b) return null
@@ -205,19 +241,36 @@ async function syncGenericConfigured(sourceKey, state) {
   if (state.source_type === 'github_releases') {
     const repository = repositoryName(config.repository || state.source_url)
     if (!repository) throw new Error(sourceKey + ' has no valid GitHub repository')
-    const release = await latestGithubRelease(repository)
-    version = releaseVersion(release?.tag_name || release?.name)
-    releaseDate = normalizedReleaseDate(release?.published_at || release?.created_at)
-    releaseUrl = clean(release?.html_url)
-    const assets = Array.isArray(release?.assets) ? release.assets : []
-    const installerMatch = globMatcher(config.assetPattern)
-    const checksumMatch = globMatcher(config.checksumAssetPattern)
-    const installer = installerMatch ? assets.find((asset) => installerMatch.test(clean(asset?.name))) : null
-    const checksum = checksumMatch ? assets.find((asset) => checksumMatch.test(clean(asset?.name))) : null
-    installerUrl = clean(installer?.browser_download_url)
-    if (installer && checksum) installerSha256 = await publishedChecksum(checksum.browser_download_url, installer.name)
-    resolvedInstallerType = detectInstallerType(installer?.name, resolvedInstallerType)
-    payload = { github: { id: release?.id, tag_name: release?.tag_name, html_url: release?.html_url } }
+    if (!clean(config.assetPattern) && !clean(config.checksumAssetPattern)) {
+      const lightweight = await latestGithubTagViaRedirect(repository)
+      version = releaseVersion(lightweight.tag)
+      releaseUrl = lightweight.releaseUrl
+      payload = { github: { tag_name: lightweight.tag, html_url: lightweight.releaseUrl, lightweight: true } }
+    } else {
+      const release = await latestGithubRelease(repository)
+      version = releaseVersion(release?.tag_name || release?.name)
+      releaseDate = normalizedReleaseDate(release?.published_at || release?.created_at)
+      releaseUrl = clean(release?.html_url)
+      const assets = Array.isArray(release?.assets) ? release.assets : []
+      const installerMatch = globMatcher(config.assetPattern)
+      const checksumMatch = globMatcher(config.checksumAssetPattern)
+      const installer = installerMatch ? assets.find((asset) => installerMatch.test(clean(asset?.name))) : null
+      const checksum = checksumMatch ? assets.find((asset) => checksumMatch.test(clean(asset?.name))) : null
+      installerUrl = clean(installer?.browser_download_url)
+      if (installer && checksum) installerSha256 = await publishedChecksum(checksum.browser_download_url, installer.name)
+      resolvedInstallerType = detectInstallerType(installer?.name, resolvedInstallerType)
+      payload = { github: { id: release?.id, tag_name: release?.tag_name, html_url: release?.html_url, lightweight: false } }
+    }
+  } else if (state.source_type === 'gitlab_releases') {
+    const releases = await fetchPublicJson(state.source_url)
+    const release = Array.isArray(releases) ? releases[0] : null
+    if (!release) throw new Error(sourceKey + ' returned no GitLab releases')
+    const rawVersion = clean(release.tag_name || release.name)
+    const numeric = rawVersion.match(/\d+(?:[._-]\d+)+/)
+    version = releaseVersion(numeric ? numeric[0].replaceAll('_', '.') : rawVersion)
+    releaseDate = normalizedReleaseDate(release.released_at || release.created_at)
+    releaseUrl = clean(release?._links?.self || release?._links?.tag || '')
+    payload = { gitlab: { name: release.name, tag_name: release.tag_name, released_at: release.released_at } }
   } else if (state.source_type === 'vendor_json') {
     const response = await fetchPublicJson(state.source_url)
     version = releaseVersion(jsonPathValue(response, parser.versionPath))
@@ -232,6 +285,74 @@ async function syncGenericConfigured(sourceKey, state) {
     }
     resolvedInstallerType = detectInstallerType(installerUrl ? new URL(installerUrl).pathname : '', resolvedInstallerType)
     payload = { json: { paths: parser, selected: { version, releaseDate, releaseUrl, installerUrl: rawInstaller, productCode: verificationProductCode } } }
+  } else if (state.source_type === 'python_releases') {
+    const releases = await fetchPublicJson(state.source_url)
+    const candidates = (Array.isArray(releases) ? releases : [])
+      .filter((item) => item?.is_published !== false && !item?.pre_release)
+      .map((item) => ({ item, version: clean(item?.name).match(/^Python\s+(\d+\.\d+\.\d+)$/i)?.[1] || '' }))
+      .filter((item) => item.version)
+      .sort((a, b) => compareVersionValues(a.version, b.version))
+    const latest = candidates.at(-1)
+    if (!latest) throw new Error(sourceKey + ' returned no stable Python release')
+    version = latest.version
+    releaseDate = normalizedReleaseDate(latest.item.release_date)
+    payload = { python: { name: latest.item.name, slug: latest.item.slug, release_date: latest.item.release_date } }
+  } else if (state.source_type === 'hashicorp_releases') {
+    const response = await fetchPublicJson(state.source_url)
+    const versions = Object.keys(object(response?.versions))
+      .filter((item) => /^\d+\.\d+\.\d+$/.test(item))
+      .sort(compareVersionValues)
+    version = versions.at(-1) || ''
+    const selected = object(response?.versions?.[version])
+    const build = (Array.isArray(selected.builds) ? selected.builds : [])
+      .find((item) => clean(item?.os) === 'windows' && clean(item?.arch) === 'amd64')
+    installerUrl = build?.url ? (await publicHttpsUrl(build.url)).toString() : ''
+    releaseUrl = version ? new URL(version + '/', new URL('.', state.source_url)).toString() : ''
+    payload = { hashicorp: { version, filename: build?.filename || '', shasums: selected.shasums || '' } }
+  } else if (state.source_type === 'adoptium') {
+    const info = await fetchPublicJson(state.source_url)
+    const lts = Number(info?.most_recent_lts || 0)
+    if (!lts) throw new Error(sourceKey + ' returned no current Adoptium LTS')
+    const assetsUrl = 'https://api.adoptium.net/v3/assets/latest/' + lts + '/hotspot?architecture=x64&image_type=jdk&os=windows&vendor=eclipse'
+    const assets = await fetchPublicJson(assetsUrl)
+    const asset = Array.isArray(assets) ? assets[0] : null
+    if (!asset) throw new Error(sourceKey + ' returned no Windows x64 JDK asset')
+    version = clean(asset?.version?.openjdk_version || asset?.version?.semver || asset?.release_name)
+    releaseDate = normalizedReleaseDate(asset?.binary?.updated_at)
+    releaseUrl = clean(asset?.release_link)
+    const installer = asset?.binary?.installer
+    installerUrl = installer?.link ? (await publicHttpsUrl(installer.link)).toString() : ''
+    installerSha256 = normalizedSha256(installer?.checksum)
+    resolvedInstallerType = detectInstallerType(installer?.name, resolvedInstallerType)
+    payload = { adoptium: { lts, release_name: asset.release_name, installer: installer?.name || '' } }
+  } else if (state.source_type === 'vendor_text') {
+    const body = await fetchPublicText(state.source_url, { maxBytes: 5 * 1024 * 1024 })
+    if (config.adapter === 'signal_yaml') {
+      version = clean(body.match(/^version:\s*([^\s]+)\s*$/mi)?.[1])
+      releaseDate = normalizedReleaseDate(body.match(/^releaseDate:\s*['"]?([^'"\r\n]+)['"]?\s*$/mi)?.[1])
+      const path = clean(body.match(/^path:\s*([^\s]+)\s*$/mi)?.[1])
+      installerUrl = path ? (await publicHttpsUrl(new URL(path, state.source_url).toString())).toString() : ''
+      resolvedInstallerType = detectInstallerType(path, resolvedInstallerType)
+      payload = { text: { adapter: config.adapter, path } }
+    } else if (config.adapter === 'vlc_directory') {
+      const match = body.match(/vlc-([0-9]+(?:\.[0-9]+)+)-win64\.exe/i)
+      version = clean(match?.[1])
+      const name = match?.[0] || ''
+      installerUrl = name ? (await publicHttpsUrl(new URL(name, state.source_url).toString())).toString() : ''
+      resolvedInstallerType = detectInstallerType(name, resolvedInstallerType)
+      payload = { text: { adapter: config.adapter, filename: name } }
+    } else if (config.adapter === 'jenkins_jsonp') {
+      const wrapped = body.match(/^\s*updateCenter\.post\(([\s\S]*)\);?\s*$/)
+      if (!wrapped) throw new Error(sourceKey + ' returned invalid Jenkins update-center JSONP')
+      const response = JSON.parse(wrapped[1])
+      version = clean(response?.core?.version)
+      releaseDate = normalizedReleaseDate(response?.core?.buildDate)
+      installerUrl = response?.core?.url ? (await publicHttpsUrl(response.core.url)).toString() : ''
+      if (response?.core?.sha256) installerSha256 = Buffer.from(response.core.sha256, 'base64').toString('hex').toUpperCase()
+      payload = { text: { adapter: config.adapter, core: { version, url: installerUrl } } }
+    } else {
+      throw new Error(sourceKey + ' has an unsupported vendor text adapter')
+    }
   } else if (state.source_type === 'static_release') {
     version = releaseVersion(config.staticVersion)
     installerUrl = config.staticInstallerUrl ? (await publicHttpsUrl(config.staticInstallerUrl)).toString() : ''
@@ -282,7 +403,7 @@ async function syncGenericConfigured(sourceKey, state) {
       verification,
       installArguments: clean(config.installArguments),
     },
-    catalogueProvider: vendorDirect ? 'vendor' : 'winget',
+    catalogueProvider: vendorDirect ? 'vendor' : deploymentMode === 'winget_preferred' ? 'winget' : 'managed',
     verification,
     execution: { installArguments: clean(config.installArguments) },
     catalogueMetadata: {
@@ -448,7 +569,7 @@ export async function syncSoftwareVendorSource(sourceKey) {
   const state = await sourceState(sourceKey)
   if (!state?.enabled) return { sourceKey, skipped: true }
   const adapter = adapters[sourceKey]
-    || (['github_releases','vendor_json','static_release'].includes(state.source_type)
+    || (['github_releases','gitlab_releases','vendor_json','vendor_text','hashicorp_releases','python_releases','adoptium','static_release'].includes(state.source_type)
       ? () => syncGenericConfigured(sourceKey, state)
       : null)
   if (!adapter) throw new Error('No software vendor adapter registered for ' + sourceKey + ' (' + state.source_type + ')')

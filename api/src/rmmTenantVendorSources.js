@@ -80,7 +80,20 @@ export async function publicHttpsUrl(value) {
   if (isIP(hostname)) {
     if (privateAddress(hostname)) throw new Error('Private or reserved vendor addresses are not allowed.')
   } else {
-    const addresses = await lookup(hostname, { all: true, verbatim: true })
+    let addresses = []
+    let lastError = null
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        addresses = await lookup(hostname, { all: true, verbatim: true })
+        lastError = null
+        break
+      } catch (error) {
+        lastError = error
+        if (!['EAI_AGAIN','ETIMEOUT','ESERVFAIL'].includes(clean(error?.code))) throw error
+        await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)))
+      }
+    }
+    if (lastError) throw lastError
     if (!addresses.length || addresses.some((item) => privateAddress(item.address))) {
       throw new Error('Vendor hostname resolves to a private or reserved address.')
     }
@@ -88,22 +101,27 @@ export async function publicHttpsUrl(value) {
   return url
 }
 
-export async function fetchPublicJson(value, redirects = 0) {
-  if (redirects > 3) throw new Error('Vendor API redirected too many times.')
+export async function fetchPublicText(value, { accept = '*/*', maxBytes = 5 * 1024 * 1024, redirects = 0 } = {}) {
+  if (redirects > 3) throw new Error('Vendor source redirected too many times.')
   const url = await publicHttpsUrl(value)
   const response = await fetch(url, {
-    headers: { Accept: 'application/json', 'User-Agent': 'Hi5Central-Software-Catalogue/1.0' },
+    headers: { Accept: accept, 'User-Agent': 'Hi5Central-Software-Catalogue/1.0' },
     redirect: 'manual',
     signal: AbortSignal.timeout(60_000),
   })
   if ([301, 302, 303, 307, 308].includes(response.status)) {
     const location = clean(response.headers.get('location'))
-    if (!location) throw new Error('Vendor API returned a redirect without a location.')
-    return fetchPublicJson(new URL(location, url).toString(), redirects + 1)
+    if (!location) throw new Error('Vendor source returned a redirect without a location.')
+    return fetchPublicText(new URL(location, url).toString(), { accept, maxBytes, redirects: redirects + 1 })
   }
-  if (!response.ok) throw new Error('Vendor JSON HTTP ' + response.status)
-  const bytes = await limitedResponseBytes(response, 5 * 1024 * 1024)
-  try { return JSON.parse(new TextDecoder('utf-8').decode(bytes)) } catch { throw new Error('Vendor API did not return valid JSON.') }
+  if (!response.ok) throw new Error('Vendor source HTTP ' + response.status)
+  const bytes = await limitedResponseBytes(response, maxBytes)
+  return new TextDecoder('utf-8').decode(bytes)
+}
+
+export async function fetchPublicJson(value, redirects = 0) {
+  const text = await fetchPublicText(value, { accept: 'application/json', maxBytes: 5 * 1024 * 1024, redirects })
+  try { return JSON.parse(text) } catch { throw new Error('Vendor API did not return valid JSON.') }
 }
 
 export function repositoryName(value = '') {

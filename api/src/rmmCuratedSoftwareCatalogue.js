@@ -53,8 +53,8 @@ async function normalizeEntry(raw = {}) {
   if (!displayName || !canonicalName) throw new Error(key + ': displayName and canonicalName are required.')
   const publisher = clean(raw.publisher).slice(0, 200)
   const sourceType = clean(raw.sourceType)
-  if (!['github_releases', 'vendor_json', 'static_release'].includes(sourceType)) {
-    throw new Error(key + ': sourceType must be github_releases, vendor_json or static_release.')
+  if (!['github_releases', 'gitlab_releases', 'vendor_json', 'vendor_text', 'hashicorp_releases', 'python_releases', 'adoptium', 'static_release'].includes(sourceType)) {
+    throw new Error(key + ': unsupported curated sourceType.')
   }
   const deploymentMode = ['vendor_direct', 'winget_preferred', 'intelligence_only'].includes(clean(raw.deploymentMode))
     ? clean(raw.deploymentMode)
@@ -113,9 +113,14 @@ async function normalizeEntry(raw = {}) {
   const platform = clean(raw.platform || 'windows').slice(0, 40)
   const architecture = clean(raw.architecture || 'x64').slice(0, 40)
 
+  const adapter = clean(raw.adapter).slice(0, 80)
+  if (sourceType === 'vendor_text' && !['signal_yaml','vlc_directory','jenkins_jsonp'].includes(adapter)) {
+    throw new Error(key + ': vendor_text requires a supported adapter.')
+  }
   const sourceMetadata = {
     curated: true,
     repository,
+    adapter,
     parserConfig,
     assetPattern: clean(raw.assetPattern).slice(0, 240),
     checksumAssetPattern: clean(raw.checksumAssetPattern).slice(0, 240),
@@ -139,6 +144,7 @@ async function normalizeEntry(raw = {}) {
     },
     wingetPackageId,
     repository,
+    adapter,
     parserConfig,
     assetPattern: sourceMetadata.assetPattern,
     checksumAssetPattern: sourceMetadata.checksumAssetPattern,
@@ -255,7 +261,7 @@ export async function importCuratedSoftwareCatalogue(entries = [], { dryRun = fa
            source_metadata=EXCLUDED.source_metadata,status='active',updated_at=now()`,
         [
           item.canonicalName,item.publisher,item.namePattern,item.publisherPattern,item.platform,
-          item.deploymentMode === 'vendor_direct' ? 'vendor' : 'winget',
+          item.deploymentMode === 'vendor_direct' ? 'vendor' : item.deploymentMode === 'winget_preferred' ? 'winget' : 'managed',
           item.catalogueKey,item.channel,item.installerType,JSON.stringify(item.verification),JSON.stringify(item.execution),
           JSON.stringify({
             curated: true,
