@@ -231,12 +231,36 @@ function normalizeInput(body = {}) {
     installerUrlPath: safeJsonPath(body.installerUrlPath ?? parser.installerUrlPath),
     sha256Path: safeJsonPath(body.sha256Path ?? parser.sha256Path),
   }
+  const verificationSource = body.verificationConfig && typeof body.verificationConfig === 'object' && !Array.isArray(body.verificationConfig)
+    ? body.verificationConfig
+    : {}
+  const verificationMethod = ['winget', 'uninstall_registry', 'file_version'].includes(clean(body.verificationMethod || verificationSource.method))
+    ? clean(body.verificationMethod || verificationSource.method)
+    : (clean(body.providerPackageId) ? 'winget' : 'uninstall_registry')
+  const productCode = clean(body.productCode ?? verificationSource.productCode).slice(0, 80)
+  const filePath = clean(body.filePath ?? verificationSource.filePath).slice(0, 520)
+  if (productCode && !/^\{[0-9A-Fa-f-]{36}\}$/.test(productCode)) {
+    throw new Error('MSI ProductCode must be a braced GUID such as {XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}.')
+  }
+  if (filePath && (!/^(?:[A-Za-z]:\\|%ProgramFiles%\\|%ProgramFiles\(x86\)%\\|%ProgramData%\\)/i.test(filePath)
+    || filePath.includes('..') || /["\r\n]/.test(filePath))) {
+    throw new Error('File-version verification requires a safe local Windows path under a drive, Program Files or ProgramData.')
+  }
+  const verificationConfig = {
+    method: verificationMethod,
+    packageId: clean(body.providerPackageId).slice(0, 240),
+    productCode,
+    displayNameContains: clean(body.verificationDisplayName ?? verificationSource.displayNameContains ?? body.namePattern ?? body.canonicalName).slice(0, 200),
+    publisherContains: clean(body.verificationPublisher ?? verificationSource.publisherContains ?? body.publisherPattern ?? body.publisher).slice(0, 200),
+    filePath,
+  }
   const input = {
     displayName: clean(body.displayName).slice(0, 160),
     sourceType: type,
     repository: type === 'github_releases' ? repositoryName(body.repository) : '',
     sourceUrl: type === 'vendor_json' ? clean(body.sourceUrl).slice(0, 2000) : '',
     parserConfig,
+    verificationConfig,
     canonicalName: clean(body.canonicalName).slice(0, 200),
     publisher: clean(body.publisher).slice(0, 200),
     expectedSigner: clean(body.expectedSigner).slice(0, 300),
@@ -266,6 +290,15 @@ function normalizeInput(body = {}) {
   if (mode === 'winget_preferred' && !input.providerPackageId) {
     throw new Error('A WinGet package ID is required for WinGet-preferred sources.')
   }
+  if (verificationMethod === 'winget' && !input.providerPackageId) {
+    throw new Error('WinGet verification requires a WinGet package ID.')
+  }
+  if (verificationMethod === 'uninstall_registry' && !productCode && !verificationConfig.displayNameContains) {
+    throw new Error('Registry verification requires an MSI ProductCode or DisplayName match.')
+  }
+  if (verificationMethod === 'file_version' && !filePath) {
+    throw new Error('File-version verification requires the installed EXE or DLL path.')
+  }
   if (mode === 'vendor_direct' && type === 'github_releases'
     && (!input.assetPattern || !input.checksumAssetPattern || !input.expectedSigner)) {
     throw new Error('GitHub vendor-direct sources require installer pattern, checksum pattern and expected signer.')
@@ -289,13 +322,27 @@ async function sourceById(tenantId, sourceId) {
   return result.rows[0] || null
 }
 
+function verificationConfigured(source) {
+  const verification = source.verification_config && typeof source.verification_config === 'object'
+    ? source.verification_config
+    : {}
+  const method = clean(verification.method || 'winget')
+  if (method === 'winget') return Boolean(clean(verification.packageId || source.provider_package_id))
+  if (method === 'uninstall_registry') {
+    return Boolean(clean(verification.productCode) || clean(verification.displayNameContains))
+  }
+  if (method === 'file_version') return Boolean(clean(verification.filePath))
+  return false
+}
+
 function trustState(source, release) {
   if (source.deployment_mode === 'intelligence_only') return 'version_only'
   if (source.deployment_mode === 'winget_preferred') return source.provider_package_id ? 'winget_ready' : 'version_only'
   if (release.installerUrl
     && /^[A-F0-9]{64}$/.test(release.installerSha256)
     && clean(source.expected_signer)
-    && ['msi', 'exe'].includes(release.installerType)) return 'direct_ready'
+    && ['msi', 'exe'].includes(release.installerType)
+    && verificationConfigured(source)) return 'direct_ready'
   return 'quarantined'
 }
 
@@ -388,6 +435,7 @@ async function storeRelease(source, release, sourcePayload) {
     checksumAsset: release.checksumName,
     sha256Present: /^[A-F0-9]{64}$/.test(release.installerSha256),
     expectedSigner: clean(source.expected_signer),
+    verification: source.verification_config || {},
     deploymentMode: source.deployment_mode,
   }
   await pool.query(
@@ -433,24 +481,24 @@ async function applyCatalogue(source, release, db = pool) {
       `UPDATE rmm_software_catalogue
           SET canonical_name=$2,publisher=$3,name_pattern=$4,publisher_pattern=$5,
               provider=$6,provider_package_id=$7,target_version=$8,release_channel=$9,
-              installer_type=$10,source_revision=$8,source_metadata=$11::jsonb,status='active',updated_at=now()
+              installer_type=$10,verification=$11::jsonb,source_revision=$8,source_metadata=$12::jsonb,status='active',updated_at=now()
         WHERE id=$1`,
       [
         existing.rows[0].id, source.canonical_name, source.publisher, source.name_pattern,
         source.publisher_pattern, provider, source.provider_package_id, release.version,
-        source.channel, release.installerType, JSON.stringify(metadata),
+        source.channel, release.installerType, JSON.stringify(source.verification_config || {}), JSON.stringify(metadata),
       ],
     )
   } else {
     await db.query(
       `INSERT INTO rmm_software_catalogue
         (tenant_id,canonical_name,publisher,name_pattern,publisher_pattern,provider,provider_package_id,
-         target_version,release_channel,installer_type,catalogue_source,external_key,source_revision,source_metadata)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'tenant_vendor',$11,$8,$12::jsonb)`,
+         target_version,release_channel,installer_type,verification,catalogue_source,external_key,source_revision,source_metadata)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,'tenant_vendor',$12,$8,$13::jsonb)`,
       [
         source.tenant_id, source.canonical_name, source.publisher, source.name_pattern,
         source.publisher_pattern, provider, source.provider_package_id, release.version,
-        source.channel, release.installerType, source.id, JSON.stringify(metadata),
+        source.channel, release.installerType, JSON.stringify(source.verification_config || {}), source.id, JSON.stringify(metadata),
       ],
     )
   }
@@ -532,14 +580,14 @@ export async function createTenantVendorSource(session, body) {
   const input = normalizeInput(body)
   const result = await pool.query(
     `INSERT INTO rmm_tenant_vendor_sources
-      (tenant_id,display_name,source_type,repository,source_url,parser_config,canonical_name,publisher,expected_signer,
+      (tenant_id,display_name,source_type,repository,source_url,parser_config,verification_config,canonical_name,publisher,expected_signer,
        provider_package_id,name_pattern,publisher_pattern,channel,architecture,deployment_mode,
        asset_pattern,checksum_asset_pattern,installer_type,poll_minutes,created_by_user_id,updated_by_user_id)
-     VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$20)
+     VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$21)
      RETURNING id`,
     [
       session.tenant_id, input.displayName, input.sourceType, input.repository, input.sourceUrl,
-      JSON.stringify(input.parserConfig), input.canonicalName, input.publisher, input.expectedSigner,
+      JSON.stringify(input.parserConfig), JSON.stringify(input.verificationConfig), input.canonicalName, input.publisher, input.expectedSigner,
       input.providerPackageId, input.namePattern, input.publisherPattern, input.channel,
       input.architecture, input.deploymentMode, input.assetPattern, input.checksumAssetPattern,
       input.installerType, input.pollMinutes, session.user_id,
@@ -553,15 +601,15 @@ export async function updateTenantVendorSource(session, sourceId, body) {
   return withTransaction(async (client) => {
     const result = await client.query(
       `UPDATE rmm_tenant_vendor_sources
-          SET display_name=$3,source_type=$4,repository=$5,source_url=$6,parser_config=$7::jsonb,
-              canonical_name=$8,publisher=$9,expected_signer=$10,provider_package_id=$11,
-              name_pattern=$12,publisher_pattern=$13,channel=$14,architecture=$15,deployment_mode=$16,
-              asset_pattern=$17,checksum_asset_pattern=$18,installer_type=$19,poll_minutes=$20,
-              status='draft',approved_at=NULL,approved_by_user_id=NULL,updated_by_user_id=$21,updated_at=now()
+          SET display_name=$3,source_type=$4,repository=$5,source_url=$6,parser_config=$7::jsonb,verification_config=$8::jsonb,
+              canonical_name=$9,publisher=$10,expected_signer=$11,provider_package_id=$12,
+              name_pattern=$13,publisher_pattern=$14,channel=$15,architecture=$16,deployment_mode=$17,
+              asset_pattern=$18,checksum_asset_pattern=$19,installer_type=$20,poll_minutes=$21,
+              status='draft',approved_at=NULL,approved_by_user_id=NULL,updated_by_user_id=$22,updated_at=now()
         WHERE id=$1 AND tenant_id=$2 AND status<>'archived' RETURNING id`,
       [
         sourceId, session.tenant_id, input.displayName, input.sourceType, input.repository, input.sourceUrl,
-        JSON.stringify(input.parserConfig), input.canonicalName, input.publisher, input.expectedSigner,
+        JSON.stringify(input.parserConfig), JSON.stringify(input.verificationConfig), input.canonicalName, input.publisher, input.expectedSigner,
         input.providerPackageId, input.namePattern, input.publisherPattern, input.channel,
         input.architecture, input.deploymentMode, input.assetPattern, input.checksumAssetPattern,
         input.installerType, input.pollMinutes, session.user_id,

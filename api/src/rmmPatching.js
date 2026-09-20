@@ -724,6 +724,19 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId) {
   if (capabilities.softwareInstall !== true) {
     return { error: 'This device has not reported PatchHost software-install capability yet.', status: 409, capabilityMissing: true }
   }
+  const verificationMethod = clean(object(row.verification).method || object(row.verification).provider || 'winget')
+  if (verificationMethod !== 'winget') {
+    const hostVersion = clean(capabilities.patchHostVersion || capabilities.version)
+    const hostComparison = compareVersions(hostVersion, '0.2.4')
+    if (!hostVersion || hostComparison == null || hostComparison < 0) {
+      return {
+        error: 'This verification method requires PatchHost 0.2.4 or newer on the endpoint.',
+        status: 409,
+        capabilityMissing: true,
+        requiredPatchHostVersion: '0.2.4',
+      }
+    }
+  }
 
   const installed = installedSoftwareForCatalogue(row.source_payload, row)
   if (!installed) return { error: 'The selected application is not currently detected on this device.', status: 409 }
@@ -824,8 +837,9 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId) {
       expectedSigner: clean(vendor?.expected_signer || row.publisher),
       fallbackProvider: vendorDirect && clean(row.provider_package_id) ? 'winget' : '',
       verification: {
-        provider: 'winget',
-        packageId: clean(row.provider_package_id),
+        ...object(row.verification),
+        method: clean(object(row.verification).method || object(row.verification).provider || 'winget'),
+        packageId: clean(object(row.verification).packageId || row.provider_package_id),
         targetVersion,
       },
     },

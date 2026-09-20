@@ -133,6 +133,11 @@ function VendorSourceModal({ source, onClose, onSave, saving }) {
     sha256Path: source?.parser_config?.sha256Path || '',
     deploymentMode: source?.deployment_mode || 'winget_preferred',
     providerPackageId: source?.provider_package_id || '',
+    verificationMethod: source?.verification_config?.method || (source?.deployment_mode === 'vendor_direct' && !source?.provider_package_id ? 'uninstall_registry' : 'winget'),
+    productCode: source?.verification_config?.productCode || '',
+    verificationDisplayName: source?.verification_config?.displayNameContains || source?.name_pattern || source?.canonical_name || '',
+    verificationPublisher: source?.verification_config?.publisherContains || source?.publisher_pattern || source?.publisher || '',
+    filePath: source?.verification_config?.filePath || '',
     expectedSigner: source?.expected_signer || '',
     namePattern: source?.name_pattern || source?.canonical_name || '',
     publisherPattern: source?.publisher_pattern || source?.publisher || '',
@@ -155,11 +160,17 @@ function VendorSourceModal({ source, onClose, onSave, saving }) {
     && (github
       ? form.assetPattern.trim() && form.checksumAssetPattern.trim()
       : form.installerUrlPath.trim() && form.sha256Path.trim()))
+  const verificationReady = form.verificationMethod === 'winget'
+    ? Boolean(form.providerPackageId.trim())
+    : form.verificationMethod === 'uninstall_registry'
+      ? Boolean(form.productCode.trim() || form.verificationDisplayName.trim())
+      : Boolean(form.filePath.trim())
   const valid = form.displayName.trim().length > 1
     && form.canonicalName.trim().length > 1
     && sourceReady
     && (!winget || form.providerPackageId.trim())
     && directReady
+    && verificationReady
 
   return <div className="rmm-patch-modal-backdrop">
     <form className="rmm-patch-modal vendor-source" onSubmit={(event) => {
@@ -179,6 +190,9 @@ function VendorSourceModal({ source, onClose, onSave, saving }) {
         <label>Publisher<input value={form.publisher} onChange={(event) => update('publisher', event.target.value)} /></label>
         <label>Deployment mode<select value={form.deploymentMode} onChange={(event) => update('deploymentMode', event.target.value)}><option value="winget_preferred">WinGet preferred</option><option value="vendor_direct">Vendor direct</option><option value="intelligence_only">Intelligence only</option></select></label>
         <label>WinGet package ID<input value={form.providerPackageId} onChange={(event) => update('providerPackageId', event.target.value)} placeholder="Required for WinGet preferred / optional fallback" /></label>
+        <label>Post-install verification<select value={form.verificationMethod} onChange={(event) => update('verificationMethod', event.target.value)}><option value="winget">WinGet package identity</option><option value="uninstall_registry">Uninstall registry / MSI identity</option><option value="file_version">Installed EXE/DLL file version</option></select></label>
+        {form.verificationMethod === 'uninstall_registry' && <><label>MSI ProductCode<input value={form.productCode} onChange={(event) => update('productCode', event.target.value)} placeholder="Optional {GUID}; otherwise match DisplayName" /></label><label>Verification DisplayName<input value={form.verificationDisplayName} onChange={(event) => update('verificationDisplayName', event.target.value)} placeholder="Application name contained in uninstall entry" /></label><label>Verification publisher<input value={form.verificationPublisher} onChange={(event) => update('verificationPublisher', event.target.value)} placeholder="Optional publisher match" /></label></>}
+        {form.verificationMethod === 'file_version' && <label className="wide">Installed EXE/DLL path<input value={form.filePath} onChange={(event) => update('filePath', event.target.value)} placeholder="%ProgramFiles%\\Vendor\\App\\app.exe" /></label>}
         <label>Name contains<input value={form.namePattern} onChange={(event) => update('namePattern', event.target.value)} placeholder={form.canonicalName || 'Inventory detection'} /></label>
         <label>Publisher contains<input value={form.publisherPattern} onChange={(event) => update('publisherPattern', event.target.value)} /></label>
         <label>Channel<input value={form.channel} onChange={(event) => update('channel', event.target.value)} /></label>
@@ -188,7 +202,7 @@ function VendorSourceModal({ source, onClose, onSave, saving }) {
         {direct && github && <><label>Installer asset pattern<input value={form.assetPattern} onChange={(event) => update('assetPattern', event.target.value)} placeholder="e.g. *windows*x64*.msi" /></label><label>Checksum asset pattern<input value={form.checksumAssetPattern} onChange={(event) => update('checksumAssetPattern', event.target.value)} placeholder="e.g. *sha256*" /></label></>}
         {direct && <label className="wide">Expected Authenticode signer<input value={form.expectedSigner} onChange={(event) => update('expectedSigner', event.target.value)} placeholder="Exact trusted publisher identity" /></label>}
       </div>
-      <div className="rmm-patch-security-note"><ShieldCheck size={16} /><span><strong>Approval gate:</strong> saving creates a draft. JSON selectors are fixed field paths only—no executable expressions. Test validates public HTTPS, release data and trust evidence; approval is a separate action.</span></div>
+      <div className="rmm-patch-security-note"><ShieldCheck size={16} /><span><strong>Approval gate:</strong> saving creates a draft. JSON selectors are fixed field paths only—no executable expressions. Test validates public HTTPS, release data and trust evidence. Post-install verification is explicit and independent from installer exit codes; approval is a separate action.</span></div>
       <footer><button onClick={onClose} type="button">Cancel</button><button className="rmm-primary" disabled={!valid || saving} type="submit">{saving ? 'Saving…' : source ? 'Save & retest' : 'Create draft'}</button></footer>
     </form>
   </div>
@@ -694,7 +708,7 @@ export function RmmPatching({ devices = [] }) {
             const trustTone = source.trust_state === 'direct_ready' || source.trust_state === 'winget_ready' ? 'healthy' : source.trust_state === 'quarantined' ? 'critical' : 'neutral'
             return <div className="row" key={source.id}>
               <span><strong>{source.display_name}</strong><small>{source.source_type === 'vendor_json' ? source.source_url : source.repository} · {(source.source_type || 'github_releases').replaceAll('_', ' ')} · every {source.poll_minutes} min</small></span>
-              <span><strong>{(source.deployment_mode || '').replaceAll('_', ' ')}</strong><small>{source.provider_package_id || 'No WinGet fallback'}</small></span>
+              <span><strong>{(source.deployment_mode || '').replaceAll('_', ' ')}</strong><small>{source.provider_package_id || 'No WinGet fallback'} · verify {(source.verification_config?.method || 'winget').replaceAll('_', ' ')}</small></span>
               <span><strong>{source.release_version || source.latest_version || 'Not tested'}</strong><small>{source.release_date ? new Date(source.release_date).toLocaleDateString() : source.last_success_at ? 'Tested ' + new Date(source.last_success_at).toLocaleString() : 'Awaiting test'}</small></span>
               <span><StatusPill tone={trustTone}>{(source.trust_state || 'untested').replaceAll('_', ' ')}</StatusPill><small>{source.installer_sha256 ? 'SHA-256 verified from release metadata' : blockers[0] || (source.deployment_mode === 'vendor_direct' ? 'Direct-install trust incomplete' : 'Execution provider performs install verification')}</small></span>
               <span><StatusPill tone={stateTone}>{source.status}</StatusPill><small>{source.last_error || (source.approved_at ? 'Approved ' + new Date(source.approved_at).toLocaleDateString() : '')}</small></span>
