@@ -36,6 +36,23 @@ function versionCompare(left, right) {
   }
   return 0
 }
+function agentReleaseVersionAtLeast(currentValue, targetValue) {
+  const current = clean(currentValue)
+  const target = clean(targetValue)
+  if (!target) return true
+  if (!current) return false
+  // Legacy Windows Agents reported a hardcoded 1.0.0 before the installer build
+  // version was compiled into the binary. Do not let that placeholder block a
+  // real 0.1.x trusted-release upgrade; the first corrected build migrates it.
+  if (current === '1.0.0' && /^0\.1\./.test(target)) return false
+  return versionCompare(current, target) >= 0
+}
+function patchHostVersionAtLeast(currentValue, targetValue) {
+  const current = clean(currentValue)
+  const target = clean(targetValue)
+  if (!target) return true
+  return Boolean(current && versionCompare(current, target) >= 0)
+}
 async function requireRmmManager(c) {
   const session = await resolveSession(c)
   if (!session) return { error: c.json({ error: 'Authentication required.' }, 401) }
@@ -427,8 +444,8 @@ export function registerRmmAgentRoutes(app) {
         buildCommit: release.build_commit,
         workflowRun: release.workflow_run,
         sha256: release.installer_sha256,
-        installed: Boolean(release.patch_host_version && patchHostVersion
-          && versionCompare(patchHostVersion, release.patch_host_version) >= 0),
+        installed: agentReleaseVersionAtLeast(device.agent_version, release.version)
+          && patchHostVersionAtLeast(patchHostVersion, release.patch_host_version),
       })),
       latestUpgrade: jobResult.rows[0] || null,
     })
@@ -489,10 +506,18 @@ export function registerRmmAgentRoutes(app) {
     }
 
     const capabilities = object(device.patch_capabilities)
+    const currentAgentVersion = clean(device.agent_version)
     const currentPatchHost = clean(capabilities.patchHostVersion || capabilities.version)
-    if (release.patch_host_version && currentPatchHost
-      && versionCompare(currentPatchHost, release.patch_host_version) >= 0) {
-      return c.json({ error: 'This device already reports the target PatchHost version or newer.', currentPatchHost, targetPatchHost: release.patch_host_version }, 409)
+    const agentMeetsTarget = agentReleaseVersionAtLeast(currentAgentVersion, release.version)
+    const patchHostMeetsTarget = patchHostVersionAtLeast(currentPatchHost, release.patch_host_version)
+    if (agentMeetsTarget && patchHostMeetsTarget) {
+      return c.json({
+        error: 'This device already reports the target Agent and PatchHost versions or newer.',
+        currentAgentVersion,
+        targetAgentVersion: release.version,
+        currentPatchHost,
+        targetPatchHost: release.patch_host_version,
+      }, 409)
     }
 
     const command = agentUpgradeScript(release)
