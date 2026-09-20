@@ -775,8 +775,10 @@ function normalizePatchDiscoveryPackage(value = {}) {
   }
 }
 
-async function reconcilePatchDeploymentFromDiscovery(client, agent, catalogueId, item, targetVersion) {
-  if (!catalogueId || !targetVersion || compareVersions(item.installedVersion, targetVersion) < 0) return null
+async function reconcilePatchDeploymentFromDiscovery(client, agent, catalogue, item, targetVersion) {
+  const catalogueId = catalogue?.id
+  const installedVersion = normalizeCatalogueVersion(item.installedVersion, catalogue, 'installed')
+  if (!catalogueId || !targetVersion || compareVersions(installedVersion, targetVersion) < 0) return null
 
   const result = await client.query(
     `SELECT d.id,d.agent_job_id,d.application_name,d.installed_version,d.target_version,d.provider,
@@ -884,7 +886,7 @@ async function ingestPatchDiscovery(agent, body = {}) {
     for (const item of packages) {
       const applicationKey = 'winget|' + lower(item.packageId)
       let catalogue = await client.query(
-        `SELECT id,target_version,tenant_id,catalogue_source
+        `SELECT id,target_version,tenant_id,catalogue_source,source_metadata
            FROM rmm_software_catalogue
           WHERE status='active' AND provider='winget' AND lower(provider_package_id)=lower($2)
             AND (tenant_id=$1 OR tenant_id IS NULL)
@@ -905,7 +907,7 @@ async function ingestPatchDiscovery(agent, body = {}) {
                WHERE tenant_id=$1 AND status='active' AND provider='winget'
                  AND lower(provider_package_id)=lower($4)
             )
-           RETURNING id,target_version,tenant_id,catalogue_source`,
+           RETURNING id,target_version,tenant_id,catalogue_source,source_metadata`,
           [
             agent.tenant_id,
             item.name || item.packageId,
@@ -920,7 +922,7 @@ async function ingestPatchDiscovery(agent, body = {}) {
         )
         if (!catalogue.rowCount) {
           catalogue = await client.query(
-            `SELECT id,target_version,tenant_id,catalogue_source
+            `SELECT id,target_version,tenant_id,catalogue_source,source_metadata
                FROM rmm_software_catalogue
               WHERE tenant_id=$1 AND status='active' AND provider='winget'
                 AND lower(provider_package_id)=lower($2)
@@ -941,7 +943,7 @@ async function ingestPatchDiscovery(agent, body = {}) {
                   source_metadata=source_metadata || $6::jsonb,
                   updated_at=now()
             WHERE id=$1 AND tenant_id=$2
-            RETURNING id,target_version,tenant_id,catalogue_source`,
+            RETURNING id,target_version,tenant_id,catalogue_source,source_metadata`,
           [
             catalogue.rows[0].id,
             agent.tenant_id,
@@ -953,9 +955,16 @@ async function ingestPatchDiscovery(agent, body = {}) {
         )
       }
 
-      const targetVersion = clean(catalogue.rows[0]?.target_version)
+      const catalogueEntry = catalogue.rows[0] || {}
+      const targetVersion = clean(catalogueEntry.target_version)
       const availableVersion = item.availableVersion || targetVersion
-      const comparison = availableVersion ? compareVersions(item.installedVersion, availableVersion) : null
+      const installedForComparison = normalizeCatalogueVersion(item.installedVersion, catalogueEntry, 'installed')
+      const availableForComparison = item.availableVersion
+        ? normalizeCatalogueVersion(item.availableVersion, catalogueEntry, 'provider')
+        : targetVersion
+      const comparison = availableForComparison
+        ? compareVersions(installedForComparison, availableForComparison)
+        : null
       const patchStatus = availableVersion && comparison != null
         ? (comparison < 0 ? 'update_available' : 'current')
         : 'current'
@@ -1017,7 +1026,7 @@ async function ingestPatchDiscovery(agent, body = {}) {
         const reconciled = await reconcilePatchDeploymentFromDiscovery(
           client,
           agent,
-          catalogue.rows[0].id,
+          catalogue.rows[0],
           item,
           targetVersion,
         )
