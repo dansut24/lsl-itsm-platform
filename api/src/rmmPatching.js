@@ -402,6 +402,18 @@ function appIdentity(app) {
 
 function publicCatalogue(entry) {
   if (!entry) return null
+  const sourceMetadata = object(entry.source_metadata)
+  const deploymentMode = clean(sourceMetadata.deploymentMode)
+  const wingetPackageId = clean(sourceMetadata.wingetPackageId || (entry.provider === 'winget' ? entry.provider_package_id : ''))
+  const installable = Boolean(
+    clean(entry.target_version)
+    && sourceMetadata.sourceEnabled !== false
+    && (
+      (deploymentMode === 'winget_preferred' && wingetPackageId)
+      || deploymentMode === 'vendor_direct'
+      || (entry.provider === 'winget' && clean(entry.provider_package_id))
+    )
+  )
   return {
     id: entry.id,
     builtIn: !entry.tenant_id,
@@ -411,13 +423,63 @@ function publicCatalogue(entry) {
     publisherPattern: entry.publisher_pattern,
     provider: entry.provider,
     packageId: entry.provider_package_id,
+    executionPackageId: wingetPackageId,
     targetVersion: entry.target_version,
     releaseChannel: entry.release_channel,
     installerType: entry.installer_type,
+    deploymentMode,
+    installable,
     status: entry.status,
     catalogueSource: clean(entry.catalogue_source),
   }
 }
+async function vulnerabilityHydrationRows(deviceSoftware = []) {
+  const mapped = deviceSoftware.filter((item) => item.catalogue?.id)
+  const catalogueIds = [...new Set(mapped.map((item) => item.catalogue.id))]
+  if (!catalogueIds.length) return []
+
+  const result = await pool.query(
+    `SELECT DISTINCT ON (catalogue_id)
+            catalogue_id,vendor,product,cpe,confidence,metadata,updated_at
+       FROM rmm_software_vulnerability_identities
+      WHERE source='nvd' AND enabled=true AND catalogue_id=ANY($1::uuid[])
+      ORDER BY catalogue_id,updated_at DESC`,
+    [catalogueIds],
+  )
+  const identities = new Map(result.rows.map((row) => [row.catalogue_id, row]))
+  const hydration = new Map()
+
+  for (const item of mapped) {
+    const catalogueId = item.catalogue.id
+    const version = clean(item.installedVersion)
+    const key = [item.inventoryId, catalogueId, version].join('|')
+    if (hydration.has(key)) continue
+
+    const identity = identities.get(catalogueId)
+    const metadata = object(identity?.metadata)
+    const hydratedVersions = new Set(array(metadata.hydratedVersions).map(clean).filter(Boolean))
+    const versionResult = object(object(metadata.versionResults)[version])
+    const checked = Boolean(version && hydratedVersions.has(version))
+
+    hydration.set(key, {
+      inventory_id: item.inventoryId,
+      catalogue_id: catalogueId,
+      application_name: item.name,
+      installed_version: version,
+      status: checked ? 'checked' : identity ? 'pending_version' : 'pending_identity',
+      checked,
+      applicable_cves: checked ? Number(versionResult.applicableCves || 0) : null,
+      family_total: checked ? Number(versionResult.familyTotal || 0) : null,
+      checked_at: checked ? clean(versionResult.hydratedAt || metadata.hydratedAt) : '',
+      nvd_vendor: clean(identity?.vendor),
+      nvd_product: clean(identity?.product),
+      nvd_cpe: clean(identity?.cpe),
+    })
+  }
+
+  return [...hydration.values()]
+}
+
 function buildSoftware(devices, catalogue, observations = []) {
   const applications = new Map()
   const deviceSoftware = []
@@ -634,6 +696,7 @@ async function patchBundle(tenantId) {
     patchDeploymentRows(tenantId),
   ])
   const software = buildSoftware(devices, catalogue, discovery.observations)
+  const vulnerabilityHydration = await vulnerabilityHydrationRows(software.deviceSoftware)
   const updateAvailable = software.deviceSoftware.filter((item) => item.patchStatus === 'update_available').length
   const mapped = software.deviceSoftware.filter((item) => item.catalogue).length
   return {
@@ -657,6 +720,7 @@ async function patchBundle(tenantId) {
     vulnerabilities,
     vulnerabilityExposures: exposureSummary,
     softwareVulnerabilityExposures,
+    vulnerabilityHydration,
     vulnerabilityExposureRows: vulnerabilityExposureRowsData,
     vendorIntel: { ...vendorIntel, tenantSources: tenantVendorSources },
     devices: devices.map((device) => ({
@@ -933,7 +997,6 @@ async function ingestPatchDiscovery(agent, body = {}) {
           item.source,
         ],
       )
-
       if (patchStatus === 'current' && catalogue.rows[0]?.id && targetVersion) {
         const reconciled = await reconcilePatchDeploymentFromDiscovery(
           client,
@@ -1022,7 +1085,8 @@ function installedSoftwareForCatalogue(sourcePayload, catalogue) {
   }
 }
 
-async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId) {
+async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId, options = {}) {
+  const intent = clean(options.intent) === 'install' ? 'install' : 'update'
   const result = await pool.query(
     `SELECT a.id AS agent_device_id,a.inventory_id,a.architecture,a.agent_version,a.websocket_status,
             a.last_telemetry_at,a.patch_capabilities,
@@ -1052,9 +1116,20 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId) {
   if (capabilities.softwareInstall !== true) {
     return { error: 'This device has not reported PatchHost software-install capability yet.', status: 409, capabilityMissing: true }
   }
+  const hostVersion = clean(capabilities.patchHostVersion || capabilities.version)
+  if (intent === 'install') {
+    const installHostComparison = compareVersions(hostVersion, '0.2.5')
+    if (!hostVersion || installHostComparison == null || installHostComparison < 0) {
+      return {
+        error: 'Installing software from the catalogue requires PatchHost 0.2.5 or newer on the endpoint.',
+        status: 409,
+        capabilityMissing: true,
+        requiredPatchHostVersion: '0.2.5',
+      }
+    }
+  }
   const verificationMethod = clean(object(row.verification).method || object(row.verification).provider || 'winget')
   if (verificationMethod !== 'winget') {
-    const hostVersion = clean(capabilities.patchHostVersion || capabilities.version)
     const hostComparison = compareVersions(hostVersion, '0.2.4')
     if (!hostVersion || hostComparison == null || hostComparison < 0) {
       return {
@@ -1072,13 +1147,18 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId) {
   }
 
   const installed = installedSoftwareForCatalogue(row.source_payload, row)
-  if (!installed) return { error: 'The selected application is not currently detected on this device.', status: 409 }
+  if (intent === 'install' && installed) {
+    return { error: 'The selected application is already detected on this device. Use Patch for an existing installation.', status: 409, current: true }
+  }
+  if (intent !== 'install' && !installed) {
+    return { error: 'The selected application is not currently detected on this device.', status: 409 }
+  }
 
-  const installedVersion = clean(installed.version)
+  const installedVersion = installed ? clean(installed.version) : ''
   const targetVersion = clean(row.target_version)
   if (!targetVersion) return { error: 'The software catalogue does not have an approved target version.', status: 409 }
 
-  if (clean(row.provider_package_id)) {
+  if (installed && clean(row.provider_package_id)) {
     const blocked = await pool.query(
       `SELECT patch_status,available_version,evidence
          FROM rmm_software_patch_observations
@@ -1100,9 +1180,24 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId) {
     }
   }
 
-  const comparison = compareVersions(installedVersion, targetVersion)
-  if (comparison != null && comparison >= 0) {
-    return { error: 'The application is already at or above the approved target version.', status: 409, current: true }
+  if (installed) {
+    const comparison = compareVersions(installedVersion, targetVersion)
+    if (comparison != null && comparison >= 0) {
+      return { error: 'The application is already at or above the approved target version.', status: 409, current: true }
+    }
+  }
+
+  const duplicate = await pool.query(
+    `SELECT id,status
+       FROM rmm_agent_jobs
+      WHERE tenant_id=$1 AND agent_device_id=$2 AND job_type='patch.software'
+        AND payload->>'catalogueId'=$3
+        AND status IN ('queued','claimed')
+      ORDER BY created_at DESC LIMIT 1`,
+    [tenantId, row.agent_device_id, row.catalogue_id],
+  )
+  if (duplicate.rowCount) {
+    return { error: 'A software deployment for this application is already running on the device.', status: 409, duplicateJobId: duplicate.rows[0].id }
   }
 
   const sourceMetadata = object(row.source_metadata)
@@ -1173,6 +1268,7 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId) {
     manifest: {
       protocolVersion: 1,
       action: 'software.install',
+      intent,
       catalogueId: row.catalogue_id,
       applicationName: row.canonical_name,
       publisher: row.publisher,
@@ -1220,6 +1316,7 @@ async function createAndDispatchSoftwarePatch(session, plan, context = {}) {
           device_reference: plan.device.reference,
           catalogue_id: plan.device.catalogue_id,
           provider: plan.provider,
+          intent: plan.manifest.intent || 'update',
           ...(cveId ? { cve_id: cveId } : {}),
           ...(exposureId ? { vulnerability_exposure_id: exposureId } : {}),
         }),
@@ -1312,6 +1409,7 @@ async function createAndDispatchSoftwarePatch(session, plan, context = {}) {
     return { ...created, dispatched: false, offline: true }
   }
 
+  const installIntent = plan.manifest.intent === 'install'
   await recordRmmActivity({
     tenantId: session.tenant_id,
     agentDeviceId: plan.device.agent_device_id,
@@ -1319,11 +1417,15 @@ async function createAndDispatchSoftwarePatch(session, plan, context = {}) {
     actorUserId: session.user_id,
     actorType: 'technician',
     actorLabel: label,
-    eventType: 'patch.software.requested',
-    category: 'patching',
-    summary: label + ' started software patch ' + '“' + plan.manifest.applicationName + '”',
-    detail: plan.manifest.installedVersion + ' → ' + plan.manifest.targetVersion + ' via ' + plan.provider
-      + (cveId ? ' · ' + cveId : ''),
+    eventType: installIntent ? 'software.install.requested' : 'patch.software.requested',
+    category: installIntent ? 'software' : 'patching',
+    summary: installIntent
+      ? label + ' started software install “' + plan.manifest.applicationName + '”'
+      : label + ' started software patch “' + plan.manifest.applicationName + '”',
+    detail: installIntent
+      ? 'Target ' + plan.manifest.targetVersion + ' via ' + plan.provider
+      : plan.manifest.installedVersion + ' → ' + plan.manifest.targetVersion + ' via ' + plan.provider
+        + (cveId ? ' · ' + cveId : ''),
     outcome: 'requested',
     correlationId: created.job.correlation_id,
     jobId: created.job.id,
@@ -1509,6 +1611,45 @@ export function registerRmmPatchingRoutes(app) {
     const dispatched = await createAndDispatchSoftwarePatch(auth.session, plan)
     if (!dispatched.dispatched) {
       return c.json({ error: 'The device went offline before the patch could be dispatched. No patch job was retained.', offline: true }, 409)
+    }
+
+    return c.json({
+      success: true,
+      job: dispatched.job,
+      deployment: dispatched.deployment,
+      provider: plan.provider,
+      bundle: await patchBundle(auth.session.tenant_id),
+    }, 202)
+  })
+
+  app.post('/api/v1/rmm/patching/software/install', async (c) => {
+    const auth = await requirePatchAccess(c, 'software')
+    if (auth.error) return auth.error
+    if (!hasPermission(auth.session.access, 'rmm.devices.control')) {
+      return c.json({ error: 'You do not have permission to control RMM devices.' }, 403)
+    }
+
+    const body = await c.req.json().catch(() => ({}))
+    const agentDeviceId = clean(body.agentDeviceId)
+    const catalogueId = clean(body.catalogueId)
+    if (!agentDeviceId || !catalogueId) {
+      return c.json({ error: 'Device and software catalogue entry are required.' }, 400)
+    }
+
+    const plan = await softwarePatchPlan(auth.session.tenant_id, agentDeviceId, catalogueId, { intent: 'install' })
+    if (plan.error) {
+      return c.json({
+        error: plan.error,
+        offline: plan.offline,
+        capabilityMissing: plan.capabilityMissing,
+        requiredPatchHostVersion: plan.requiredPatchHostVersion,
+        current: plan.current,
+      }, plan.status || 400)
+    }
+
+    const dispatched = await createAndDispatchSoftwarePatch(auth.session, plan, { source: 'rmm_catalogue_install' })
+    if (!dispatched.dispatched) {
+      return c.json({ error: 'The device went offline before the install could be dispatched. No install job was retained.', offline: true }, 409)
     }
 
     return c.json({

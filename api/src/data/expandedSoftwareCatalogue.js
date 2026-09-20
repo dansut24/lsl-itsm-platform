@@ -413,9 +413,12 @@ export const expandedSoftwareCatalogue = [
     "canonicalName": "Notepad++",
     "sourceType": "github_releases",
     "repository": "notepad-plus-plus/notepad-plus-plus",
-    "deploymentMode": "intelligence_only",
+    "deploymentMode": "winget_preferred",
     "pollMinutes": 60,
-    "enabled": true
+    "enabled": true,
+    "wingetPackageId": "Notepad++.Notepad++",
+    "nvdVendor": "notepad-plus-plus",
+    "nvdProduct": "notepad++"
   },
   {
     "sourceKey": "gh_vim_vim",
@@ -433,9 +436,12 @@ export const expandedSoftwareCatalogue = [
     "canonicalName": "Neovim",
     "sourceType": "github_releases",
     "repository": "neovim/neovim",
-    "deploymentMode": "intelligence_only",
+    "deploymentMode": "winget_preferred",
     "pollMinutes": 60,
-    "enabled": true
+    "enabled": true,
+    "wingetPackageId": "Neovim.Neovim",
+    "nvdVendor": "neovim",
+    "nvdProduct": "neovim"
   },
   {
     "sourceKey": "gh_zed_industries_zed",

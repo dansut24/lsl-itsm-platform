@@ -73,6 +73,8 @@ export function jobActivityDescriptor(job, success, result = {}, errorMessage = 
   }
   if (type === 'patch.software') {
     const name = clean(result.applicationName || result.application_name || payload.applicationName) || 'software'
+    const intent = clean(result.intent || payload.intent || 'update').toLowerCase()
+    const installing = intent === 'install'
     const fromVersion = clean(result.installedVersion || result.installed_version || payload.installedVersion)
     const targetVersion = clean(payload.targetVersion || result.targetVersion || result.target_version)
     const verifiedVersion = clean(result.verifiedVersion || result.verified_version)
@@ -80,6 +82,7 @@ export function jobActivityDescriptor(job, success, result = {}, errorMessage = 
     const verificationFailed = Boolean(result.verificationFailed || result.verification_failed)
     const installerOutput = clean(result.installerOutput || result.installer_output).toLowerCase()
     const providerBlocked = verificationFailed
+      && !installing
       && provider.toLowerCase() === 'winget'
       && (
         clean(result.error).toLowerCase() === 'provider_no_upgrade'
@@ -94,18 +97,22 @@ export function jobActivityDescriptor(job, success, result = {}, errorMessage = 
           ? 'Verification failed · See details'
           : suffix
     const detailParts = [
-      fromVersion && targetVersion ? fromVersion + ' → ' + targetVersion : '',
+      installing
+        ? (targetVersion ? 'Installed target ' + targetVersion : '')
+        : fromVersion && targetVersion ? fromVersion + ' → ' + targetVersion : '',
       provider ? 'Provider: ' + provider : '',
       verifiedVersion && verifiedVersion !== targetVersion ? 'Verified: ' + verifiedVersion : '',
       patchSuffix,
     ].filter(Boolean)
     return {
       ...common,
-      eventType: type,
-      category: 'patching',
-      summary: ok ? actor.actorLabel + ' patched ' + quoted(name) : actor.actorLabel + ' failed to patch ' + quoted(name),
+      eventType: installing ? 'software.install' : type,
+      category: installing ? 'software' : 'patching',
+      summary: installing
+        ? (ok ? actor.actorLabel + ' installed ' + quoted(name) : actor.actorLabel + ' failed to install ' + quoted(name))
+        : (ok ? actor.actorLabel + ' patched ' + quoted(name) : actor.actorLabel + ' failed to patch ' + quoted(name)),
       detail: detailParts.join(' · '),
-      metadata: { software: name, installedVersion: fromVersion, targetVersion, verifiedVersion, provider, providerBlocked, result },
+      metadata: { software: name, intent, installedVersion: fromVersion, targetVersion, verifiedVersion, provider, providerBlocked, result },
     }
   }
   if (type === 'process.kill') {

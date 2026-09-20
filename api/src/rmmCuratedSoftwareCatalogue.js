@@ -75,7 +75,7 @@ async function normalizeEntry(raw = {}) {
   if (deploymentMode === 'winget_preferred' && !wingetPackageId) {
     throw new Error(key + ': winget_preferred requires a real wingetPackageId.')
   }
-  const catalogueKey = wingetPackageId || ('vendor:' + key)
+  const catalogueKey = 'vendor:' + key
   const repository = sourceType === 'github_releases' ? repositoryName(raw.repository || raw.sourceUrl) : ''
   if (sourceType === 'github_releases' && !repository) throw new Error(key + ': a valid GitHub repository is required.')
   let sourceUrl = clean(raw.sourceUrl)
@@ -124,6 +124,11 @@ async function normalizeEntry(raw = {}) {
   const channel = clean(raw.channel || 'stable').slice(0, 80)
   const platform = clean(raw.platform || 'windows').slice(0, 40)
   const architecture = clean(raw.architecture || 'x64').slice(0, 40)
+  const nvdVendor = clean(raw.nvdVendor).slice(0, 160)
+  const nvdProduct = clean(raw.nvdProduct).slice(0, 160)
+  if (Boolean(nvdVendor) !== Boolean(nvdProduct)) {
+    throw new Error(key + ': nvdVendor and nvdProduct must be supplied together.')
+  }
 
   const adapter = clean(raw.adapter).slice(0, 80)
   if (sourceType === 'vendor_text' && !['signal_yaml','vlc_directory','jenkins_jsonp'].includes(adapter)) {
@@ -141,6 +146,8 @@ async function normalizeEntry(raw = {}) {
     staticInstallerUrl,
     staticSha256,
     staticReleaseUrl,
+    nvdVendor,
+    nvdProduct,
   }
   const bindingMetadata = {
     curated: true,
@@ -166,6 +173,8 @@ async function normalizeEntry(raw = {}) {
     staticInstallerUrl,
     staticSha256,
     staticReleaseUrl,
+    nvdVendor,
+    nvdProduct,
   }
 
   return {
@@ -188,6 +197,8 @@ async function normalizeEntry(raw = {}) {
     deploymentMode,
     installerType,
     expectedSigner,
+    nvdVendor,
+    nvdProduct,
     verification: bindingMetadata.verificationConfig,
     execution: { installArguments },
     sourceMetadata,
@@ -276,7 +287,7 @@ export async function importCuratedSoftwareCatalogue(entries = [], { dryRun = fa
            source_metadata=EXCLUDED.source_metadata,status='active',updated_at=now()`,
         [
           item.canonicalName,item.publisher,item.namePattern,item.publisherPattern,item.platform,
-          item.deploymentMode === 'vendor_direct' ? 'vendor' : item.deploymentMode === 'winget_preferred' ? 'winget' : 'managed',
+          'managed',
           item.catalogueKey,item.channel,item.installerType,JSON.stringify(item.verification),JSON.stringify(item.execution),
           JSON.stringify({
             curated: true,
@@ -289,6 +300,8 @@ export async function importCuratedSoftwareCatalogue(entries = [], { dryRun = fa
             trustState: 'pending_source_sync',
             hasWingetFallback: Boolean(item.wingetPackageId),
             wingetPackageId: item.wingetPackageId,
+            nvdVendor: item.nvdVendor,
+            nvdProduct: item.nvdProduct,
           }),
         ],
       )

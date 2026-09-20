@@ -71,6 +71,13 @@ export function deploySoftwarePatch(agentDeviceId, catalogueId) {
   })
 }
 
+export function installSoftwareFromCatalogue(agentDeviceId, catalogueId) {
+  return request('/api/v1/rmm/patching/software/install', {
+    method: 'POST',
+    body: JSON.stringify({ agentDeviceId, catalogueId }),
+  })
+}
+
 export function remediateVulnerabilityExposure(exposureId) {
   return request('/api/v1/rmm/vulnerability-exposures/' + encodeURIComponent(exposureId) + '/remediate', {
     method: 'POST',

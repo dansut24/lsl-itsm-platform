@@ -436,7 +436,7 @@ async function syncGenericConfigured(sourceKey, state) {
       verification,
       installArguments: clean(config.installArguments),
     },
-    catalogueProvider: vendorDirect ? 'vendor' : deploymentMode === 'winget_preferred' ? 'winget' : 'managed',
+    catalogueProvider: 'managed',
     verification,
     execution: { installArguments: clean(config.installArguments) },
     catalogueMetadata: {

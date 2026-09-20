@@ -25,6 +25,7 @@ import {
   deletePatchAssignment,
   deleteSoftwareCatalogueEntry,
   deploySoftwarePatch,
+  installSoftwareFromCatalogue,
   loadRmmPatching,
   loadRmmVulnerabilities,
   remediateVulnerabilityExposure,
@@ -43,6 +44,17 @@ function patchTone(status) {
   if (status === 'current') return 'healthy'
   if (status === 'detection_pending') return 'running'
   return 'neutral'
+}
+
+function versionAtLeast(current = '', required = '') {
+  const left = String(current).match(/\d+/g)?.map(Number) || []
+  const right = String(required).match(/\d+/g)?.map(Number) || []
+  const size = Math.max(left.length, right.length)
+  for (let index = 0; index < size; index += 1) {
+    const delta = (left[index] || 0) - (right[index] || 0)
+    if (delta) return delta > 0
+  }
+  return Boolean(left.length && right.length)
 }
 
 function patchLabel(status) {
@@ -364,6 +376,8 @@ export function RmmPatching({ devices = [] }) {
   const [error, setError] = useState('')
   const [mappingApp, setMappingApp] = useState(null)
   const [patchApp, setPatchApp] = useState(null)
+  const [catalogueInstallDeviceId, setCatalogueInstallDeviceId] = useState('')
+  const [catalogueInstallId, setCatalogueInstallId] = useState('')
   const [showVendorSource, setShowVendorSource] = useState(false)
   const [editingVendorSource, setEditingVendorSource] = useState(null)
   const [showPolicy, setShowPolicy] = useState(false)
@@ -407,6 +421,8 @@ export function RmmPatching({ devices = [] }) {
   }, [])
 
   const applications = bundle?.applications || []
+  const catalogue = bundle?.catalogue || []
+  const patchDevices = bundle?.devices || []
   const catalogueCandidates = bundle?.catalogueCandidates || []
   const patchObservations = bundle?.patchObservations || []
   const vendorSources = bundle?.vendorIntel?.sources || []
@@ -417,6 +433,7 @@ export function RmmPatching({ devices = [] }) {
   const deviceSoftware = bundle?.deviceSoftware || []
   const deployments = bundle?.deployments || []
   const softwareVulnerabilityExposures = bundle?.softwareVulnerabilityExposures || []
+  const vulnerabilityHydration = bundle?.vulnerabilityHydration || []
   const vulnerabilityExposureRows = bundle?.vulnerabilityExposureRows || []
   const exposureSummary = bundle?.vulnerabilityExposures || {}
   const overview = bundle?.overview || {}
@@ -424,8 +441,38 @@ export function RmmPatching({ devices = [] }) {
   const mappedApps = applications.filter((item) => item.catalogue)
   const windowsReported = devices.filter((device) => device.pendingPatches != null)
   const windowsPending = windowsReported.reduce((sum, device) => sum + Number(device.pendingPatches || 0), 0)
-  const patchHostReady = (bundle?.devices || []).filter((device) => device.patchCapabilities?.softwareDiscovery).length
-  const patchHostInstallReady = (bundle?.devices || []).filter((device) => device.patchCapabilities?.softwareInstall).length
+  const patchHostReady = patchDevices.filter((device) => device.patchCapabilities?.softwareDiscovery).length
+  const patchHostInstallReady = patchDevices.filter((device) => device.patchCapabilities?.softwareInstall).length
+  const onlineInstallDevices = patchDevices.filter((device) => device.online)
+  const selectedInstallDevice = onlineInstallDevices.find((device) => device.agentDeviceId === catalogueInstallDeviceId) || null
+  const selectedDeviceInstalledCatalogueIds = new Set(
+    deviceSoftware
+      .filter((item) => item.agentDeviceId === catalogueInstallDeviceId && item.catalogue?.id)
+      .map((item) => item.catalogue.id),
+  )
+  const installableCatalogue = catalogue
+    .filter((item) => item.installable && !selectedDeviceInstalledCatalogueIds.has(item.id))
+    .sort((a, b) => String(a.canonicalName || '').localeCompare(String(b.canonicalName || '')))
+  const selectedCatalogueInstall = installableCatalogue.find((item) => item.id === catalogueInstallId) || null
+  const selectedInstallPatchHost = selectedInstallDevice?.patchCapabilities?.patchHostVersion
+    || selectedInstallDevice?.patchCapabilities?.version
+    || ''
+  const selectedInstallCapabilityReady = Boolean(
+    selectedInstallDevice?.patchCapabilities?.softwareInstall
+    && versionAtLeast(selectedInstallPatchHost, '0.2.5'),
+  )
+
+  useEffect(() => {
+    if (!catalogueInstallDeviceId && onlineInstallDevices.length) {
+      setCatalogueInstallDeviceId(onlineInstallDevices[0].agentDeviceId)
+    }
+  }, [catalogueInstallDeviceId, onlineInstallDevices])
+
+  useEffect(() => {
+    if (catalogueInstallId && !installableCatalogue.some((item) => item.id === catalogueInstallId)) {
+      setCatalogueInstallId('')
+    }
+  }, [catalogueInstallId, installableCatalogue])
 
   function patchInstallsForApplication(application) {
     const grouped = new Map()
@@ -460,7 +507,7 @@ export function RmmPatching({ devices = [] }) {
         .filter((item) => item.key === application.key && item.catalogue?.id)
         .map((item) => item.inventoryId + '|' + item.catalogue.id),
     )
-    return softwareVulnerabilityExposures
+    const exposure = softwareVulnerabilityExposures
       .filter((item) => installationKeys.has(item.inventory_id + '|' + item.catalogue_id))
       .reduce((summary, item) => ({
         open: summary.open + Number(item.open_count || 0),
@@ -468,6 +515,16 @@ export function RmmPatching({ devices = [] }) {
         critical: summary.critical + Number(item.critical_count || 0),
         maxCvss: Math.max(summary.maxCvss, Number(item.max_cvss || 0)),
       }), { open: 0, kev: 0, critical: 0, maxCvss: 0 })
+
+    const hydration = vulnerabilityHydration
+      .filter((item) => installationKeys.has(item.inventory_id + '|' + item.catalogue_id))
+      .reduce((summary, item) => ({
+        total: summary.total + 1,
+        checked: summary.checked + Number(item.checked === true || item.status === 'checked'),
+        pending: summary.pending + Number(item.checked !== true && item.status !== 'checked'),
+      }), { total: 0, checked: 0, pending: 0 })
+
+    return { ...exposure, ...hydration }
   }
 
   async function saveMapping(form) {
@@ -508,6 +565,21 @@ export function RmmPatching({ devices = [] }) {
       setPatchApp(null)
     } catch (requestError) {
       setError(requestError?.message || 'Unable to start software patch.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function runCatalogueInstall() {
+    if (!catalogueInstallDeviceId || !catalogueInstallId || !selectedInstallCapabilityReady) return
+    setSaving(true)
+    setError('')
+    try {
+      const result = await installSoftwareFromCatalogue(catalogueInstallDeviceId, catalogueInstallId)
+      setBundle(result.bundle)
+      setCatalogueInstallId('')
+    } catch (requestError) {
+      setError(requestError?.message || 'Unable to start software installation.')
     } finally {
       setSaving(false)
     }
@@ -651,6 +723,27 @@ export function RmmPatching({ devices = [] }) {
 
     {tab === 'software' && <section className="rmm-patch-panel">
       <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Software patch catalogue</span><h2>Patchability by application</h2><p>{mappedApps.length} mapped application{mappedApps.length === 1 ? '' : 's'} · {applications.length - mappedApps.length} awaiting mapping · {catalogueCandidates.length} automatically discovered package{catalogueCandidates.length === 1 ? '' : 's'}.</p></div></div>
+      <div className="rmm-catalogue-install-card">
+        <div className="intro"><PackageCheck size={18} /><div><strong>Install from catalogue</strong><span>Install approved catalogue software on an online managed device. Existing installations stay in the normal Patch workflow.</span></div></div>
+        <div className="controls">
+          <label>Device<select value={catalogueInstallDeviceId} onChange={(event) => { setCatalogueInstallDeviceId(event.target.value); setCatalogueInstallId('') }}>
+            <option value="">Select device</option>
+            {onlineInstallDevices.map((device) => <option key={device.agentDeviceId} value={device.agentDeviceId}>{device.name}</option>)}
+          </select></label>
+          <label>Application<select value={catalogueInstallId} onChange={(event) => setCatalogueInstallId(event.target.value)} disabled={!catalogueInstallDeviceId}>
+            <option value="">Select application</option>
+            {installableCatalogue.map((item) => <option key={item.id} value={item.id}>{item.canonicalName} · {item.targetVersion}</option>)}
+          </select></label>
+          <div className="install-meta">
+            <span><small>Target</small><strong>{selectedCatalogueInstall?.targetVersion || '—'}</strong></span>
+            <span><small>Provider</small><strong>{selectedCatalogueInstall?.executionPackageId ? 'WinGet' : selectedCatalogueInstall?.deploymentMode?.replaceAll('_', ' ') || '—'}</strong></span>
+            <span><small>PatchHost</small><strong>{selectedInstallPatchHost || 'Not reported'}</strong></span>
+          </div>
+          <button className="rmm-primary" disabled={saving || !selectedCatalogueInstall || !selectedInstallCapabilityReady} onClick={runCatalogueInstall} type="button"><Plus size={14} /> Install</button>
+        </div>
+        {selectedInstallDevice && !selectedInstallCapabilityReady && <small className="capability-note">Catalogue installation requires PatchHost 0.2.5 or newer. {selectedInstallPatchHost ? 'This device currently reports ' + selectedInstallPatchHost + '.' : 'This device has not reported a compatible PatchHost version yet.'}</small>}
+        {catalogueInstallDeviceId && !installableCatalogue.length && <small className="capability-note">No installable catalogue applications remain for this device.</small>}
+      </div>
       <div className="rmm-patch-table software">
         <div className="head"><span>Application</span><span>Installed</span><span>Target</span><span>Patch state</span><span>Vulnerabilities</span><span>Provider</span><span /></div>
         {applications.map((application) => {
@@ -671,7 +764,24 @@ export function RmmPatching({ devices = [] }) {
             <span className="versions"><strong title={application.versions?.map((version) => version.version).join(' · ') || ''}>{application.versions?.map((version) => version.version).join(' · ') || 'Not reported'}</strong>{application.installs > application.deviceCount && <small>{application.installs} registrations across {application.deviceCount} device{application.deviceCount === 1 ? '' : 's'}</small>}</span>
             <span><strong>{application.catalogue?.targetVersion || 'Not set'}</strong><small>{application.catalogue?.packageId || 'No package ID'}</small></span>
             <span><StatusPill tone={patchTone(status)}>{patchLabel(status)}</StatusPill>{application.updateAvailable > 0 && <small>{application.updateAvailable} install{application.updateAvailable === 1 ? '' : 's'} behind</small>}{status === 'provider_blocked' && <small>WinGet reports no applicable upgrade; retry is suppressed until detection changes.</small>}{status === 'older_version_present' && <small>{application.olderVersionPresent} older side-by-side install{application.olderVersionPresent === 1 ? '' : 's'} remain. The approved target is installed; remove older majors separately if they are no longer required.</small>}</span>
-            <span>{exposure.open > 0 ? <StatusPill tone={exposure.kev > 0 || exposure.critical > 0 ? 'critical' : 'warning'}>{exposure.open} open</StatusPill> : <StatusPill tone={application.catalogue ? 'healthy' : 'neutral'}>{application.catalogue ? 'None known' : 'Unmapped'}</StatusPill>}<small>{exposure.kev > 0 ? exposure.kev + ' CISA KEV' : exposure.maxCvss > 0 ? 'Max CVSS ' + exposure.maxCvss : ''}</small></span>
+            <span>{exposure.open > 0
+              ? <StatusPill tone={exposure.kev > 0 || exposure.critical > 0 ? 'critical' : 'warning'}>{exposure.open} open</StatusPill>
+              : !application.catalogue
+                ? <StatusPill tone="neutral">Unmapped</StatusPill>
+                : exposure.checked > 0 && exposure.pending === 0
+                  ? <StatusPill tone="healthy">None known</StatusPill>
+                  : <StatusPill tone="running">Checking NVD</StatusPill>}
+              <small>{[
+                exposure.kev > 0 ? exposure.kev + ' CISA KEV' : exposure.maxCvss > 0 ? 'Max CVSS ' + exposure.maxCvss : '',
+                application.catalogue && exposure.pending > 0
+                  ? exposure.checked > 0
+                    ? exposure.checked + ' checked · ' + exposure.pending + ' pending'
+                    : 'Installed version awaiting NVD lookup'
+                  : application.catalogue && exposure.checked > 0
+                    ? 'NVD checked for installed version'
+                    : '',
+              ].filter(Boolean).join(' · ')}</small>
+            </span>
             <span><strong>{application.catalogue?.provider || 'Unmapped'}</strong><small>{application.catalogue?.builtIn ? 'Hi5Central catalogue' : application.catalogue ? 'Tenant mapping' : 'Needs mapping'}</small></span>
             <span className="actions">{application.catalogue ? <>
               <button disabled={saving || application.updateAvailable < 1} onClick={() => setPatchApp(application)} type="button"><PackageCheck size={14} /> Patch</button>
