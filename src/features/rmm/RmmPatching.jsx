@@ -146,6 +146,7 @@ function VendorSourceModal({ source, onClose, onSave, saving }) {
     assetPattern: source?.asset_pattern || '',
     checksumAssetPattern: source?.checksum_asset_pattern || '',
     installerType: source?.installer_type || '',
+    installArguments: source?.install_arguments || '',
     channel: source?.channel || 'stable',
     architecture: source?.architecture || 'x64',
     pollMinutes: source?.poll_minutes || 60,
@@ -159,6 +160,7 @@ function VendorSourceModal({ source, onClose, onSave, saving }) {
     ? form.repository.trim().length > 2
     : form.sourceUrl.trim().startsWith('https://') && form.versionPath.trim()
   const directReady = !direct || (form.expectedSigner.trim()
+    && (form.installerType !== 'exe' || form.installArguments.trim())
     && (github
       ? form.assetPattern.trim() && form.checksumAssetPattern.trim()
       : form.installerUrlPath.trim() && form.sha256Path.trim()))
@@ -200,7 +202,7 @@ function VendorSourceModal({ source, onClose, onSave, saving }) {
         <label>Channel<input value={form.channel} onChange={(event) => update('channel', event.target.value)} /></label>
         <label>Architecture<select value={form.architecture} onChange={(event) => update('architecture', event.target.value)}><option value="x64">x64</option><option value="arm64">arm64</option><option value="x86">x86</option></select></label>
         <label>Poll interval (minutes)<input min="15" max="10080" type="number" value={form.pollMinutes} onChange={(event) => update('pollMinutes', event.target.value)} /></label>
-        <label>Installer type<select value={form.installerType} onChange={(event) => update('installerType', event.target.value)}><option value="">Auto-detect</option><option value="msi">MSI</option><option value="exe">EXE</option></select></label>
+        <label>Installer type<select value={form.installerType} onChange={(event) => update('installerType', event.target.value)}><option value="">Auto-detect</option><option value="msi">MSI</option><option value="exe">EXE</option></select></label>{direct && form.installerType === 'exe' && <label className="wide">Silent installer arguments<input value={form.installArguments} onChange={(event) => update('installArguments', event.target.value)} placeholder="e.g. install --quiet --accept-license" /><small>Explicit arguments are required for vendor-direct EXE sources; Hi5Central never guesses vendor silent switches.</small></label>}
         {direct && github && <><label>Installer asset pattern<input value={form.assetPattern} onChange={(event) => update('assetPattern', event.target.value)} placeholder="e.g. *windows*x64*.msi" /></label><label>Checksum asset pattern<input value={form.checksumAssetPattern} onChange={(event) => update('checksumAssetPattern', event.target.value)} placeholder="e.g. *sha256*" /></label></>}
         {direct && <label className="wide">Expected Authenticode signer<input value={form.expectedSigner} onChange={(event) => update('expectedSigner', event.target.value)} placeholder="Exact trusted publisher identity" /></label>}
       </div>

@@ -247,6 +247,8 @@ function normalizeInput(body = {}) {
     || filePath.includes('..') || /["\r\n]/.test(filePath))) {
     throw new Error('File-version verification requires a safe local Windows path under a drive, Program Files or ProgramData.')
   }
+  const installArguments = clean(body.installArguments).slice(0, 800)
+  if (/[\r\n\0]/.test(installArguments)) throw new Error('Installer arguments must be a single command-line argument string.')
   const verificationConfig = {
     method: verificationMethod,
     packageId: clean(body.providerPackageId).slice(0, 240),
@@ -274,6 +276,7 @@ function normalizeInput(body = {}) {
     assetPattern: type === 'github_releases' ? clean(body.assetPattern).slice(0, 240) : '',
     checksumAssetPattern: type === 'github_releases' ? clean(body.checksumAssetPattern).slice(0, 240) : '',
     installerType: clean(body.installerType).toLowerCase().slice(0, 20),
+    installArguments,
     pollMinutes: Math.max(15, Math.min(10080, Number(body.pollMinutes) || 60)),
   }
   if (input.displayName.length < 2 || input.canonicalName.length < 2 || input.namePattern.length < 2) {
@@ -311,6 +314,9 @@ function normalizeInput(body = {}) {
   if (input.installerType && !['msi', 'exe'].includes(input.installerType)) {
     throw new Error('Installer type must be MSI or EXE.')
   }
+  if (mode === 'vendor_direct' && input.installerType === 'exe' && !input.installArguments) {
+    throw new Error('Vendor-direct EXE sources require explicit silent installer arguments.')
+  }
   return input
 }
 
@@ -343,6 +349,7 @@ function trustState(source, release) {
     && /^[A-F0-9]{64}$/.test(release.installerSha256)
     && clean(source.expected_signer)
     && ['msi', 'exe'].includes(release.installerType)
+    && (release.installerType !== 'exe' || clean(source.install_arguments))
     && verificationConfigured(source)) return 'direct_ready'
   return 'quarantined'
 }
@@ -451,6 +458,7 @@ async function storeRelease(source, release, sourcePayload) {
     sha256Present: /^[A-F0-9]{64}$/.test(release.installerSha256),
     expectedSigner: clean(source.expected_signer),
     verification: source.verification_config || {},
+    installArguments: clean(source.install_arguments),
     resolvedVerificationProductCode: clean(release.verificationProductCode),
     deploymentMode: source.deployment_mode,
   }
@@ -483,6 +491,7 @@ function verificationForRelease(source, release) {
 async function applyCatalogue(source, release, db = pool) {
   const provider = source.deployment_mode === 'winget_preferred' ? 'winget' : 'vendor'
   const verification = verificationForRelease(source, release)
+  const execution = { installArguments: clean(source.install_arguments) }
   const metadata = {
     tenantVendorSourceId: source.id,
     sourceType: source.source_type,
@@ -504,24 +513,24 @@ async function applyCatalogue(source, release, db = pool) {
       `UPDATE rmm_software_catalogue
           SET canonical_name=$2,publisher=$3,name_pattern=$4,publisher_pattern=$5,
               provider=$6,provider_package_id=$7,target_version=$8,release_channel=$9,
-              installer_type=$10,verification=$11::jsonb,source_revision=$8,source_metadata=$12::jsonb,status='active',updated_at=now()
+              installer_type=$10,verification=$11::jsonb,execution=$12::jsonb,source_revision=$8,source_metadata=$13::jsonb,status='active',updated_at=now()
         WHERE id=$1`,
       [
         existing.rows[0].id, source.canonical_name, source.publisher, source.name_pattern,
         source.publisher_pattern, provider, source.provider_package_id, release.version,
-        source.channel, release.installerType, JSON.stringify(verification), JSON.stringify(metadata),
+        source.channel, release.installerType, JSON.stringify(verification), JSON.stringify(execution), JSON.stringify(metadata),
       ],
     )
   } else {
     await db.query(
       `INSERT INTO rmm_software_catalogue
         (tenant_id,canonical_name,publisher,name_pattern,publisher_pattern,provider,provider_package_id,
-         target_version,release_channel,installer_type,verification,catalogue_source,external_key,source_revision,source_metadata)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,'tenant_vendor',$12,$8,$13::jsonb)`,
+         target_version,release_channel,installer_type,verification,execution,catalogue_source,external_key,source_revision,source_metadata)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,'tenant_vendor',$13,$8,$14::jsonb)`,
       [
         source.tenant_id, source.canonical_name, source.publisher, source.name_pattern,
         source.publisher_pattern, provider, source.provider_package_id, release.version,
-        source.channel, release.installerType, JSON.stringify(verification), source.id, JSON.stringify(metadata),
+        source.channel, release.installerType, JSON.stringify(verification), JSON.stringify(execution), source.id, JSON.stringify(metadata),
       ],
     )
   }
@@ -537,6 +546,7 @@ async function syncSourceRow(source, testOnly = false) {
       if (!resolved.release.installerSha256) blockers.push('No verified SHA-256 was resolved from the source.')
       if (!resolved.release.installerType) blockers.push('Installer must be MSI or EXE.')
       if (!clean(source.expected_signer)) blockers.push('Expected signer is required.')
+      if (resolved.release.installerType === 'exe' && !clean(source.install_arguments)) blockers.push('Explicit silent installer arguments are required for EXE installers.')
     }
     const result = {
       ok: blockers.length === 0,
@@ -605,15 +615,15 @@ export async function createTenantVendorSource(session, body) {
     `INSERT INTO rmm_tenant_vendor_sources
       (tenant_id,display_name,source_type,repository,source_url,parser_config,verification_config,canonical_name,publisher,expected_signer,
        provider_package_id,name_pattern,publisher_pattern,channel,architecture,deployment_mode,
-       asset_pattern,checksum_asset_pattern,installer_type,poll_minutes,created_by_user_id,updated_by_user_id)
-     VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$21)
+       asset_pattern,checksum_asset_pattern,installer_type,install_arguments,poll_minutes,created_by_user_id,updated_by_user_id)
+     VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$22)
      RETURNING id`,
     [
       session.tenant_id, input.displayName, input.sourceType, input.repository, input.sourceUrl,
       JSON.stringify(input.parserConfig), JSON.stringify(input.verificationConfig), input.canonicalName, input.publisher, input.expectedSigner,
       input.providerPackageId, input.namePattern, input.publisherPattern, input.channel,
       input.architecture, input.deploymentMode, input.assetPattern, input.checksumAssetPattern,
-      input.installerType, input.pollMinutes, session.user_id,
+      input.installerType, input.installArguments, input.pollMinutes, session.user_id,
     ],
   )
   return result.rows[0]
@@ -627,15 +637,15 @@ export async function updateTenantVendorSource(session, sourceId, body) {
           SET display_name=$3,source_type=$4,repository=$5,source_url=$6,parser_config=$7::jsonb,verification_config=$8::jsonb,
               canonical_name=$9,publisher=$10,expected_signer=$11,provider_package_id=$12,
               name_pattern=$13,publisher_pattern=$14,channel=$15,architecture=$16,deployment_mode=$17,
-              asset_pattern=$18,checksum_asset_pattern=$19,installer_type=$20,poll_minutes=$21,
-              status='draft',approved_at=NULL,approved_by_user_id=NULL,updated_by_user_id=$22,updated_at=now()
+              asset_pattern=$18,checksum_asset_pattern=$19,installer_type=$20,install_arguments=$21,poll_minutes=$22,
+              status='draft',approved_at=NULL,approved_by_user_id=NULL,updated_by_user_id=$23,updated_at=now()
         WHERE id=$1 AND tenant_id=$2 AND status<>'archived' RETURNING id`,
       [
         sourceId, session.tenant_id, input.displayName, input.sourceType, input.repository, input.sourceUrl,
         JSON.stringify(input.parserConfig), JSON.stringify(input.verificationConfig), input.canonicalName, input.publisher, input.expectedSigner,
         input.providerPackageId, input.namePattern, input.publisherPattern, input.channel,
         input.architecture, input.deploymentMode, input.assetPattern, input.checksumAssetPattern,
-        input.installerType, input.pollMinutes, session.user_id,
+        input.installerType, input.installArguments, input.pollMinutes, session.user_id,
       ],
     )
     if (!result.rowCount) throw new Error('Vendor source not found.')

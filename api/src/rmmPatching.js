@@ -982,6 +982,7 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId) {
       downloadUrl: vendorDirect ? clean(vendor.installer_url) : '',
       sha256: vendorDirect ? clean(vendor.installer_sha256).toUpperCase() : '',
       installerType: vendorDirect ? clean(vendor.installer_type || row.installer_type) : '',
+      installArguments: vendorDirect ? clean(object(row.execution).installArguments) : '',
       expectedSigner: clean(vendor?.expected_signer || row.publisher),
       fallbackProvider: vendorDirect && clean(row.provider_package_id) ? 'winget' : '',
       verification: {
