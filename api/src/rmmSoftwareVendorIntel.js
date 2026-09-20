@@ -222,18 +222,22 @@ async function upsertRelease({
                   || jsonb_build_object(
                     'trustState',
                     CASE
-                      WHEN source_metadata->>'trustState' IN ('rejected','signer_review_required')
+                      WHEN source_revision=$4
+                        AND source_metadata->>'trustState' IN ('rejected','signer_review_required')
                         THEN source_metadata->>'trustState'
-                      WHEN source_metadata->>'trustState'='direct_ready'
+                      WHEN source_revision=$4
+                        AND source_metadata->>'trustState'='direct_ready'
                         AND COALESCE($14::jsonb->>'trustState','')<>'direct_ready'
                         THEN 'direct_ready'
                       ELSE COALESCE(NULLIF($14::jsonb->>'trustState',''),source_metadata->>'trustState','version_only')
                     END,
                     'deploymentMode',
                     CASE
-                      WHEN source_metadata->>'trustState' IN ('rejected','signer_review_required')
+                      WHEN source_revision=$4
+                        AND source_metadata->>'trustState' IN ('rejected','signer_review_required')
                         THEN 'intelligence_only'
-                      WHEN source_metadata->>'trustState'='direct_ready'
+                      WHEN source_revision=$4
+                        AND source_metadata->>'trustState'='direct_ready'
                         AND COALESCE($14::jsonb->>'trustState','')<>'direct_ready'
                         THEN 'vendor_direct'
                       ELSE COALESCE(NULLIF($14::jsonb->>'deploymentMode',''),source_metadata->>'deploymentMode','intelligence_only')
@@ -241,8 +245,9 @@ async function upsertRelease({
                   ),
                 qualification_state=CASE
                   WHEN qualification_state IN ('qualified','blocked') THEN qualification_state
-                  WHEN source_metadata->>'trustState'='direct_ready' THEN 'deployment_candidate'
-                  WHEN source_metadata->>'trustState' IN ('rejected','signer_review_required') THEN 'intelligence_only'
+                  WHEN source_revision=$4 AND source_metadata->>'trustState'='direct_ready' THEN 'deployment_candidate'
+                  WHEN source_revision=$4
+                    AND source_metadata->>'trustState' IN ('rejected','signer_review_required') THEN 'intelligence_only'
                   ELSE $15
                 END,
                 qualification_evidence=qualification_evidence || $16::jsonb,
