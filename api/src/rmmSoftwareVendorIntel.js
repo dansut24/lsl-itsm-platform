@@ -298,7 +298,10 @@ async function syncGenericConfigured(sourceKey, state) {
     releaseDate = normalizedReleaseDate(latest.item.release_date)
     payload = { python: { name: latest.item.name, slug: latest.item.slug, release_date: latest.item.release_date } }
   } else if (state.source_type === 'hashicorp_releases') {
-    const response = await fetchPublicJson(state.source_url)
+    const response = JSON.parse(await fetchPublicText(state.source_url, {
+      accept: 'application/vnd+hashicorp.releases-api.v0+json, application/json',
+      maxBytes: 5 * 1024 * 1024,
+    }))
     const versions = Object.keys(object(response?.versions))
       .filter((item) => /^\d+\.\d+\.\d+$/.test(item))
       .sort(compareVersionValues)
