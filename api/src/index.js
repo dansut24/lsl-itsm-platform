@@ -18,6 +18,7 @@ import { registerRmmScopeRoutes } from './rmmScope.js'
 import { registerRmmPatchingRoutes } from './rmmPatching.js'
 import { startRmmVulnerabilitySyncScheduler } from './rmmVulnerabilityIntel.js'
 import { startSoftwareVendorSyncScheduler } from './rmmSoftwareVendorIntel.js'
+import { startTenantVendorSourceScheduler } from './rmmTenantVendorSources.js'
 import {
   allowedRequestOrigin,
   deployment,
@@ -407,6 +408,7 @@ await ensureRedisConnected()
 startMicrosoftSyncScheduler()
 startRmmVulnerabilitySyncScheduler()
 startSoftwareVendorSyncScheduler()
+startTenantVendorSourceScheduler()
 const server = serve({ fetch: app.fetch, hostname: '0.0.0.0', port })
 attachRmmAgentWebSocket(server)
 attachRmmViewerWebSocket(server)

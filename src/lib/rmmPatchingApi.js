@@ -38,6 +38,32 @@ export function deleteSoftwareCatalogueEntry(catalogueId) {
   })
 }
 
+export function createVendorSource(source) {
+  return request('/api/v1/rmm/vendor-sources', {
+    method: 'POST',
+    body: JSON.stringify(source),
+  })
+}
+
+export function updateVendorSource(sourceId, source) {
+  return request('/api/v1/rmm/vendor-sources/' + encodeURIComponent(sourceId), {
+    method: 'PUT',
+    body: JSON.stringify(source),
+  })
+}
+
+export function testVendorSource(sourceId) {
+  return request('/api/v1/rmm/vendor-sources/' + encodeURIComponent(sourceId) + '/test', { method: 'POST' })
+}
+
+export function approveVendorSource(sourceId) {
+  return request('/api/v1/rmm/vendor-sources/' + encodeURIComponent(sourceId) + '/approve', { method: 'POST' })
+}
+
+export function archiveVendorSource(sourceId) {
+  return request('/api/v1/rmm/vendor-sources/' + encodeURIComponent(sourceId), { method: 'DELETE' })
+}
+
 export function deploySoftwarePatch(agentDeviceId, catalogueId) {
   return request('/api/v1/rmm/patching/software/deploy', {
     method: 'POST',

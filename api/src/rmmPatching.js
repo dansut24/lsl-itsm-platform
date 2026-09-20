@@ -5,6 +5,14 @@ import { agentSocketForDevice, authenticateAgent, sendAgentMessage } from './rmm
 import { recordRmmActivity } from './rmmActivity.js'
 import { recentVulnerabilities, vulnerabilitySummary } from './rmmVulnerabilityIntel.js'
 import { softwareVendorSummary } from './rmmSoftwareVendorIntel.js'
+import {
+  approveTenantVendorSource,
+  archiveTenantVendorSource,
+  createTenantVendorSource,
+  listTenantVendorSources,
+  testTenantVendorSource,
+  updateTenantVendorSource,
+} from './rmmTenantVendorSources.js'
 import { vulnerabilityExposureByInstallation, vulnerabilityExposureRows, vulnerabilityExposureSummary } from './rmmVulnerabilityExposure.js'
 import { resolveSession } from './session.js'
 
@@ -283,7 +291,7 @@ function buildSoftware(devices, catalogue, observations = []) {
 }
 
 async function patchBundle(tenantId) {
-  const [devices, catalogue, policies, assignments, vulnerabilities, discovery, vendorIntel, exposureSummary, softwareVulnerabilityExposures, vulnerabilityExposureRowsData, deployments] = await Promise.all([
+  const [devices, catalogue, policies, assignments, vulnerabilities, discovery, vendorIntel, tenantVendorSources, exposureSummary, softwareVulnerabilityExposures, vulnerabilityExposureRowsData, deployments] = await Promise.all([
     patchDeviceRows(tenantId),
     catalogueRows(tenantId),
     policyRows(tenantId),
@@ -291,6 +299,7 @@ async function patchBundle(tenantId) {
     vulnerabilitySummary(),
     patchDiscoveryRows(tenantId),
     softwareVendorSummary(),
+    listTenantVendorSources(tenantId),
     vulnerabilityExposureSummary(tenantId),
     vulnerabilityExposureByInstallation(tenantId),
     vulnerabilityExposureRows(tenantId, 250),
@@ -321,7 +330,7 @@ async function patchBundle(tenantId) {
     vulnerabilityExposures: exposureSummary,
     softwareVulnerabilityExposures,
     vulnerabilityExposureRows: vulnerabilityExposureRowsData,
-    vendorIntel,
+    vendorIntel: { ...vendorIntel, tenantSources: tenantVendorSources },
     devices: devices.map((device) => ({
       id: device.reference,
       inventoryId: device.inventory_id,
@@ -692,7 +701,8 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId) {
             i.reference,i.name AS device_name,i.source_payload,
             c.id AS catalogue_id,c.canonical_name,c.publisher,c.name_pattern,c.publisher_pattern,
             c.provider,c.provider_package_id,c.target_version,c.release_channel,c.installer_type,
-            c.execution,c.verification,c.tenant_id AS catalogue_tenant_id
+            c.execution,c.verification,c.catalogue_source,c.external_key,c.source_metadata,
+            c.tenant_id AS catalogue_tenant_id
        FROM rmm_agent_devices a
        JOIN rmm_device_inventory i ON i.id=a.inventory_id AND i.active=true
        JOIN rmm_software_catalogue c ON c.id=$3 AND c.status='active'
@@ -749,18 +759,44 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId) {
     return { error: 'The application is already at or above the approved target version.', status: 409, current: true }
   }
 
-  const release = await pool.query(
-    `SELECT source_key,version,release_date,installer_url,installer_sha256,installer_type,source_priority
-       FROM rmm_software_vendor_releases
-      WHERE provider_package_id=$1 AND version=$2
-      ORDER BY source_priority DESC,COALESCE(release_date,last_seen_at) DESC
-      LIMIT 1`,
-    [clean(row.provider_package_id), targetVersion],
-  )
-  const vendor = release.rows[0]
+  const sourceMetadata = object(row.source_metadata)
+  const tenantVendorSourceId = clean(sourceMetadata.tenantVendorSourceId)
+  const sourceMode = clean(sourceMetadata.deploymentMode)
+  if (tenantVendorSourceId && sourceMode === 'intelligence_only') {
+    return { error: 'This vendor source is configured for version intelligence only and cannot deploy software.', status: 409 }
+  }
+
+  let vendor = null
+  if (tenantVendorSourceId) {
+    const tenantRelease = await pool.query(
+      `SELECT 'tenant_github' AS source_key,r.version,r.release_date,r.installer_url,r.installer_sha256,
+              r.installer_type,1000 AS source_priority,r.trust_state,s.expected_signer,s.deployment_mode
+         FROM rmm_tenant_vendor_releases r
+         JOIN rmm_tenant_vendor_sources s ON s.id=r.source_id AND s.tenant_id=$1 AND s.status='active'
+        WHERE r.source_id=$2 AND r.version=$3
+        ORDER BY COALESCE(r.release_date,r.last_seen_at) DESC LIMIT 1`,
+      [tenantId, tenantVendorSourceId, targetVersion],
+    )
+    vendor = tenantRelease.rows[0] || null
+  } else {
+    const release = await pool.query(
+      `SELECT source_key,version,release_date,installer_url,installer_sha256,installer_type,source_priority,
+              '' AS trust_state,'' AS expected_signer,'vendor_direct' AS deployment_mode
+         FROM rmm_software_vendor_releases
+        WHERE provider_package_id=$1 AND version=$2
+        ORDER BY source_priority DESC,COALESCE(release_date,last_seen_at) DESC
+        LIMIT 1`,
+      [clean(row.provider_package_id), targetVersion],
+    )
+    vendor = release.rows[0] || null
+  }
+
   const vendorDirect = vendor
+    && clean(vendor.deployment_mode) !== 'winget_preferred'
+    && (!tenantVendorSourceId || clean(vendor.trust_state) === 'direct_ready')
     && /^https:\/\//i.test(clean(vendor.installer_url))
     && /^[a-f0-9]{64}$/i.test(clean(vendor.installer_sha256))
+    && clean(vendor.expected_signer || row.publisher)
 
   const provider = vendorDirect ? 'vendor_direct' : 'winget'
   if (provider === 'winget' && !clean(row.provider_package_id)) {
@@ -785,7 +821,7 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId) {
       downloadUrl: vendorDirect ? clean(vendor.installer_url) : '',
       sha256: vendorDirect ? clean(vendor.installer_sha256).toUpperCase() : '',
       installerType: vendorDirect ? clean(vendor.installer_type || row.installer_type) : '',
-      expectedSigner: clean(row.publisher),
+      expectedSigner: clean(vendor?.expected_signer || row.publisher),
       fallbackProvider: vendorDirect && clean(row.provider_package_id) ? 'winget' : '',
       verification: {
         provider: 'winget',
@@ -974,6 +1010,68 @@ export function registerRmmPatchingRoutes(app) {
     const auth = await requirePatchAccess(c)
     if (auth.error) return auth.error
     return c.json(await patchBundle(auth.session.tenant_id))
+  })
+
+  app.post('/api/v1/rmm/vendor-sources', async (c) => {
+    const auth = await requirePatchAccess(c, 'software')
+    if (auth.error) return auth.error
+    const body = await c.req.json().catch(() => ({}))
+    try {
+      const source = await createTenantVendorSource(auth.session, body)
+      await audit(auth.session, 'patch.vendor_source.created', 'Created vendor source “' + clean(body.displayName) + '”', 'Draft · Test required before approval', { sourceId: source.id })
+      return c.json({ success: true, source, bundle: await patchBundle(auth.session.tenant_id) }, 201)
+    } catch (error) {
+      return c.json({ error: clean(error?.message || error) || 'Unable to create vendor source.' }, 400)
+    }
+  })
+
+  app.put('/api/v1/rmm/vendor-sources/:sourceId', async (c) => {
+    const auth = await requirePatchAccess(c, 'software')
+    if (auth.error) return auth.error
+    const body = await c.req.json().catch(() => ({}))
+    try {
+      const source = await updateTenantVendorSource(auth.session, clean(c.req.param('sourceId')), body)
+      await audit(auth.session, 'patch.vendor_source.updated', 'Updated vendor source “' + clean(body.displayName) + '”', 'Approval reset · Source must be tested again', { sourceId: source.id })
+      return c.json({ success: true, source, bundle: await patchBundle(auth.session.tenant_id) })
+    } catch (error) {
+      return c.json({ error: clean(error?.message || error) || 'Unable to update vendor source.' }, 400)
+    }
+  })
+
+  app.post('/api/v1/rmm/vendor-sources/:sourceId/test', async (c) => {
+    const auth = await requirePatchAccess(c, 'software')
+    if (auth.error) return auth.error
+    try {
+      const result = await testTenantVendorSource(auth.session.tenant_id, clean(c.req.param('sourceId')))
+      await audit(auth.session, 'patch.vendor_source.tested', 'Tested vendor source', result.version + ' · ' + result.trustState, { sourceId: result.sourceId, result })
+      return c.json({ success: true, result, bundle: await patchBundle(auth.session.tenant_id) })
+    } catch (error) {
+      return c.json({ error: clean(error?.message || error) || 'Vendor source test failed.' }, 409)
+    }
+  })
+
+  app.post('/api/v1/rmm/vendor-sources/:sourceId/approve', async (c) => {
+    const auth = await requirePatchAccess(c, 'software')
+    if (auth.error) return auth.error
+    try {
+      const result = await approveTenantVendorSource(auth.session, clean(c.req.param('sourceId')))
+      await audit(auth.session, 'patch.vendor_source.approved', 'Approved vendor source “' + result.source.display_name + '”', result.release.version + ' · ' + result.release.trustState, { sourceId: result.source.id })
+      return c.json({ success: true, result, bundle: await patchBundle(auth.session.tenant_id) })
+    } catch (error) {
+      return c.json({ error: clean(error?.message || error) || 'Vendor source approval failed.' }, 409)
+    }
+  })
+
+  app.delete('/api/v1/rmm/vendor-sources/:sourceId', async (c) => {
+    const auth = await requirePatchAccess(c, 'software')
+    if (auth.error) return auth.error
+    try {
+      const result = await archiveTenantVendorSource(auth.session, clean(c.req.param('sourceId')))
+      await audit(auth.session, 'patch.vendor_source.archived', 'Archived vendor source “' + result.display_name + '”', '', { sourceId: result.id })
+      return c.json({ success: true, bundle: await patchBundle(auth.session.tenant_id) })
+    } catch (error) {
+      return c.json({ error: clean(error?.message || error) || 'Unable to archive vendor source.' }, 404)
+    }
   })
 
   app.get('/api/v1/rmm/vulnerabilities', async (c) => {

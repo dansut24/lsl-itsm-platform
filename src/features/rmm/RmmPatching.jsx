@@ -16,15 +16,20 @@ import {
   X,
 } from 'lucide-react'
 import {
+  approveVendorSource,
+  archiveVendorSource,
   createPatchAssignment,
   createPatchPolicy,
   createSoftwareCatalogueEntry,
+  createVendorSource,
   deletePatchAssignment,
   deleteSoftwareCatalogueEntry,
   deploySoftwarePatch,
   loadRmmPatching,
   loadRmmVulnerabilities,
   remediateVulnerabilityExposure,
+  testVendorSource,
+  updateVendorSource,
 } from '../../lib/rmmPatchingApi.js'
 import { loadRmmScope } from '../../lib/rmmScopeApi.js'
 import './RmmPatching.css'
@@ -109,6 +114,64 @@ function MappingModal({ application, onClose, onSave }) {
         <button onClick={onClose} type="button">Cancel</button>
         <button className="rmm-primary" disabled={!valid} type="submit"><PackageCheck size={15} /> Save mapping</button>
       </footer>
+    </form>
+  </div>
+}
+
+function VendorSourceModal({ source, onClose, onSave, saving }) {
+  const [form, setForm] = useState({
+    displayName: source?.display_name || '',
+    canonicalName: source?.canonical_name || '',
+    publisher: source?.publisher || '',
+    repository: source?.repository || '',
+    deploymentMode: source?.deployment_mode || 'winget_preferred',
+    providerPackageId: source?.provider_package_id || '',
+    expectedSigner: source?.expected_signer || '',
+    namePattern: source?.name_pattern || source?.canonical_name || '',
+    publisherPattern: source?.publisher_pattern || source?.publisher || '',
+    assetPattern: source?.asset_pattern || '',
+    checksumAssetPattern: source?.checksum_asset_pattern || '',
+    installerType: source?.installer_type || '',
+    channel: source?.channel || 'stable',
+    architecture: source?.architecture || 'x64',
+    pollMinutes: source?.poll_minutes || 60,
+  })
+  const update = (key, value) => setForm((current) => ({ ...current, [key]: value }))
+  const direct = form.deploymentMode === 'vendor_direct'
+  const winget = form.deploymentMode === 'winget_preferred'
+  const valid = form.displayName.trim().length > 1
+    && form.canonicalName.trim().length > 1
+    && form.repository.trim().length > 2
+    && (!winget || form.providerPackageId.trim())
+    && (!direct || (form.assetPattern.trim() && form.checksumAssetPattern.trim() && form.expectedSigner.trim()))
+
+  return <div className="rmm-patch-modal-backdrop">
+    <form className="rmm-patch-modal vendor-source" onSubmit={(event) => {
+      event.preventDefault()
+      if (valid && !saving) onSave(form)
+    }}>
+      <header>
+        <div><span className="rmm-eyebrow">Self-service vendor patching</span><h2>{source ? 'Edit vendor source' : 'Add vendor source'}</h2></div>
+        <button aria-label="Close" onClick={onClose} type="button"><X size={17} /></button>
+      </header>
+      <p>Use a public GitHub Releases repository as an authoritative version source. Sources must be tested and approved before they can affect patch targets.</p>
+      <div className="rmm-patch-form-grid">
+        <label>Source name<input autoFocus value={form.displayName} onChange={(event) => update('displayName', event.target.value)} placeholder="e.g. Tailscale Windows" /></label>
+        <label>GitHub repository<input value={form.repository} onChange={(event) => update('repository', event.target.value)} placeholder="owner/repository or https://github.com/owner/repository" /></label>
+        <label>Application<input value={form.canonicalName} onChange={(event) => update('canonicalName', event.target.value)} /></label>
+        <label>Publisher<input value={form.publisher} onChange={(event) => update('publisher', event.target.value)} /></label>
+        <label>Deployment mode<select value={form.deploymentMode} onChange={(event) => update('deploymentMode', event.target.value)}><option value="winget_preferred">WinGet preferred</option><option value="vendor_direct">Vendor direct</option><option value="intelligence_only">Intelligence only</option></select></label>
+        <label>WinGet package ID<input value={form.providerPackageId} onChange={(event) => update('providerPackageId', event.target.value)} placeholder="Required for WinGet preferred / optional fallback" /></label>
+        <label>Name contains<input value={form.namePattern} onChange={(event) => update('namePattern', event.target.value)} placeholder={form.canonicalName || 'Inventory detection'} /></label>
+        <label>Publisher contains<input value={form.publisherPattern} onChange={(event) => update('publisherPattern', event.target.value)} /></label>
+        <label>Channel<input value={form.channel} onChange={(event) => update('channel', event.target.value)} /></label>
+        <label>Architecture<select value={form.architecture} onChange={(event) => update('architecture', event.target.value)}><option value="x64">x64</option><option value="arm64">arm64</option><option value="x86">x86</option></select></label>
+        <label>Poll interval (minutes)<input min="15" max="10080" type="number" value={form.pollMinutes} onChange={(event) => update('pollMinutes', event.target.value)} /></label>
+        <label>Installer type<select value={form.installerType} onChange={(event) => update('installerType', event.target.value)}><option value="">Auto-detect</option><option value="msi">MSI</option><option value="exe">EXE</option></select></label>
+        {direct && <><label>Installer asset pattern<input value={form.assetPattern} onChange={(event) => update('assetPattern', event.target.value)} placeholder="e.g. *windows*x64*.msi" /></label><label>Checksum asset pattern<input value={form.checksumAssetPattern} onChange={(event) => update('checksumAssetPattern', event.target.value)} placeholder="e.g. *sha256*" /></label><label className="wide">Expected Authenticode signer<input value={form.expectedSigner} onChange={(event) => update('expectedSigner', event.target.value)} placeholder="Exact trusted publisher identity" /></label></>}
+      </div>
+      <div className="rmm-patch-security-note"><ShieldCheck size={16} /><span><strong>Approval gate:</strong> saving creates a draft. Test resolves the latest release and trust evidence; approval is a separate action.</span></div>
+      <footer><button onClick={onClose} type="button">Cancel</button><button className="rmm-primary" disabled={!valid || saving} type="submit">{saving ? 'Saving…' : source ? 'Save & retest' : 'Create draft'}</button></footer>
     </form>
   </div>
 }
@@ -256,6 +319,8 @@ export function RmmPatching({ devices = [] }) {
   const [error, setError] = useState('')
   const [mappingApp, setMappingApp] = useState(null)
   const [patchApp, setPatchApp] = useState(null)
+  const [showVendorSource, setShowVendorSource] = useState(false)
+  const [editingVendorSource, setEditingVendorSource] = useState(null)
   const [showPolicy, setShowPolicy] = useState(false)
   const [assignPolicy, setAssignPolicy] = useState(null)
 
@@ -301,6 +366,7 @@ export function RmmPatching({ devices = [] }) {
   const patchObservations = bundle?.patchObservations || []
   const vendorSources = bundle?.vendorIntel?.sources || []
   const vendorLatest = bundle?.vendorIntel?.latest || []
+  const tenantVendorSources = bundle?.vendorIntel?.tenantSources || []
   const policies = bundle?.policies || []
   const assignments = bundle?.assignments || []
   const deviceSoftware = bundle?.deviceSoftware || []
@@ -402,6 +468,64 @@ export function RmmPatching({ devices = [] }) {
     }
   }
 
+  async function saveVendorSource(form) {
+    setSaving(true)
+    setError('')
+    try {
+      const result = editingVendorSource?.id
+        ? await updateVendorSource(editingVendorSource.id, form)
+        : await createVendorSource(form)
+      setBundle(result.bundle)
+      setShowVendorSource(false)
+      setEditingVendorSource(null)
+      setTab('vendors')
+    } catch (requestError) {
+      setError(requestError?.message || 'Unable to save vendor source.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function runVendorSourceTest(source) {
+    setSaving(true)
+    setError('')
+    try {
+      const result = await testVendorSource(source.id)
+      setBundle(result.bundle)
+    } catch (requestError) {
+      setError(requestError?.message || 'Vendor source test failed.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function runVendorSourceApproval(source) {
+    setSaving(true)
+    setError('')
+    try {
+      const result = await approveVendorSource(source.id)
+      setBundle(result.bundle)
+    } catch (requestError) {
+      setError(requestError?.message || 'Unable to approve vendor source.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function removeVendorSource(source) {
+    if (!window.confirm('Archive vendor source ' + source.display_name + '?')) return
+    setSaving(true)
+    setError('')
+    try {
+      const result = await archiveVendorSource(source.id)
+      setBundle(result.bundle)
+    } catch (requestError) {
+      setError(requestError?.message || 'Unable to archive vendor source.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   async function remediateExposure(exposure) {
     if (!exposure?.id || remediatingExposureId) return
     setRemediatingExposureId(exposure.id)
@@ -473,7 +597,7 @@ export function RmmPatching({ devices = [] }) {
     <nav className="rmm-patch-tabs">
       {[
         ['software', 'Software', exposedApps.length],
-        ['vendors', 'Vendors', vendorSources.length],
+        ['vendors', 'Vendors', vendorSources.length + tenantVendorSources.length],
         ['vulnerabilities', 'Vulnerabilities', bundle?.vulnerabilities?.kev || 0],
         ['windows', 'Windows Update', windowsPending],
         ['policies', 'Policies', policies.length],
@@ -541,7 +665,27 @@ export function RmmPatching({ devices = [] }) {
     </section>}
 
     {tab === 'vendors' && <section className="rmm-patch-panel">
-      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Vendor-first freshness</span><h2>Vendor software catalogue</h2><p>Authoritative vendor releases establish the newest known version independently of WinGet. WinGet remains the preferred execution metadata when its package manifest is current.</p></div></div>
+      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Vendor-first freshness</span><h2>Vendor software catalogue</h2><p>Built-in feeds provide Hi5Central-maintained intelligence. Tenant sources let you add GitHub Releases feeds, test their trust evidence and explicitly approve them before they can influence patch targets.</p></div><button className="rmm-primary compact" onClick={() => { setEditingVendorSource(null); setShowVendorSource(true) }} type="button"><Plus size={14} /> Add vendor source</button></div>
+      <div className="rmm-patch-tenant-vendors">
+        <div className="rmm-patch-subheading"><div><span className="rmm-eyebrow">Self-service sources</span><h3>Tenant vendor sources</h3><p>Draft → Test → Approve. Editing an approved source resets it to draft so changed trust rules can never silently enter production.</p></div></div>
+        <div className="rmm-patch-table tenant-vendors">
+          <div className="head"><span>Source</span><span>Deployment</span><span>Latest</span><span>Trust</span><span>State</span><span /></div>
+          {tenantVendorSources.map((source) => {
+            const blockers = Array.isArray(source.last_test_result?.blockers) ? source.last_test_result.blockers : []
+            const stateTone = source.status === 'active' ? 'healthy' : source.status === 'quarantined' ? 'critical' : source.status === 'tested' ? 'running' : 'neutral'
+            const trustTone = source.trust_state === 'direct_ready' || source.trust_state === 'winget_ready' ? 'healthy' : source.trust_state === 'quarantined' ? 'critical' : 'neutral'
+            return <div className="row" key={source.id}>
+              <span><strong>{source.display_name}</strong><small>{source.repository} · every {source.poll_minutes} min</small></span>
+              <span><strong>{(source.deployment_mode || '').replaceAll('_', ' ')}</strong><small>{source.provider_package_id || 'No WinGet fallback'}</small></span>
+              <span><strong>{source.release_version || source.latest_version || 'Not tested'}</strong><small>{source.release_date ? new Date(source.release_date).toLocaleDateString() : source.last_success_at ? 'Tested ' + new Date(source.last_success_at).toLocaleString() : 'Awaiting test'}</small></span>
+              <span><StatusPill tone={trustTone}>{(source.trust_state || 'untested').replaceAll('_', ' ')}</StatusPill><small>{source.installer_sha256 ? 'SHA-256 verified from release metadata' : blockers[0] || (source.deployment_mode === 'vendor_direct' ? 'Direct-install trust incomplete' : 'Execution provider performs install verification')}</small></span>
+              <span><StatusPill tone={stateTone}>{source.status}</StatusPill><small>{source.last_error || (source.approved_at ? 'Approved ' + new Date(source.approved_at).toLocaleDateString() : '')}</small></span>
+              <span className="actions"><button disabled={saving} onClick={() => runVendorSourceTest(source)} type="button"><RefreshCw size={13} /> Test</button>{source.status === 'tested' && <button className="rmm-primary compact" disabled={saving} onClick={() => runVendorSourceApproval(source)} type="button"><ShieldCheck size={13} /> Approve</button>}<button disabled={saving} onClick={() => { setEditingVendorSource(source); setShowVendorSource(true) }} type="button">Edit</button><button aria-label={'Archive ' + source.display_name} disabled={saving} onClick={() => removeVendorSource(source)} type="button"><Trash2 size={13} /></button></span>
+            </div>
+          })}
+        </div>
+        {!tenantVendorSources.length && <div className="rmm-empty compact"><GitBranch size={22} /><strong>No self-service sources yet</strong><span>Add a public GitHub Releases source to test vendor-first version intelligence without changing the global Hi5Central catalogue.</span></div>}
+      </div>
       <div className="rmm-patch-vendor-section standalone">
         <div className="rmm-patch-vendor-grid">
           {vendorSources.map((source) => {
@@ -660,6 +804,7 @@ export function RmmPatching({ devices = [] }) {
     </section>}
 
     {mappingApp && <MappingModal application={mappingApp} onClose={() => setMappingApp(null)} onSave={saveMapping} />}
+    {showVendorSource && <VendorSourceModal source={editingVendorSource} saving={saving} onClose={() => { setShowVendorSource(false); setEditingVendorSource(null) }} onSave={saveVendorSource} />}
     {patchApp && <SoftwarePatchModal
       application={patchApp}
       devices={bundle?.devices || []}
