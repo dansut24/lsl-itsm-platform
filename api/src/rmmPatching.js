@@ -105,7 +105,7 @@ async function catalogueRows(tenantId) {
   const result = await pool.query(
     `SELECT id,tenant_id,canonical_name,publisher,name_pattern,publisher_pattern,platform,provider,
             provider_package_id,target_version,release_channel,installer_type,detection,execution,verification,status,
-            created_at,updated_at
+            catalogue_source,external_key,source_metadata,created_at,updated_at
        FROM rmm_software_catalogue
       WHERE status<>'archived' AND (tenant_id=$1 OR tenant_id IS NULL)
       ORDER BY tenant_id NULLS FIRST,lower(canonical_name)`,
@@ -170,7 +170,16 @@ function catalogueMatch(app, catalogue) {
   return candidates.sort((a, b) => {
     const tenantWeight = Number(Boolean(b.tenant_id)) - Number(Boolean(a.tenant_id))
     if (tenantWeight) return tenantWeight
-    return clean(b.name_pattern).length - clean(a.name_pattern).length
+    const sourceWeight = (entry) => {
+      if (entry.catalogue_source === 'tenant_vendor') return 30
+      if (entry.catalogue_source === 'patchhost') return 10
+      return 20
+    }
+    const sourceDelta = sourceWeight(b) - sourceWeight(a)
+    if (sourceDelta) return sourceDelta
+    const patternDelta = clean(b.name_pattern).length - clean(a.name_pattern).length
+    if (patternDelta) return patternDelta
+    return new Date(b.updated_at || 0).getTime() - new Date(a.updated_at || 0).getTime()
   })[0] || null
 }
 function classifyInstallation(app, catalogue) {
@@ -221,6 +230,7 @@ function publicCatalogue(entry) {
     releaseChannel: entry.release_channel,
     installerType: entry.installer_type,
     status: entry.status,
+    catalogueSource: clean(entry.catalogue_source),
   }
 }
 function buildSoftware(devices, catalogue, observations = []) {
