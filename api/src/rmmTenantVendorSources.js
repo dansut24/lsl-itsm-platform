@@ -67,7 +67,7 @@ async function limitedResponseBytes(response, maxBytes) {
   return output
 }
 
-async function publicHttpsUrl(value) {
+export async function publicHttpsUrl(value) {
   let url
   try { url = new URL(clean(value)) } catch { throw new Error('A valid HTTPS URL is required.') }
   if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443')) {
@@ -88,7 +88,7 @@ async function publicHttpsUrl(value) {
   return url
 }
 
-async function fetchPublicJson(value, redirects = 0) {
+export async function fetchPublicJson(value, redirects = 0) {
   if (redirects > 3) throw new Error('Vendor API redirected too many times.')
   const url = await publicHttpsUrl(value)
   const response = await fetch(url, {
@@ -106,7 +106,7 @@ async function fetchPublicJson(value, redirects = 0) {
   try { return JSON.parse(new TextDecoder('utf-8').decode(bytes)) } catch { throw new Error('Vendor API did not return valid JSON.') }
 }
 
-function repositoryName(value = '') {
+export function repositoryName(value = '') {
   const input = clean(value).replace(/\.git$/i, '')
   const direct = input.match(/^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/)
   if (direct) return direct[1] + '/' + direct[2]
@@ -120,23 +120,23 @@ function repositoryName(value = '') {
   }
 }
 
-function globMatcher(pattern = '') {
+export function globMatcher(pattern = '') {
   const value = clean(pattern)
   if (!value || value.length > 240) return null
   const escaped = value.replace(/[.+^$(){}|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')
   return new RegExp('^' + escaped + '$', 'i')
 }
-function releaseVersion(value = '') {
+export function releaseVersion(value = '') {
   const version = clean(value)
   return /^v\d/i.test(version) ? version.slice(1) : version
 }
 
-function releaseDate(value = '') {
+export function releaseDate(value = '') {
   const parsed = Date.parse(clean(value))
   return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null
 }
 
-function installerType(name = '', configured = '') {
+export function installerType(name = '', configured = '') {
   const explicit = clean(configured).toLowerCase()
   if (['msi', 'exe'].includes(explicit)) return explicit
   const lower = clean(name).toLowerCase()
@@ -145,7 +145,7 @@ function installerType(name = '', configured = '') {
   return ''
 }
 
-async function latestGithubRelease(repository) {
+export async function latestGithubRelease(repository) {
   const response = await fetch('https://api.github.com/repos/' + repository + '/releases/latest', {
     headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Hi5Central-Software-Catalogue/1.0' },
     signal: AbortSignal.timeout(60_000),
@@ -153,7 +153,7 @@ async function latestGithubRelease(repository) {
   if (!response.ok) throw new Error('GitHub Releases HTTP ' + response.status)
   return response.json()
 }
-async function publishedChecksum(assetUrl, installerName) {
+export async function publishedChecksum(assetUrl, installerName) {
   if (!assetUrl) return ''
   const url = new URL(assetUrl)
   if (url.protocol !== 'https:' || !['github.com', 'objects.githubusercontent.com'].includes(url.hostname.toLowerCase())) {
@@ -200,7 +200,7 @@ function safeJsonPath(value = '', required = false) {
   return path
 }
 
-function jsonPathValue(payload, path = '') {
+export function jsonPathValue(payload, path = '') {
   if (!path) return ''
   let value = payload
   for (const part of path.split('.')) {
@@ -213,7 +213,7 @@ function jsonPathValue(payload, path = '') {
   return clean(value)
 }
 
-function normalizedSha256(value = '') {
+export function normalizedSha256(value = '') {
   const match = clean(value).match(/(?:^|[^A-Fa-f0-9])([A-Fa-f0-9]{64})(?:$|[^A-Fa-f0-9])/)
   return clean(match?.[1]).toUpperCase()
 }

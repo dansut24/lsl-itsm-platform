@@ -1108,7 +1108,7 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId) {
   const sourceMetadata = object(row.source_metadata)
   const tenantVendorSourceId = clean(sourceMetadata.tenantVendorSourceId)
   const sourceMode = clean(sourceMetadata.deploymentMode)
-  if (tenantVendorSourceId && sourceMode === 'intelligence_only') {
+  if (sourceMode === 'intelligence_only') {
     return { error: 'This vendor source is configured for version intelligence only and cannot deploy software.', status: 409 }
   }
 
@@ -1126,11 +1126,22 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId) {
     vendor = tenantRelease.rows[0] || null
   } else {
     const release = await pool.query(
-      `SELECT source_key,version,release_date,installer_url,installer_sha256,installer_type,source_priority,
-              '' AS trust_state,'' AS expected_signer,'vendor_direct' AS deployment_mode
-         FROM rmm_software_vendor_releases
-        WHERE provider_package_id=$1 AND version=$2
-        ORDER BY source_priority DESC,COALESCE(release_date,last_seen_at) DESC
+      `SELECT r.source_key,r.version,r.release_date,r.installer_url,r.installer_sha256,r.installer_type,r.source_priority,
+              COALESCE(NULLIF(r.source_payload->>'trustState',''),NULLIF(b.metadata->>'trustState',''),'') AS trust_state,
+              COALESCE(NULLIF(r.source_payload->>'expectedSigner',''),NULLIF(b.metadata->>'expectedSigner',''),NULLIF(s.metadata->>'expectedSigner',''),'') AS expected_signer,
+              COALESCE(NULLIF(r.source_payload->>'deploymentMode',''),NULLIF(b.metadata->>'deploymentMode',''),'winget_preferred') AS deployment_mode,
+              COALESCE(NULLIF(b.metadata->>'wingetPackageId',''),'') AS winget_package_id
+         FROM rmm_software_vendor_releases r
+         JOIN rmm_software_vendor_sources s ON s.source_key=r.source_key AND s.enabled=true
+         LEFT JOIN rmm_software_vendor_bindings b
+           ON b.source_key=r.source_key
+          AND b.provider_package_id=r.provider_package_id
+          AND b.channel=r.channel
+          AND b.platform=r.platform
+          AND b.architecture=r.architecture
+          AND b.enabled=true
+        WHERE r.provider_package_id=$1 AND r.version=$2
+        ORDER BY r.source_priority DESC,COALESCE(r.release_date,r.last_seen_at) DESC
         LIMIT 1`,
       [clean(row.provider_package_id), targetVersion],
     )
@@ -1139,11 +1150,14 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId) {
 
   const vendorDirect = vendor
     && clean(vendor.deployment_mode) !== 'winget_preferred'
-    && (!tenantVendorSourceId || clean(vendor.trust_state) === 'direct_ready')
+    && clean(vendor.trust_state) === 'direct_ready'
     && /^https:\/\//i.test(clean(vendor.installer_url))
     && /^[a-f0-9]{64}$/i.test(clean(vendor.installer_sha256))
     && clean(vendor.expected_signer || row.publisher)
 
+  const globalWingetFallback = clean(vendor?.winget_package_id || sourceMetadata.wingetPackageId)
+  const fallbackPackageId = tenantVendorSourceId ? clean(row.provider_package_id) : globalWingetFallback
+  const executionPackageId = vendorDirect ? (fallbackPackageId || clean(row.provider_package_id)) : clean(row.provider_package_id)
   const provider = vendorDirect ? 'vendor_direct' : 'winget'
   if (provider === 'winget' && !clean(row.provider_package_id)) {
     return { error: 'No safe deployment provider is available for this catalogue entry.', status: 409 }
@@ -1159,7 +1173,7 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId) {
       catalogueId: row.catalogue_id,
       applicationName: row.canonical_name,
       publisher: row.publisher,
-      packageId: clean(row.provider_package_id),
+      packageId: executionPackageId,
       installedVersion,
       targetVersion,
       provider,
@@ -1169,11 +1183,11 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId) {
       installerType: vendorDirect ? clean(vendor.installer_type || row.installer_type) : '',
       installArguments: vendorDirect ? clean(object(row.execution).installArguments) : '',
       expectedSigner: clean(vendor?.expected_signer || row.publisher),
-      fallbackProvider: vendorDirect && clean(row.provider_package_id) ? 'winget' : '',
+      fallbackProvider: vendorDirect && fallbackPackageId ? 'winget' : '',
       verification: {
         ...object(row.verification),
         method: clean(object(row.verification).method || object(row.verification).provider || 'winget'),
-        packageId: clean(object(row.verification).packageId || row.provider_package_id),
+        packageId: clean(object(row.verification).packageId || executionPackageId),
         targetVersion,
       },
     },

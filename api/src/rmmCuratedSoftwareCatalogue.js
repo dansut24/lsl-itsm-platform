@@ -1,0 +1,278 @@
+import { pool, withTransaction } from './db.js'
+import {
+  normalizedSha256,
+  publicHttpsUrl,
+  repositoryName,
+} from './rmmTenantVendorSources.js'
+
+function clean(value = '') { return String(value ?? '').trim() }
+function object(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {} }
+
+function sourceKey(value = '') {
+  const key = clean(value).toLowerCase().replace(/[^a-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '')
+  if (!key || key.length > 120) throw new Error('Each catalogue entry requires a sourceKey of 120 characters or fewer.')
+  return key
+}
+
+function jsonPath(value = '') {
+  const path = clean(value)
+  if (!path) return ''
+  if (path.length > 240 || path.split('.').some((part) => !part || !/^(?:[A-Za-z0-9_-]+|\d+)$/.test(part)
+    || ['__proto__', 'prototype', 'constructor'].includes(part))) {
+    throw new Error('JSON paths may contain only object keys, numeric indexes, underscores and hyphens.')
+  }
+  return path
+}
+
+function verificationConfig(value = {}, providerPackageId = '') {
+  const input = object(value)
+  const method = ['winget', 'uninstall_registry', 'file_version'].includes(clean(input.method))
+    ? clean(input.method)
+    : providerPackageId ? 'winget' : 'uninstall_registry'
+  const productCode = clean(input.productCode).slice(0, 80)
+  if (productCode && !/^\{[0-9A-Fa-f-]{36}\}$/.test(productCode)) throw new Error('Invalid MSI ProductCode.')
+  const filePath = clean(input.filePath).slice(0, 520)
+  if (filePath && (!/^(?:[A-Za-z]:\\|%ProgramFiles%\\|%ProgramFiles\(x86\)%\\|%ProgramData%\\)/i.test(filePath)
+    || filePath.includes('..') || /["\r\n]/.test(filePath) || !/\.(?:exe|dll)$/i.test(filePath))) {
+    throw new Error('Invalid file-version verification path.')
+  }
+  return {
+    method,
+    packageId: providerPackageId,
+    productCode,
+    displayNameContains: clean(input.displayNameContains).slice(0, 200),
+    publisherContains: clean(input.publisherContains).slice(0, 200),
+    filePath,
+  }
+}
+
+async function normalizeEntry(raw = {}) {
+  const key = sourceKey(raw.sourceKey || raw.key || raw.canonicalName || raw.displayName)
+  const displayName = clean(raw.displayName || raw.canonicalName).slice(0, 160)
+  const canonicalName = clean(raw.canonicalName || raw.displayName).slice(0, 200)
+  if (!displayName || !canonicalName) throw new Error(key + ': displayName and canonicalName are required.')
+  const publisher = clean(raw.publisher).slice(0, 200)
+  const sourceType = clean(raw.sourceType)
+  if (!['github_releases', 'vendor_json', 'static_release'].includes(sourceType)) {
+    throw new Error(key + ': sourceType must be github_releases, vendor_json or static_release.')
+  }
+  const deploymentMode = ['vendor_direct', 'winget_preferred', 'intelligence_only'].includes(clean(raw.deploymentMode))
+    ? clean(raw.deploymentMode)
+    : clean(raw.wingetPackageId || raw.providerPackageId) ? 'winget_preferred' : 'intelligence_only'
+  const wingetPackageId = clean(raw.wingetPackageId || raw.providerPackageId).slice(0, 240)
+  if (deploymentMode === 'winget_preferred' && !wingetPackageId) {
+    throw new Error(key + ': winget_preferred requires a real wingetPackageId.')
+  }
+  const catalogueKey = wingetPackageId || ('vendor:' + key)
+  const repository = sourceType === 'github_releases' ? repositoryName(raw.repository || raw.sourceUrl) : ''
+  if (sourceType === 'github_releases' && !repository) throw new Error(key + ': a valid GitHub repository is required.')
+  let sourceUrl = clean(raw.sourceUrl)
+  if (sourceType === 'github_releases' && !sourceUrl) sourceUrl = 'https://github.com/' + repository
+  if (!sourceUrl && sourceType === 'static_release') sourceUrl = clean(raw.staticReleaseUrl || raw.releaseUrl)
+  if (!sourceUrl) throw new Error(key + ': sourceUrl is required.')
+  sourceUrl = (await publicHttpsUrl(sourceUrl)).toString()
+
+  const parserInput = object(raw.parserConfig)
+  const parserConfig = {
+    versionPath: jsonPath(raw.versionPath ?? parserInput.versionPath),
+    releaseDatePath: jsonPath(raw.releaseDatePath ?? parserInput.releaseDatePath),
+    releaseUrlPath: jsonPath(raw.releaseUrlPath ?? parserInput.releaseUrlPath),
+    installerUrlPath: jsonPath(raw.installerUrlPath ?? parserInput.installerUrlPath),
+    sha256Path: jsonPath(raw.sha256Path ?? parserInput.sha256Path),
+    productCodePath: jsonPath(raw.productCodePath ?? parserInput.productCodePath),
+  }
+  if (sourceType === 'vendor_json' && !parserConfig.versionPath) throw new Error(key + ': vendor_json requires versionPath.')
+
+  const staticVersion = clean(raw.staticVersion || raw.version).slice(0, 120)
+  const staticInstallerUrl = clean(raw.staticInstallerUrl || raw.installerUrl)
+  const staticSha256 = normalizedSha256(raw.staticSha256 || raw.sha256)
+  const staticReleaseUrl = clean(raw.staticReleaseUrl || raw.releaseUrl || sourceUrl)
+  if (sourceType === 'static_release') {
+    if (!staticVersion || !staticInstallerUrl || !staticSha256) {
+      throw new Error(key + ': static_release requires version, installerUrl and SHA-256.')
+    }
+    await publicHttpsUrl(staticInstallerUrl)
+    if (staticReleaseUrl) await publicHttpsUrl(staticReleaseUrl)
+  }
+
+  const installerType = clean(raw.installerType).toLowerCase()
+  if (installerType && !['msi', 'exe'].includes(installerType)) throw new Error(key + ': installerType must be msi or exe.')
+  const installArguments = clean(raw.installArguments).slice(0, 1000)
+  if (deploymentMode === 'vendor_direct' && installerType === 'exe' && !installArguments) {
+    throw new Error(key + ': vendor-direct EXE entries require explicit silent installArguments.')
+  }
+  const expectedSigner = clean(raw.expectedSigner).slice(0, 300)
+  if (deploymentMode === 'vendor_direct' && !expectedSigner) throw new Error(key + ': vendor-direct entries require expectedSigner.')
+
+  const verification = verificationConfig(raw.verificationConfig || raw.verification, wingetPackageId)
+  const namePattern = clean(raw.namePattern || canonicalName).slice(0, 200)
+  const publisherPattern = clean(raw.publisherPattern || publisher).slice(0, 200)
+  const priority = Math.max(1, Math.min(1000, Number(raw.priority || 700) || 700))
+  const pollMinutes = Math.max(5, Math.min(10080, Number(raw.pollMinutes || 60) || 60))
+  const channel = clean(raw.channel || 'stable').slice(0, 80)
+  const platform = clean(raw.platform || 'windows').slice(0, 40)
+  const architecture = clean(raw.architecture || 'x64').slice(0, 40)
+
+  const sourceMetadata = {
+    curated: true,
+    repository,
+    parserConfig,
+    assetPattern: clean(raw.assetPattern).slice(0, 240),
+    checksumAssetPattern: clean(raw.checksumAssetPattern).slice(0, 240),
+    staticVersion,
+    staticInstallerUrl,
+    staticSha256,
+    staticReleaseUrl,
+  }
+  const bindingMetadata = {
+    curated: true,
+    namePattern,
+    publisherPattern,
+    deploymentMode,
+    expectedSigner,
+    installerType,
+    installArguments,
+    verificationConfig: {
+      ...verification,
+      displayNameContains: verification.displayNameContains || namePattern,
+      publisherContains: verification.publisherContains || publisherPattern,
+    },
+    wingetPackageId,
+    repository,
+    parserConfig,
+    assetPattern: sourceMetadata.assetPattern,
+    checksumAssetPattern: sourceMetadata.checksumAssetPattern,
+    staticVersion,
+    staticInstallerUrl,
+    staticSha256,
+    staticReleaseUrl,
+  }
+
+  return {
+    sourceKey: key,
+    displayName,
+    sourceType,
+    sourceUrl,
+    enabled: raw.enabled !== false,
+    priority,
+    pollMinutes,
+    catalogueKey,
+    wingetPackageId,
+    canonicalName,
+    publisher,
+    channel,
+    platform,
+    architecture,
+    namePattern,
+    publisherPattern,
+    deploymentMode,
+    installerType,
+    expectedSigner,
+    verification: bindingMetadata.verificationConfig,
+    execution: { installArguments },
+    sourceMetadata,
+    bindingMetadata,
+  }
+}
+
+export async function validateCuratedSoftwareCatalogue(entries = []) {
+  if (!Array.isArray(entries)) throw new Error('Catalogue import must be an array.')
+  if (!entries.length) return { entries: [], count: 0 }
+  if (entries.length > 1000) throw new Error('A single catalogue import is limited to 1000 entries.')
+  const normalized = []
+  const seen = new Set()
+  for (let index = 0; index < entries.length; index += 1) {
+    try {
+      const item = await normalizeEntry(entries[index])
+      if (seen.has(item.sourceKey)) throw new Error('Duplicate sourceKey in import.')
+      seen.add(item.sourceKey)
+      normalized.push(item)
+    } catch (error) {
+      throw new Error('Entry ' + (index + 1) + ': ' + clean(error?.message || error))
+    }
+  }
+  return { entries: normalized, count: normalized.length }
+}
+
+export async function importCuratedSoftwareCatalogue(entries = [], { dryRun = false } = {}) {
+  const validated = await validateCuratedSoftwareCatalogue(entries)
+  if (dryRun) {
+    return {
+      dryRun: true,
+      count: validated.count,
+      sources: validated.entries.map((item) => ({
+        sourceKey: item.sourceKey,
+        canonicalName: item.canonicalName,
+        sourceType: item.sourceType,
+        deploymentMode: item.deploymentMode,
+        packageKey: item.catalogueKey,
+        hasWingetFallback: Boolean(item.wingetPackageId),
+      })),
+    }
+  }
+
+  return withTransaction(async (client) => {
+    let created = 0
+    let updated = 0
+    for (const item of validated.entries) {
+      const existed = await client.query('SELECT 1 FROM rmm_software_vendor_sources WHERE source_key=$1', [item.sourceKey])
+      await client.query(
+        `INSERT INTO rmm_software_vendor_sources
+          (source_key,display_name,source_type,source_url,enabled,priority,poll_minutes,metadata,updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,now())
+         ON CONFLICT (source_key) DO UPDATE SET
+           display_name=EXCLUDED.display_name,source_type=EXCLUDED.source_type,source_url=EXCLUDED.source_url,
+           enabled=EXCLUDED.enabled,priority=EXCLUDED.priority,poll_minutes=EXCLUDED.poll_minutes,
+           metadata=EXCLUDED.metadata,updated_at=now()`,
+        [
+          item.sourceKey,item.displayName,item.sourceType,item.sourceUrl,item.enabled,item.priority,item.pollMinutes,
+          JSON.stringify(item.sourceMetadata),
+        ],
+      )
+      await client.query(
+        `INSERT INTO rmm_software_vendor_bindings
+          (source_key,provider_package_id,canonical_name,publisher,channel,platform,architecture,enabled,metadata)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,true,$8::jsonb)
+         ON CONFLICT (source_key,provider_package_id,channel,platform,architecture) DO UPDATE SET
+           canonical_name=EXCLUDED.canonical_name,publisher=EXCLUDED.publisher,enabled=true,
+           metadata=EXCLUDED.metadata`,
+        [
+          item.sourceKey,item.catalogueKey,item.canonicalName,item.publisher,item.channel,item.platform,item.architecture,
+          JSON.stringify(item.bindingMetadata),
+        ],
+      )
+      await client.query(
+        `INSERT INTO rmm_software_catalogue
+          (tenant_id,canonical_name,publisher,name_pattern,publisher_pattern,platform,provider,provider_package_id,
+           target_version,release_channel,installer_type,verification,execution,status,catalogue_source,external_key,
+           source_revision,source_metadata)
+         VALUES (NULL,$1,$2,$3,$4,$5,$6,$7,'',$8,$9,$10::jsonb,$11::jsonb,'active','vendor',$7,'',$12::jsonb)
+         ON CONFLICT (catalogue_source,external_key) WHERE tenant_id IS NULL AND external_key<>'' AND status<>'archived'
+         DO UPDATE SET canonical_name=EXCLUDED.canonical_name,publisher=EXCLUDED.publisher,
+           name_pattern=EXCLUDED.name_pattern,publisher_pattern=EXCLUDED.publisher_pattern,platform=EXCLUDED.platform,
+           provider=EXCLUDED.provider,release_channel=EXCLUDED.release_channel,installer_type=EXCLUDED.installer_type,
+           verification=EXCLUDED.verification,execution=EXCLUDED.execution,
+           source_metadata=EXCLUDED.source_metadata,status='active',updated_at=now()`,
+        [
+          item.canonicalName,item.publisher,item.namePattern,item.publisherPattern,item.platform,
+          item.deploymentMode === 'vendor_direct' ? 'vendor' : 'winget',
+          item.catalogueKey,item.channel,item.installerType,JSON.stringify(item.verification),JSON.stringify(item.execution),
+          JSON.stringify({
+            curated: true,
+            preseeded: true,
+            latestSource: item.sourceKey,
+            sourceType: item.sourceType,
+            deploymentMode: item.deploymentMode,
+            expectedSigner: item.expectedSigner,
+            trustState: 'pending_source_sync',
+            hasWingetFallback: Boolean(item.wingetPackageId),
+            wingetPackageId: item.wingetPackageId,
+          }),
+        ],
+      )
+      if (existed.rowCount) updated += 1
+      else created += 1
+    }
+    return { dryRun: false, count: validated.count, created, updated }
+  })
+}

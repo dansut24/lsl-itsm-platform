@@ -1,7 +1,21 @@
 import { pool, withTransaction } from './db.js'
+import {
+  fetchPublicJson,
+  globMatcher,
+  installerType as detectInstallerType,
+  jsonPathValue,
+  latestGithubRelease,
+  normalizedSha256,
+  publicHttpsUrl,
+  publishedChecksum,
+  releaseDate as normalizedReleaseDate,
+  releaseVersion,
+  repositoryName,
+} from './rmmTenantVendorSources.js'
 import { recalculateAllTenantVulnerabilityExposures } from './rmmVulnerabilityExposure.js'
 
 function clean(value = '') { return String(value ?? '').trim() }
+function object(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {} }
 
 async function fetchText(url, accept = '*/*') {
   const response = await fetch(url, {
@@ -74,6 +88,10 @@ async function upsertRelease({
   installerType = '',
   sourcePriority = 100,
   payload = {},
+  catalogueProvider = 'winget',
+  verification = {},
+  execution = {},
+  catalogueMetadata = {},
 }) {
   const normalizedVersion = clean(version)
   if (!normalizedVersion) throw new Error(sourceKey + ' returned an empty version')
@@ -107,26 +125,41 @@ async function upsertRelease({
     if (existing.rowCount) {
       await client.query(
         `UPDATE rmm_software_catalogue
-            SET canonical_name=$2,publisher=$3,name_pattern=$2,publisher_pattern=$3,
-                provider='winget',provider_package_id=$1,target_version=$4,
-                release_channel=$5,source_revision=$4,
-                source_metadata=source_metadata || $6::jsonb,updated_at=now()
+            SET canonical_name=$2,publisher=$3,
+                name_pattern=COALESCE(NULLIF($8,''),$2),publisher_pattern=COALESCE(NULLIF($9,''),$3),
+                provider=$10,provider_package_id=$1,target_version=$4,
+                release_channel=$5,installer_type=$11,verification=$12::jsonb,execution=$13::jsonb,source_revision=$4,
+                source_metadata=source_metadata || $6::jsonb || $14::jsonb,updated_at=now()
           WHERE id=$7`,
         [
           packageId, canonicalName, publisher, normalizedVersion, channel,
           JSON.stringify({ latestSource: sourceKey, releaseDate, vendorPriority: sourcePriority }),
           existing.rows[0].id,
+          clean(catalogueMetadata.namePattern),
+          clean(catalogueMetadata.publisherPattern),
+          catalogueProvider,
+          installerType,
+          JSON.stringify(verification || {}),
+          JSON.stringify(execution || {}),
+          JSON.stringify(catalogueMetadata || {}),
         ],
       )
     } else {
       await client.query(
         `INSERT INTO rmm_software_catalogue
           (tenant_id,canonical_name,publisher,name_pattern,publisher_pattern,provider,provider_package_id,
-           target_version,release_channel,catalogue_source,external_key,source_revision,source_metadata)
-         VALUES (NULL,$2,$3,$2,$3,'winget',$1,$4,$5,'vendor',$1,$4,$6::jsonb)`,
+           target_version,release_channel,installer_type,verification,execution,catalogue_source,external_key,source_revision,source_metadata)
+         VALUES (NULL,$2,$3,COALESCE(NULLIF($7,''),$2),COALESCE(NULLIF($8,''),$3),$9,$1,$4,$5,$10,$11::jsonb,$12::jsonb,'vendor',$1,$4,$6::jsonb || $13::jsonb)`,
         [
           packageId, canonicalName, publisher, normalizedVersion, channel,
           JSON.stringify({ latestSource: sourceKey, releaseDate, vendorPriority: sourcePriority }),
+          clean(catalogueMetadata.namePattern),
+          clean(catalogueMetadata.publisherPattern),
+          catalogueProvider,
+          installerType,
+          JSON.stringify(verification || {}),
+          JSON.stringify(execution || {}),
+          JSON.stringify(catalogueMetadata || {}),
         ],
       )
     }
@@ -145,7 +178,7 @@ async function upsertRelease({
 async function binding(sourceKey) {
   const result = await pool.query(
     `SELECT b.source_key,b.provider_package_id,b.canonical_name,b.publisher,b.channel,b.platform,b.architecture,
-            b.metadata,s.priority,s.source_url
+            b.metadata AS binding_metadata,s.priority,s.source_url,s.source_type,s.metadata AS source_metadata
        FROM rmm_software_vendor_bindings b
        JOIN rmm_software_vendor_sources s ON s.source_key=b.source_key
       WHERE b.source_key=$1 AND b.enabled=true AND s.enabled=true
@@ -153,6 +186,118 @@ async function binding(sourceKey) {
     [sourceKey],
   )
   return result.rows[0] || null
+}
+
+async function syncGenericConfigured(sourceKey, state) {
+  const b = await binding(sourceKey)
+  if (!b) return null
+  const config = { ...object(b.source_metadata), ...object(b.binding_metadata) }
+  const parser = object(config.parserConfig)
+  let version = ''
+  let releaseDate = null
+  let installerUrl = ''
+  let installerSha256 = ''
+  let resolvedInstallerType = clean(config.installerType).toLowerCase()
+  let releaseUrl = ''
+  let verificationProductCode = ''
+  let payload = {}
+
+  if (state.source_type === 'github_releases') {
+    const repository = repositoryName(config.repository || state.source_url)
+    if (!repository) throw new Error(sourceKey + ' has no valid GitHub repository')
+    const release = await latestGithubRelease(repository)
+    version = releaseVersion(release?.tag_name || release?.name)
+    releaseDate = normalizedReleaseDate(release?.published_at || release?.created_at)
+    releaseUrl = clean(release?.html_url)
+    const assets = Array.isArray(release?.assets) ? release.assets : []
+    const installerMatch = globMatcher(config.assetPattern)
+    const checksumMatch = globMatcher(config.checksumAssetPattern)
+    const installer = installerMatch ? assets.find((asset) => installerMatch.test(clean(asset?.name))) : null
+    const checksum = checksumMatch ? assets.find((asset) => checksumMatch.test(clean(asset?.name))) : null
+    installerUrl = clean(installer?.browser_download_url)
+    if (installer && checksum) installerSha256 = await publishedChecksum(checksum.browser_download_url, installer.name)
+    resolvedInstallerType = detectInstallerType(installer?.name, resolvedInstallerType)
+    payload = { github: { id: release?.id, tag_name: release?.tag_name, html_url: release?.html_url } }
+  } else if (state.source_type === 'vendor_json') {
+    const response = await fetchPublicJson(state.source_url)
+    version = releaseVersion(jsonPathValue(response, parser.versionPath))
+    releaseDate = normalizedReleaseDate(jsonPathValue(response, parser.releaseDatePath))
+    releaseUrl = clean(jsonPathValue(response, parser.releaseUrlPath))
+    const rawInstaller = clean(jsonPathValue(response, parser.installerUrlPath))
+    if (rawInstaller) installerUrl = (await publicHttpsUrl(new URL(rawInstaller, state.source_url).toString())).toString()
+    installerSha256 = normalizedSha256(jsonPathValue(response, parser.sha256Path))
+    verificationProductCode = clean(jsonPathValue(response, parser.productCodePath))
+    if (verificationProductCode && !/^\{[0-9A-Fa-f-]{36}\}$/.test(verificationProductCode)) {
+      throw new Error(sourceKey + ' returned an invalid MSI ProductCode')
+    }
+    resolvedInstallerType = detectInstallerType(installerUrl ? new URL(installerUrl).pathname : '', resolvedInstallerType)
+    payload = { json: { paths: parser, selected: { version, releaseDate, releaseUrl, installerUrl: rawInstaller, productCode: verificationProductCode } } }
+  } else if (state.source_type === 'static_release') {
+    version = releaseVersion(config.staticVersion)
+    installerUrl = config.staticInstallerUrl ? (await publicHttpsUrl(config.staticInstallerUrl)).toString() : ''
+    installerSha256 = normalizedSha256(config.staticSha256)
+    releaseUrl = config.staticReleaseUrl ? (await publicHttpsUrl(config.staticReleaseUrl)).toString() : ''
+    resolvedInstallerType = detectInstallerType(installerUrl ? new URL(installerUrl).pathname : '', resolvedInstallerType)
+    payload = { static: { version, installerUrl, releaseUrl } }
+  } else {
+    throw new Error('No generic software vendor resolver for source type ' + state.source_type)
+  }
+
+  if (!version) throw new Error(sourceKey + ' returned no usable release version')
+  const verification = { ...object(config.verificationConfig) }
+  if (verificationProductCode) verification.productCode = verificationProductCode
+  const deploymentMode = clean(config.deploymentMode || 'winget_preferred')
+  const vendorDirect = deploymentMode === 'vendor_direct'
+  const trustState = vendorDirect
+    && installerUrl
+    && /^[A-F0-9]{64}$/.test(installerSha256)
+    && clean(config.expectedSigner)
+    && ['msi','exe'].includes(resolvedInstallerType)
+    && (resolvedInstallerType !== 'exe' || clean(config.installArguments))
+      ? 'direct_ready'
+      : deploymentMode === 'winget_preferred' && clean(config.wingetPackageId || b.provider_package_id)
+        ? 'winget_ready'
+        : 'version_only'
+
+  return upsertRelease({
+    sourceKey: b.source_key,
+    packageId: b.provider_package_id,
+    canonicalName: b.canonical_name,
+    publisher: b.publisher,
+    channel: b.channel,
+    platform: b.platform,
+    architecture: b.architecture,
+    version,
+    releaseDate,
+    installerUrl,
+    installerSha256,
+    installerType: resolvedInstallerType,
+    sourcePriority: b.priority,
+    payload: {
+      ...payload,
+      releaseUrl,
+      trustState,
+      expectedSigner: clean(config.expectedSigner),
+      deploymentMode,
+      verification,
+      installArguments: clean(config.installArguments),
+    },
+    catalogueProvider: vendorDirect ? 'vendor' : 'winget',
+    verification,
+    execution: { installArguments: clean(config.installArguments) },
+    catalogueMetadata: {
+      namePattern: clean(config.namePattern || b.canonical_name),
+      publisherPattern: clean(config.publisherPattern || b.publisher),
+      latestSource: sourceKey,
+      sourceType: state.source_type,
+      deploymentMode,
+      expectedSigner: clean(config.expectedSigner),
+      trustState,
+      releaseUrl,
+      hasWingetFallback: Boolean(clean(config.wingetPackageId)),
+      wingetPackageId: clean(config.wingetPackageId),
+    },
+  })
 }
 
 async function syncChrome() {
@@ -303,7 +448,10 @@ export async function syncSoftwareVendorSource(sourceKey) {
   const state = await sourceState(sourceKey)
   if (!state?.enabled) return { sourceKey, skipped: true }
   const adapter = adapters[sourceKey]
-  if (!adapter) throw new Error('No software vendor adapter registered for ' + sourceKey)
+    || (['github_releases','vendor_json','static_release'].includes(state.source_type)
+      ? () => syncGenericConfigured(sourceKey, state)
+      : null)
+  if (!adapter) throw new Error('No software vendor adapter registered for ' + sourceKey + ' (' + state.source_type + ')')
   await markAttempt(sourceKey)
   try {
     const version = await adapter()
