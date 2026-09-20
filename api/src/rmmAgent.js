@@ -666,7 +666,11 @@ export function registerRmmAgentRoutes(app) {
         `UPDATE rmm_agent_jobs
             SET status='queued',claimed_at=NULL,updated_at=now()
           WHERE agent_device_id=$1 AND status='claimed'
-            AND claimed_at < now()-interval '2 minutes'`,
+            AND claimed_at < now() - CASE
+              WHEN job_type='patch.software' THEN interval '35 minutes'
+              WHEN job_type='custom.command' THEN interval '15 minutes'
+              ELSE interval '5 minutes'
+            END`,
         [agent.id],
       )
       const result = await client.query(
