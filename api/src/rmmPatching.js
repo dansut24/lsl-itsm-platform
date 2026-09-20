@@ -359,6 +359,89 @@ function normalizePatchDiscoveryPackage(value = {}) {
   }
 }
 
+async function reconcilePatchDeploymentFromDiscovery(client, agent, catalogueId, item, targetVersion) {
+  if (!catalogueId || !targetVersion || compareVersions(item.installedVersion, targetVersion) < 0) return null
+
+  const result = await client.query(
+    `SELECT d.id,d.agent_job_id,d.application_name,d.installed_version,d.target_version,d.provider,
+            COALESCE(NULLIF(j.initiated_by_label,''),'Technician') AS actor_label
+       FROM rmm_patch_deployments d
+       LEFT JOIN rmm_agent_jobs j ON j.id=d.agent_job_id
+      WHERE d.tenant_id=$1 AND d.inventory_id=$2 AND d.catalogue_id=$3
+        AND d.target_version=$4
+        AND d.provider='winget'
+        AND d.status IN ('verification_failed','failed')
+        AND COALESCE(d.result->>'error','') IN ('target_version_not_verified','installer_failed')
+        AND d.completed_at>now()-interval '6 hours'
+      ORDER BY d.created_at DESC
+      LIMIT 1
+      FOR UPDATE OF d`,
+    [agent.tenant_id, agent.inventory_id, catalogueId, targetVersion],
+  )
+  const deployment = result.rows[0]
+  if (!deployment) return null
+
+  const reconciliation = {
+    success: true,
+    verificationPassed: true,
+    verificationFailed: false,
+    lateVerification: true,
+    lateVerifiedVersion: item.installedVersion,
+    lateVerifiedAt: new Date().toISOString(),
+    reconciliationSource: 'patchhost_discovery',
+  }
+
+  await client.query(
+    `UPDATE rmm_patch_deployments
+        SET status='succeeded',
+            result=(result - 'error') || $4::jsonb,
+            updated_at=now()
+      WHERE tenant_id=$1 AND inventory_id=$2 AND id=$3`,
+    [agent.tenant_id, agent.inventory_id, deployment.id, JSON.stringify(reconciliation)],
+  )
+  await client.query(
+    `UPDATE rmm_agent_jobs
+        SET status='completed',
+            result=(result - 'error') || $3::jsonb,
+            error_message=NULL,
+            updated_at=now()
+      WHERE tenant_id=$1 AND id=$2`,
+    [agent.tenant_id, deployment.agent_job_id, JSON.stringify(reconciliation)],
+  )
+
+  const detail = [
+    clean(deployment.installed_version) && clean(deployment.target_version)
+      ? clean(deployment.installed_version) + ' → ' + clean(deployment.target_version)
+      : '',
+    clean(deployment.provider) ? 'Provider: ' + clean(deployment.provider) : '',
+    'Verified after inventory refresh',
+    'Job successful · See details',
+  ].filter(Boolean).join(' · ')
+
+  await client.query(
+    `UPDATE rmm_activity_events
+        SET outcome='success',
+            severity='info',
+            summary=$3,
+            detail=$4,
+            metadata=metadata || $5::jsonb
+      WHERE tenant_id=$1 AND job_id=$2 AND event_type='patch.software'`,
+    [
+      agent.tenant_id,
+      deployment.agent_job_id,
+      deployment.actor_label + ' patched “' + deployment.application_name + '”',
+      detail,
+      JSON.stringify({
+        lateVerification: true,
+        lateVerifiedVersion: item.installedVersion,
+        reconciliationSource: 'patchhost_discovery',
+      }),
+    ],
+  )
+
+  return deployment.id
+}
+
 async function ingestPatchDiscovery(agent, body = {}) {
   const packages = array(body.packages)
     .slice(0, 2500)
@@ -366,6 +449,7 @@ async function ingestPatchDiscovery(agent, body = {}) {
     .filter(Boolean)
   const capabilities = object(body.capabilities)
   const hostVersion = clean(capabilities.patchHostVersion || capabilities.version).slice(0, 80)
+  let reconciledDeployments = 0
 
   await withTransaction(async (client) => {
     await client.query(
@@ -512,6 +596,17 @@ async function ingestPatchDiscovery(agent, body = {}) {
           item.source,
         ],
       )
+
+      if (patchStatus === 'current' && catalogue.rows[0]?.id && targetVersion) {
+        const reconciled = await reconcilePatchDeploymentFromDiscovery(
+          client,
+          agent,
+          catalogue.rows[0].id,
+          item,
+          targetVersion,
+        )
+        if (reconciled) reconciledDeployments += 1
+      }
     }
 
     await client.query(
@@ -549,7 +644,7 @@ async function ingestPatchDiscovery(agent, body = {}) {
     )
   })
 
-  return { packages: packages.length, patchHostVersion: hostVersion }
+  return { packages: packages.length, patchHostVersion: hostVersion, reconciledDeployments }
 }
 
 async function patchDeploymentRows(tenantId) {

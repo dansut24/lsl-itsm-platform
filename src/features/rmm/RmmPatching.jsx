@@ -583,7 +583,7 @@ export function RmmPatching({ devices = [] }) {
       </div>
 
       <div className="rmm-vuln-table exposures">
-        <div className="head"><span>CVE / risk</span><span>Endpoint / software</span><span>CVSS / EPSS</span><span>Exploitation</span><span>Fix / remediation</span><span>SLA</span></div>
+        <div className="head"><span>CVE</span><span>Risk</span><span>CVSS</span><span>EPSS</span><span>CISA KEV</span><span>Exploitation</span><span>Published</span><span>Fix</span><span>Exposed devices</span><span>Vulnerable software</span><span>Remediation</span></div>
         {vulnerabilityExposureRows.map((item) => {
           const epss = item.epss_score == null ? null : Number(item.epss_score)
           const percentile = item.epss_percentile == null ? null : Number(item.epss_percentile)
@@ -604,12 +604,17 @@ export function RmmPatching({ devices = [] }) {
           const remediationLabel = providerBlocked ? 'provider blocked' : (item.remediation_state || 'unavailable')
           const blockedDetail = item.patch_evidence?.providerBlockedDetail || 'The selected provider cannot currently remediate this detected installation.'
           return <div className="row" key={item.id}>
-            <span><strong>{item.cve_id}</strong><small>{item.kev ? 'CISA KEV' : item.severity || item.source}</small></span>
-            <span><strong>{item.device_name}</strong><small>{item.application_name} {item.installed_version ? '· ' + item.installed_version : ''}</small></span>
-            <span><strong>{item.cvss_score ?? '—'}</strong><small>{epss == null ? 'EPSS pending' : 'EPSS ' + (epss * 100).toFixed(1) + '%' + (percentile == null ? '' : ' · ' + Math.round(percentile * 100) + 'th pct')}</small></span>
-            <span>{item.kev ? <StatusPill tone="critical">Known exploited</StatusPill> : exploitation ? <StatusPill tone={exploitation === 'active' ? 'critical' : exploitation === 'poc' ? 'warning' : 'neutral'}>{exploitation === 'poc' ? 'PoC observed' : exploitation}</StatusPill> : <StatusPill tone={riskCritical ? 'warning' : 'neutral'}>{item.severity || 'Observed'}</StatusPill>}<small>{item.known_ransomware_use ? 'Ransomware: ' + item.known_ransomware_use : item.ssvc_automatable ? 'Automatable: ' + item.ssvc_automatable : ''}</small></span>
-            <span className="rmm-vuln-remediation"><StatusPill tone={remediationTone}>{remediationLabel.replaceAll('_', ' ')}</StatusPill><small>{item.remediation_target_version ? 'Target ' + item.remediation_target_version + (item.remediation_provider ? ' via ' + item.remediation_provider : '') : item.fixed_version ? 'Fixed in ' + item.fixed_version : 'No verified fix route yet'}</small>{providerBlocked ? <small className="rmm-vuln-blocked-detail">{blockedDetail}</small> : canRemediate ? <button className="rmm-vuln-remediate" disabled={!item.device_online || remediating} onClick={() => remediateExposure(item)} type="button"><Wrench size={12} /> {remediating ? 'Starting…' : item.device_online ? 'Remediate' : 'Device offline'}</button> : null}</span>
-            <span><strong>{item.remediation_due_at ? new Date(item.remediation_due_at).toLocaleDateString() : '—'}</strong><small>{item.remediation_sla_class ? item.remediation_sla_class.replaceAll('_', ' ') : ''}</small></span>
+            <span><strong>{item.cve_id}</strong><small>{item.source}</small></span>
+            <span><StatusPill tone={riskCritical ? 'critical' : Number(item.cvss_score || 0) >= 7 ? 'warning' : 'neutral'}>{item.severity || 'Observed'}</StatusPill><small>{item.remediation_sla_class ? item.remediation_sla_class.replaceAll('_', ' ') : ''}</small></span>
+            <span><strong>{item.cvss_score ?? '—'}</strong><small>{item.cvss_version || 'Score pending'}</small></span>
+            <span><strong>{epss == null ? '—' : (epss * 100).toFixed(1) + '%'}</strong><small>{percentile == null ? 'EPSS pending' : Math.round(percentile * 100) + 'th percentile'}</small></span>
+            <span>{item.kev ? <StatusPill tone="critical">Yes</StatusPill> : <StatusPill tone="neutral">No</StatusPill>}<small>{item.kev_due_at ? 'Due ' + new Date(item.kev_due_at).toLocaleDateString() : item.kev_added_at ? 'Added ' + new Date(item.kev_added_at).toLocaleDateString() : ''}</small></span>
+            <span>{item.kev ? <StatusPill tone="critical">Known exploited</StatusPill> : exploitation ? <StatusPill tone={exploitation === 'active' ? 'critical' : exploitation === 'poc' ? 'warning' : 'neutral'}>{exploitation === 'poc' ? 'PoC observed' : exploitation}</StatusPill> : <StatusPill tone="neutral">Not reported</StatusPill>}<small>{item.known_ransomware_use ? 'Ransomware: ' + item.known_ransomware_use : item.ssvc_automatable ? 'Automatable: ' + item.ssvc_automatable : ''}</small></span>
+            <span><strong>{item.published_at ? new Date(item.published_at).toLocaleDateString() : '—'}</strong><small>{item.modified_at ? 'Updated ' + new Date(item.modified_at).toLocaleDateString() : ''}</small></span>
+            <span><strong>{item.remediation_target_version || item.fixed_version || '—'}</strong><small>{item.remediation_provider ? 'via ' + item.remediation_provider : item.fixed_version ? 'Vendor fixed version' : 'No verified fix route yet'}</small></span>
+            <span><strong>{item.device_name}</strong><small>{item.device_online ? 'Online' : 'Offline'}</small></span>
+            <span><strong>{item.application_name}</strong><small>{item.installed_version ? 'Installed ' + item.installed_version : 'Version unavailable'}</small></span>
+            <span className="rmm-vuln-remediation"><StatusPill tone={remediationTone}>{remediationLabel.replaceAll('_', ' ')}</StatusPill><small>{item.remediation_due_at ? 'SLA due ' + new Date(item.remediation_due_at).toLocaleDateString() : ''}</small>{providerBlocked ? <small className="rmm-vuln-blocked-detail">{blockedDetail}</small> : canRemediate ? <button className="rmm-vuln-remediate" disabled={!item.device_online || remediating} onClick={() => remediateExposure(item)} type="button"><Wrench size={12} /> {remediating ? 'Starting…' : item.device_online ? 'Remediate' : 'Device offline'}</button> : null}</span>
           </div>
         })}
       </div>
