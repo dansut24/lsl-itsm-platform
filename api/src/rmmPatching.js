@@ -370,8 +370,8 @@ async function reconcilePatchDeploymentFromDiscovery(client, agent, catalogueId,
       WHERE d.tenant_id=$1 AND d.inventory_id=$2 AND d.catalogue_id=$3
         AND d.target_version=$4
         AND d.provider='winget'
-        AND d.status IN ('verification_failed','failed')
-        AND COALESCE(d.result->>'error','') IN ('target_version_not_verified','installer_failed')
+        AND d.status='verification_failed'
+        AND COALESCE(d.result->>'error','')='target_version_not_verified'
         AND d.completed_at>now()-interval '6 hours'
       ORDER BY d.created_at DESC
       LIMIT 1
