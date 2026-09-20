@@ -1265,6 +1265,7 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId, options =
               COALESCE(NULLIF(r.trust_state,''),NULLIF(b.metadata->>'trustState',''),'') AS trust_state,
               COALESCE(NULLIF(b.metadata->>'expectedSigner',''),NULLIF(r.source_payload->>'expectedSigner',''),NULLIF(s.metadata->>'expectedSigner',''),'') AS expected_signer,
               COALESCE(NULLIF(b.metadata->>'deploymentMode',''),NULLIF(r.source_payload->>'deploymentMode',''),'winget_preferred') AS deployment_mode,
+              COALESCE(NULLIF(b.metadata->>'installerTechnology',''),NULLIF(r.source_payload->>'installerTechnology',''),'') AS installer_technology,
               COALESCE(NULLIF(b.metadata->>'wingetPackageId',''),'') AS winget_package_id
          FROM rmm_software_vendor_releases r
          JOIN rmm_software_vendor_sources s ON s.source_key=r.source_key AND s.enabled=true
@@ -1322,6 +1323,7 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId, options =
       downloadUrl: vendorDirect ? clean(vendor.installer_url) : '',
       sha256: vendorDirect ? clean(vendor.installer_sha256).toUpperCase() : '',
       installerType: vendorDirect ? clean(vendor.installer_type || row.installer_type) : '',
+      installerTechnology: vendorDirect ? clean(vendor.installer_technology) : '',
       installArguments: vendorDirect ? clean(object(row.execution).installArguments) : '',
       expectedSigner: clean(vendor?.expected_signer || row.publisher),
       fallbackProvider: vendorDirect && fallbackPackageId ? 'winget' : '',

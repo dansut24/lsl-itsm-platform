@@ -22,27 +22,75 @@ function assetName(value = '') {
   }
 }
 
-function installerAssetScore(name = '', productName = '') {
+const GENERIC_PRODUCT_TOKENS = new Set([
+  'app','application','client','community','desktop','electron','for','manager',
+  'player','professional','studio','the','windows',
+])
+
+function compactAssetToken(value = '') {
+  return lower(value).replace(/[^a-z0-9]/g, '')
+}
+
+function productAssetMatch(name = '', productName = '') {
+  const compactName = compactAssetToken(name)
+  const tokens = lower(productName)
+    .split(/[^a-z0-9]+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3 && !GENERIC_PRODUCT_TOKENS.has(token))
+  return tokens.some((token) => compactName.includes(compactAssetToken(token)))
+}
+
+function releaseLooksLikeRawBinaryMatrix(assets = []) {
+  const names = assets.map((asset) => lower(asset?.name)).filter(Boolean)
+  const matrixAssets = names.filter((name) =>
+    /(?:windows|linux|darwin|macos)[-_.].*(?:amd64|x86_64|arm64|aarch64|386)/i.test(name),
+  )
+  const guiPackaging = names.some((name) =>
+    /\.(?:msi|msix|msixbundle|dmg|pkg|deb|rpm|appimage)$/i.test(name)
+    || /(?:setup|installer|install|nsis|inno|squirrel)/i.test(name),
+  )
+  return matrixAssets.length >= 4 && !guiPackaging
+}
+
+function installerAssetAssessment(name = '', productName = '', assets = []) {
   const value = lower(name)
   const product = lower(productName)
   const isMsi = value.endsWith('.msi')
   const isExe = value.endsWith('.exe')
-  if (!isMsi && !isExe) return -Infinity
-  if (/\b(?:arm64|aarch64|armv\d*|x86|win32|ia32|i[3-6]86|32[-_. ]?bit)\b/i.test(value)) return -Infinity
-  if (/\b(?:portable|debug|symbols?|pdb|source|src|uninstall)\b/i.test(value)) return -Infinity
-  if (isExe && !/(?:setup|installer|install)/i.test(value)) return -Infinity
+  if (!isMsi && !isExe) return { score: -Infinity, reason: '' }
+  if (/\b(?:arm64|aarch64|armv\d*|win32|x32|ia32|i[3-6]86|32[-_. ]?bit)\b/i.test(value)) {
+    return { score: -Infinity, reason: '' }
+  }
+  if (/(?:^|[-_. ])x86(?:[-_. ]|\.exe$)/i.test(value) && !/(?:x86_64|x86-64)/i.test(value)) {
+    return { score: -Infinity, reason: '' }
+  }
+  if (/\b(?:portable|debug|symbols?|pdb|source|src|uninstall)\b/i.test(value)) {
+    return { score: -Infinity, reason: '' }
+  }
+
+  const explicitInstaller = /(?:setup|installer|install|nsis|inno|squirrel)/i.test(value)
+  const windows64 = /(?:windows|win64|win[-_.]?x64|win[-_.]?amd64|x86_64|x86-64|amd64|64[-_. ]?bit)/i.test(value)
+  const productMatch = productAssetMatch(value, productName)
+  const rawBinaryMatrix = releaseLooksLikeRawBinaryMatrix(assets)
+
+  if (isExe && !explicitInstaller) {
+    if (!productMatch) return { score: -Infinity, reason: '' }
+    if (!windows64 && rawBinaryMatrix) return { score: -Infinity, reason: '' }
+    if (rawBinaryMatrix) return { score: -Infinity, reason: '' }
+  }
 
   let score = isMsi ? 80 : 55
-  if (/(?:windows|win64|win[-_.]?x64)/i.test(value)) score += 25
-  if (/(?:x64|amd64|64[-_. ]?bit)/i.test(value)) score += 20
-  if (/(?:setup|installer)/i.test(value)) score += 20
+  let reason = isMsi ? 'msi' : explicitInstaller ? 'explicit_installer' : 'product_windows_executable'
+  if (/(?:windows|win64|win[-_.]?x64|win[-_.]?amd64)/i.test(value)) score += 25
+  if (/(?:x64|x86_64|x86-64|amd64|64[-_. ]?bit)/i.test(value)) score += 20
+  if (explicitInstaller) score += 20
   if (/(?:enterprise|machine|allusers)/i.test(value)) score += 5
   if (/legacy/i.test(value) && !/legacy/i.test(product)) score -= 60
   if (/\bagent\b/i.test(value) && !/\bagent\b/i.test(product)) score -= 50
   if (/\bserver\b/i.test(value) && !/\bserver\b/i.test(product)) score -= 35
   if (/\bcli\b/i.test(value) && !/\bcli\b/i.test(product)) score -= 25
   if (/(?:web|bootstrap)/i.test(value)) score -= 8
-  return score
+  return { score, reason }
 }
 
 function checksumAssetScore(name = '') {
@@ -55,7 +103,10 @@ function checksumAssetScore(name = '') {
 
 export function selectWindowsInstallerAsset(assets = [], productName = '') {
   return assets
-    .map((asset) => ({ ...asset, score: installerAssetScore(asset?.name, productName) }))
+    .map((asset) => {
+      const assessment = installerAssetAssessment(asset?.name, productName, assets)
+      return { ...asset, score: assessment.score, selectionReason: assessment.reason }
+    })
     .filter((asset) => Number.isFinite(asset.score))
     .sort((a, b) => b.score - a.score || clean(a.name).localeCompare(clean(b.name)))[0] || null
 }
@@ -178,7 +229,7 @@ export async function reconcileVendorArtifactInspections() {
   const jobs = await pool.query(
     `SELECT j.id,j.status,j.result,j.error_message,j.request_metadata,
             r.id AS release_id,r.source_key,r.provider_package_id,r.canonical_name,r.version,
-            r.installer_url,r.installer_sha256,r.installer_type,r.trust_state,
+            r.installer_url,r.installer_sha256,r.installer_type,r.trust_state,r.source_payload,
             b.metadata AS binding_metadata
        FROM rmm_agent_jobs j
        JOIN rmm_software_vendor_releases r
@@ -208,6 +259,19 @@ export async function reconcileVendorArtifactInspections() {
     const hashVerified = /^[A-F0-9]{64}$/.test(actualSha)
       && (!configuredSha || configuredSha === actualSha)
     const metadata = object(row.binding_metadata)
+    const sourcePayload = object(row.source_payload)
+    const trustPayload = object(sourcePayload.trustEvidence)
+    const githubPayload = object(sourcePayload.github)
+    const selectionReason = clean(
+      trustPayload.selectedAssetReason
+      || githubPayload.selectedAssetReason
+      || metadata.selectedAssetReason,
+    )
+    const installerTechnology = lower(clean(result.installerTechnology))
+    const installerTechnologyRecognized = result.installerTechnologyRecognized === true
+      || ['msi','inno','nullsoft','nsis','burn','installshield','squirrel','install4j'].includes(installerTechnology)
+    const technologyRequired = lower(row.installer_type) === 'exe'
+      && selectionReason === 'product_windows_executable'
     const signerBaseline = clean(metadata.signerBaseline || metadata.expectedSigner)
     const inspectionError = lower(clean(result.error || row.error_message))
 
@@ -217,9 +281,14 @@ export async function reconcileVendorArtifactInspections() {
       if (signerBaseline && !signerEquivalent(signerBaseline, signer)) {
         trustState = 'signer_review_required'
         reason = 'signer_changed_from_baseline'
+      } else if (technologyRequired && !installerTechnologyRecognized) {
+        trustState = 'installer_review_required'
+        reason = 'installer_technology_unrecognized'
       } else {
         trustState = 'direct_ready'
-        reason = 'authenticode_and_sha256_verified'
+        reason = technologyRequired
+          ? 'authenticode_sha256_and_installer_technology_verified'
+          : 'authenticode_and_sha256_verified'
       }
     } else if (configuredSha && actualSha && configuredSha !== actualSha) {
       trustState = 'rejected'
@@ -249,6 +318,10 @@ export async function reconcileVendorArtifactInspections() {
       signerBaseline: signerBaseline || signer,
       installerUrl: row.installer_url,
       installerType: row.installer_type,
+      selectionReason,
+      installerTechnology,
+      installerTechnologyRecognized,
+      installerTechnologyRequired: technologyRequired,
       patchHostVersion: clean(object(result.capabilities).patchHostVersion),
     }
 
@@ -272,6 +345,8 @@ export async function reconcileVendorArtifactInspections() {
             expectedSigner,
             signerBaseline: signerBaseline || signer,
             artifactHashProvenance: hashProvenance,
+            installerTechnology,
+            selectedAssetReason: selectionReason,
           }),
         ],
       )
@@ -290,6 +365,8 @@ export async function reconcileVendorArtifactInspections() {
               signerBaseline: signerBaseline || signer,
               trustState,
               installerType: row.installer_type,
+              installerTechnology,
+              selectedAssetReason: selectionReason,
               automaticVendorRelease: true,
               artifactHashProvenance: hashProvenance,
               trustedReleaseVersion: row.version,
@@ -323,6 +400,8 @@ export async function reconcileVendorArtifactInspections() {
               expectedSigner,
               signerBaseline: signerBaseline || signer,
               trustState,
+              installerTechnology,
+              selectedAssetReason: selectionReason,
               automaticVendorRelease: true,
               artifactHashProvenance: hashProvenance,
             }),
@@ -379,6 +458,7 @@ export async function queueVendorArtifactInspections(limit = 2) {
         AND a.websocket_status='Connected'
         AND a.last_telemetry_at>now()-interval '90 seconds'
         AND COALESCE((a.patch_capabilities->'vendorDirect'->>'artifactInspection')::boolean,false)=true
+        AND COALESCE((a.patch_capabilities->'vendorDirect'->>'artifactTechnologyDetection')::boolean,false)=true
       ORDER BY a.last_telemetry_at DESC
       LIMIT 1`,
   )

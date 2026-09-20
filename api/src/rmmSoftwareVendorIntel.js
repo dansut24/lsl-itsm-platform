@@ -174,7 +174,7 @@ async function upsertRelease({
          release_url=EXCLUDED.release_url,
          asset_name=EXCLUDED.asset_name,
          trust_state=CASE
-           WHEN rmm_software_vendor_releases.trust_state IN ('rejected','signer_review_required')
+           WHEN rmm_software_vendor_releases.trust_state IN ('rejected','signer_review_required','installer_review_required')
              THEN rmm_software_vendor_releases.trust_state
            WHEN rmm_software_vendor_releases.trust_state='direct_ready'
              AND EXCLUDED.trust_state<>'direct_ready'
@@ -187,7 +187,7 @@ async function upsertRelease({
            || jsonb_build_object(
              'trustState',
              CASE
-               WHEN rmm_software_vendor_releases.trust_state IN ('rejected','signer_review_required')
+               WHEN rmm_software_vendor_releases.trust_state IN ('rejected','signer_review_required','installer_review_required')
                  THEN rmm_software_vendor_releases.trust_state
                WHEN rmm_software_vendor_releases.trust_state='direct_ready'
                  AND EXCLUDED.trust_state<>'direct_ready'
@@ -223,7 +223,7 @@ async function upsertRelease({
                     'trustState',
                     CASE
                       WHEN source_revision=$4
-                        AND source_metadata->>'trustState' IN ('rejected','signer_review_required')
+                        AND source_metadata->>'trustState' IN ('rejected','signer_review_required','installer_review_required')
                         THEN source_metadata->>'trustState'
                       WHEN source_revision=$4
                         AND source_metadata->>'trustState'='direct_ready'
@@ -234,7 +234,7 @@ async function upsertRelease({
                     'deploymentMode',
                     CASE
                       WHEN source_revision=$4
-                        AND source_metadata->>'trustState' IN ('rejected','signer_review_required')
+                        AND source_metadata->>'trustState' IN ('rejected','signer_review_required','installer_review_required')
                         THEN 'intelligence_only'
                       WHEN source_revision=$4
                         AND source_metadata->>'trustState'='direct_ready'
@@ -247,7 +247,7 @@ async function upsertRelease({
                   WHEN qualification_state IN ('qualified','blocked') THEN qualification_state
                   WHEN source_revision=$4 AND source_metadata->>'trustState'='direct_ready' THEN 'deployment_candidate'
                   WHEN source_revision=$4
-                    AND source_metadata->>'trustState' IN ('rejected','signer_review_required') THEN 'intelligence_only'
+                    AND source_metadata->>'trustState' IN ('rejected','signer_review_required','installer_review_required') THEN 'intelligence_only'
                   ELSE $15
                 END,
                 qualification_evidence=qualification_evidence || $16::jsonb,
@@ -378,6 +378,7 @@ async function syncGenericConfigured(sourceKey, state) {
   let resolvedInstallerType = clean(config.installerType).toLowerCase()
   let releaseUrl = ''
   let verificationProductCode = ''
+  let selectedAssetReason = ''
   let payload = {}
 
   if (state.source_type === 'github_releases') {
@@ -390,6 +391,7 @@ async function syncGenericConfigured(sourceKey, state) {
       const discovery = await discoverGithubWindowsInstaller(repository, lightweight.tag, b.canonical_name)
       const installer = discovery.installer
       const checksum = discovery.checksum
+      selectedAssetReason = clean(installer?.selectionReason)
       installerUrl = clean(installer?.browser_download_url)
       if (installer && checksum) {
         installerSha256 = await publishedChecksum(checksum.browser_download_url, installer.name).catch(() => '')
@@ -402,6 +404,7 @@ async function syncGenericConfigured(sourceKey, state) {
         automaticAssetDiscovery: true,
         assetsSeen: discovery.assetsSeen,
         selectedAsset: clean(installer?.name),
+        selectedAssetReason,
         checksumAsset: clean(checksum?.name),
       } }
     } else {
@@ -420,6 +423,7 @@ async function syncGenericConfigured(sourceKey, state) {
       const checksum = checksumMatch
         ? assets.find((asset) => checksumMatch.test(clean(asset?.name)))
         : selectChecksumAsset(assets)
+      selectedAssetReason = installerMatch ? 'configured_asset_pattern' : clean(installer?.selectionReason)
       installerUrl = clean(installer?.browser_download_url)
       if (installer && checksum) {
         installerSha256 = await publishedChecksum(checksum.browser_download_url, installer.name).catch(() => '')
@@ -431,6 +435,8 @@ async function syncGenericConfigured(sourceKey, state) {
         html_url: release?.html_url,
         lightweight: false,
         releaseTagPattern: clean(config.releaseTagPattern),
+        selectedAsset: clean(installer?.name),
+        selectedAssetReason,
       } }
     }
   } else if (state.source_type === 'gitlab_releases') {
@@ -445,18 +451,58 @@ async function syncGenericConfigured(sourceKey, state) {
     payload = { gitlab: { name: release.name, tag_name: release.tag_name, released_at: release.released_at } }
   } else if (state.source_type === 'vendor_json') {
     const response = await fetchPublicJson(state.source_url)
-    version = releaseVersion(jsonPathValue(response, parser.versionPath))
-    releaseDate = normalizedReleaseDate(jsonPathValue(response, parser.releaseDatePath))
-    releaseUrl = clean(jsonPathValue(response, parser.releaseUrlPath))
-    const rawInstaller = clean(jsonPathValue(response, parser.installerUrlPath))
-    if (rawInstaller) installerUrl = (await publicHttpsUrl(new URL(rawInstaller, state.source_url).toString())).toString()
-    installerSha256 = normalizedSha256(jsonPathValue(response, parser.sha256Path))
-    verificationProductCode = clean(jsonPathValue(response, parser.productCodePath))
-    if (verificationProductCode && !/^\{[0-9A-Fa-f-]{36}\}$/.test(verificationProductCode)) {
-      throw new Error(sourceKey + ' returned an invalid MSI ProductCode')
+    if (sourceKey === 'go_golang') {
+      const releases = Array.isArray(response) ? response : []
+      const latest = releases.find((item) => item?.stable !== false) || releases[0]
+      if (!latest?.version) throw new Error('Go release feed returned no stable release')
+      version = clean(latest.version)
+      const file = (Array.isArray(latest.files) ? latest.files : []).find((item) =>
+        clean(item?.os) === 'windows'
+        && clean(item?.arch) === 'amd64'
+        && clean(item?.kind) === 'installer'
+        && clean(item?.filename).toLowerCase().endsWith('.msi')
+      )
+      if (!file) throw new Error('Go release feed returned no Windows amd64 MSI installer')
+      installerUrl = (await publicHttpsUrl('https://go.dev/dl/' + clean(file.filename))).toString()
+      installerSha256 = normalizedSha256(file.sha256)
+      resolvedInstallerType = 'msi'
+      releaseUrl = 'https://go.dev/dl/'
+      selectedAssetReason = 'vendor_published_installer'
+      payload = { go: { version: latest.version, filename: file.filename, sha256: file.sha256, kind: file.kind } }
+    } else if (sourceKey === 'nodejs') {
+      const releases = Array.isArray(response) ? response : []
+      const latest = releases[0]
+      const rawVersion = clean(latest?.version)
+      if (!rawVersion) throw new Error('Node.js release feed returned no current release')
+      version = releaseVersion(rawVersion)
+      const files = Array.isArray(latest?.files) ? latest.files : []
+      if (!files.includes('win-x64-msi')) throw new Error('Node.js release feed did not advertise a Windows x64 MSI')
+      const filename = 'node-' + rawVersion + '-x64.msi'
+      const distBase = 'https://nodejs.org/dist/' + rawVersion + '/'
+      installerUrl = (await publicHttpsUrl(distBase + filename)).toString()
+      const shasums = await fetchPublicText(distBase + 'SHASUMS256.txt', { maxBytes: 2 * 1024 * 1024 })
+      const checksumLine = shasums.split(/\r?\n/).find((line) => line.trim().endsWith('  ' + filename))
+      installerSha256 = normalizedSha256(clean(checksumLine).split(/\s+/)[0])
+      if (!installerSha256) throw new Error('Node.js SHASUMS256.txt did not contain ' + filename)
+      resolvedInstallerType = 'msi'
+      releaseDate = normalizedReleaseDate(latest?.date)
+      releaseUrl = distBase
+      selectedAssetReason = 'vendor_published_installer'
+      payload = { nodejs: { version: rawVersion, filename, sha256: installerSha256, files } }
+    } else {
+      version = releaseVersion(jsonPathValue(response, parser.versionPath))
+      releaseDate = normalizedReleaseDate(jsonPathValue(response, parser.releaseDatePath))
+      releaseUrl = clean(jsonPathValue(response, parser.releaseUrlPath))
+      const rawInstaller = clean(jsonPathValue(response, parser.installerUrlPath))
+      if (rawInstaller) installerUrl = (await publicHttpsUrl(new URL(rawInstaller, state.source_url).toString())).toString()
+      installerSha256 = normalizedSha256(jsonPathValue(response, parser.sha256Path))
+      verificationProductCode = clean(jsonPathValue(response, parser.productCodePath))
+      if (verificationProductCode && !/^\{[0-9A-Fa-f-]{36}\}$/.test(verificationProductCode)) {
+        throw new Error(sourceKey + ' returned an invalid MSI ProductCode')
+      }
+      resolvedInstallerType = detectInstallerType(installerUrl ? new URL(installerUrl).pathname : '', resolvedInstallerType)
+      payload = { json: { paths: parser, selected: { version, releaseDate, releaseUrl, installerUrl: rawInstaller, productCode: verificationProductCode } } }
     }
-    resolvedInstallerType = detectInstallerType(installerUrl ? new URL(installerUrl).pathname : '', resolvedInstallerType)
-    payload = { json: { paths: parser, selected: { version, releaseDate, releaseUrl, installerUrl: rawInstaller, productCode: verificationProductCode } } }
   } else if (state.source_type === 'python_releases') {
     const releases = await fetchPublicJson(state.source_url)
     const candidates = (Array.isArray(releases) ? releases : [])
@@ -468,7 +514,30 @@ async function syncGenericConfigured(sourceKey, state) {
     if (!latest) throw new Error(sourceKey + ' returned no stable Python release')
     version = latest.version
     releaseDate = normalizedReleaseDate(latest.item.release_date)
-    payload = { python: { name: latest.item.name, slug: latest.item.slug, release_date: latest.item.release_date } }
+    const releaseId = clean(latest.item.resource_uri).match(/\/release\/(\d+)\/?$/)?.[1] || ''
+    if (!releaseId) throw new Error(sourceKey + ' latest Python release has no usable release ID')
+    const files = await fetchPublicJson('https://www.python.org/api/v2/downloads/release_file/?release=' + releaseId)
+    const installer = (Array.isArray(files) ? files : []).find((item) =>
+      /^Windows installer \(64-bit\)$/i.test(clean(item?.name))
+      && clean(item?.url).toLowerCase().endsWith('-amd64.exe')
+    )
+    if (!installer?.url) throw new Error(sourceKey + ' returned no Windows 64-bit installer')
+    installerUrl = (await publicHttpsUrl(installer.url)).toString()
+    installerSha256 = normalizedSha256(installer.sha256_sum)
+    if (!installerSha256) throw new Error(sourceKey + ' Windows installer did not include SHA-256')
+    resolvedInstallerType = 'exe'
+    releaseUrl = clean(latest.item.resource_uri)
+    selectedAssetReason = 'vendor_published_installer'
+    payload = {
+      python: {
+        name: latest.item.name,
+        slug: latest.item.slug,
+        release_date: latest.item.release_date,
+        releaseId,
+        installer: installer.name,
+        sha256: installer.sha256_sum,
+      },
+    }
   } else if (state.source_type === 'hashicorp_releases') {
     const response = JSON.parse(await fetchPublicText(state.source_url, {
       accept: 'application/vnd+hashicorp.releases-api.v0+json, application/json',
@@ -516,6 +585,137 @@ async function syncGenericConfigured(sourceKey, state) {
       installerUrl = name ? (await publicHttpsUrl(new URL(name, state.source_url).toString())).toString() : ''
       resolvedInstallerType = detectInstallerType(name, resolvedInstallerType)
       payload = { text: { adapter: config.adapter, filename: name } }
+    } else if (config.adapter === 'element_windows_index') {
+      const candidates = [...body.matchAll(
+        /href="(Element Setup ([0-9]+(?:\.[0-9]+)+)\.exe)"[\s\S]{0,350}?<td class="date">([^<]+)<\/td>/gi,
+      )].map((match) => ({
+        name: clean(match[1]),
+        version: clean(match[2]),
+        date: clean(match[3]),
+      })).filter((item) => item.name && item.version)
+      candidates.sort((a, b) => compareVersionValues(a.version, b.version))
+      const latest = candidates.at(-1)
+      if (!latest) throw new Error(sourceKey + ' returned no versioned Windows x64 Element installer')
+      version = latest.version
+      releaseDate = normalizedReleaseDate(latest.date)
+      installerUrl = (await publicHttpsUrl(new URL(latest.name, state.source_url).toString())).toString()
+      resolvedInstallerType = 'exe'
+      releaseUrl = state.source_url
+      selectedAssetReason = 'official_vendor_channel_installer'
+      payload = { text: { adapter: config.adapter, filename: latest.name, version, releaseDate } }
+    } else if (config.adapter === 'grafana_windows_download') {
+      const match = body.match(
+        /SHA256:\s*(?:<!-- -->)?([a-f0-9]{64})[\s\S]{0,1000}?href="(https:\/\/dl\.grafana\.com\/grafana\/release\/([0-9.]+)\/grafana_[^"]+_windows_amd64\.msi)"/i,
+      )
+      if (!match) throw new Error(sourceKey + ' returned no Grafana Windows amd64 MSI metadata')
+      installerSha256 = normalizedSha256(match[1])
+      installerUrl = (await publicHttpsUrl(match[2])).toString()
+      version = clean(match[3])
+      resolvedInstallerType = 'msi'
+      releaseUrl = state.source_url
+      selectedAssetReason = 'vendor_published_installer'
+      payload = { text: { adapter: config.adapter, version, installerUrl, sha256: installerSha256 } }
+    } else if (config.adapter === 'nextcloud_windows_index') {
+      const candidates = [...body.matchAll(
+        /href="(Nextcloud-([0-9]+(?:\.[0-9]+)+)-x64\.msi)"/gi,
+      )].map((match) => ({
+        name: clean(match[1]),
+        version: clean(match[2]),
+      })).filter((item) => item.name && item.version)
+      candidates.sort((a, b) => compareVersionValues(a.version, b.version))
+      const latest = candidates.at(-1)
+      if (!latest) throw new Error(sourceKey + ' returned no versioned Windows x64 Nextcloud MSI')
+      version = latest.version
+      installerUrl = (await publicHttpsUrl(new URL(latest.name, state.source_url).toString())).toString()
+      resolvedInstallerType = 'msi'
+      releaseUrl = state.source_url
+      selectedAssetReason = 'official_vendor_channel_installer'
+      payload = { text: { adapter: config.adapter, filename: latest.name, version } }
+    } else if (config.adapter === 'qgis_windows_download') {
+      const candidates = [...body.matchAll(
+        /href=["']?(https:\/\/download\.qgis\.org\/downloads\/(QGIS-OSGeo4W-([0-9]+(?:\.[0-9]+)+)-[0-9]+\.msi))/gi,
+      )].map((match) => ({
+        url: clean(match[1]),
+        name: clean(match[2]),
+        version: clean(match[3]),
+      })).filter((item) => item.url && item.version)
+      candidates.sort((a, b) => compareVersionValues(a.version, b.version))
+      const latest = candidates.at(-1)
+      if (!latest) throw new Error(sourceKey + ' returned no current QGIS Windows MSI')
+      version = latest.version
+      installerUrl = (await publicHttpsUrl(latest.url)).toString()
+      const metaUrl = await publicHttpsUrl('https://dl1.qgis.org/downloads/' + latest.name + '.meta4')
+      const metalink = await fetchPublicText(metaUrl.toString(), { maxBytes: 2 * 1024 * 1024 })
+      installerSha256 = normalizedSha256(
+        metalink.match(/<hash\s+type=["']sha-256["']>([a-f0-9]{64})<\/hash>/i)?.[1],
+      )
+      if (!installerSha256) throw new Error(sourceKey + ' QGIS Metalink did not contain SHA-256')
+      resolvedInstallerType = 'msi'
+      releaseUrl = state.source_url
+      selectedAssetReason = 'vendor_published_installer'
+      payload = {
+        text: {
+          adapter: config.adapter,
+          filename: latest.name,
+          version,
+          sha256: installerSha256,
+          metalink: metaUrl.toString(),
+        },
+      }
+    } else if (config.adapter === 'gimp_windows_index') {
+      const candidates = [...body.matchAll(
+        /href="(gimp-([0-9]+(?:\.[0-9]+)+)-setup\.exe)"/gi,
+      )].map((match) => ({
+        name: clean(match[1]),
+        version: clean(match[2]),
+      })).filter((item) => item.name && item.version)
+      candidates.sort((a, b) => compareVersionValues(a.version, b.version))
+      const latest = candidates.at(-1)
+      if (!latest) throw new Error(sourceKey + ' returned no stable GIMP Windows setup executable')
+      version = latest.version
+      installerUrl = (await publicHttpsUrl(new URL(latest.name, state.source_url).toString())).toString()
+      const sumsUrl = await publicHttpsUrl(new URL('SHA256SUMS', state.source_url).toString())
+      const sums = await fetchPublicText(sumsUrl.toString(), { maxBytes: 2 * 1024 * 1024 })
+      const checksumLine = sums.split(/\r?\n/).find((line) => line.trim().endsWith('  ' + latest.name))
+      installerSha256 = normalizedSha256(clean(checksumLine).split(/\s+/)[0])
+      if (!installerSha256) throw new Error(sourceKey + ' GIMP SHA256SUMS did not contain ' + latest.name)
+      resolvedInstallerType = 'exe'
+      releaseUrl = state.source_url
+      selectedAssetReason = 'vendor_published_installer'
+      payload = {
+        text: {
+          adapter: config.adapter,
+          filename: latest.name,
+          version,
+          sha256: installerSha256,
+          sums: sumsUrl.toString(),
+        },
+      }
+    } else if (config.adapter === 'wazuh_windows_packages') {
+      const matches = [...body.matchAll(
+        /href="(https:\/\/packages\.wazuh\.com\/4\.x\/windows\/(wazuh-agent-([0-9]+(?:\.[0-9]+)+)-([0-9]+)\.msi))"/gi,
+      )].map((match) => ({
+        url: clean(match[1]),
+        name: clean(match[2]),
+        version: clean(match[3]),
+        revision: Number(match[4] || 0),
+      }))
+      matches.sort((a, b) => compareVersionValues(a.version, b.version) || a.revision - b.revision)
+      const latest = matches.at(-1)
+      if (!latest) throw new Error(sourceKey + ' returned no Wazuh Windows MSI package')
+      version = latest.version
+      installerUrl = (await publicHttpsUrl(latest.url)).toString()
+      resolvedInstallerType = 'msi'
+      releaseUrl = state.source_url
+      selectedAssetReason = 'official_vendor_channel_installer'
+      payload = {
+        text: {
+          adapter: config.adapter,
+          filename: latest.name,
+          version,
+          revision: latest.revision,
+        },
+      }
     } else if (config.adapter === 'jenkins_jsonp') {
       const wrapped = body.match(/^\s*updateCenter\.post\(([\s\S]*)\);?\s*$/)
       if (!wrapped) throw new Error(sourceKey + ' returned invalid Jenkins update-center JSONP')
@@ -569,6 +769,7 @@ async function syncGenericConfigured(sourceKey, state) {
     sourceKey,
     releaseUrl,
     selectedAsset: selectedAssetName,
+    selectedAssetReason,
   }
 
   return upsertRelease({
@@ -621,6 +822,7 @@ async function syncGenericConfigured(sourceKey, state) {
       trustEvidence: qualificationEvidence,
       releaseUrl,
       selectedAsset: selectedAssetName,
+      selectedAssetReason,
       automaticVendorRelease: true,
       hasWingetFallback: Boolean(wingetPackageId),
       wingetPackageId: clean(config.wingetPackageId),
@@ -633,10 +835,41 @@ async function syncGenericConfigured(sourceKey, state) {
 async function syncChrome() {
   const b = await binding('google_chrome')
   if (!b) return null
-  const payload = await fetchJson(b.source_url + '?page_size=10')
-  const versions = Array.isArray(payload?.versions) ? payload.versions : []
+  const response = await fetchJson(b.source_url + '?page_size=10')
+  const versions = Array.isArray(response?.versions) ? response.versions : []
   const latest = clean(versions[0]?.version)
   if (!latest) throw new Error('Chrome VersionHistory returned no stable Windows versions')
+
+  const config = { ...object(b.source_metadata), ...object(b.binding_metadata) }
+  const installerUrl = (await publicHttpsUrl(
+    'https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi',
+  )).toString()
+  const verification = {
+    method: 'uninstall_registry',
+    packageId: '',
+    productCode: '',
+    displayNameContains: 'Google Chrome',
+    publisherContains: 'Google LLC',
+    filePath: '',
+  }
+  const wingetPackageId = clean(config.wingetPackageId || config.autoWingetPackageId || 'Google.Chrome')
+  const trust = vendorReleaseTrustProfile({
+    installerUrl,
+    installerSha256: '',
+    installerType: 'msi',
+    publisher: b.publisher,
+    expectedSigner: clean(config.expectedSigner),
+    verification,
+    wingetPackageId,
+    deploymentMode: clean(config.deploymentMode),
+  })
+  const evidence = {
+    ...trust.evidence,
+    sourceKey: b.source_key,
+    releaseUrl: b.source_url,
+    selectedAsset: 'googlechromestandaloneenterprise64.msi',
+    selectedAssetReason: 'official_vendor_channel_installer',
+  }
   return upsertRelease({
     sourceKey: b.source_key,
     packageId: b.provider_package_id,
@@ -646,8 +879,43 @@ async function syncChrome() {
     platform: b.platform,
     architecture: b.architecture,
     version: latest,
+    installerUrl,
+    installerType: 'msi',
+    releaseUrl: b.source_url,
+    assetName: 'googlechromestandaloneenterprise64.msi',
+    trustState: trust.trustState,
+    trustEvidence: evidence,
+    qualificationState: trust.qualificationState,
+    qualificationEvidence: evidence,
     sourcePriority: b.priority,
-    payload: { versions: versions.slice(0, 10) },
+    payload: {
+      versions: versions.slice(0, 10),
+      releaseUrl: b.source_url,
+      trustState: trust.trustState,
+      trustEvidence: evidence,
+      expectedSigner: '',
+      deploymentMode: trust.deploymentMode,
+      verification,
+      installArguments: '',
+    },
+    catalogueProvider: 'managed',
+    verification,
+    execution: { installArguments: '' },
+    catalogueMetadata: {
+      namePattern: 'Google Chrome',
+      publisherPattern: 'Google LLC',
+      latestSource: b.source_key,
+      sourceType: 'vendor_api',
+      deploymentMode: trust.deploymentMode,
+      trustState: trust.trustState,
+      trustEvidence: evidence,
+      releaseUrl: b.source_url,
+      selectedAsset: 'googlechromestandaloneenterprise64.msi',
+      selectedAssetReason: 'official_vendor_channel_installer',
+      automaticVendorRelease: true,
+      hasWingetFallback: Boolean(wingetPackageId),
+      wingetPackageId,
+    },
   })
 }
 
