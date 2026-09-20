@@ -1040,7 +1040,7 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId) {
   let vendor = null
   if (tenantVendorSourceId) {
     const tenantRelease = await pool.query(
-      `SELECT 'tenant_github' AS source_key,r.version,r.release_date,r.installer_url,r.installer_sha256,
+      `SELECT 'tenant_' || s.source_type AS source_key,r.version,r.release_date,r.installer_url,r.installer_sha256,
               r.installer_type,1000 AS source_priority,r.trust_state,s.expected_signer,s.deployment_mode
          FROM rmm_tenant_vendor_releases r
          JOIN rmm_tenant_vendor_sources s ON s.id=r.source_id AND s.tenant_id=$1 AND s.status='active'
