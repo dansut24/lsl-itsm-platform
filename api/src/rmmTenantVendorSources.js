@@ -1,7 +1,110 @@
+import { lookup } from 'node:dns/promises'
+import { isIP } from 'node:net'
 import { pool, withTransaction } from './db.js'
 import { recalculateAllTenantVulnerabilityExposures } from './rmmVulnerabilityExposure.js'
 
 function clean(value = '') { return String(value ?? '').trim() }
+
+function privateIpv4(address) {
+  const parts = address.split('.').map(Number)
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return true
+  const [a, b, c] = parts
+  return a === 0 || a === 10 || a === 127
+    || (a === 100 && b >= 64 && b <= 127)
+    || (a === 169 && b === 254)
+    || (a === 172 && b >= 16 && b <= 31)
+    || (a === 192 && b === 0 && (c === 0 || c === 2))
+    || (a === 192 && b === 88 && c === 99)
+    || (a === 192 && b === 168)
+    || (a === 198 && (b === 18 || b === 19))
+    || (a === 198 && b === 51 && c === 100)
+    || (a === 203 && b === 0 && c === 113)
+    || a >= 224
+}
+
+function privateIpv6(address) {
+  const value = address.toLowerCase().split('%')[0]
+  if (value === '::' || value === '::1') return true
+  if (value.startsWith('fc') || value.startsWith('fd') || value.startsWith('ff')) return true
+  if (/^fe[89ab]/.test(value) || value.startsWith('2001:db8:')) return true
+  if (value.startsWith('::ffff:')) {
+    const mapped = value.slice(7)
+    return isIP(mapped) === 4 ? privateIpv4(mapped) : true
+  }
+  return false
+}
+
+function privateAddress(address) {
+  const family = isIP(address)
+  if (family === 4) return privateIpv4(address)
+  if (family === 6) return privateIpv6(address)
+  return true
+}
+
+async function limitedResponseBytes(response, maxBytes) {
+  const declared = Number(response.headers.get('content-length') || 0)
+  if (declared > maxBytes) throw new Error('Vendor response exceeds the allowed size.')
+  if (!response.body) return new Uint8Array()
+  const reader = response.body.getReader()
+  const chunks = []
+  let total = 0
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.byteLength
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {})
+      throw new Error('Vendor response exceeds the allowed size.')
+    }
+    chunks.push(value)
+  }
+  const output = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    output.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return output
+}
+
+async function publicHttpsUrl(value) {
+  let url
+  try { url = new URL(clean(value)) } catch { throw new Error('A valid HTTPS URL is required.') }
+  if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443')) {
+    throw new Error('Vendor URLs must use public HTTPS without embedded credentials or custom ports.')
+  }
+  const hostname = url.hostname.toLowerCase().replace(/\.$/, '')
+  if (!hostname || hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local') || hostname.endsWith('.internal')) {
+    throw new Error('Private or local vendor URLs are not allowed.')
+  }
+  if (isIP(hostname)) {
+    if (privateAddress(hostname)) throw new Error('Private or reserved vendor addresses are not allowed.')
+  } else {
+    const addresses = await lookup(hostname, { all: true, verbatim: true })
+    if (!addresses.length || addresses.some((item) => privateAddress(item.address))) {
+      throw new Error('Vendor hostname resolves to a private or reserved address.')
+    }
+  }
+  return url
+}
+
+async function fetchPublicJson(value, redirects = 0) {
+  if (redirects > 3) throw new Error('Vendor API redirected too many times.')
+  const url = await publicHttpsUrl(value)
+  const response = await fetch(url, {
+    headers: { Accept: 'application/json', 'User-Agent': 'Hi5Central-Software-Catalogue/1.0' },
+    redirect: 'manual',
+    signal: AbortSignal.timeout(60_000),
+  })
+  if ([301, 302, 303, 307, 308].includes(response.status)) {
+    const location = clean(response.headers.get('location'))
+    if (!location) throw new Error('Vendor API returned a redirect without a location.')
+    return fetchPublicJson(new URL(location, url).toString(), redirects + 1)
+  }
+  if (!response.ok) throw new Error('Vendor JSON HTTP ' + response.status)
+  const bytes = await limitedResponseBytes(response, 5 * 1024 * 1024)
+  try { return JSON.parse(new TextDecoder('utf-8').decode(bytes)) } catch { throw new Error('Vendor API did not return valid JSON.') }
+}
 
 function repositoryName(value = '') {
   const input = clean(value).replace(/\.git$/i, '')
@@ -61,9 +164,7 @@ async function publishedChecksum(assetUrl, installerName) {
     signal: AbortSignal.timeout(60_000),
   })
   if (!response.ok) throw new Error('Checksum download HTTP ' + response.status)
-  const length = Number(response.headers.get('content-length') || 0)
-  if (length > 2 * 1024 * 1024) throw new Error('Checksum asset is unexpectedly large.')
-  const bytes = new Uint8Array(await response.arrayBuffer()).slice(0, 2 * 1024 * 1024)
+  const bytes = await limitedResponseBytes(response, 2 * 1024 * 1024)
   let body = ''
   if (bytes[0] === 0xff && bytes[1] === 0xfe) body = new TextDecoder('utf-16le').decode(bytes)
   else if (bytes[0] === 0xfe && bytes[1] === 0xff) body = new TextDecoder('utf-16be').decode(bytes)
@@ -79,11 +180,63 @@ function deploymentMode(value = '') {
     ? clean(value)
     : 'winget_preferred'
 }
+
+function sourceType(value = '') {
+  return ['github_releases', 'vendor_json'].includes(clean(value)) ? clean(value) : 'github_releases'
+}
+
+function safeJsonPath(value = '', required = false) {
+  const path = clean(value)
+  if (!path) {
+    if (required) throw new Error('A version JSON path is required.')
+    return ''
+  }
+  if (path.length > 240) throw new Error('JSON paths must be 240 characters or fewer.')
+  const parts = path.split('.')
+  if (parts.some((part) => !part || !/^(?:[A-Za-z0-9_-]+|\d+)$/.test(part)
+    || ['__proto__', 'prototype', 'constructor'].includes(part))) {
+    throw new Error('JSON paths may contain only object keys, numeric indexes, underscores and hyphens.')
+  }
+  return path
+}
+
+function jsonPathValue(payload, path = '') {
+  if (!path) return ''
+  let value = payload
+  for (const part of path.split('.')) {
+    if (value === null || value === undefined) return ''
+    if (Array.isArray(value) && /^\d+$/.test(part)) value = value[Number(part)]
+    else if (typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, part)) value = value[part]
+    else return ''
+  }
+  if (value === null || value === undefined || typeof value === 'object') return ''
+  return clean(value)
+}
+
+function normalizedSha256(value = '') {
+  const match = clean(value).match(/(?:^|[^A-Fa-f0-9])([A-Fa-f0-9]{64})(?:$|[^A-Fa-f0-9])/)
+  return clean(match?.[1]).toUpperCase()
+}
+
 function normalizeInput(body = {}) {
   const mode = deploymentMode(body.deploymentMode)
+  const type = sourceType(body.sourceType)
+  const parser = body.parserConfig && typeof body.parserConfig === 'object' && !Array.isArray(body.parserConfig)
+    ? body.parserConfig
+    : {}
+  const parserConfig = {
+    versionPath: safeJsonPath(body.versionPath ?? parser.versionPath, type === 'vendor_json'),
+    releaseDatePath: safeJsonPath(body.releaseDatePath ?? parser.releaseDatePath),
+    releaseUrlPath: safeJsonPath(body.releaseUrlPath ?? parser.releaseUrlPath),
+    installerUrlPath: safeJsonPath(body.installerUrlPath ?? parser.installerUrlPath),
+    sha256Path: safeJsonPath(body.sha256Path ?? parser.sha256Path),
+  }
   const input = {
     displayName: clean(body.displayName).slice(0, 160),
-    repository: repositoryName(body.repository),
+    sourceType: type,
+    repository: type === 'github_releases' ? repositoryName(body.repository) : '',
+    sourceUrl: type === 'vendor_json' ? clean(body.sourceUrl).slice(0, 2000) : '',
+    parserConfig,
     canonicalName: clean(body.canonicalName).slice(0, 200),
     publisher: clean(body.publisher).slice(0, 200),
     expectedSigner: clean(body.expectedSigner).slice(0, 300),
@@ -93,20 +246,33 @@ function normalizeInput(body = {}) {
     channel: clean(body.channel || 'stable').slice(0, 80) || 'stable',
     architecture: clean(body.architecture || 'x64').slice(0, 40) || 'x64',
     deploymentMode: mode,
-    assetPattern: clean(body.assetPattern).slice(0, 240),
-    checksumAssetPattern: clean(body.checksumAssetPattern).slice(0, 240),
+    assetPattern: type === 'github_releases' ? clean(body.assetPattern).slice(0, 240) : '',
+    checksumAssetPattern: type === 'github_releases' ? clean(body.checksumAssetPattern).slice(0, 240) : '',
     installerType: clean(body.installerType).toLowerCase().slice(0, 20),
     pollMinutes: Math.max(15, Math.min(10080, Number(body.pollMinutes) || 60)),
   }
   if (input.displayName.length < 2 || input.canonicalName.length < 2 || input.namePattern.length < 2) {
     throw new Error('Display name, application name and detection name are required.')
   }
-  if (!input.repository) throw new Error('A valid public GitHub repository is required.')
+  if (type === 'github_releases' && !input.repository) throw new Error('A valid public GitHub repository is required.')
+  if (type === 'vendor_json') {
+    try {
+      const url = new URL(input.sourceUrl)
+      if (url.protocol !== 'https:') throw new Error()
+    } catch {
+      throw new Error('A valid HTTPS vendor JSON URL is required.')
+    }
+  }
   if (mode === 'winget_preferred' && !input.providerPackageId) {
     throw new Error('A WinGet package ID is required for WinGet-preferred sources.')
   }
-  if (mode === 'vendor_direct' && (!input.assetPattern || !input.checksumAssetPattern || !input.expectedSigner)) {
-    throw new Error('Vendor-direct sources require installer pattern, checksum pattern and expected signer.')
+  if (mode === 'vendor_direct' && type === 'github_releases'
+    && (!input.assetPattern || !input.checksumAssetPattern || !input.expectedSigner)) {
+    throw new Error('GitHub vendor-direct sources require installer pattern, checksum pattern and expected signer.')
+  }
+  if (mode === 'vendor_direct' && type === 'vendor_json'
+    && (!parserConfig.installerUrlPath || !parserConfig.sha256Path || !input.expectedSigner)) {
+    throw new Error('JSON vendor-direct sources require installer URL path, SHA-256 path and expected signer.')
   }
   if (input.installerType && !['msi', 'exe'].includes(input.installerType)) {
     throw new Error('Installer type must be MSI or EXE.')
@@ -154,12 +320,70 @@ async function resolveGithubSource(source) {
   }
   if (installer && checksum) release.installerSha256 = await publishedChecksum(checksum.browser_download_url, installer.name)
   release.trustState = trustState(source, release)
-  return { release, payload }
+  return {
+    release,
+    sourcePayload: { github: { id: payload?.id, tag_name: payload?.tag_name, html_url: payload?.html_url } },
+  }
 }
 
-async function storeRelease(source, release, payload) {
+async function resolveJsonSource(source) {
+  const parser = source.parser_config && typeof source.parser_config === 'object' ? source.parser_config : {}
+  const payload = await fetchPublicJson(source.source_url)
+  const version = releaseVersion(jsonPathValue(payload, parser.versionPath))
+  if (!version) throw new Error('The configured version JSON path returned no scalar value.')
+  const releaseDateValue = jsonPathValue(payload, parser.releaseDatePath)
+  const releaseUrlValue = jsonPathValue(payload, parser.releaseUrlPath)
+  const installerUrlValue = jsonPathValue(payload, parser.installerUrlPath)
+  const shaValue = jsonPathValue(payload, parser.sha256Path)
+  let installerUrl = ''
+  if (installerUrlValue) installerUrl = (await publicHttpsUrl(installerUrlValue)).toString()
+  let releaseUrl = ''
+  if (releaseUrlValue) {
+    try {
+      const parsed = new URL(releaseUrlValue)
+      if (parsed.protocol === 'https:') releaseUrl = parsed.toString()
+    } catch {}
+  }
+  const release = {
+    version,
+    releaseDate: releaseDate(releaseDateValue),
+    releaseUrl,
+    installerUrl,
+    installerSha256: normalizedSha256(shaValue),
+    installerType: installerType(installerUrl ? new URL(installerUrl).pathname : '', source.installer_type),
+    installerName: installerUrl ? new URL(installerUrl).pathname.split('/').filter(Boolean).pop() || '' : '',
+    checksumName: parser.sha256Path ? 'JSON: ' + parser.sha256Path : '',
+  }
+  release.trustState = trustState(source, release)
+  return {
+    release,
+    sourcePayload: {
+      json: {
+        source_url: source.source_url,
+        paths: parser,
+        selected: {
+          version,
+          releaseDate: releaseDateValue,
+          releaseUrl: releaseUrlValue,
+          installerUrl: installerUrlValue,
+          sha256Present: Boolean(release.installerSha256),
+        },
+      },
+    },
+  }
+}
+
+async function resolveSource(source) {
+  if (source.source_type === 'vendor_json') return resolveJsonSource(source)
+  return resolveGithubSource(source)
+}
+
+async function storeRelease(source, release, sourcePayload) {
   const evidence = {
+    sourceType: source.source_type,
     repository: source.repository,
+    sourceUrl: source.source_url,
+    parserConfig: source.parser_config,
     installerAsset: release.installerName,
     checksumAsset: release.checksumName,
     sha256Present: /^[A-F0-9]{64}$/.test(release.installerSha256),
@@ -180,7 +404,7 @@ async function storeRelease(source, release, payload) {
       source.id, source.tenant_id, release.version, release.releaseDate, release.releaseUrl,
       release.installerUrl, release.installerSha256, release.installerType, release.trustState,
       JSON.stringify(evidence),
-      JSON.stringify({ github: { id: payload?.id, tag_name: payload?.tag_name, html_url: payload?.html_url } }),
+      JSON.stringify(sourcePayload || {}),
     ],
   )
   return evidence
@@ -192,6 +416,7 @@ async function applyCatalogue(source, release, db = pool) {
     tenantVendorSourceId: source.id,
     sourceType: source.source_type,
     repository: source.repository,
+    sourceUrl: source.source_url,
     deploymentMode: source.deployment_mode,
     expectedSigner: source.expected_signer,
     trustState: release.trustState,
@@ -233,12 +458,12 @@ async function applyCatalogue(source, release, db = pool) {
 async function syncSourceRow(source, testOnly = false) {
   await pool.query('UPDATE rmm_tenant_vendor_sources SET last_attempt_at=now(),updated_at=now() WHERE id=$1', [source.id])
   try {
-    const resolved = await resolveGithubSource(source)
-    const evidence = await storeRelease(source, resolved.release, resolved.payload)
+    const resolved = await resolveSource(source)
+    const evidence = await storeRelease(source, resolved.release, resolved.sourcePayload)
     const blockers = []
     if (source.deployment_mode === 'vendor_direct' && resolved.release.trustState !== 'direct_ready') {
-      if (!resolved.release.installerUrl) blockers.push('No installer asset matched.')
-      if (!resolved.release.installerSha256) blockers.push('No matching published SHA-256 was found.')
+      if (!resolved.release.installerUrl) blockers.push('No installer URL was resolved from the source.')
+      if (!resolved.release.installerSha256) blockers.push('No verified SHA-256 was resolved from the source.')
       if (!resolved.release.installerType) blockers.push('Installer must be MSI or EXE.')
       if (!clean(source.expected_signer)) blockers.push('Expected signer is required.')
     }
@@ -256,7 +481,7 @@ async function syncSourceRow(source, testOnly = false) {
       evidence,
     }
     let status = source.status
-    if (testOnly && source.status !== 'active') status = 'tested'
+    if (testOnly && source.status !== 'active') status = blockers.length ? 'quarantined' : 'tested'
     if (!testOnly && source.status === 'active' && blockers.length) status = 'quarantined'
     await pool.query(
       `UPDATE rmm_tenant_vendor_sources
@@ -307,16 +532,17 @@ export async function createTenantVendorSource(session, body) {
   const input = normalizeInput(body)
   const result = await pool.query(
     `INSERT INTO rmm_tenant_vendor_sources
-      (tenant_id,display_name,source_type,repository,canonical_name,publisher,expected_signer,
+      (tenant_id,display_name,source_type,repository,source_url,parser_config,canonical_name,publisher,expected_signer,
        provider_package_id,name_pattern,publisher_pattern,channel,architecture,deployment_mode,
        asset_pattern,checksum_asset_pattern,installer_type,poll_minutes,created_by_user_id,updated_by_user_id)
-     VALUES ($1,$2,'github_releases',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17)
+     VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$20)
      RETURNING id`,
     [
-      session.tenant_id, input.displayName, input.repository, input.canonicalName, input.publisher,
-      input.expectedSigner, input.providerPackageId, input.namePattern, input.publisherPattern,
-      input.channel, input.architecture, input.deploymentMode, input.assetPattern,
-      input.checksumAssetPattern, input.installerType, input.pollMinutes, session.user_id,
+      session.tenant_id, input.displayName, input.sourceType, input.repository, input.sourceUrl,
+      JSON.stringify(input.parserConfig), input.canonicalName, input.publisher, input.expectedSigner,
+      input.providerPackageId, input.namePattern, input.publisherPattern, input.channel,
+      input.architecture, input.deploymentMode, input.assetPattern, input.checksumAssetPattern,
+      input.installerType, input.pollMinutes, session.user_id,
     ],
   )
   return result.rows[0]
@@ -327,18 +553,18 @@ export async function updateTenantVendorSource(session, sourceId, body) {
   return withTransaction(async (client) => {
     const result = await client.query(
       `UPDATE rmm_tenant_vendor_sources
-          SET display_name=$3,repository=$4,canonical_name=$5,publisher=$6,expected_signer=$7,
-              provider_package_id=$8,name_pattern=$9,publisher_pattern=$10,channel=$11,
-              architecture=$12,deployment_mode=$13,asset_pattern=$14,checksum_asset_pattern=$15,
-              installer_type=$16,poll_minutes=$17,status='draft',approved_at=NULL,approved_by_user_id=NULL,
-              updated_by_user_id=$18,updated_at=now()
+          SET display_name=$3,source_type=$4,repository=$5,source_url=$6,parser_config=$7::jsonb,
+              canonical_name=$8,publisher=$9,expected_signer=$10,provider_package_id=$11,
+              name_pattern=$12,publisher_pattern=$13,channel=$14,architecture=$15,deployment_mode=$16,
+              asset_pattern=$17,checksum_asset_pattern=$18,installer_type=$19,poll_minutes=$20,
+              status='draft',approved_at=NULL,approved_by_user_id=NULL,updated_by_user_id=$21,updated_at=now()
         WHERE id=$1 AND tenant_id=$2 AND status<>'archived' RETURNING id`,
       [
-        sourceId, session.tenant_id, input.displayName, input.repository, input.canonicalName,
-        input.publisher, input.expectedSigner, input.providerPackageId, input.namePattern,
-        input.publisherPattern, input.channel, input.architecture, input.deploymentMode,
-        input.assetPattern, input.checksumAssetPattern, input.installerType, input.pollMinutes,
-        session.user_id,
+        sourceId, session.tenant_id, input.displayName, input.sourceType, input.repository, input.sourceUrl,
+        JSON.stringify(input.parserConfig), input.canonicalName, input.publisher, input.expectedSigner,
+        input.providerPackageId, input.namePattern, input.publisherPattern, input.channel,
+        input.architecture, input.deploymentMode, input.assetPattern, input.checksumAssetPattern,
+        input.installerType, input.pollMinutes, session.user_id,
       ],
     )
     if (!result.rowCount) throw new Error('Vendor source not found.')
