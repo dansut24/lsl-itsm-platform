@@ -1,4 +1,5 @@
 import { pool, withTransaction } from './db.js'
+import { recalculateAllTenantVulnerabilityExposures } from './rmmVulnerabilityExposure.js'
 
 function clean(value = '') { return String(value ?? '').trim() }
 
@@ -306,7 +307,12 @@ export async function syncSoftwareVendorSource(sourceKey) {
   await markAttempt(sourceKey)
   try {
     const version = await adapter()
-    return { sourceKey, version, ok: true }
+    return {
+      sourceKey,
+      version,
+      changed: Boolean(clean(version) && clean(version) !== clean(state.cursor_value)),
+      ok: true,
+    }
   } catch (error) {
     await markFailure(sourceKey, error)
     throw error
@@ -329,6 +335,11 @@ export async function syncDueSoftwareVendorSources() {
       console.error('RMM software vendor sync failed', row.source_key, error.message)
       results.push({ sourceKey: row.source_key, ok: false, error: error.message })
     }
+  }
+  if (results.some((item) => item?.ok && item?.changed)) {
+    recalculateAllTenantVulnerabilityExposures().catch((error) => {
+      console.error('RMM vulnerability exposure refresh failed after vendor release change', error)
+    })
   }
   return results
 }

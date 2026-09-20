@@ -455,12 +455,24 @@ export function registerRmmAgentRoutes(app) {
       const deploymentStatus = success
         ? (rebootRequired ? 'reboot_required' : 'succeeded')
         : (verificationFailed ? 'verification_failed' : 'failed')
-      await pool.query(
-        `UPDATE rmm_patch_deployments
-            SET status=$4,result=$5::jsonb,completed_at=now(),updated_at=now()
-          WHERE tenant_id=$1 AND agent_job_id=$2 AND inventory_id=$3`,
-        [agent.tenant_id, completedJob.id, agent.inventory_id, deploymentStatus, JSON.stringify(resultPayload)],
-      ).catch((error) => console.error('RMM patch deployment result update failed', completedJob.id, error.message))
+      await withTransaction(async (client) => {
+        const deployment = await client.query(
+          `UPDATE rmm_patch_deployments
+              SET status=$4,result=$5::jsonb,completed_at=now(),updated_at=now()
+            WHERE tenant_id=$1 AND agent_job_id=$2 AND inventory_id=$3
+            RETURNING catalogue_id`,
+          [agent.tenant_id, completedJob.id, agent.inventory_id, deploymentStatus, JSON.stringify(resultPayload)],
+        )
+        if (!success && deployment.rowCount && deployment.rows[0].catalogue_id) {
+          await client.query(
+            `UPDATE rmm_vulnerability_exposures
+                SET remediation_state='available',last_seen_at=now()
+              WHERE tenant_id=$1 AND inventory_id=$2 AND catalogue_id=$3
+                AND status='open' AND remediation_state='in_progress'`,
+            [agent.tenant_id, agent.inventory_id, deployment.rows[0].catalogue_id],
+          )
+        }
+      }).catch((error) => console.error('RMM patch deployment result update failed', completedJob.id, error.message))
     }
 
     await recordJobCompletionActivity(completedJob, success, resultPayload, errorMessage).catch((error) => {

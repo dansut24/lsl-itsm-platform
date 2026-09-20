@@ -5,7 +5,7 @@ import { agentSocketForDevice, authenticateAgent, sendAgentMessage } from './rmm
 import { recordRmmActivity } from './rmmActivity.js'
 import { recentVulnerabilities, vulnerabilitySummary } from './rmmVulnerabilityIntel.js'
 import { softwareVendorSummary } from './rmmSoftwareVendorIntel.js'
-import { vulnerabilityExposureByInstallation, vulnerabilityExposureSummary } from './rmmVulnerabilityExposure.js'
+import { vulnerabilityExposureByInstallation, vulnerabilityExposureRows, vulnerabilityExposureSummary } from './rmmVulnerabilityExposure.js'
 import { resolveSession } from './session.js'
 
 function clean(value = '') { return String(value ?? '').trim() }
@@ -266,7 +266,7 @@ function buildSoftware(devices, catalogue) {
 }
 
 async function patchBundle(tenantId) {
-  const [devices, catalogue, policies, assignments, vulnerabilities, discovery, vendorIntel, exposureSummary, softwareVulnerabilityExposures, deployments] = await Promise.all([
+  const [devices, catalogue, policies, assignments, vulnerabilities, discovery, vendorIntel, exposureSummary, softwareVulnerabilityExposures, vulnerabilityExposureRowsData, deployments] = await Promise.all([
     patchDeviceRows(tenantId),
     catalogueRows(tenantId),
     policyRows(tenantId),
@@ -276,6 +276,7 @@ async function patchBundle(tenantId) {
     softwareVendorSummary(),
     vulnerabilityExposureSummary(tenantId),
     vulnerabilityExposureByInstallation(tenantId),
+    vulnerabilityExposureRows(tenantId, 250),
     patchDeploymentRows(tenantId),
   ])
   const software = buildSoftware(devices, catalogue)
@@ -302,6 +303,7 @@ async function patchBundle(tenantId) {
     vulnerabilities,
     vulnerabilityExposures: exposureSummary,
     softwareVulnerabilityExposures,
+    vulnerabilityExposureRows: vulnerabilityExposureRowsData,
     vendorIntel,
     devices: devices.map((device) => ({
       id: device.reference,
@@ -697,12 +699,21 @@ async function createAndDispatchSoftwarePatch(session, plan) {
   )
   if (!claimed.rowCount) throw new Error('Patch job could not be claimed for immediate dispatch.')
 
-  await pool.query(
-    `UPDATE rmm_patch_deployments
-        SET status='running',started_at=now(),updated_at=now()
-      WHERE id=$1 AND tenant_id=$2`,
-    [created.deployment.id, session.tenant_id],
-  )
+  await withTransaction(async (client) => {
+    await client.query(
+      `UPDATE rmm_patch_deployments
+          SET status='running',started_at=now(),updated_at=now()
+        WHERE id=$1 AND tenant_id=$2`,
+      [created.deployment.id, session.tenant_id],
+    )
+    await client.query(
+      `UPDATE rmm_vulnerability_exposures
+          SET remediation_state='in_progress',last_seen_at=now()
+        WHERE tenant_id=$1 AND inventory_id=$2 AND catalogue_id=$3
+          AND status='open' AND remediation_state='available'`,
+      [session.tenant_id, plan.device.inventory_id, plan.device.catalogue_id],
+    )
+  })
 
   const pushed = sendAgentMessage(plan.device.agent_device_id, {
     type: 'job_execute',
@@ -730,6 +741,13 @@ async function createAndDispatchSoftwarePatch(session, plan) {
                 result=result || '{"reason":"device_offline_before_dispatch"}'::jsonb
           WHERE id=$1 AND tenant_id=$2`,
         [created.deployment.id, session.tenant_id],
+      )
+      await client.query(
+        `UPDATE rmm_vulnerability_exposures
+            SET remediation_state='available',last_seen_at=now()
+          WHERE tenant_id=$1 AND inventory_id=$2 AND catalogue_id=$3
+            AND status='open' AND remediation_state='in_progress'`,
+        [session.tenant_id, plan.device.inventory_id, plan.device.catalogue_id],
       )
     })
     return { ...created, dispatched: false, offline: true }

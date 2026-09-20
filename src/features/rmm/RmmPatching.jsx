@@ -301,6 +301,7 @@ export function RmmPatching({ devices = [] }) {
   const deviceSoftware = bundle?.deviceSoftware || []
   const deployments = bundle?.deployments || []
   const softwareVulnerabilityExposures = bundle?.softwareVulnerabilityExposures || []
+  const vulnerabilityExposureRows = bundle?.vulnerabilityExposureRows || []
   const exposureSummary = bundle?.vulnerabilityExposures || {}
   const overview = bundle?.overview || {}
   const exposedApps = applications.filter((item) => item.updateAvailable > 0)
@@ -540,23 +541,53 @@ export function RmmPatching({ devices = [] }) {
     </section>}
 
     {tab === 'vulnerabilities' && <section className="rmm-patch-panel">
-      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Threat intelligence</span><h2>Vulnerability intelligence</h2><p>Global feeds are correlated through verified Hi5 catalogue identities to the software actually installed on managed endpoints.</p></div></div>
+      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Threat intelligence + remediation</span><h2>Endpoint vulnerability exposure</h2><p>Hi5Central correlates authoritative vulnerability intelligence to software actually installed on managed endpoints, then tracks whether a verified remediation is available and completed.</p></div></div>
       <div className="rmm-vuln-exposure-summary">
         <div><small>Open exposures</small><strong>{exposureSummary.open ?? 0}</strong></div>
+        <div><small>Known / active exploitation</small><strong>{exposureSummary.active_exploitation_open ?? exposureSummary.kev_open ?? 0}</strong></div>
+        <div><small>Fix available</small><strong>{exposureSummary.fix_available_open ?? 0}</strong></div>
+        <div><small>Overdue SLA</small><strong>{exposureSummary.overdue_open ?? 0}</strong></div>
         <div><small>CISA KEV exposures</small><strong>{exposureSummary.kev_open ?? 0}</strong></div>
-        <div><small>CVSS 9+ exposures</small><strong>{exposureSummary.critical_open ?? 0}</strong></div>
         <div><small>Remediated</small><strong>{exposureSummary.remediated ?? 0}</strong></div>
       </div>
       <div className="rmm-vuln-source-grid">
         {(bundle?.vulnerabilities?.sources || []).map((source) => <article key={source.source}><span><CheckCircle2 size={16} /></span><div><strong>{source.source.replaceAll('_', ' ').toUpperCase()}</strong><small>{source.last_success_at ? 'Last successful sync ' + new Date(source.last_success_at).toLocaleString() : 'Awaiting first successful sync'}</small></div><StatusPill tone={source.last_error ? 'warning' : source.last_success_at ? 'healthy' : 'neutral'}>{source.last_error ? 'Attention' : source.last_success_at ? 'Live' : 'Pending'}</StatusPill></article>)}
       </div>
-      <div className="rmm-vuln-table">
-        <div className="head"><span>CVE</span><span>Priority</span><span>CVSS</span><span>Published / due</span><span>Summary</span></div>
+
+      <div className="rmm-vuln-table exposures">
+        <div className="head"><span>CVE / risk</span><span>Endpoint / software</span><span>CVSS / EPSS</span><span>Exploitation</span><span>Fix / remediation</span><span>SLA</span></div>
+        {vulnerabilityExposureRows.map((item) => {
+          const epss = item.epss_score == null ? null : Number(item.epss_score)
+          const percentile = item.epss_percentile == null ? null : Number(item.epss_percentile)
+          const exploitation = (item.ssvc_exploitation || '').toLowerCase()
+          const riskCritical = item.kev || exploitation === 'active' || Number(item.cvss_score || 0) >= 9
+          const remediationTone = item.remediation_state === 'remediated'
+            ? 'healthy'
+            : item.remediation_state === 'in_progress'
+              ? 'running'
+              : item.remediation_state === 'available'
+                ? 'warning'
+                : 'neutral'
+          return <div className="row" key={item.id}>
+            <span><strong>{item.cve_id}</strong><small>{item.kev ? 'CISA KEV' : item.severity || item.source}</small></span>
+            <span><strong>{item.device_name}</strong><small>{item.application_name} {item.installed_version ? '· ' + item.installed_version : ''}</small></span>
+            <span><strong>{item.cvss_score ?? '—'}</strong><small>{epss == null ? 'EPSS pending' : 'EPSS ' + (epss * 100).toFixed(1) + '%' + (percentile == null ? '' : ' · ' + Math.round(percentile * 100) + 'th pct')}</small></span>
+            <span>{item.kev ? <StatusPill tone="critical">Known exploited</StatusPill> : exploitation ? <StatusPill tone={exploitation === 'active' ? 'critical' : exploitation === 'poc' ? 'warning' : 'neutral'}>{exploitation === 'poc' ? 'PoC observed' : exploitation}</StatusPill> : <StatusPill tone={riskCritical ? 'warning' : 'neutral'}>{item.severity || 'Observed'}</StatusPill>}<small>{item.known_ransomware_use ? 'Ransomware: ' + item.known_ransomware_use : item.ssvc_automatable ? 'Automatable: ' + item.ssvc_automatable : ''}</small></span>
+            <span><StatusPill tone={remediationTone}>{(item.remediation_state || 'unavailable').replaceAll('_', ' ')}</StatusPill><small>{item.remediation_target_version ? 'Target ' + item.remediation_target_version + (item.remediation_provider ? ' via ' + item.remediation_provider : '') : item.fixed_version ? 'Fixed in ' + item.fixed_version : 'No verified fix route yet'}</small></span>
+            <span><strong>{item.remediation_due_at ? new Date(item.remediation_due_at).toLocaleDateString() : '—'}</strong><small>{item.remediation_sla_class ? item.remediation_sla_class.replaceAll('_', ' ') : ''}</small></span>
+          </div>
+        })}
+      </div>
+      {!vulnerabilityExposureRows.length && <div className="rmm-empty"><ShieldCheck size={24} /><strong>{loading ? 'Correlating endpoint exposures…' : 'No endpoint vulnerability exposures'}</strong><span>Global vulnerability feeds remain active below; endpoint rows appear only after a verified catalogue identity matches installed software and an affected version range.</span></div>}
+
+      <div className="rmm-vuln-feed-heading"><span className="rmm-eyebrow">Global intelligence</span><h3>Recent CVE intelligence</h3><p>These records are supporting threat intelligence. They do not become endpoint exposures until a verified product identity and affected version match.</p></div>
+      <div className="rmm-vuln-table feed">
+        <div className="head"><span>CVE</span><span>Priority</span><span>CVSS / EPSS</span><span>Published / due</span><span>Summary</span></div>
         {vulnerabilities.map((item) => <div className="row" key={item.cve_id}>
           <span><strong>{item.cve_id}</strong><small>{item.source}</small></span>
-          <span>{item.kev ? <StatusPill tone="critical">CISA KEV</StatusPill> : <StatusPill tone="neutral">{item.severity || 'Observed'}</StatusPill>}</span>
-          <span><strong>{item.cvss_score ?? 'Pending enrichment'}</strong><small>{item.cvss_version || ''}</small></span>
-          <span><strong>{item.kev_added_at || item.published_at ? new Date(item.kev_added_at || item.published_at).toLocaleDateString() : 'Not reported'}</strong><small>{item.kev_due_at ? 'Due ' + new Date(item.kev_due_at).toLocaleDateString() : ''}</small></span>
+          <span>{item.kev ? <StatusPill tone="critical">CISA KEV</StatusPill> : item.ssvc_exploitation === 'active' ? <StatusPill tone="critical">Active exploitation</StatusPill> : <StatusPill tone="neutral">{item.severity || 'Observed'}</StatusPill>}</span>
+          <span><strong>{item.cvss_score ?? 'Pending'}</strong><small>{item.epss_score == null ? item.cvss_version || '' : 'EPSS ' + (Number(item.epss_score) * 100).toFixed(1) + '%'}</small></span>
+          <span><strong>{item.kev_added_at || item.published_at ? new Date(item.kev_added_at || item.published_at).toLocaleDateString() : 'Not reported'}</strong><small>{item.kev_due_at ? 'CISA due ' + new Date(item.kev_due_at).toLocaleDateString() : ''}</small></span>
           <span><strong>{item.summary || 'Description pending enrichment'}</strong><small>{item.known_ransomware_use ? 'Ransomware use: ' + item.known_ransomware_use : item.required_action || ''}</small></span>
         </div>)}
       </div>
