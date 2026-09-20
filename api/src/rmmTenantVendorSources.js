@@ -230,6 +230,7 @@ function normalizeInput(body = {}) {
     releaseUrlPath: safeJsonPath(body.releaseUrlPath ?? parser.releaseUrlPath),
     installerUrlPath: safeJsonPath(body.installerUrlPath ?? parser.installerUrlPath),
     sha256Path: safeJsonPath(body.sha256Path ?? parser.sha256Path),
+    productCodePath: safeJsonPath(body.productCodePath ?? parser.productCodePath),
   }
   const verificationSource = body.verificationConfig && typeof body.verificationConfig === 'object' && !Array.isArray(body.verificationConfig)
     ? body.verificationConfig
@@ -329,7 +330,7 @@ function verificationConfigured(source) {
   const method = clean(verification.method || 'winget')
   if (method === 'winget') return Boolean(clean(verification.packageId || source.provider_package_id))
   if (method === 'uninstall_registry') {
-    return Boolean(clean(verification.productCode) || clean(verification.displayNameContains))
+    return Boolean(clean(verification.productCode) || clean(verification.displayNameContains) || clean(source.parser_config?.productCodePath))
   }
   if (method === 'file_version') return Boolean(clean(verification.filePath))
   return false
@@ -382,6 +383,10 @@ async function resolveJsonSource(source) {
   const releaseUrlValue = jsonPathValue(payload, parser.releaseUrlPath)
   const installerUrlValue = jsonPathValue(payload, parser.installerUrlPath)
   const shaValue = jsonPathValue(payload, parser.sha256Path)
+  const productCodeValue = jsonPathValue(payload, parser.productCodePath)
+  if (productCodeValue && !/^\{[0-9A-Fa-f-]{36}\}$/.test(productCodeValue)) {
+    throw new Error('The configured ProductCode JSON path did not return a braced MSI GUID.')
+  }
   let installerUrl = ''
   if (installerUrlValue) {
     let resolvedInstaller = installerUrlValue
@@ -408,6 +413,7 @@ async function resolveJsonSource(source) {
     installerType: installerType(installerUrl ? new URL(installerUrl).pathname : '', source.installer_type),
     installerName: installerUrl ? new URL(installerUrl).pathname.split('/').filter(Boolean).pop() || '' : '',
     checksumName: parser.sha256Path ? 'JSON: ' + parser.sha256Path : '',
+    verificationProductCode: productCodeValue,
   }
   release.trustState = trustState(source, release)
   return {
@@ -421,6 +427,7 @@ async function resolveJsonSource(source) {
           releaseDate: releaseDateValue,
           releaseUrl: releaseUrlValue,
           installerUrl: installerUrlValue,
+          productCode: productCodeValue,
           sha256Present: Boolean(release.installerSha256),
         },
       },
@@ -444,6 +451,7 @@ async function storeRelease(source, release, sourcePayload) {
     sha256Present: /^[A-F0-9]{64}$/.test(release.installerSha256),
     expectedSigner: clean(source.expected_signer),
     verification: source.verification_config || {},
+    resolvedVerificationProductCode: clean(release.verificationProductCode),
     deploymentMode: source.deployment_mode,
   }
   await pool.query(
@@ -466,8 +474,15 @@ async function storeRelease(source, release, sourcePayload) {
   return evidence
 }
 
+function verificationForRelease(source, release) {
+  const verification = { ...(source.verification_config || {}) }
+  if (clean(release.verificationProductCode)) verification.productCode = clean(release.verificationProductCode)
+  return verification
+}
+
 async function applyCatalogue(source, release, db = pool) {
   const provider = source.deployment_mode === 'winget_preferred' ? 'winget' : 'vendor'
+  const verification = verificationForRelease(source, release)
   const metadata = {
     tenantVendorSourceId: source.id,
     sourceType: source.source_type,
@@ -494,7 +509,7 @@ async function applyCatalogue(source, release, db = pool) {
       [
         existing.rows[0].id, source.canonical_name, source.publisher, source.name_pattern,
         source.publisher_pattern, provider, source.provider_package_id, release.version,
-        source.channel, release.installerType, JSON.stringify(source.verification_config || {}), JSON.stringify(metadata),
+        source.channel, release.installerType, JSON.stringify(verification), JSON.stringify(metadata),
       ],
     )
   } else {
@@ -506,7 +521,7 @@ async function applyCatalogue(source, release, db = pool) {
       [
         source.tenant_id, source.canonical_name, source.publisher, source.name_pattern,
         source.publisher_pattern, provider, source.provider_package_id, release.version,
-        source.channel, release.installerType, JSON.stringify(source.verification_config || {}), source.id, JSON.stringify(metadata),
+        source.channel, release.installerType, JSON.stringify(verification), source.id, JSON.stringify(metadata),
       ],
     )
   }
@@ -678,6 +693,7 @@ export async function approveTenantVendorSource(session, sourceId) {
       installerSha256: releaseRow.installer_sha256,
       installerType: releaseRow.installer_type,
       trustState: releaseRow.trust_state,
+      verificationProductCode: clean(releaseRow.source_payload?.json?.selected?.productCode),
     }
     await applyCatalogue(activeSource, release, client)
     return { source: activeSource, release }

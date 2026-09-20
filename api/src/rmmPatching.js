@@ -187,6 +187,16 @@ function classifyInstallation(app, catalogue) {
   }
 }
 
+function targetProductCodeInstalled(items, catalogue) {
+  const verification = object(catalogue?.verification)
+  if (clean(verification.method) !== 'uninstall_registry') return false
+  const productCode = lower(verification.productCode)
+  const targetVersion = clean(catalogue?.target_version)
+  if (!productCode || !targetVersion) return false
+  return items.some((item) => lower(item?.registry_key) === productCode
+    && (compareVersions(clean(item?.version), targetVersion) ?? -1) >= 0)
+}
+
 function softwareItems(row) {
   return array(object(object(row.source_payload).software).items)
     .filter((item) => clean(item?.name))
@@ -223,8 +233,10 @@ function buildSoftware(devices, catalogue, observations = []) {
     ]),
   )
   for (const device of devices) {
-    for (const app of softwareItems(device)) {
+    const items = softwareItems(device)
+    for (const app of items) {
       const state = classifyInstallation(app, catalogue)
+      if (state.catalogue && targetProductCodeInstalled(items, state.catalogue)) state.patchStatus = 'current'
       const observation = state.catalogue?.provider_package_id
         ? observationMap.get(device.inventory_id + '|' + lower(state.catalogue.provider_package_id))
         : null
@@ -736,6 +748,11 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId) {
         requiredPatchHostVersion: '0.2.4',
       }
     }
+  }
+
+  const sourceItems = softwareItems(row)
+  if (targetProductCodeInstalled(sourceItems, row)) {
+    return { error: 'The target MSI identity is already installed at or above the approved version.', status: 409, current: true }
   }
 
   const installed = installedSoftwareForCatalogue(row.source_payload, row)

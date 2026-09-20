@@ -131,6 +131,7 @@ function VendorSourceModal({ source, onClose, onSave, saving }) {
     releaseUrlPath: source?.parser_config?.releaseUrlPath || '',
     installerUrlPath: source?.parser_config?.installerUrlPath || '',
     sha256Path: source?.parser_config?.sha256Path || '',
+    productCodePath: source?.parser_config?.productCodePath || '',
     deploymentMode: source?.deployment_mode || 'winget_preferred',
     providerPackageId: source?.provider_package_id || '',
     verificationMethod: source?.verification_config?.method || (source?.deployment_mode === 'vendor_direct' && !source?.provider_package_id ? 'uninstall_registry' : 'winget'),
@@ -163,7 +164,7 @@ function VendorSourceModal({ source, onClose, onSave, saving }) {
   const verificationReady = form.verificationMethod === 'winget'
     ? Boolean(form.providerPackageId.trim())
     : form.verificationMethod === 'uninstall_registry'
-      ? Boolean(form.productCode.trim() || form.verificationDisplayName.trim())
+      ? Boolean(form.productCode.trim() || form.productCodePath.trim() || form.verificationDisplayName.trim())
       : Boolean(form.filePath.trim())
   const valid = form.displayName.trim().length > 1
     && form.canonicalName.trim().length > 1
@@ -191,7 +192,7 @@ function VendorSourceModal({ source, onClose, onSave, saving }) {
         <label>Deployment mode<select value={form.deploymentMode} onChange={(event) => update('deploymentMode', event.target.value)}><option value="winget_preferred">WinGet preferred</option><option value="vendor_direct">Vendor direct</option><option value="intelligence_only">Intelligence only</option></select></label>
         <label>WinGet package ID<input value={form.providerPackageId} onChange={(event) => update('providerPackageId', event.target.value)} placeholder="Required for WinGet preferred / optional fallback" /></label>
         <label>Post-install verification<select value={form.verificationMethod} onChange={(event) => update('verificationMethod', event.target.value)}><option value="winget">WinGet package identity</option><option value="uninstall_registry">Uninstall registry / MSI identity</option><option value="file_version">Installed EXE/DLL file version</option></select></label>
-        {form.verificationMethod === 'uninstall_registry' && <><label>MSI ProductCode<input value={form.productCode} onChange={(event) => update('productCode', event.target.value)} placeholder="Optional {GUID}; otherwise match DisplayName" /></label><label>Verification DisplayName<input value={form.verificationDisplayName} onChange={(event) => update('verificationDisplayName', event.target.value)} placeholder="Application name contained in uninstall entry" /></label><label>Verification publisher<input value={form.verificationPublisher} onChange={(event) => update('verificationPublisher', event.target.value)} placeholder="Optional publisher match" /></label></>}
+        {form.verificationMethod === 'uninstall_registry' && <><label>MSI ProductCode<input value={form.productCode} onChange={(event) => update('productCode', event.target.value)} placeholder="Optional static {GUID}" /></label>{json && <label>ProductCode JSON path<input value={form.productCodePath} onChange={(event) => update('productCodePath', event.target.value)} placeholder="e.g. productCode" /></label>}<label>Verification DisplayName<input value={form.verificationDisplayName} onChange={(event) => update('verificationDisplayName', event.target.value)} placeholder="Fallback uninstall entry match" /></label><label>Verification publisher<input value={form.verificationPublisher} onChange={(event) => update('verificationPublisher', event.target.value)} placeholder="Optional publisher match" /></label></>}
         {form.verificationMethod === 'file_version' && <label className="wide">Installed EXE/DLL path<input value={form.filePath} onChange={(event) => update('filePath', event.target.value)} placeholder="%ProgramFiles%\\Vendor\\App\\app.exe" /></label>}
         <label>Name contains<input value={form.namePattern} onChange={(event) => update('namePattern', event.target.value)} placeholder={form.canonicalName || 'Inventory detection'} /></label>
         <label>Publisher contains<input value={form.publisherPattern} onChange={(event) => update('publisherPattern', event.target.value)} /></label>
