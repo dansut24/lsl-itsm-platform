@@ -209,6 +209,7 @@ export async function reconcileVendorArtifactInspections() {
       && (!configuredSha || configuredSha === actualSha)
     const metadata = object(row.binding_metadata)
     const signerBaseline = clean(metadata.signerBaseline || metadata.expectedSigner)
+    const inspectionError = lower(clean(result.error || row.error_message))
 
     let trustState = 'asset_candidate'
     let reason = clean(row.error_message || result.error) || 'inspection_incomplete'
@@ -223,9 +224,13 @@ export async function reconcileVendorArtifactInspections() {
     } else if (configuredSha && actualSha && configuredSha !== actualSha) {
       trustState = 'rejected'
       reason = 'vendor_checksum_mismatch'
-    } else if (row.status === 'completed' && !signatureVerified) {
+    } else if (
+      inspectionError === 'authenticode_invalid'
+      || inspectionError === 'authenticode_signer_missing'
+      || (row.status === 'completed' && !signatureVerified)
+    ) {
       trustState = 'rejected'
-      reason = 'authenticode_invalid'
+      reason = inspectionError || 'authenticode_invalid'
     }
 
     const resolvedSha = trustState === 'direct_ready' ? (configuredSha || actualSha) : configuredSha
