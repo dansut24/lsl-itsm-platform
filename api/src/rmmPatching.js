@@ -236,7 +236,15 @@ function buildSoftware(devices, catalogue, observations = []) {
     const items = softwareItems(device)
     for (const app of items) {
       const state = classifyInstallation(app, catalogue)
-      if (state.catalogue && targetProductCodeInstalled(items, state.catalogue)) state.patchStatus = 'current'
+      if (state.catalogue && targetProductCodeInstalled(items, state.catalogue)) {
+        const verification = object(state.catalogue.verification)
+        const targetCode = lower(verification.productCode)
+        const appCode = lower(app?.registry_key)
+        const comparison = compareVersions(clean(app?.version), state.targetVersion)
+        state.patchStatus = appCode === targetCode || (comparison != null && comparison >= 0)
+          ? 'current'
+          : 'older_version_present'
+      }
       const observation = state.catalogue?.provider_package_id
         ? observationMap.get(device.inventory_id + '|' + lower(state.catalogue.provider_package_id))
         : null
@@ -273,6 +281,7 @@ function buildSoftware(devices, catalogue, observations = []) {
         versions: new Map(),
         updateAvailable: 0,
         providerBlocked: 0,
+        olderVersionPresent: 0,
         current: 0,
         detectionPending: 0,
         unmapped: 0,
@@ -283,6 +292,7 @@ function buildSoftware(devices, catalogue, observations = []) {
       grouped.versions.set(row.installedVersion || 'Not reported', (grouped.versions.get(row.installedVersion || 'Not reported') || 0) + 1)
       if (state.patchStatus === 'update_available') grouped.updateAvailable += 1
       else if (state.patchStatus === 'provider_blocked') grouped.providerBlocked += 1
+      else if (state.patchStatus === 'older_version_present') grouped.olderVersionPresent += 1
       else if (state.patchStatus === 'current') grouped.current += 1
       else if (state.patchStatus === 'detection_pending') grouped.detectionPending += 1
       else grouped.unmapped += 1

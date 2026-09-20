@@ -39,7 +39,7 @@ function StatusPill({ children, tone = 'neutral' }) {
 }
 function patchTone(status) {
   if (status === 'provider_blocked') return 'critical'
-  if (status === 'update_available') return 'warning'
+  if (status === 'update_available' || status === 'older_version_present') return 'warning'
   if (status === 'current') return 'healthy'
   if (status === 'detection_pending') return 'running'
   return 'neutral'
@@ -50,6 +50,7 @@ function patchLabel(status) {
     update_available: 'Update available',
     provider_blocked: 'Provider blocked',
     current: 'Current',
+    older_version_present: 'Target installed · older version remains',
     detection_pending: 'Detection pending',
     unmapped: 'Unmapped',
     unsupported: 'Unsupported',
@@ -646,7 +647,9 @@ export function RmmPatching({ devices = [] }) {
             ? 'update_available'
             : application.providerBlocked
               ? 'provider_blocked'
-              : application.catalogue?.targetVersion
+              : application.olderVersionPresent
+                ? 'older_version_present'
+                : application.catalogue?.targetVersion
                 ? 'current'
                 : application.catalogue
                   ? 'detection_pending'
@@ -656,7 +659,7 @@ export function RmmPatching({ devices = [] }) {
             <span><strong>{application.name}</strong><small>{application.publisher || 'Publisher not reported'} · {application.deviceCount} device{application.deviceCount === 1 ? '' : 's'}</small></span>
             <span className="versions"><strong title={application.versions?.map((version) => version.version).join(' · ') || ''}>{application.versions?.map((version) => version.version).join(' · ') || 'Not reported'}</strong>{application.installs > application.deviceCount && <small>{application.installs} registrations across {application.deviceCount} device{application.deviceCount === 1 ? '' : 's'}</small>}</span>
             <span><strong>{application.catalogue?.targetVersion || 'Not set'}</strong><small>{application.catalogue?.packageId || 'No package ID'}</small></span>
-            <span><StatusPill tone={patchTone(status)}>{patchLabel(status)}</StatusPill>{application.updateAvailable > 0 && <small>{application.updateAvailable} install{application.updateAvailable === 1 ? '' : 's'} behind</small>}{status === 'provider_blocked' && <small>WinGet reports no applicable upgrade; retry is suppressed until detection changes.</small>}</span>
+            <span><StatusPill tone={patchTone(status)}>{patchLabel(status)}</StatusPill>{application.updateAvailable > 0 && <small>{application.updateAvailable} install{application.updateAvailable === 1 ? '' : 's'} behind</small>}{status === 'provider_blocked' && <small>WinGet reports no applicable upgrade; retry is suppressed until detection changes.</small>}{status === 'older_version_present' && <small>{application.olderVersionPresent} older side-by-side install{application.olderVersionPresent === 1 ? '' : 's'} remain. The approved target is installed; remove older majors separately if they are no longer required.</small>}</span>
             <span>{exposure.open > 0 ? <StatusPill tone={exposure.kev > 0 || exposure.critical > 0 ? 'critical' : 'warning'}>{exposure.open} open</StatusPill> : <StatusPill tone={application.catalogue ? 'healthy' : 'neutral'}>{application.catalogue ? 'None known' : 'Unmapped'}</StatusPill>}<small>{exposure.kev > 0 ? exposure.kev + ' CISA KEV' : exposure.maxCvss > 0 ? 'Max CVSS ' + exposure.maxCvss : ''}</small></span>
             <span><strong>{application.catalogue?.provider || 'Unmapped'}</strong><small>{application.catalogue?.builtIn ? 'Hi5Central catalogue' : application.catalogue ? 'Tenant mapping' : 'Needs mapping'}</small></span>
             <span className="actions">{application.catalogue ? <>
