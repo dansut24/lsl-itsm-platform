@@ -884,6 +884,15 @@ export function attachRmmAgentWebSocket(server) {
       }
 
       if (payload.type === 'hello') {
+        const reportedVersion = clean(payload.agent_version || payload.agentVersion).slice(0, 48)
+        if (/^[0-9A-Za-z._-]+$/.test(reportedVersion)) {
+          pool.query(
+            `UPDATE rmm_agent_devices
+                SET agent_version=$2,last_authenticated_at=now(),updated_at=now()
+              WHERE id=$1`,
+            [agent.id, reportedVersion],
+          ).catch(() => {})
+        }
         if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'hello_ack' }))
         return
       }

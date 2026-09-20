@@ -68,6 +68,20 @@ function patchLabel(status) {
     unsupported: 'Unsupported',
   })[status] || status
 }
+function qualificationLabel(state) {
+  return ({
+    qualified: 'Qualified',
+    deployment_candidate: 'Deployment candidate',
+    intelligence_only: 'Intelligence only',
+    blocked: 'Blocked',
+  })[state] || 'Not classified'
+}
+function qualificationTone(state) {
+  if (state === 'qualified') return 'healthy'
+  if (state === 'deployment_candidate') return 'running'
+  if (state === 'blocked') return 'critical'
+  return 'neutral'
+}
 
 function PageHeading({ action }) {
   return (
@@ -722,7 +736,7 @@ export function RmmPatching({ devices = [] }) {
     </nav>
 
     {tab === 'software' && <section className="rmm-patch-panel">
-      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Software patch catalogue</span><h2>Patchability by application</h2><p>{mappedApps.length} mapped application{mappedApps.length === 1 ? '' : 's'} · {applications.length - mappedApps.length} awaiting mapping · {catalogueCandidates.length} automatically discovered package{catalogueCandidates.length === 1 ? '' : 's'}.</p></div></div>
+      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Software patch catalogue</span><h2>Patchability by application</h2><p>{mappedApps.length} mapped application{mappedApps.length === 1 ? '' : 's'} · {applications.length - mappedApps.length} awaiting mapping · {catalogueCandidates.length} automatically discovered package{catalogueCandidates.length === 1 ? '' : 's'} · {overview.qualifiedCatalogue || 0} qualified · {overview.candidateCatalogue || 0} deployment candidates.</p></div></div>
       <div className="rmm-catalogue-install-card">
         <div className="intro"><PackageCheck size={18} /><div><strong>Install from catalogue</strong><span>Install approved catalogue software on an online managed device. Existing installations stay in the normal Patch workflow.</span></div></div>
         <div className="controls">
@@ -732,11 +746,12 @@ export function RmmPatching({ devices = [] }) {
           </select></label>
           <label>Application<select value={catalogueInstallId} onChange={(event) => setCatalogueInstallId(event.target.value)} disabled={!catalogueInstallDeviceId}>
             <option value="">Select application</option>
-            {installableCatalogue.map((item) => <option key={item.id} value={item.id}>{item.canonicalName} · {item.targetVersion}</option>)}
+            {installableCatalogue.map((item) => <option key={item.id} value={item.id}>{item.canonicalName} · {item.targetVersion} · {qualificationLabel(item.qualificationState)}</option>)}
           </select></label>
           <div className="install-meta">
             <span><small>Target</small><strong>{selectedCatalogueInstall?.targetVersion || '—'}</strong></span>
             <span><small>Provider</small><strong>{selectedCatalogueInstall?.executionPackageId ? 'WinGet' : selectedCatalogueInstall?.deploymentMode?.replaceAll('_', ' ') || '—'}</strong></span>
+            <span><small>Qualification</small><strong>{qualificationLabel(selectedCatalogueInstall?.qualificationState)}</strong></span>
             <span><small>PatchHost</small><strong>{selectedInstallPatchHost || 'Not reported'}</strong></span>
           </div>
           <button className="rmm-primary" disabled={saving || !selectedCatalogueInstall || !selectedInstallCapabilityReady} onClick={runCatalogueInstall} type="button"><Plus size={14} /> Install</button>
@@ -782,7 +797,9 @@ export function RmmPatching({ devices = [] }) {
                     : '',
               ].filter(Boolean).join(' · ')}</small>
             </span>
-            <span><strong>{application.catalogue?.provider || 'Unmapped'}</strong><small>{application.catalogue?.builtIn ? 'Hi5Central catalogue' : application.catalogue ? 'Tenant mapping' : 'Needs mapping'}</small></span>
+            <span><strong>{application.catalogue?.provider || 'Unmapped'}</strong>{application.catalogue
+              ? <><StatusPill tone={qualificationTone(application.catalogue.qualificationState)}>{qualificationLabel(application.catalogue.qualificationState)}</StatusPill><small>{application.catalogue.builtIn ? 'Hi5Central catalogue' : 'Tenant mapping'}{application.catalogue.qualificationVersion ? ' · tested ' + application.catalogue.qualificationVersion : ''}</small></>
+              : <small>Needs mapping</small>}</span>
             <span className="actions">{application.catalogue ? <>
               <button disabled={saving || application.updateAvailable < 1} onClick={() => setPatchApp(application)} type="button"><PackageCheck size={14} /> Patch</button>
               {!application.catalogue.builtIn && <button aria-label={'Archive ' + application.name} disabled={saving} onClick={() => removeMapping(application)} type="button"><Trash2 size={14} /></button>}

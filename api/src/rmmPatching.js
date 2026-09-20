@@ -290,7 +290,8 @@ async function catalogueRows(tenantId) {
   const result = await pool.query(
     `SELECT id,tenant_id,canonical_name,publisher,name_pattern,publisher_pattern,platform,provider,
             provider_package_id,target_version,release_channel,installer_type,detection,execution,verification,status,
-            catalogue_source,external_key,source_metadata,created_at,updated_at
+            catalogue_source,external_key,source_metadata,qualification_state,qualification_version,
+            qualification_evidence,qualification_notes,qualified_at,created_at,updated_at
        FROM rmm_software_catalogue
       WHERE status<>'archived' AND (tenant_id=$1 OR tenant_id IS NULL)
       ORDER BY tenant_id NULLS FIRST,lower(canonical_name)`,
@@ -407,6 +408,7 @@ function publicCatalogue(entry) {
   const wingetPackageId = clean(sourceMetadata.wingetPackageId || (entry.provider === 'winget' ? entry.provider_package_id : ''))
   const installable = Boolean(
     clean(entry.target_version)
+    && clean(entry.qualification_state) !== 'blocked'
     && sourceMetadata.sourceEnabled !== false
     && (
       (deploymentMode === 'winget_preferred' && wingetPackageId)
@@ -429,6 +431,11 @@ function publicCatalogue(entry) {
     installerType: entry.installer_type,
     deploymentMode,
     installable,
+    qualificationState: clean(entry.qualification_state || 'intelligence_only'),
+    qualificationVersion: clean(entry.qualification_version),
+    qualificationEvidence: object(entry.qualification_evidence),
+    qualificationNotes: clean(entry.qualification_notes),
+    qualifiedAt: entry.qualified_at || null,
     status: entry.status,
     catalogueSource: clean(entry.catalogue_source),
   }
@@ -708,6 +715,10 @@ async function patchBundle(tenantId) {
       unmappedInstallations: software.deviceSoftware.length - mapped,
       autoDiscoveredPackages: discovery.candidates.length,
       autoDiscoveredUpdates: discovery.observations.filter((item) => item.patch_status === 'update_available').length,
+      qualifiedCatalogue: catalogue.filter((item) => item.qualification_state === 'qualified').length,
+      candidateCatalogue: catalogue.filter((item) => item.qualification_state === 'deployment_candidate').length,
+      blockedCatalogue: catalogue.filter((item) => item.qualification_state === 'blocked').length,
+      intelligenceOnlyCatalogue: catalogue.filter((item) => item.qualification_state === 'intelligence_only').length,
     },
     catalogue: catalogue.map(publicCatalogue),
     catalogueCandidates: discovery.candidates,
@@ -1095,6 +1106,7 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId, options =
             c.id AS catalogue_id,c.canonical_name,c.publisher,c.name_pattern,c.publisher_pattern,
             c.provider,c.provider_package_id,c.target_version,c.release_channel,c.installer_type,
             c.execution,c.verification,c.catalogue_source,c.external_key,c.source_metadata,
+            c.qualification_state,c.qualification_version,
             c.tenant_id AS catalogue_tenant_id
        FROM rmm_agent_devices a
        JOIN rmm_device_inventory i ON i.id=a.inventory_id AND i.active=true
@@ -1106,6 +1118,13 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId, options =
   )
   const row = result.rows[0]
   if (!row) return { error: 'Device or software catalogue entry was not found.', status: 404 }
+  if (clean(row.qualification_state) === 'blocked') {
+    return {
+      error: 'This software catalogue entry is blocked and cannot be deployed.',
+      status: 409,
+      qualificationBlocked: true,
+    }
+  }
 
   const liveSocket = agentSocketForDevice(row.agent_device_id)
   const telemetryFresh = row.last_telemetry_at && Date.now() - new Date(row.last_telemetry_at).getTime() <= 90_000
@@ -1747,8 +1766,9 @@ export function registerRmmPatchingRoutes(app) {
     const result = await pool.query(
       `INSERT INTO rmm_software_catalogue
         (tenant_id,canonical_name,publisher,name_pattern,publisher_pattern,provider,provider_package_id,
-         target_version,release_channel,installer_type,detection,execution,verification,created_by_user_id,updated_by_user_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13::jsonb,$14,$14)
+         target_version,release_channel,installer_type,detection,execution,verification,qualification_state,
+         created_by_user_id,updated_by_user_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13::jsonb,'deployment_candidate',$14,$14)
        RETURNING id`,
       [
         auth.session.tenant_id,
