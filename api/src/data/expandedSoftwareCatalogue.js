@@ -41,7 +41,10 @@ export const expandedSoftwareCatalogue = [
     "sourceType": "vendor_text",
     "sourceUrl": "https://get.videolan.org/vlc/last/win64/",
     "adapter": "vlc_directory",
-    "deploymentMode": "intelligence_only",
+    "deploymentMode": "winget_preferred",
+    "wingetPackageId": "VideoLAN.VLC",
+    "nvdVendor": "videolan",
+    "nvdProduct": "vlc_media_player",
     "pollMinutes": 60
   },
   {
@@ -1090,7 +1093,10 @@ export const expandedSoftwareCatalogue = [
     "canonicalName": "KeePassXC",
     "sourceType": "github_releases",
     "repository": "keepassxreboot/keepassxc",
-    "deploymentMode": "intelligence_only",
+    "deploymentMode": "winget_preferred",
+    "wingetPackageId": "KeePassXCTeam.KeePassXC",
+    "nvdVendor": "keepassxc",
+    "nvdProduct": "keepassxc",
     "pollMinutes": 60,
     "enabled": true
   },
@@ -1301,7 +1307,8 @@ export const expandedSoftwareCatalogue = [
     "canonicalName": "ShareX",
     "sourceType": "github_releases",
     "repository": "ShareX/ShareX",
-    "deploymentMode": "intelligence_only",
+    "deploymentMode": "winget_preferred",
+    "wingetPackageId": "ShareX.ShareX",
     "pollMinutes": 60,
     "enabled": true
   },
@@ -1361,7 +1368,10 @@ export const expandedSoftwareCatalogue = [
     "canonicalName": "WinMerge",
     "sourceType": "github_releases",
     "repository": "WinMerge/winmerge",
-    "deploymentMode": "intelligence_only",
+    "deploymentMode": "winget_preferred",
+    "wingetPackageId": "WinMerge.WinMerge",
+    "nvdVendor": "winmerge",
+    "nvdProduct": "winmerge",
     "pollMinutes": 60,
     "enabled": true
   },
@@ -1381,7 +1391,10 @@ export const expandedSoftwareCatalogue = [
     "canonicalName": "Microsoft PowerToys",
     "sourceType": "github_releases",
     "repository": "microsoft/PowerToys",
-    "deploymentMode": "intelligence_only",
+    "deploymentMode": "winget_preferred",
+    "wingetPackageId": "Microsoft.PowerToys",
+    "nvdVendor": "microsoft",
+    "nvdProduct": "powertoys",
     "pollMinutes": 60,
     "enabled": true
   },
