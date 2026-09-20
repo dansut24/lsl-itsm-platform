@@ -380,6 +380,8 @@ export const expandedSoftwareCatalogue = [
     "publisherPattern": "Brave Software",
     "deploymentMode": "winget_preferred",
     "wingetPackageId": "Brave.Brave",
+    "qualificationState": "blocked",
+    "qualificationNotes": "Blocked during qualification: GitHub target 1.95.104 maps to Windows/WinGet version 153.1.95.104. Add explicit Brave version normalization before deployment is allowed.",
     "nvdVendor": "brave",
     "nvdProduct": "browser",
     "pollMinutes": 60,

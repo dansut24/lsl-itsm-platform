@@ -71,7 +71,12 @@ async function normalizeEntry(raw = {}) {
   const deploymentMode = ['vendor_direct', 'winget_preferred', 'intelligence_only'].includes(clean(raw.deploymentMode))
     ? clean(raw.deploymentMode)
     : clean(raw.wingetPackageId || raw.providerPackageId) ? 'winget_preferred' : 'intelligence_only'
-  const qualificationState = deploymentMode === 'intelligence_only' ? 'intelligence_only' : 'deployment_candidate'
+  const requestedQualificationState = clean(raw.qualificationState)
+  const qualificationStatePinned = ['intelligence_only', 'deployment_candidate', 'qualified', 'blocked'].includes(requestedQualificationState)
+  const qualificationState = qualificationStatePinned
+    ? requestedQualificationState
+    : deploymentMode === 'intelligence_only' ? 'intelligence_only' : 'deployment_candidate'
+  const qualificationNotes = clean(raw.qualificationNotes).slice(0, 1000)
   const wingetPackageId = clean(raw.wingetPackageId || raw.providerPackageId).slice(0, 240)
   if (deploymentMode === 'winget_preferred' && !wingetPackageId) {
     throw new Error(key + ': winget_preferred requires a real wingetPackageId.')
@@ -197,6 +202,8 @@ async function normalizeEntry(raw = {}) {
     publisherPattern,
     deploymentMode,
     qualificationState,
+    qualificationStatePinned,
+    qualificationNotes,
     installerType,
     expectedSigner,
     nvdVendor,
@@ -278,8 +285,8 @@ export async function importCuratedSoftwareCatalogue(entries = [], { dryRun = fa
         `INSERT INTO rmm_software_catalogue
           (tenant_id,canonical_name,publisher,name_pattern,publisher_pattern,platform,provider,provider_package_id,
            target_version,release_channel,installer_type,verification,execution,status,catalogue_source,external_key,
-           source_revision,source_metadata,qualification_state)
-         VALUES (NULL,$1,$2,$3,$4,$5,$6,$7,'',$8,$9,$10::jsonb,$11::jsonb,'active','vendor',$7,'',$12::jsonb,$13)
+           source_revision,source_metadata,qualification_state,qualification_notes)
+         VALUES (NULL,$1,$2,$3,$4,$5,$6,$7,'',$8,$9,$10::jsonb,$11::jsonb,'active','vendor',$7,'',$12::jsonb,$13,$14)
          ON CONFLICT (catalogue_source,external_key) WHERE tenant_id IS NULL AND external_key<>'' AND status<>'archived'
          DO UPDATE SET canonical_name=EXCLUDED.canonical_name,publisher=EXCLUDED.publisher,
            name_pattern=EXCLUDED.name_pattern,publisher_pattern=EXCLUDED.publisher_pattern,platform=EXCLUDED.platform,
@@ -287,8 +294,13 @@ export async function importCuratedSoftwareCatalogue(entries = [], { dryRun = fa
            verification=EXCLUDED.verification,execution=EXCLUDED.execution,
            target_version=CASE WHEN EXCLUDED.source_metadata->>'sourceEnabled'='false' THEN '' ELSE rmm_software_catalogue.target_version END,
            qualification_state=CASE
+             WHEN EXCLUDED.source_metadata->>'qualificationStatePinned'='true' THEN EXCLUDED.qualification_state
              WHEN rmm_software_catalogue.qualification_state IN ('qualified','blocked') THEN rmm_software_catalogue.qualification_state
              ELSE EXCLUDED.qualification_state
+           END,
+           qualification_notes=CASE
+             WHEN EXCLUDED.source_metadata->>'qualificationStatePinned'='true' THEN EXCLUDED.qualification_notes
+             ELSE rmm_software_catalogue.qualification_notes
            END,
            source_metadata=EXCLUDED.source_metadata,status='active',updated_at=now()`,
         [
@@ -308,8 +320,10 @@ export async function importCuratedSoftwareCatalogue(entries = [], { dryRun = fa
             wingetPackageId: item.wingetPackageId,
             nvdVendor: item.nvdVendor,
             nvdProduct: item.nvdProduct,
+            qualificationStatePinned: item.qualificationStatePinned,
           }),
           item.qualificationState,
+          item.qualificationNotes,
         ],
       )
       if (existed.rowCount) updated += 1
