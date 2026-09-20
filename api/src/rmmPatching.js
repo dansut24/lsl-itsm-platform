@@ -5,6 +5,7 @@ import { agentSocketForDevice, authenticateAgent, sendAgentMessage } from './rmm
 import { recordRmmActivity } from './rmmActivity.js'
 import { recentVulnerabilities, vulnerabilitySummary } from './rmmVulnerabilityIntel.js'
 import { softwareVendorSummary } from './rmmSoftwareVendorIntel.js'
+import { normalizeCatalogueVersion } from './rmmSoftwareVersioning.js'
 import {
   approveTenantVendorSource,
   archiveTenantVendorSource,
@@ -373,7 +374,7 @@ function classifyInstallation(app, catalogue) {
   if (!match) return { patchStatus: 'unmapped', catalogue: null, targetVersion: '' }
   const targetVersion = clean(match.target_version)
   if (!targetVersion) return { patchStatus: 'detection_pending', catalogue: match, targetVersion: '' }
-  const comparison = compareVersions(app.version, targetVersion)
+  const comparison = compareVersions(normalizeCatalogueVersion(app.version, match, 'installed'), targetVersion)
   if (comparison == null) return { patchStatus: 'detection_pending', catalogue: match, targetVersion }
   return {
     patchStatus: comparison < 0 ? 'update_available' : 'current',
@@ -389,7 +390,7 @@ function targetProductCodeInstalled(items, catalogue) {
   const targetVersion = clean(catalogue?.target_version)
   if (!productCode || !targetVersion) return false
   return items.some((item) => lower(item?.registry_key) === productCode
-    && (compareVersions(clean(item?.version), targetVersion) ?? -1) >= 0)
+    && (compareVersions(normalizeCatalogueVersion(item?.version, catalogue, 'installed'), targetVersion) ?? -1) >= 0)
 }
 
 function softwareItems(row) {
@@ -436,6 +437,7 @@ function publicCatalogue(entry) {
     qualificationEvidence: object(entry.qualification_evidence),
     qualificationNotes: clean(entry.qualification_notes),
     qualifiedAt: entry.qualified_at || null,
+    versionNormalization: object(sourceMetadata.versionNormalization),
     status: entry.status,
     catalogueSource: clean(entry.catalogue_source),
   }
@@ -458,7 +460,8 @@ async function vulnerabilityHydrationRows(deviceSoftware = []) {
 
   for (const item of mapped) {
     const catalogueId = item.catalogue.id
-    const version = clean(item.installedVersion)
+    const rawVersion = clean(item.installedVersion)
+    const version = normalizeCatalogueVersion(rawVersion, item.catalogue, 'installed')
     const key = [item.inventoryId, catalogueId, version].join('|')
     if (hydration.has(key)) continue
 
@@ -472,7 +475,8 @@ async function vulnerabilityHydrationRows(deviceSoftware = []) {
       inventory_id: item.inventoryId,
       catalogue_id: catalogueId,
       application_name: item.name,
-      installed_version: version,
+      installed_version: rawVersion,
+      evaluated_version: version,
       status: checked ? 'checked' : identity ? 'pending_version' : 'pending_identity',
       checked,
       applicable_cves: checked ? Number(versionResult.applicableCves || 0) : null,
@@ -504,7 +508,7 @@ function buildSoftware(devices, catalogue, observations = []) {
         const verification = object(state.catalogue.verification)
         const targetCode = lower(verification.productCode)
         const appCode = lower(app?.registry_key)
-        const comparison = compareVersions(clean(app?.version), state.targetVersion)
+        const comparison = compareVersions(normalizeCatalogueVersion(app?.version, state.catalogue, 'installed'), state.targetVersion)
         state.patchStatus = appCode === targetCode || (comparison != null && comparison >= 0)
           ? 'current'
           : 'older_version_present'
@@ -1190,7 +1194,7 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId, options =
     )
     const observation = blocked.rows[0]
     if (observation?.patch_status === 'provider_blocked'
-      && clean(observation.available_version) === targetVersion) {
+      && normalizeCatalogueVersion(observation.available_version, row, 'provider') === targetVersion) {
       return {
         error: clean(object(observation.evidence).providerBlockedDetail)
           || 'The selected deployment provider cannot currently remediate this detected update.',
@@ -1201,7 +1205,7 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId, options =
   }
 
   if (installed) {
-    const comparison = compareVersions(installedVersion, targetVersion)
+    const comparison = compareVersions(normalizeCatalogueVersion(installedVersion, row, 'installed'), targetVersion)
     if (comparison != null && comparison >= 0) {
       return { error: 'The application is already at or above the approved target version.', status: 409, current: true }
     }

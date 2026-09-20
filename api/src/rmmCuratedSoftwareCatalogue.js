@@ -136,6 +136,23 @@ async function normalizeEntry(raw = {}) {
     throw new Error(key + ': nvdVendor and nvdProduct must be supplied together.')
   }
 
+  const rawVersionNormalization = object(raw.versionNormalization)
+  const normalizationStrategy = clean(rawVersionNormalization.strategy)
+  if (normalizationStrategy && normalizationStrategy !== 'strip_leading_numeric_segments') {
+    throw new Error(key + ': unsupported versionNormalization strategy.')
+  }
+  const versionNormalization = normalizationStrategy
+    ? {
+        strategy: normalizationStrategy,
+        installedSegmentsToStrip: Math.max(0, Math.min(4, Number(rawVersionNormalization.installedSegmentsToStrip || 0) || 0)),
+        providerSegmentsToStrip: Math.max(0, Math.min(4, Number(rawVersionNormalization.providerSegmentsToStrip || 0) || 0)),
+        expectedRemainingSegments: Math.max(0, Math.min(8, Number(rawVersionNormalization.expectedRemainingSegments || 0) || 0)),
+      }
+    : {}
+  if (normalizationStrategy && !versionNormalization.installedSegmentsToStrip && !versionNormalization.providerSegmentsToStrip) {
+    throw new Error(key + ': versionNormalization requires at least one strip count.')
+  }
+
   const adapter = clean(raw.adapter).slice(0, 80)
   if (sourceType === 'vendor_text' && !['signal_yaml','vlc_directory','jenkins_jsonp'].includes(adapter)) {
     throw new Error(key + ': vendor_text requires a supported adapter.')
@@ -154,6 +171,7 @@ async function normalizeEntry(raw = {}) {
     staticReleaseUrl,
     nvdVendor,
     nvdProduct,
+    versionNormalization,
   }
   const bindingMetadata = {
     curated: true,
@@ -181,6 +199,7 @@ async function normalizeEntry(raw = {}) {
     staticReleaseUrl,
     nvdVendor,
     nvdProduct,
+    versionNormalization,
   }
 
   return {
@@ -208,6 +227,7 @@ async function normalizeEntry(raw = {}) {
     expectedSigner,
     nvdVendor,
     nvdProduct,
+    versionNormalization,
     verification: bindingMetadata.verificationConfig,
     execution: { installArguments },
     sourceMetadata,
@@ -320,6 +340,7 @@ export async function importCuratedSoftwareCatalogue(entries = [], { dryRun = fa
             wingetPackageId: item.wingetPackageId,
             nvdVendor: item.nvdVendor,
             nvdProduct: item.nvdProduct,
+            versionNormalization: item.versionNormalization,
             qualificationStatePinned: item.qualificationStatePinned,
           }),
           item.qualificationState,

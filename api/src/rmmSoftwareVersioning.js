@@ -1,0 +1,35 @@
+function clean(value = '') { return String(value ?? '').trim() }
+function object(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {} }
+
+function normalizationConfig(catalogue = {}) {
+  const metadata = object(catalogue?.source_metadata || catalogue?.sourceMetadata)
+  return object(metadata.versionNormalization || catalogue?.versionNormalization)
+}
+
+export function normalizeCatalogueVersion(value, catalogue = {}, role = 'installed') {
+  const raw = clean(value)
+  if (!raw) return ''
+
+  const config = normalizationConfig(catalogue)
+  if (clean(config.strategy) !== 'strip_leading_numeric_segments') return raw
+
+  const strip = role === 'provider'
+    ? Number(config.providerSegmentsToStrip || 0)
+    : Number(config.installedSegmentsToStrip || 0)
+  if (!Number.isInteger(strip) || strip <= 0 || strip > 4) return raw
+
+  const match = /^v?([0-9]+(?:\.[0-9]+)+)(.*)$/i.exec(raw)
+  if (!match) return raw
+  const parts = match[1].split('.')
+  if (parts.length <= strip) return raw
+
+  const normalizedParts = parts.slice(strip)
+  const expectedRemainingSegments = Number(config.expectedRemainingSegments || 0)
+  if (expectedRemainingSegments > 0 && normalizedParts.length !== expectedRemainingSegments) return raw
+
+  return normalizedParts.join('.') + clean(match[2])
+}
+
+export function catalogueVersionNormalization(catalogue = {}) {
+  return normalizationConfig(catalogue)
+}

@@ -380,8 +380,14 @@ export const expandedSoftwareCatalogue = [
     "publisherPattern": "Brave Software",
     "deploymentMode": "winget_preferred",
     "wingetPackageId": "Brave.Brave",
-    "qualificationState": "blocked",
-    "qualificationNotes": "Blocked during qualification: GitHub target 1.95.104 maps to Windows/WinGet version 153.1.95.104. Add explicit Brave version normalization before deployment is allowed.",
+    "versionNormalization": {
+      "strategy": "strip_leading_numeric_segments",
+      "installedSegmentsToStrip": 1,
+      "providerSegmentsToStrip": 1,
+      "expectedRemainingSegments": 3
+    },
+    "qualificationState": "deployment_candidate",
+    "qualificationNotes": "Brave Windows/WinGet versions carry a Chromium-major prefix (for example 153.1.95.104) while upstream/NVD use the Brave product version (1.95.104). Comparisons normalize the installed/provider version by stripping one leading numeric segment.",
     "nvdVendor": "brave",
     "nvdProduct": "browser",
     "pollMinutes": 60,
