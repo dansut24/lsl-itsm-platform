@@ -11,6 +11,7 @@ const AGENT_DOWNLOAD_URL = 'https://downloads.hi5central.com/agent/latest/Hi5Cen
 const MAX_INVENTORY_BYTES = 4 * 1024 * 1024
 
 function clean(value = '') { return String(value ?? '').trim() }
+function isUuid(value = '') { return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clean(value)) }
 function sha256(value = '') { return createHash('sha256').update(String(value)).digest('hex') }
 function secret(prefix) { return `${prefix}_${randomBytes(32).toString('base64url')}` }
 function boundedNumber(value, min, max) {
@@ -23,6 +24,18 @@ function boundedInteger(value, min, max) {
   if (!Number.isFinite(number)) return null
   return Math.min(max, Math.max(min, Math.trunc(number)))
 }
+function object(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {} }
+function psSingleQuote(value = '') { return String(value).replaceAll("'", "''") }
+function versionParts(value = '') { return String(value).match(/\d+/g)?.slice(0, 4).map(Number) || [] }
+function versionCompare(left, right) {
+  const a = versionParts(left)
+  const b = versionParts(right)
+  for (let index = 0; index < Math.max(a.length, b.length, 1); index += 1) {
+    const delta = (a[index] || 0) - (b[index] || 0)
+    if (delta) return delta > 0 ? 1 : -1
+  }
+  return 0
+}
 async function requireRmmManager(c) {
   const session = await resolveSession(c)
   if (!session) return { error: c.json({ error: 'Authentication required.' }, 401) }
@@ -33,6 +46,56 @@ async function requireRmmManager(c) {
     return { error: c.json({ error: 'You do not have permission to manage RMM agents.' }, 403) }
   }
   return { session }
+}
+
+async function requireRmmDeviceControl(c) {
+  const session = await resolveSession(c)
+  if (!session) return { error: c.json({ error: 'Authentication required.' }, 401) }
+  if (!originMatchesTenant(c.req.header('origin'), session.slug)) {
+    return { error: c.json({ error: 'Tenant session mismatch.' }, 403) }
+  }
+  if (!hasPermission(session.access, 'rmm.devices.control')) {
+    return { error: c.json({ error: 'You do not have permission to upgrade RMM agents.' }, 403) }
+  }
+  return { session }
+}
+
+function agentUpgradeScript(release) {
+  const url = psSingleQuote(release.installer_url)
+  const expected = psSingleQuote(clean(release.installer_sha256).toLowerCase())
+  const version = clean(release.version).replace(/[^0-9A-Za-z._-]/g, '').slice(0, 48)
+  const taskName = 'Hi5CentralAgentUpgrade-' + version
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    "$url = '" + url + "'",
+    "$expectedSha256 = '" + expected + "'",
+    "$upgradeDir = Join-Path $env:ProgramData 'Hi5Central\\Agent\\Upgrade'",
+    "New-Item -ItemType Directory -Force -Path $upgradeDir | Out-Null",
+    "$installer = Join-Path $upgradeDir 'Hi5CentralAgentSetup-" + version + ".exe'",
+    "$logPath = Join-Path $upgradeDir 'installer-" + version + ".log'",
+    "Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $installer",
+    "$actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLowerInvariant()",
+    "if ($actualSha256 -ne $expectedSha256) { Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue; throw ('Installer SHA-256 mismatch. Expected ' + $expectedSha256 + ' but got ' + $actualSha256) }",
+    "$taskName = '" + psSingleQuote(taskName) + "'",
+    "$installerArgs = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /INSTALL_SOURCE=agent-upgrade /LOG=' + [char]34 + $logPath + [char]34",
+    "$action = New-ScheduledTaskAction -Execute $installer -Argument $installerArgs",
+    "$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(35)",
+    "$principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest",
+    "$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 10)",
+    "Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null",
+    "[pscustomobject]@{ status='scheduled'; task=$taskName; installer=$installer; sha256=$actualSha256; scheduled_for=$trigger.StartBoundary } | ConvertTo-Json -Compress",
+  ].join("\n")
+}
+
+async function agentReleaseRows() {
+  const result = await pool.query(
+    `SELECT id,channel,version,patch_host_version,installer_url,installer_sha256,
+            build_commit,workflow_run,status,release_notes,created_at,updated_at
+       FROM rmm_agent_releases
+      WHERE status IN ('test','active')
+      ORDER BY status='active' DESC,created_at DESC,version DESC`,
+  )
+  return result.rows
 }
 
 export async function authenticateAgent(deviceId, deviceSecret) {
@@ -310,6 +373,202 @@ export function registerRmmAgentRoutes(app) {
     )
     if (!result.rowCount) return c.json({ error: 'Enrollment package not found.' }, 404)
     return c.json({ success: true })
+  })
+
+  app.get('/api/v1/rmm/agent/devices/:agentDeviceId/upgrade-info', async (c) => {
+    const auth = await requireRmmDeviceControl(c)
+    if (auth.error) return auth.error
+    const agentDeviceId = clean(c.req.param('agentDeviceId'))
+    if (!isUuid(agentDeviceId)) return c.json({ error: 'A valid managed Agent ID is required.' }, 400)
+    const [deviceResult, releases, jobResult] = await Promise.all([
+      pool.query(
+        `SELECT a.id,a.inventory_id,a.agent_version,a.websocket_status,a.last_telemetry_at,
+                a.patch_capabilities,a.patch_capabilities_at,i.name,i.reference
+           FROM rmm_agent_devices a
+           JOIN rmm_device_inventory i ON i.id=a.inventory_id
+          WHERE a.id=$1 AND a.tenant_id=$2 AND a.disabled_at IS NULL AND i.active=true
+          LIMIT 1`,
+        [agentDeviceId, auth.session.tenant_id],
+      ),
+      agentReleaseRows(),
+      pool.query(
+        `SELECT id,status,error_message,created_at,claimed_at,completed_at,request_metadata
+           FROM rmm_agent_jobs
+          WHERE tenant_id=$1 AND agent_device_id=$2
+            AND request_metadata->>'source'='agent_upgrade'
+          ORDER BY created_at DESC LIMIT 1`,
+        [auth.session.tenant_id, agentDeviceId],
+      ),
+    ])
+    const device = deviceResult.rows[0]
+    if (!device) return c.json({ error: 'Managed Agent not found for this device.' }, 404)
+    const capabilities = object(device.patch_capabilities)
+    const patchHostVersion = clean(capabilities.patchHostVersion || capabilities.version)
+    const online = Boolean(agentSocketForDevice(device.id)?.readyState === 1)
+    return c.json({
+      device: {
+        agentDeviceId: device.id,
+        name: device.name,
+        reference: device.reference,
+        agentVersion: clean(device.agent_version),
+        patchHostVersion,
+        online,
+        websocketStatus: device.websocket_status,
+        lastTelemetryAt: device.last_telemetry_at,
+        patchCapabilitiesAt: device.patch_capabilities_at,
+      },
+      releases: releases.map((release) => ({
+        id: release.id,
+        channel: release.channel,
+        version: release.version,
+        patchHostVersion: release.patch_host_version,
+        status: release.status,
+        releaseNotes: release.release_notes,
+        buildCommit: release.build_commit,
+        workflowRun: release.workflow_run,
+        sha256: release.installer_sha256,
+        installed: Boolean(release.patch_host_version && patchHostVersion
+          && versionCompare(patchHostVersion, release.patch_host_version) >= 0),
+      })),
+      latestUpgrade: jobResult.rows[0] || null,
+    })
+  })
+
+  app.post('/api/v1/rmm/agent/devices/:agentDeviceId/upgrade', async (c) => {
+    const auth = await requireRmmDeviceControl(c)
+    if (auth.error) return auth.error
+    const agentDeviceId = clean(c.req.param('agentDeviceId'))
+    const body = await c.req.json().catch(() => ({}))
+    const releaseId = clean(body.releaseId)
+    if (!isUuid(agentDeviceId)) return c.json({ error: 'A valid managed Agent ID is required.' }, 400)
+    if (!isUuid(releaseId)) return c.json({ error: 'Select a trusted Agent release.' }, 400)
+
+    const [deviceResult, releaseResult, pendingResult] = await Promise.all([
+      pool.query(
+        `SELECT a.id,a.inventory_id,a.agent_version,a.patch_capabilities,i.name,i.reference
+           FROM rmm_agent_devices a
+           JOIN rmm_device_inventory i ON i.id=a.inventory_id
+          WHERE a.id=$1 AND a.tenant_id=$2 AND a.disabled_at IS NULL AND i.active=true
+          LIMIT 1`,
+        [agentDeviceId, auth.session.tenant_id],
+      ),
+      pool.query(
+        `SELECT id,channel,version,patch_host_version,installer_url,installer_sha256,
+                build_commit,workflow_run,status,release_notes
+           FROM rmm_agent_releases
+          WHERE id=$1 AND status IN ('test','active') LIMIT 1`,
+        [releaseId],
+      ),
+      pool.query(
+        `SELECT id,status,created_at FROM rmm_agent_jobs
+          WHERE tenant_id=$1 AND agent_device_id=$2
+            AND request_metadata->>'source'='agent_upgrade'
+            AND status IN ('queued','claimed')
+          ORDER BY created_at DESC LIMIT 1`,
+        [auth.session.tenant_id, agentDeviceId],
+      ),
+    ])
+    const device = deviceResult.rows[0]
+    const release = releaseResult.rows[0]
+    if (!device) return c.json({ error: 'Managed Agent not found for this device.' }, 404)
+    if (!release) return c.json({ error: 'Trusted Agent release not found.' }, 404)
+    if (pendingResult.rowCount) return c.json({ error: 'An Agent upgrade is already queued or running for this device.', job: pendingResult.rows[0] }, 409)
+
+    let installer
+    try { installer = new URL(release.installer_url) } catch { return c.json({ error: 'Trusted release has an invalid installer URL.' }, 409) }
+    if (installer.protocol !== 'https:' || installer.hostname.toLowerCase() !== 'downloads.hi5central.com') {
+      return c.json({ error: 'Trusted Agent installers must be served from downloads.hi5central.com over HTTPS.' }, 409)
+    }
+    if (!/^[a-f0-9]{64}$/i.test(clean(release.installer_sha256))) {
+      return c.json({ error: 'Trusted release does not contain a valid SHA-256.' }, 409)
+    }
+
+    const socket = agentSocketForDevice(device.id)
+    if (!socket || socket.readyState !== 1) {
+      return c.json({ error: 'This device is offline. No Agent upgrade was queued.', offline: true }, 409)
+    }
+
+    const capabilities = object(device.patch_capabilities)
+    const currentPatchHost = clean(capabilities.patchHostVersion || capabilities.version)
+    if (release.patch_host_version && currentPatchHost
+      && versionCompare(currentPatchHost, release.patch_host_version) >= 0) {
+      return c.json({ error: 'This device already reports the target PatchHost version or newer.', currentPatchHost, targetPatchHost: release.patch_host_version }, 409)
+    }
+
+    const command = agentUpgradeScript(release)
+    const correlationId = randomUUID()
+    const actorLabel = clean(auth.session.name || auth.session.email || 'Technician').slice(0, 255)
+    const inserted = await pool.query(
+      `INSERT INTO rmm_agent_jobs
+        (tenant_id,agent_device_id,job_type,payload,queued_by_user_id,initiated_by,initiated_by_label,
+         correlation_id,request_metadata)
+       VALUES ($1,$2,'custom.command',$3::jsonb,$4,'technician',$5,$6,$7::jsonb)
+       RETURNING id,job_type,status,created_at`,
+      [
+        auth.session.tenant_id,
+        device.id,
+        JSON.stringify({ command, timeout_seconds: 180 }),
+        auth.session.user_id,
+        actorLabel,
+        correlationId,
+        JSON.stringify({
+          source: 'agent_upgrade',
+          release_id: release.id,
+          release_version: release.version,
+          target_patch_host_version: release.patch_host_version,
+          installer_sha256: release.installer_sha256,
+          channel: release.channel,
+          device_name: device.name,
+          device_reference: device.reference,
+        }),
+      ],
+    )
+    const job = inserted.rows[0]
+    const claimed = await pool.query(
+      `UPDATE rmm_agent_jobs SET status='claimed',claimed_at=now(),updated_at=now()
+        WHERE id=$1 AND tenant_id=$2 AND status='queued'
+        RETURNING status,claimed_at,updated_at`,
+      [job.id, auth.session.tenant_id],
+    )
+    if (!claimed.rowCount) return c.json({ error: 'Unable to claim Agent upgrade job.' }, 409)
+    Object.assign(job, claimed.rows[0])
+    const pushed = sendAgentMessage(device.id, {
+      type: 'job_execute',
+      job: { id: job.id, job_type: 'custom.command', payload: { command, timeout_seconds: 180 }, created_at: job.created_at },
+    })
+    if (!pushed) {
+      await pool.query(
+        `UPDATE rmm_agent_jobs
+            SET status='cancelled',claimed_at=NULL,completed_at=now(),
+                error_message='Device went offline before the Agent upgrade could be dispatched.',updated_at=now()
+          WHERE id=$1 AND tenant_id=$2 AND status='claimed'`,
+        [job.id, auth.session.tenant_id],
+      )
+      return c.json({ error: 'The device went offline before the Agent upgrade could start. No job was retained.', offline: true }, 409)
+    }
+
+    recordRmmActivity({
+      tenantId: auth.session.tenant_id,
+      agentDeviceId: device.id,
+      inventoryId: device.inventory_id,
+      actorUserId: auth.session.user_id,
+      actorType: 'technician',
+      actorLabel,
+      eventType: 'agent.upgrade.requested',
+      category: 'device',
+      summary: actorLabel + ' requested Hi5Central Agent ' + release.version + ' test upgrade',
+      detail: 'Target PatchHost ' + (release.patch_host_version || 'not specified') + ' · ' + release.channel,
+      outcome: 'info',
+      jobId: job.id,
+      correlationId,
+      metadata: { releaseId: release.id, version: release.version, patchHostVersion: release.patch_host_version, channel: release.channel },
+    }).catch(() => {})
+
+    return c.json({
+      success: true,
+      job,
+      release: { id: release.id, version: release.version, patchHostVersion: release.patch_host_version, status: release.status },
+    }, 202)
   })
 
   app.post('/api/v1/agent/enroll', async (c) => {

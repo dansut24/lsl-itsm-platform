@@ -138,6 +138,20 @@ export function jobActivityDescriptor(job, success, result = {}, errorMessage = 
   }
   if (type === 'custom.command') {
     const requestMetadata = job?.request_metadata && typeof job.request_metadata === 'object' ? job.request_metadata : {}
+    if (clean(requestMetadata.source) === 'agent_upgrade') {
+      const version = clean(requestMetadata.release_version) || 'selected release'
+      const targetPatchHost = clean(requestMetadata.target_patch_host_version)
+      return {
+        ...common,
+        eventType: ok ? 'agent.upgrade.scheduled' : 'agent.upgrade.failed',
+        category: 'device',
+        summary: ok
+          ? actor.actorLabel + ' scheduled Hi5Central Agent ' + version + ' upgrade'
+          : actor.actorLabel + ' failed to prepare Hi5Central Agent ' + version + ' upgrade',
+        detail: [targetPatchHost ? 'Target PatchHost ' + targetPatchHost : '', suffix].filter(Boolean).join(' · '),
+        metadata: { releaseVersion: version, targetPatchHostVersion: targetPatchHost, result, requestMetadata },
+      }
+    }
     const automationName = clean(requestMetadata.automation_name || requestMetadata.tray_label) || 'automation'
     return {
       ...common,

@@ -248,6 +248,91 @@ function DeviceProperty({ label, value, detail }) {
   return <div><span>{label}</span><strong>{value || 'Not reported'}</strong>{detail && <small>{detail}</small>}</div>
 }
 
+function AgentMaintenance({ device }) {
+  const apiBase = window.__HI5_API_BASE__ || deploymentConfig().apiUrl
+  const [info, setInfo] = useState(null)
+  const [loading, setLoading] = useState(Boolean(device.agentDeviceId))
+  const [busy, setBusy] = useState(false)
+  const [watching, setWatching] = useState(false)
+  const [error, setError] = useState('')
+
+  async function load() {
+    if (!device.agentDeviceId) return
+    const response = await fetch(apiBase + '/api/v1/rmm/agent/devices/' + encodeURIComponent(device.agentDeviceId) + '/upgrade-info', { credentials: 'include' })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(payload.error || 'Unable to load Agent maintenance state.')
+    setInfo(payload)
+    const target = (payload.releases || []).find((release) => !release.installed)
+    if (!target && watching) setWatching(false)
+  }
+
+  useEffect(() => {
+    let active = true
+    if (!device.agentDeviceId) return undefined
+    setLoading(true)
+    load().catch((loadError) => { if (active) setError(loadError.message) }).finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [device.agentDeviceId])
+
+  useEffect(() => {
+    if (!watching) return undefined
+    const interval = window.setInterval(() => load().catch(() => {}), 3000)
+    const stop = window.setTimeout(() => setWatching(false), 180000)
+    return () => { window.clearInterval(interval); window.clearTimeout(stop) }
+  }, [watching, device.agentDeviceId])
+
+  const releases = info?.releases || []
+  const target = releases.find((release) => !release.installed) || releases[0]
+  const latest = info?.latestUpgrade
+  const latestTargetsTarget = Boolean(target?.id && latest?.request_metadata?.release_id === target.id)
+  const verified = Boolean(target?.installed)
+  const running = latestTargetsTarget && ['queued', 'claimed'].includes(latest?.status)
+  const scheduled = latestTargetsTarget && latest?.status === 'completed' && !verified
+  const failed = latestTargetsTarget && ['failed', 'cancelled'].includes(latest?.status)
+
+  async function upgrade() {
+    if (!target?.id || busy || verified || !info?.device?.online) return
+    if (!window.confirm('Upgrade ' + device.name + ' to Hi5Central Agent ' + target.version + '? The Agent service will briefly disconnect and reconnect.')) return
+    setBusy(true)
+    setError('')
+    try {
+      const response = await fetch(apiBase + '/api/v1/rmm/agent/devices/' + encodeURIComponent(device.agentDeviceId) + '/upgrade', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ releaseId: target.id }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.error || 'Unable to start Agent upgrade.')
+      setWatching(true)
+      await load()
+    } catch (upgradeError) {
+      setError(upgradeError?.message || 'Unable to start Agent upgrade.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!device.agentDeviceId) return null
+  return <section className="rmm-card rmm-agent-maintenance-card">
+    <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Agent maintenance</span><h2>Hi5Central Agent</h2></div>{verified ? <StatusPill tone="healthy">Verified</StatusPill> : running || scheduled ? <StatusPill tone="running">{running ? 'Preparing' : 'Reconnecting'}</StatusPill> : failed ? <StatusPill tone="critical">Attention</StatusPill> : <StatusPill tone="neutral">{target?.status === 'test' ? 'Test release' : 'Managed'}</StatusPill>}</div>
+    {loading ? <p>Loading Agent release state…</p> : <>
+      <div className="rmm-agent-maintenance-meta">
+        <span><small>Agent reports</small><strong>{info?.device?.agentVersion || 'Not reported'}</strong></span>
+        <span><small>PatchHost</small><strong>{info?.device?.patchHostVersion || 'Not reported'}</strong></span>
+        <span><small>Target</small><strong>{target ? target.version + ' / ' + (target.patchHostVersion || '—') : 'No release'}</strong></span>
+      </div>
+      {target?.releaseNotes && <p>{target.releaseNotes}</p>}
+      {scheduled && <div className="rmm-agent-maintenance-state running"><Clock3 size={14} /><span>Installer scheduled. Waiting for the Agent to restart and report PatchHost {target.patchHostVersion}.</span></div>}
+      {verified && <div className="rmm-agent-maintenance-state healthy"><CheckCircle2 size={14} /><span>PatchHost {info?.device?.patchHostVersion} is reporting. This release is verified on the endpoint.</span></div>}
+      {failed && <div className="rmm-agent-maintenance-state critical"><AlertTriangle size={14} /><span>{latest?.error_message || 'The Agent upgrade preparation job failed.'}</span></div>}
+      {error && <div className="rmm-agent-maintenance-state critical"><AlertTriangle size={14} /><span>{error}</span></div>}
+      {!verified && <button className="rmm-primary compact" disabled={busy || running || scheduled || !target || !info?.device?.online} onClick={upgrade} type="button"><Download size={14} /> {busy ? 'Starting…' : running ? 'Preparing…' : scheduled ? 'Waiting for restart…' : !info?.device?.online ? 'Device offline' : target ? 'Upgrade to ' + target.version : 'No release available'}</button>}
+      {target?.sha256 && <small className="rmm-agent-maintenance-sha">SHA-256 {target.sha256.slice(0, 12)}…{target.sha256.slice(-12)} · {target.channel}</small>}
+    </>}
+  </section>
+}
+
 function DeviceOverview({ device, deviceAlerts, monitoringResolution, relatedTickets, navigate, onCreateIncident }) {
   const security = device.security || {}
   return (
@@ -311,6 +396,8 @@ function DeviceOverview({ device, deviceAlerts, monitoringResolution, relatedTic
           <div className="rmm-device-monitoring-effective"><span><SlidersHorizontal size={16} /></span><div><strong>{monitoringResolution?.policy?.name || 'No monitoring policy assigned'}</strong><small>{monitoringResolution?.policy ? `${monitoringResolution.policy.checks?.length || 0} checks · ${monitoringResolution.policy.evaluation || 'Evaluation not set'}` : 'Assign a tenant policy from Monitoring policies'}</small></div></div>
           <button onClick={() => navigate('policies')} type="button"><GitBranch size={14} /> View policy inheritance</button>
         </section>
+
+        <AgentMaintenance device={device} />
 
         <section className="rmm-card rmm-itsm-bridge-card">
           <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Hi5Central ITSM</span><h2>Related service records</h2></div></div>

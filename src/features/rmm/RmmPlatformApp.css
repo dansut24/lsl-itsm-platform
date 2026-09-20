@@ -493,6 +493,18 @@ button.rmm-table-row { width: 100%; border: 0; text-align: left; cursor: pointer
 .rmm-device-management-meta span { display: grid; gap: 2px; border-radius: 8px; padding: 9px; background: var(--rmm-soft); }
 .rmm-device-management-meta strong { overflow: hidden; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
 .rmm-device-management-meta small { color: var(--rmm-muted); font-size: 6px; }
+.rmm-agent-maintenance-card > p { margin: 0; padding: 0 13px 10px; color: var(--rmm-muted); font-size: 8px; line-height: 1.5; }
+.rmm-agent-maintenance-meta { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 6px; padding: 0 13px 10px; }
+.rmm-agent-maintenance-meta span { display: grid; gap: 2px; min-width: 0; border-radius: 8px; padding: 9px; background: var(--rmm-soft); }
+.rmm-agent-maintenance-meta small { color: var(--rmm-muted); font-size: 6px; }
+.rmm-agent-maintenance-meta strong { overflow: hidden; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.rmm-agent-maintenance-card > .rmm-primary { margin: 0 13px 9px; }
+.rmm-agent-maintenance-state { display: flex; align-items: flex-start; gap: 7px; margin: 0 13px 9px; border: 1px solid var(--rmm-border); border-radius: 8px; padding: 8px 9px; font-size: 7px; line-height: 1.45; }
+.rmm-agent-maintenance-state svg { flex: 0 0 auto; margin-top: 1px; }
+.rmm-agent-maintenance-state.running { border-color: rgba(30,122,224,.22); background: rgba(30,122,224,.06); color: #397bbd; }
+.rmm-agent-maintenance-state.healthy { border-color: rgba(35,158,99,.22); background: rgba(35,158,99,.06); color: #188c61; }
+.rmm-agent-maintenance-state.critical { border-color: rgba(208,68,88,.24); background: rgba(208,68,88,.07); color: #c44d5d; }
+.rmm-agent-maintenance-sha { display: block; overflow-wrap: anywhere; padding: 0 13px 12px; color: var(--rmm-muted); font-size: 6px; line-height: 1.45; }
 
 .rmm-device-section-grid { display: grid; grid-template-columns: minmax(0,1.2fr) minmax(300px,.8fr); gap: 14px; }
 .rmm-adapter-list { display: grid; }
@@ -593,7 +605,8 @@ button.rmm-table-row { width: 100%; border: 0; text-align: left; cursor: pointer
   .rmm-device-subnav { margin-inline: -2px; }
   .rmm-property-grid.detailed { grid-template-columns: 1fr; }
   .rmm-security-grid { grid-template-columns: 1fr; }
-  .rmm-device-management-meta { grid-template-columns: 1fr; }
+  .rmm-device-management-meta,.rmm-agent-maintenance-meta { grid-template-columns: 1fr; }
+  .rmm-agent-maintenance-card > .rmm-primary { width: calc(100% - 26px); justify-content: center; }
   .rmm-device-section-heading { align-items: flex-start; flex-direction: column; }
   .rmm-device-section-heading .rmm-primary { width: 100%; justify-content: center; }
   .rmm-alert-meta { grid-template-columns: auto auto !important; }
