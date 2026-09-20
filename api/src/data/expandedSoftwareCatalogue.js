@@ -380,6 +380,8 @@ export const expandedSoftwareCatalogue = [
     "publisherPattern": "Brave Software",
     "deploymentMode": "winget_preferred",
     "wingetPackageId": "Brave.Brave",
+    "nvdVendor": "brave",
+    "nvdProduct": "browser",
     "pollMinutes": 60,
     "enabled": true
   },
@@ -832,6 +834,8 @@ export const expandedSoftwareCatalogue = [
     "publisherPattern": "DBeaver",
     "deploymentMode": "winget_preferred",
     "wingetPackageId": "DBeaver.DBeaver.Community",
+    "nvdVendor": "dbeaver",
+    "nvdProduct": "dbeaver",
     "pollMinutes": 60,
     "enabled": true
   },
@@ -1046,6 +1050,8 @@ export const expandedSoftwareCatalogue = [
     "publisherPattern": "Laurent Cozic",
     "deploymentMode": "winget_preferred",
     "wingetPackageId": "Joplin.Joplin",
+    "nvdVendor": "joplin_project",
+    "nvdProduct": "joplin",
     "pollMinutes": 60,
     "enabled": true
   },
@@ -1315,6 +1321,8 @@ export const expandedSoftwareCatalogue = [
     "publisherPattern": "Nicke Manarin",
     "deploymentMode": "winget_preferred",
     "wingetPackageId": "NickeManarin.ScreenToGif",
+    "nvdVendor": "screentogif",
+    "nvdProduct": "screentogif",
     "pollMinutes": 60,
     "enabled": true
   },
@@ -1443,6 +1451,8 @@ export const expandedSoftwareCatalogue = [
     "publisherPattern": "AutoHotkey",
     "deploymentMode": "winget_preferred",
     "wingetPackageId": "AutoHotkey.AutoHotkey",
+    "nvdVendor": "autohotkey",
+    "nvdProduct": "autohotkey",
     "pollMinutes": 60,
     "enabled": true
   },
@@ -1556,6 +1566,8 @@ export const expandedSoftwareCatalogue = [
     "publisherPattern": "Kovid Goyal",
     "deploymentMode": "winget_preferred",
     "wingetPackageId": "calibre.calibre",
+    "nvdVendor": "calibre-ebook",
+    "nvdProduct": "calibre",
     "pollMinutes": 60,
     "enabled": true
   },
