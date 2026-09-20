@@ -353,8 +353,6 @@ function catalogueMatch(app, catalogue) {
     && contains(app.publisher, entry.publisher_pattern)
   ))
   return candidates.sort((a, b) => {
-    const tenantWeight = Number(Boolean(b.tenant_id)) - Number(Boolean(a.tenant_id))
-    if (tenantWeight) return tenantWeight
     const sourceWeight = (entry) => {
       if (entry.catalogue_source === 'tenant_vendor') return 30
       if (entry.catalogue_source === 'patchhost') return 10
@@ -362,6 +360,8 @@ function catalogueMatch(app, catalogue) {
     }
     const sourceDelta = sourceWeight(b) - sourceWeight(a)
     if (sourceDelta) return sourceDelta
+    const tenantWeight = Number(Boolean(b.tenant_id)) - Number(Boolean(a.tenant_id))
+    if (tenantWeight) return tenantWeight
     const patternDelta = clean(b.name_pattern).length - clean(a.name_pattern).length
     if (patternDelta) return patternDelta
     return new Date(b.updated_at || 0).getTime() - new Date(a.updated_at || 0).getTime()
