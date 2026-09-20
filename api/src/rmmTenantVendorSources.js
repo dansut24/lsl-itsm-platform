@@ -383,7 +383,15 @@ async function resolveJsonSource(source) {
   const installerUrlValue = jsonPathValue(payload, parser.installerUrlPath)
   const shaValue = jsonPathValue(payload, parser.sha256Path)
   let installerUrl = ''
-  if (installerUrlValue) installerUrl = (await publicHttpsUrl(installerUrlValue)).toString()
+  if (installerUrlValue) {
+    let resolvedInstaller = installerUrlValue
+    try {
+      resolvedInstaller = new URL(installerUrlValue, source.source_url).toString()
+    } catch {
+      throw new Error('The configured installer URL path did not resolve to a valid URL or relative filename.')
+    }
+    installerUrl = (await publicHttpsUrl(resolvedInstaller)).toString()
+  }
   let releaseUrl = ''
   if (releaseUrlValue) {
     try {
