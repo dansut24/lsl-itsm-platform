@@ -997,6 +997,7 @@ async function ingestPatchDiscovery(agent, body = {}) {
           item.source,
         ],
       )
+
       if (patchStatus === 'current' && catalogue.rows[0]?.id && targetVersion) {
         const reconciled = await reconcilePatchDeploymentFromDiscovery(
           client,
