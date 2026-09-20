@@ -159,6 +159,7 @@ export function jobActivityDescriptor(job, success, result = {}, errorMessage = 
         metadata: { releaseVersion: version, targetPatchHostVersion: targetPatchHost, result, requestMetadata },
       }
     }
+    if (clean(requestMetadata.source) === 'vendor_artifact_trust_probe') return null
     if (clean(requestMetadata.source) === 'vendor_verification_probe') {
       const filePath = clean(requestMetadata.verification_file_path)
       return {

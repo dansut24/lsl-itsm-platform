@@ -295,7 +295,7 @@ export async function importCuratedSoftwareCatalogue(entries = [], { dryRun = fa
          VALUES ($1,$2,$3,$4,$5,$6,$7,true,$8::jsonb)
          ON CONFLICT (source_key,provider_package_id,channel,platform,architecture) DO UPDATE SET
            canonical_name=EXCLUDED.canonical_name,publisher=EXCLUDED.publisher,enabled=true,
-           metadata=EXCLUDED.metadata`,
+           metadata=rmm_software_vendor_bindings.metadata || EXCLUDED.metadata`,
         [
           item.sourceKey,item.catalogueKey,item.canonicalName,item.publisher,item.channel,item.platform,item.architecture,
           JSON.stringify(item.bindingMetadata),
@@ -322,7 +322,7 @@ export async function importCuratedSoftwareCatalogue(entries = [], { dryRun = fa
              WHEN EXCLUDED.source_metadata->>'qualificationStatePinned'='true' THEN EXCLUDED.qualification_notes
              ELSE rmm_software_catalogue.qualification_notes
            END,
-           source_metadata=EXCLUDED.source_metadata,status='active',updated_at=now()`,
+           source_metadata=rmm_software_catalogue.source_metadata || EXCLUDED.source_metadata,status='active',updated_at=now()`,
         [
           item.canonicalName,item.publisher,item.namePattern,item.publisherPattern,item.platform,
           'managed',

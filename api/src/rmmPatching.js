@@ -407,13 +407,14 @@ function publicCatalogue(entry) {
   const sourceMetadata = object(entry.source_metadata)
   const deploymentMode = clean(sourceMetadata.deploymentMode)
   const wingetPackageId = clean(sourceMetadata.wingetPackageId || (entry.provider === 'winget' ? entry.provider_package_id : ''))
+  const wingetFallbackReady = entry.provider === 'winget' || sourceMetadata.wingetFallbackReady === true
   const installable = Boolean(
     clean(entry.target_version)
     && clean(entry.qualification_state) !== 'blocked'
     && sourceMetadata.sourceEnabled !== false
     && (
-      (deploymentMode === 'winget_preferred' && wingetPackageId)
-      || deploymentMode === 'vendor_direct'
+      (deploymentMode === 'winget_preferred' && wingetPackageId && wingetFallbackReady)
+      || (deploymentMode === 'vendor_direct' && clean(sourceMetadata.trustState) === 'direct_ready')
       || (entry.provider === 'winget' && clean(entry.provider_package_id))
     )
   )
@@ -431,6 +432,10 @@ function publicCatalogue(entry) {
     releaseChannel: entry.release_channel,
     installerType: entry.installer_type,
     deploymentMode,
+    trustState: clean(sourceMetadata.trustState || 'version_only'),
+    trustEvidence: object(sourceMetadata.trustEvidence),
+    releaseUrl: clean(sourceMetadata.releaseUrl),
+    selectedAsset: clean(sourceMetadata.selectedAsset),
     installable,
     qualificationState: clean(entry.qualification_state || 'intelligence_only'),
     qualificationVersion: clean(entry.qualification_version),
@@ -1236,8 +1241,10 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId, options =
   const sourceMetadata = object(row.source_metadata)
   const tenantVendorSourceId = clean(sourceMetadata.tenantVendorSourceId)
   const sourceMode = clean(sourceMetadata.deploymentMode)
-  if (sourceMode === 'intelligence_only') {
-    return { error: 'This vendor source is configured for version intelligence only and cannot deploy software.', status: 409 }
+  const wingetFallbackReady = row.provider === 'winget' || sourceMetadata.wingetFallbackReady === true
+  const learnedWingetFallback = wingetFallbackReady ? clean(sourceMetadata.wingetPackageId) : ''
+  if (sourceMode === 'intelligence_only' && !learnedWingetFallback) {
+    return { error: 'This vendor source is configured for version intelligence only and has no verified fallback transport.', status: 409 }
   }
 
   let vendor = null
@@ -1284,7 +1291,9 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId, options =
     && /^[a-f0-9]{64}$/i.test(clean(vendor.installer_sha256))
     && clean(vendor.expected_signer || row.publisher)
 
-  const globalWingetFallback = clean(vendor?.winget_package_id || sourceMetadata.wingetPackageId)
+  const globalWingetFallback = wingetFallbackReady
+    ? clean(vendor?.winget_package_id || sourceMetadata.wingetPackageId)
+    : ''
   const fallbackPackageId = tenantVendorSourceId
     ? clean(row.provider_package_id)
     : (globalWingetFallback || (deploymentMode === 'winget_preferred' && row.provider === 'winget' ? clean(row.provider_package_id) : ''))

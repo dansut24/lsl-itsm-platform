@@ -14,6 +14,14 @@ import {
   repositoryName,
 } from './rmmTenantVendorSources.js'
 import { recalculateAllTenantVulnerabilityExposures } from './rmmVulnerabilityExposure.js'
+import { syncAutomaticWingetFallbacks } from './rmmWingetFallback.js'
+import {
+  discoverGithubWindowsInstaller,
+  runVendorArtifactQualification,
+  selectChecksumAsset,
+  selectWindowsInstallerAsset,
+  vendorReleaseTrustProfile,
+} from './rmmVendorReleaseEnrichment.js'
 
 function clean(value = '') { return String(value ?? '').trim() }
 function object(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {} }
@@ -97,6 +105,13 @@ async function upsertRelease({
   installerUrl = '',
   installerSha256 = '',
   installerType = '',
+  releaseUrl = '',
+  assetName = '',
+  trustState = 'version_only',
+  trustEvidence = {},
+  qualificationState = 'intelligence_only',
+  qualificationEvidence = {},
+  qualificationNotes = '',
   sourcePriority = 100,
   payload = {},
   catalogueProvider = 'winget',
@@ -107,22 +122,64 @@ async function upsertRelease({
   const normalizedVersion = clean(version)
   if (!normalizedVersion) throw new Error(sourceKey + ' returned an empty version')
 
+  const legacyWingetFallback = catalogueProvider === 'winget'
+    && clean(packageId)
+    && !clean(packageId).startsWith('vendor:')
+  if (legacyWingetFallback) {
+    verification = {
+      method: 'winget',
+      packageId: clean(packageId),
+      productCode: '',
+      displayNameContains: clean(canonicalName),
+      publisherContains: clean(publisher),
+      filePath: '',
+      ...object(verification),
+    }
+    trustState = trustState === 'version_only' ? 'winget_ready' : trustState
+    trustEvidence = {
+      sourceOfTruth: 'vendor_feed',
+      deploymentTransport: 'winget',
+      ...object(trustEvidence),
+    }
+    qualificationState = qualificationState === 'intelligence_only' ? 'deployment_candidate' : qualificationState
+    qualificationEvidence = {
+      vendorAuthoritativeVersion: true,
+      wingetFallback: true,
+      ...object(qualificationEvidence),
+    }
+    qualificationNotes = qualificationNotes
+      || 'Vendor feed is authoritative for the target version; WinGet is used only as the deployment transport.'
+    catalogueMetadata = {
+      deploymentMode: 'winget_preferred',
+      trustState,
+      wingetPackageId: clean(packageId),
+      hasWingetFallback: true,
+      automaticVendorRelease: true,
+      ...object(catalogueMetadata),
+    }
+  }
+
   return withTransaction(async (client) => {
     await client.query(
       `INSERT INTO rmm_software_vendor_releases
         (source_key,provider_package_id,canonical_name,publisher,channel,platform,architecture,
-         version,release_date,installer_url,installer_sha256,installer_type,source_priority,source_payload,last_seen_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,now())
+         version,release_date,installer_url,installer_sha256,installer_type,release_url,asset_name,
+         trust_state,trust_evidence,source_priority,source_payload,last_seen_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,$17,$18::jsonb,now())
        ON CONFLICT (source_key,provider_package_id,channel,platform,architecture,version)
        DO UPDATE SET release_date=COALESCE(EXCLUDED.release_date,rmm_software_vendor_releases.release_date),
-         installer_url=CASE WHEN EXCLUDED.installer_url<>'' THEN EXCLUDED.installer_url ELSE rmm_software_vendor_releases.installer_url END,
-         installer_sha256=CASE WHEN EXCLUDED.installer_sha256<>'' THEN EXCLUDED.installer_sha256 ELSE rmm_software_vendor_releases.installer_sha256 END,
-         installer_type=CASE WHEN EXCLUDED.installer_type<>'' THEN EXCLUDED.installer_type ELSE rmm_software_vendor_releases.installer_type END,
+         installer_url=EXCLUDED.installer_url,
+         installer_sha256=EXCLUDED.installer_sha256,
+         installer_type=EXCLUDED.installer_type,
+         release_url=EXCLUDED.release_url,
+         asset_name=EXCLUDED.asset_name,
+         trust_state=EXCLUDED.trust_state,trust_evidence=EXCLUDED.trust_evidence,
          source_priority=EXCLUDED.source_priority,source_payload=EXCLUDED.source_payload,last_seen_at=now()
        RETURNING id`,
       [
         sourceKey, packageId, canonicalName, publisher, channel, platform, architecture,
         normalizedVersion, releaseDate, installerUrl, installerSha256, installerType,
+        releaseUrl, assetName, trustState, JSON.stringify(trustEvidence || {}),
         sourcePriority, JSON.stringify(payload),
       ],
     )
@@ -140,7 +197,14 @@ async function upsertRelease({
                 name_pattern=COALESCE(NULLIF($8,''),$2),publisher_pattern=COALESCE(NULLIF($9,''),$3),
                 provider=$10,provider_package_id=$1,target_version=$4,
                 release_channel=$5,installer_type=$11,verification=$12::jsonb,execution=$13::jsonb,source_revision=$4,
-                source_metadata=source_metadata || $6::jsonb || $14::jsonb,updated_at=now()
+                source_metadata=source_metadata || $6::jsonb || $14::jsonb,
+                qualification_state=CASE
+                  WHEN qualification_state IN ('qualified','blocked') THEN qualification_state
+                  ELSE $15
+                END,
+                qualification_evidence=qualification_evidence || $16::jsonb,
+                qualification_notes=CASE WHEN qualification_notes<>'' THEN qualification_notes ELSE $17 END,
+                updated_at=now()
           WHERE id=$7`,
         [
           packageId, canonicalName, publisher, normalizedVersion, channel,
@@ -153,14 +217,19 @@ async function upsertRelease({
           JSON.stringify(verification || {}),
           JSON.stringify(execution || {}),
           JSON.stringify(catalogueMetadata || {}),
+          qualificationState,
+          JSON.stringify(qualificationEvidence || {}),
+          clean(qualificationNotes).slice(0, 1000),
         ],
       )
     } else {
       await client.query(
         `INSERT INTO rmm_software_catalogue
           (tenant_id,canonical_name,publisher,name_pattern,publisher_pattern,provider,provider_package_id,
-           target_version,release_channel,installer_type,verification,execution,catalogue_source,external_key,source_revision,source_metadata)
-         VALUES (NULL,$2,$3,COALESCE(NULLIF($7,''),$2),COALESCE(NULLIF($8,''),$3),$9,$1,$4,$5,$10,$11::jsonb,$12::jsonb,'vendor',$1,$4,$6::jsonb || $13::jsonb)`,
+           target_version,release_channel,installer_type,verification,execution,catalogue_source,external_key,source_revision,source_metadata,
+           qualification_state,qualification_evidence,qualification_notes)
+         VALUES (NULL,$2,$3,COALESCE(NULLIF($7,''),$2),COALESCE(NULLIF($8,''),$3),$9,$1,$4,$5,$10,$11::jsonb,$12::jsonb,'vendor',$1,$4,
+           $6::jsonb || $13::jsonb,$14,$15::jsonb,$16)`,
         [
           packageId, canonicalName, publisher, normalizedVersion, channel,
           JSON.stringify({ latestSource: sourceKey, releaseDate, vendorPriority: sourcePriority }),
@@ -171,6 +240,9 @@ async function upsertRelease({
           JSON.stringify(verification || {}),
           JSON.stringify(execution || {}),
           JSON.stringify(catalogueMetadata || {}),
+          qualificationState,
+          JSON.stringify(qualificationEvidence || {}),
+          clean(qualificationNotes).slice(0, 1000),
         ],
       )
     }
@@ -267,7 +339,23 @@ async function syncGenericConfigured(sourceKey, state) {
       const lightweight = await latestGithubTagViaRedirect(repository)
       version = normalizedGithubVersion(lightweight.tag)
       releaseUrl = lightweight.releaseUrl
-      payload = { github: { tag_name: lightweight.tag, html_url: lightweight.releaseUrl, lightweight: true } }
+      const discovery = await discoverGithubWindowsInstaller(repository, lightweight.tag, b.canonical_name)
+      const installer = discovery.installer
+      const checksum = discovery.checksum
+      installerUrl = clean(installer?.browser_download_url)
+      if (installer && checksum) {
+        installerSha256 = await publishedChecksum(checksum.browser_download_url, installer.name).catch(() => '')
+      }
+      resolvedInstallerType = detectInstallerType(installer?.name, resolvedInstallerType)
+      payload = { github: {
+        tag_name: lightweight.tag,
+        html_url: lightweight.releaseUrl,
+        lightweight: true,
+        automaticAssetDiscovery: true,
+        assetsSeen: discovery.assetsSeen,
+        selectedAsset: clean(installer?.name),
+        checksumAsset: clean(checksum?.name),
+      } }
     } else {
       const release = clean(config.releaseTagPattern)
         ? await matchingGithubRelease(repository, config.releaseTagPattern)
@@ -278,10 +366,16 @@ async function syncGenericConfigured(sourceKey, state) {
       const assets = Array.isArray(release?.assets) ? release.assets : []
       const installerMatch = globMatcher(config.assetPattern)
       const checksumMatch = globMatcher(config.checksumAssetPattern)
-      const installer = installerMatch ? assets.find((asset) => installerMatch.test(clean(asset?.name))) : null
-      const checksum = checksumMatch ? assets.find((asset) => checksumMatch.test(clean(asset?.name))) : null
+      const installer = installerMatch
+        ? assets.find((asset) => installerMatch.test(clean(asset?.name)))
+        : selectWindowsInstallerAsset(assets, b.canonical_name)
+      const checksum = checksumMatch
+        ? assets.find((asset) => checksumMatch.test(clean(asset?.name)))
+        : selectChecksumAsset(assets)
       installerUrl = clean(installer?.browser_download_url)
-      if (installer && checksum) installerSha256 = await publishedChecksum(checksum.browser_download_url, installer.name)
+      if (installer && checksum) {
+        installerSha256 = await publishedChecksum(checksum.browser_download_url, installer.name).catch(() => '')
+      }
       resolvedInstallerType = detectInstallerType(installer?.name, resolvedInstallerType)
       payload = { github: {
         id: release?.id,
@@ -398,20 +492,36 @@ async function syncGenericConfigured(sourceKey, state) {
   }
 
   if (!version) throw new Error(sourceKey + ' returned no usable release version')
+  if (!installerSha256 && clean(config.trustedReleaseVersion) === clean(version)) {
+    installerSha256 = normalizedSha256(config.trustedReleaseSha256)
+  }
   const verification = { ...object(config.verificationConfig) }
   if (verificationProductCode) verification.productCode = verificationProductCode
-  const deploymentMode = clean(config.deploymentMode || 'winget_preferred')
-  const vendorDirect = deploymentMode === 'vendor_direct'
-  const trustState = vendorDirect
-    && installerUrl
-    && /^[A-F0-9]{64}$/.test(installerSha256)
-    && clean(config.expectedSigner)
-    && ['msi','exe'].includes(resolvedInstallerType)
-    && (resolvedInstallerType !== 'exe' || clean(config.installArguments))
-      ? 'direct_ready'
-      : deploymentMode === 'winget_preferred' && clean(config.wingetPackageId || b.provider_package_id)
-        ? 'winget_ready'
-        : 'version_only'
+  const wingetPackageId = clean(config.wingetPackageId || config.autoWingetPackageId)
+  const configuredExpectedSigner = clean(config.autoExpectedSigner || config.expectedSigner)
+  const configuredDeploymentMode = clean(config.autoDeploymentMode || config.deploymentMode)
+  const trust = vendorReleaseTrustProfile({
+    installerUrl,
+    installerSha256,
+    installerType: resolvedInstallerType,
+    publisher: b.publisher,
+    expectedSigner: configuredExpectedSigner,
+    verification,
+    wingetPackageId,
+    deploymentMode: configuredDeploymentMode,
+  })
+  const deploymentMode = trust.deploymentMode
+  const trustState = trust.trustState
+  const expectedSigner = trust.expectedSigner || configuredExpectedSigner
+  const selectedAssetName = installerUrl
+    ? decodeURIComponent(new URL(installerUrl).pathname.split('/').filter(Boolean).at(-1) || '')
+    : ''
+  const qualificationEvidence = {
+    ...trust.evidence,
+    sourceKey,
+    releaseUrl,
+    selectedAsset: selectedAssetName,
+  }
 
   return upsertRelease({
     sourceKey: b.source_key,
@@ -426,12 +536,22 @@ async function syncGenericConfigured(sourceKey, state) {
     installerUrl,
     installerSha256,
     installerType: resolvedInstallerType,
+    releaseUrl,
+    assetName: selectedAssetName,
+    trustState,
+    trustEvidence: qualificationEvidence,
+    qualificationState: trust.qualificationState,
+    qualificationEvidence,
+    qualificationNotes: trust.qualificationState === 'deployment_candidate'
+      ? 'Automatically promoted from the authoritative vendor release feed with deployable trust metadata.'
+      : '',
     sourcePriority: b.priority,
     payload: {
       ...payload,
       releaseUrl,
       trustState,
-      expectedSigner: clean(config.expectedSigner),
+      trustEvidence: qualificationEvidence,
+      expectedSigner,
       deploymentMode,
       verification,
       installArguments: clean(config.installArguments),
@@ -445,11 +565,19 @@ async function syncGenericConfigured(sourceKey, state) {
       latestSource: sourceKey,
       sourceType: state.source_type,
       deploymentMode,
-      expectedSigner: clean(config.expectedSigner),
+      expectedSigner,
+      autoExpectedSigner: clean(config.autoExpectedSigner),
+      autoDeploymentMode: clean(config.autoDeploymentMode),
+      autoTrustState: clean(config.autoTrustState),
       trustState,
+      trustEvidence: qualificationEvidence,
       releaseUrl,
-      hasWingetFallback: Boolean(clean(config.wingetPackageId)),
+      selectedAsset: selectedAssetName,
+      automaticVendorRelease: true,
+      hasWingetFallback: Boolean(wingetPackageId),
       wingetPackageId: clean(config.wingetPackageId),
+      autoWingetPackageId: clean(config.autoWingetPackageId),
+      autoWingetConfidence: clean(config.autoWingetConfidence),
     },
   })
 }
@@ -638,6 +766,27 @@ export async function syncDueSoftwareVendorSources() {
       results.push({ sourceKey: row.source_key, ok: false, error: error.message })
     }
   }
+
+  try {
+    const fallback = await syncAutomaticWingetFallbacks()
+    if (fallback?.mapped) {
+      const ready = fallback.mappings.filter((item) => item.transportReady).length
+      const lagging = fallback.mappings.filter((item) => !item.transportReady).length
+      console.log('RMM WinGet fallback verification', { mapped: fallback.mapped, ready, lagging })
+    }
+  } catch (error) {
+    console.error('RMM automatic WinGet fallback verification failed', error.message)
+  }
+
+  try {
+    const qualification = await runVendorArtifactQualification({ inspectLimit: 2 })
+    if (qualification.reconciled.length || qualification.queued.length) {
+      console.log('RMM vendor artifact qualification', qualification)
+    }
+  } catch (error) {
+    console.error('RMM vendor artifact qualification failed', error.message)
+  }
+
   if (results.some((item) => item?.ok && item?.changed)) {
     recalculateAllTenantVulnerabilityExposures().catch((error) => {
       console.error('RMM vulnerability exposure refresh failed after vendor release change', error)
@@ -656,7 +805,8 @@ export async function softwareVendorSummary() {
     pool.query(
       `SELECT DISTINCT ON (provider_package_id,channel,platform,architecture)
               source_key,provider_package_id,canonical_name,publisher,channel,platform,architecture,
-              version,release_date,installer_url,installer_sha256,installer_type,source_priority,last_seen_at
+              version,release_date,release_url,asset_name,installer_url,installer_sha256,installer_type,
+              trust_state,trust_evidence,source_priority,last_seen_at
          FROM rmm_software_vendor_releases
         ORDER BY provider_package_id,channel,platform,architecture,source_priority DESC,
                  COALESCE(release_date,last_seen_at) DESC`,
@@ -671,6 +821,10 @@ export function startSoftwareVendorSyncScheduler() {
   if (schedulerStarted) return
   schedulerStarted = true
   const run = () => syncDueSoftwareVendorSources().catch((error) => console.error('RMM software vendor scheduler failed', error))
+  const qualify = () => runVendorArtifactQualification({ inspectLimit: 2 })
+    .catch((error) => console.error('RMM vendor artifact qualification scheduler failed', error))
   setTimeout(run, 10_000).unref?.()
   setInterval(run, 5 * 60 * 1000).unref?.()
+  setTimeout(qualify, 30_000).unref?.()
+  setInterval(qualify, 60_000).unref?.()
 }
