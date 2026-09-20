@@ -133,6 +133,10 @@ function VendorSourceModal({ source, onClose, onSave, saving }) {
     installerUrlPath: source?.parser_config?.installerUrlPath || '',
     sha256Path: source?.parser_config?.sha256Path || '',
     productCodePath: source?.parser_config?.productCodePath || '',
+    staticVersion: source?.parser_config?.staticVersion || source?.latest_version || '',
+    staticInstallerUrl: source?.parser_config?.staticInstallerUrl || source?.latest_installer_url || '',
+    staticSha256: source?.parser_config?.staticSha256 || source?.latest_installer_sha256 || '',
+    staticReleaseUrl: source?.parser_config?.staticReleaseUrl || source?.source_url || '',
     deploymentMode: source?.deployment_mode || 'winget_preferred',
     providerPackageId: source?.provider_package_id || '',
     verificationMethod: source?.verification_config?.method || (source?.deployment_mode === 'vendor_direct' && !source?.provider_package_id ? 'uninstall_registry' : 'winget'),
@@ -156,14 +160,19 @@ function VendorSourceModal({ source, onClose, onSave, saving }) {
   const winget = form.deploymentMode === 'winget_preferred'
   const github = form.sourceType === 'github_releases'
   const json = form.sourceType === 'vendor_json'
+  const staticRelease = form.sourceType === 'static_release'
   const sourceReady = github
     ? form.repository.trim().length > 2
-    : form.sourceUrl.trim().startsWith('https://') && form.versionPath.trim()
+    : json
+      ? form.sourceUrl.trim().startsWith('https://') && form.versionPath.trim()
+      : Boolean(form.staticVersion.trim() && form.staticInstallerUrl.trim().startsWith('https://') && /^[A-Fa-f0-9]{64}$/.test(form.staticSha256.trim()))
   const directReady = !direct || (form.expectedSigner.trim()
     && (form.installerType !== 'exe' || form.installArguments.trim())
     && (github
       ? form.assetPattern.trim() && form.checksumAssetPattern.trim()
-      : form.installerUrlPath.trim() && form.sha256Path.trim()))
+      : json
+        ? form.installerUrlPath.trim() && form.sha256Path.trim()
+        : form.staticInstallerUrl.trim() && form.staticSha256.trim()))
   const verificationReady = form.verificationMethod === 'winget'
     ? Boolean(form.providerPackageId.trim())
     : form.verificationMethod === 'uninstall_registry'
@@ -185,11 +194,11 @@ function VendorSourceModal({ source, onClose, onSave, saving }) {
         <div><span className="rmm-eyebrow">Self-service vendor patching</span><h2>{source ? 'Edit vendor source' : 'Add vendor source'}</h2></div>
         <button aria-label="Close" onClick={onClose} type="button"><X size={17} /></button>
       </header>
-      <p>Use a public GitHub Releases repository or vendor JSON endpoint as authoritative release intelligence. Sources must be tested and approved before they can affect patch targets.</p>
+      <p>Use GitHub Releases, a vendor JSON endpoint, or a manually entered static vendor release as authoritative patch intelligence. Sources must be tested and approved before they can affect patch targets.</p>
       <div className="rmm-patch-form-grid">
         <label>Source name<input autoFocus value={form.displayName} onChange={(event) => update('displayName', event.target.value)} placeholder="e.g. Tailscale Windows" /></label>
-        <label>Source type<select value={form.sourceType} onChange={(event) => update('sourceType', event.target.value)}><option value="github_releases">GitHub Releases</option><option value="vendor_json">Vendor JSON API</option></select></label>
-        {github ? <label className="wide">GitHub repository<input value={form.repository} onChange={(event) => update('repository', event.target.value)} placeholder="owner/repository or https://github.com/owner/repository" /></label> : <><label className="wide">Vendor JSON URL<input value={form.sourceUrl} onChange={(event) => update('sourceUrl', event.target.value)} placeholder="https://vendor.example/api/releases" /></label><label>Version JSON path<input value={form.versionPath} onChange={(event) => update('versionPath', event.target.value)} placeholder="e.g. latest.version or releases.0.version" /></label><label>Release date path<input value={form.releaseDatePath} onChange={(event) => update('releaseDatePath', event.target.value)} placeholder="Optional" /></label><label>Release URL path<input value={form.releaseUrlPath} onChange={(event) => update('releaseUrlPath', event.target.value)} placeholder="Optional" /></label><label>Installer URL path<input value={form.installerUrlPath} onChange={(event) => update('installerUrlPath', event.target.value)} placeholder={direct ? 'Required for vendor direct' : 'Optional'} /></label><label>SHA-256 JSON path<input value={form.sha256Path} onChange={(event) => update('sha256Path', event.target.value)} placeholder={direct ? 'Required for vendor direct' : 'Optional'} /></label></>}
+        <label>Source type<select value={form.sourceType} onChange={(event) => update('sourceType', event.target.value)}><option value="github_releases">GitHub Releases</option><option value="vendor_json">Vendor JSON API</option><option value="static_release">Static vendor release</option></select></label>
+        {github ? <label className="wide">GitHub repository<input value={form.repository} onChange={(event) => update('repository', event.target.value)} placeholder="owner/repository or https://github.com/owner/repository" /></label> : json ? <><label className="wide">Vendor JSON URL<input value={form.sourceUrl} onChange={(event) => update('sourceUrl', event.target.value)} placeholder="https://vendor.example/api/releases" /></label><label>Version JSON path<input value={form.versionPath} onChange={(event) => update('versionPath', event.target.value)} placeholder="e.g. latest.version or releases.0.version" /></label><label>Release date path<input value={form.releaseDatePath} onChange={(event) => update('releaseDatePath', event.target.value)} placeholder="Optional" /></label><label>Release URL path<input value={form.releaseUrlPath} onChange={(event) => update('releaseUrlPath', event.target.value)} placeholder="Optional" /></label><label>Installer URL path<input value={form.installerUrlPath} onChange={(event) => update('installerUrlPath', event.target.value)} placeholder={direct ? 'Required for vendor direct' : 'Optional'} /></label><label>SHA-256 JSON path<input value={form.sha256Path} onChange={(event) => update('sha256Path', event.target.value)} placeholder={direct ? 'Required for vendor direct' : 'Optional'} /></label></> : <><label>Release version<input value={form.staticVersion} onChange={(event) => update('staticVersion', event.target.value)} placeholder="e.g. 4.91.0" /></label><label className="wide">Installer URL<input value={form.staticInstallerUrl} onChange={(event) => update('staticInstallerUrl', event.target.value)} placeholder="https://vendor.example/releases/app.exe" /></label><label className="wide">SHA-256<input value={form.staticSha256} onChange={(event) => update('staticSha256', event.target.value)} placeholder="64-character SHA-256" /></label><label className="wide">Vendor release page<input value={form.staticReleaseUrl} onChange={(event) => update('staticReleaseUrl', event.target.value)} placeholder="Optional HTTPS evidence page" /></label></>}
         <label>Application<input value={form.canonicalName} onChange={(event) => update('canonicalName', event.target.value)} /></label>
         <label>Publisher<input value={form.publisher} onChange={(event) => update('publisher', event.target.value)} /></label>
         <label>Deployment mode<select value={form.deploymentMode} onChange={(event) => update('deploymentMode', event.target.value)}><option value="winget_preferred">WinGet preferred</option><option value="vendor_direct">Vendor direct</option><option value="intelligence_only">Intelligence only</option></select></label>
@@ -703,7 +712,7 @@ export function RmmPatching({ devices = [] }) {
     </section>}
 
     {tab === 'vendors' && <section className="rmm-patch-panel">
-      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Vendor-first freshness</span><h2>Vendor software catalogue</h2><p>Built-in feeds provide Hi5Central-maintained intelligence. Tenant sources let you add GitHub Releases feeds, test their trust evidence and explicitly approve them before they can influence patch targets.</p></div><button className="rmm-primary compact" onClick={() => { setEditingVendorSource(null); setShowVendorSource(true) }} type="button"><Plus size={14} /> Add vendor source</button></div>
+      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Vendor-first freshness</span><h2>Vendor software catalogue</h2><p>Built-in feeds provide Hi5Central-maintained intelligence. Tenant sources can use GitHub Releases, vendor JSON APIs, or manually entered vendor releases; every source must be tested and explicitly approved before it can influence patch targets.</p></div><button className="rmm-primary compact" onClick={() => { setEditingVendorSource(null); setShowVendorSource(true) }} type="button"><Plus size={14} /> Add vendor source</button></div>
       <div className="rmm-patch-tenant-vendors">
         <div className="rmm-patch-subheading"><div><span className="rmm-eyebrow">Self-service sources</span><h3>Tenant vendor sources</h3><p>Draft → Test → Approve. Editing an approved source resets it to draft so changed trust rules can never silently enter production.</p></div></div>
         <div className="rmm-patch-table tenant-vendors">
@@ -713,10 +722,10 @@ export function RmmPatching({ devices = [] }) {
             const stateTone = source.status === 'active' ? 'healthy' : source.status === 'quarantined' ? 'critical' : source.status === 'tested' ? 'running' : 'neutral'
             const trustTone = source.trust_state === 'direct_ready' || source.trust_state === 'winget_ready' ? 'healthy' : source.trust_state === 'quarantined' ? 'critical' : 'neutral'
             return <div className="row" key={source.id}>
-              <span><strong>{source.display_name}</strong><small>{source.source_type === 'vendor_json' ? source.source_url : source.repository} · {(source.source_type || 'github_releases').replaceAll('_', ' ')} · every {source.poll_minutes} min</small></span>
+              <span><strong>{source.display_name}</strong><small>{source.source_type === 'github_releases' ? source.repository : source.source_url || source.parser_config?.staticReleaseUrl || 'Manual release'} · {(source.source_type || 'github_releases').replaceAll('_', ' ')} · every {source.poll_minutes} min</small></span>
               <span><strong>{(source.deployment_mode || '').replaceAll('_', ' ')}</strong><small>{source.provider_package_id || 'No WinGet fallback'} · verify {(source.verification_config?.method || 'winget').replaceAll('_', ' ')}</small></span>
               <span><strong>{source.release_version || source.latest_version || 'Not tested'}</strong><small>{source.release_date ? new Date(source.release_date).toLocaleDateString() : source.last_success_at ? 'Tested ' + new Date(source.last_success_at).toLocaleString() : 'Awaiting test'}</small></span>
-              <span><StatusPill tone={trustTone}>{(source.trust_state || 'untested').replaceAll('_', ' ')}</StatusPill><small>{source.installer_sha256 ? 'SHA-256 verified from release metadata' : blockers[0] || (source.deployment_mode === 'vendor_direct' ? 'Direct-install trust incomplete' : 'Execution provider performs install verification')}</small></span>
+              <span><StatusPill tone={trustTone}>{(source.trust_state || 'untested').replaceAll('_', ' ')}</StatusPill><small>{source.installer_sha256 ? (source.source_type === 'static_release' ? 'SHA-256 pinned from vendor release evidence' : 'SHA-256 verified from release metadata') : blockers[0] || (source.deployment_mode === 'vendor_direct' ? 'Direct-install trust incomplete' : 'Execution provider performs install verification')}</small></span>
               <span><StatusPill tone={stateTone}>{source.status}</StatusPill><small>{source.last_error || (source.approved_at ? 'Approved ' + new Date(source.approved_at).toLocaleDateString() : '')}</small></span>
               <span className="actions"><button disabled={saving} onClick={() => runVendorSourceTest(source)} type="button"><RefreshCw size={13} /> Test</button>{source.status === 'tested' && <button className="rmm-primary compact" disabled={saving} onClick={() => runVendorSourceApproval(source)} type="button"><ShieldCheck size={13} /> Approve</button>}<button disabled={saving} onClick={() => { setEditingVendorSource(source); setShowVendorSource(true) }} type="button">Edit</button><button aria-label={'Archive ' + source.display_name} disabled={saving} onClick={() => removeVendorSource(source)} type="button"><Trash2 size={13} /></button></span>
             </div>

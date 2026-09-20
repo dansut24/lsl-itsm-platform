@@ -53,6 +53,116 @@ async function audit(session, eventType, summary, detail = '', metadata = {}) {
   }).catch(() => null)
 }
 
+function psSingleQuote(value = '') {
+  return "'" + clean(value).replaceAll("'", "''") + "'"
+}
+
+function safeVerificationFilePath(value = '') {
+  const filePath = clean(value)
+  return Boolean(filePath
+    && /^(?:[A-Za-z]:\\|%ProgramFiles%\\|%ProgramFiles\(x86\)%\\|%ProgramData%\\)/i.test(filePath)
+    && !filePath.includes('..')
+    && !/["\r\n]/.test(filePath)
+    && /\.(?:exe|dll)$/i.test(filePath))
+}
+
+function fileVersionProbeScript(filePath) {
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    '$path = [Environment]::ExpandEnvironmentVariables(' + psSingleQuote(filePath) + ')',
+    "if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw ('Verification file was not found: ' + $path) }",
+    '$info = (Get-Item -LiteralPath $path).VersionInfo',
+    '[pscustomobject]@{',
+    "  status = 'ok'",
+    '  path = $path',
+    '  file_version = [string]$info.FileVersion',
+    '  product_version = [string]$info.ProductVersion',
+    '  file_description = [string]$info.FileDescription',
+    '  product_name = [string]$info.ProductName',
+    '  original_filename = [string]$info.OriginalFilename',
+    '} | ConvertTo-Json -Compress',
+  ].join('\n')
+}
+
+export async function queueVendorVerificationProbe({ tenantId, userId = null, actorLabel = 'Technician', sourceId, agentDeviceId }) {
+  const selected = await pool.query(
+    `SELECT s.id AS source_id,s.display_name,s.status,s.verification_config,
+            a.id AS agent_device_id,a.inventory_id,a.websocket_status,a.last_telemetry_at,
+            i.name AS device_name,i.reference AS device_reference
+       FROM rmm_tenant_vendor_sources s
+       JOIN rmm_agent_devices a ON a.tenant_id=s.tenant_id AND a.id=$3 AND a.disabled_at IS NULL
+       JOIN rmm_device_inventory i ON i.id=a.inventory_id AND i.active=true
+      WHERE s.tenant_id=$1 AND s.id=$2 AND s.status IN ('tested','active')
+      LIMIT 1`,
+    [tenantId, sourceId, agentDeviceId],
+  )
+  const row = selected.rows[0]
+  if (!row) return { error: 'Vendor source or managed endpoint was not found.', status: 404 }
+
+  const verification = object(row.verification_config)
+  if (clean(verification.method) !== 'file_version') {
+    return { error: 'This probe currently supports file-version verification sources only.', status: 409 }
+  }
+  const filePath = clean(verification.filePath)
+  if (!safeVerificationFilePath(filePath)) {
+    return { error: 'The configured verification file path is not allowed.', status: 409 }
+  }
+  const telemetryFresh = row.last_telemetry_at && Date.now() - new Date(row.last_telemetry_at).getTime() <= 90_000
+  if (row.websocket_status !== 'Connected' || !telemetryFresh) {
+    return { error: 'This device is offline. No verification probe was queued.', status: 409, offline: true }
+  }
+
+  const existing = await pool.query(
+    `SELECT id,status FROM rmm_agent_jobs
+      WHERE tenant_id=$1 AND agent_device_id=$2 AND job_type='custom.command'
+        AND request_metadata->>'source'='vendor_verification_probe'
+        AND request_metadata->>'vendor_source_id'=$3
+        AND status IN ('queued','claimed')
+      ORDER BY created_at DESC LIMIT 1`,
+    [tenantId, agentDeviceId, sourceId],
+  )
+  if (existing.rowCount) return { error: 'A verification probe is already running for this source and device.', status: 409, jobId: existing.rows[0].id }
+
+  const command = fileVersionProbeScript(filePath)
+  const inserted = await pool.query(
+    `INSERT INTO rmm_agent_jobs
+      (tenant_id,agent_device_id,job_type,payload,queued_by_user_id,initiated_by,initiated_by_label,request_metadata)
+     VALUES ($1,$2,'custom.command',$3::jsonb,$4,'technician',$5,$6::jsonb)
+     RETURNING id,status,created_at`,
+    [
+      tenantId,
+      agentDeviceId,
+      JSON.stringify({ command, timeout_seconds: 30 }),
+      userId,
+      clean(actorLabel || 'Technician').slice(0, 255),
+      JSON.stringify({
+        source: 'vendor_verification_probe',
+        vendor_source_id: sourceId,
+        verification_method: 'file_version',
+        verification_file_path: filePath,
+        device_name: row.device_name,
+        device_reference: row.device_reference,
+      }),
+    ],
+  )
+  await recordRmmActivity({
+    tenantId,
+    agentDeviceId,
+    inventoryId: row.inventory_id,
+    actorUserId: userId,
+    actorType: 'technician',
+    actorLabel: clean(actorLabel || 'Technician').slice(0, 255),
+    eventType: 'patch.vendor_verification_probe.requested',
+    category: 'patching',
+    summary: clean(actorLabel || 'Technician') + ' started vendor verification probe “' + row.display_name + '”',
+    detail: 'Read-only file VERSIONINFO probe · ' + filePath,
+    outcome: 'requested',
+    jobId: inserted.rows[0].id,
+    metadata: { sourceId, method: 'file_version', filePath },
+  }).catch(() => null)
+  return { success: true, job: inserted.rows[0], filePath, deviceName: row.device_name }
+}
+
 function versionParts(value) {
   const matches = clean(value).match(/\d+/g)
   if (!matches?.length) return null
@@ -1211,6 +1321,21 @@ export function registerRmmPatchingRoutes(app) {
     } catch (error) {
       return c.json({ error: clean(error?.message || error) || 'Vendor source test failed.' }, 409)
     }
+  })
+
+  app.post('/api/v1/rmm/vendor-sources/:sourceId/probe-verification', async (c) => {
+    const auth = await requirePatchAccess(c, 'software')
+    if (auth.error) return auth.error
+    const body = await c.req.json().catch(() => ({}))
+    const result = await queueVendorVerificationProbe({
+      tenantId: auth.session.tenant_id,
+      userId: auth.session.user_id,
+      actorLabel: auth.session.name || auth.session.email || 'Technician',
+      sourceId: clean(c.req.param('sourceId')),
+      agentDeviceId: clean(body.agentDeviceId),
+    })
+    if (result.error) return c.json({ error: result.error, ...result }, result.status || 409)
+    return c.json(result, 202)
   })
 
   app.post('/api/v1/rmm/vendor-sources/:sourceId/approve', async (c) => {

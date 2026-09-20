@@ -152,6 +152,19 @@ export function jobActivityDescriptor(job, success, result = {}, errorMessage = 
         metadata: { releaseVersion: version, targetPatchHostVersion: targetPatchHost, result, requestMetadata },
       }
     }
+    if (clean(requestMetadata.source) === 'vendor_verification_probe') {
+      const filePath = clean(requestMetadata.verification_file_path)
+      return {
+        ...common,
+        eventType: ok ? 'patch.vendor_verification_probe.completed' : 'patch.vendor_verification_probe.failed',
+        category: 'patching',
+        summary: ok
+          ? actor.actorLabel + ' completed vendor verification probe'
+          : actor.actorLabel + ' vendor verification probe failed',
+        detail: [filePath ? 'File VERSIONINFO · ' + filePath : '', suffix].filter(Boolean).join(' · '),
+        metadata: { method: 'file_version', filePath, result, requestMetadata },
+      }
+    }
     const automationName = clean(requestMetadata.automation_name || requestMetadata.tray_label) || 'automation'
     return {
       ...common,

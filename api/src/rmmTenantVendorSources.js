@@ -182,7 +182,7 @@ function deploymentMode(value = '') {
 }
 
 function sourceType(value = '') {
-  return ['github_releases', 'vendor_json'].includes(clean(value)) ? clean(value) : 'github_releases'
+  return ['github_releases', 'vendor_json', 'static_release'].includes(clean(value)) ? clean(value) : 'github_releases'
 }
 
 function safeJsonPath(value = '', required = false) {
@@ -231,6 +231,10 @@ function normalizeInput(body = {}) {
     installerUrlPath: safeJsonPath(body.installerUrlPath ?? parser.installerUrlPath),
     sha256Path: safeJsonPath(body.sha256Path ?? parser.sha256Path),
     productCodePath: safeJsonPath(body.productCodePath ?? parser.productCodePath),
+    staticVersion: clean(body.staticVersion ?? parser.staticVersion).slice(0, 120),
+    staticInstallerUrl: clean(body.staticInstallerUrl ?? parser.staticInstallerUrl).slice(0, 2000),
+    staticSha256: normalizedSha256(body.staticSha256 ?? parser.staticSha256),
+    staticReleaseUrl: clean(body.staticReleaseUrl ?? parser.staticReleaseUrl ?? body.sourceUrl).slice(0, 2000),
   }
   const verificationSource = body.verificationConfig && typeof body.verificationConfig === 'object' && !Array.isArray(body.verificationConfig)
     ? body.verificationConfig
@@ -261,7 +265,7 @@ function normalizeInput(body = {}) {
     displayName: clean(body.displayName).slice(0, 160),
     sourceType: type,
     repository: type === 'github_releases' ? repositoryName(body.repository) : '',
-    sourceUrl: type === 'vendor_json' ? clean(body.sourceUrl).slice(0, 2000) : '',
+    sourceUrl: ['vendor_json', 'static_release'].includes(type) ? clean(body.sourceUrl).slice(0, 2000) : '',
     parserConfig,
     verificationConfig,
     canonicalName: clean(body.canonicalName).slice(0, 200),
@@ -291,6 +295,24 @@ function normalizeInput(body = {}) {
       throw new Error('A valid HTTPS vendor JSON URL is required.')
     }
   }
+  if (type === 'static_release') {
+    if (!parserConfig.staticVersion) throw new Error('A release version is required for static vendor sources.')
+    try {
+      const installerUrl = new URL(parserConfig.staticInstallerUrl)
+      if (installerUrl.protocol !== 'https:') throw new Error()
+    } catch {
+      throw new Error('A valid HTTPS installer URL is required for static vendor sources.')
+    }
+    if (!/^[A-F0-9]{64}$/.test(parserConfig.staticSha256)) throw new Error('A valid SHA-256 is required for static vendor sources.')
+    if (parserConfig.staticReleaseUrl) {
+      try {
+        const releaseUrl = new URL(parserConfig.staticReleaseUrl)
+        if (releaseUrl.protocol !== 'https:') throw new Error()
+      } catch {
+        throw new Error('Static vendor release page URLs must use HTTPS.')
+      }
+    }
+  }
   if (mode === 'winget_preferred' && !input.providerPackageId) {
     throw new Error('A WinGet package ID is required for WinGet-preferred sources.')
   }
@@ -310,6 +332,9 @@ function normalizeInput(body = {}) {
   if (mode === 'vendor_direct' && type === 'vendor_json'
     && (!parserConfig.installerUrlPath || !parserConfig.sha256Path || !input.expectedSigner)) {
     throw new Error('JSON vendor-direct sources require installer URL path, SHA-256 path and expected signer.')
+  }
+  if (mode === 'vendor_direct' && type === 'static_release' && !input.expectedSigner) {
+    throw new Error('Static vendor-direct sources require an expected signer.')
   }
   if (input.installerType && !['msi', 'exe'].includes(input.installerType)) {
     throw new Error('Installer type must be MSI or EXE.')
@@ -442,8 +467,40 @@ async function resolveJsonSource(source) {
   }
 }
 
+async function resolveStaticSource(source) {
+  const parser = source.parser_config && typeof source.parser_config === 'object' ? source.parser_config : {}
+  const version = releaseVersion(parser.staticVersion)
+  if (!version) throw new Error('Static vendor release does not contain a usable version.')
+  const installerUrl = (await publicHttpsUrl(parser.staticInstallerUrl)).toString()
+  const releaseUrl = parser.staticReleaseUrl ? (await publicHttpsUrl(parser.staticReleaseUrl)).toString() : ''
+  const release = {
+    version,
+    releaseDate: null,
+    releaseUrl,
+    installerUrl,
+    installerSha256: normalizedSha256(parser.staticSha256),
+    installerType: installerType(new URL(installerUrl).pathname, source.installer_type),
+    installerName: new URL(installerUrl).pathname.split('/').filter(Boolean).pop() || '',
+    checksumName: 'Static SHA-256',
+    verificationProductCode: '',
+  }
+  release.trustState = trustState(source, release)
+  return {
+    release,
+    sourcePayload: {
+      static: {
+        version,
+        releaseUrl,
+        installerUrl,
+        sha256Present: Boolean(release.installerSha256),
+      },
+    },
+  }
+}
+
 async function resolveSource(source) {
   if (source.source_type === 'vendor_json') return resolveJsonSource(source)
+  if (source.source_type === 'static_release') return resolveStaticSource(source)
   return resolveGithubSource(source)
 }
 
