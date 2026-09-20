@@ -701,8 +701,11 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId) {
   }
 }
 
-async function createAndDispatchSoftwarePatch(session, plan) {
+async function createAndDispatchSoftwarePatch(session, plan, context = {}) {
   const label = clean(session.name || session.email || 'Technician').slice(0, 255)
+  const cveId = clean(context.cveId)
+  const exposureId = clean(context.exposureId)
+  const requestSource = clean(context.source) || 'rmm_patching'
   const created = await withTransaction(async (client) => {
     const jobResult = await client.query(
       `INSERT INTO rmm_agent_jobs
@@ -716,11 +719,13 @@ async function createAndDispatchSoftwarePatch(session, plan) {
         session.user_id,
         label,
         JSON.stringify({
-          source: 'rmm_patching',
+          source: requestSource,
           device_name: plan.device.device_name,
           device_reference: plan.device.reference,
           catalogue_id: plan.device.catalogue_id,
           provider: plan.provider,
+          ...(cveId ? { cve_id: cveId } : {}),
+          ...(exposureId ? { vulnerability_exposure_id: exposureId } : {}),
         }),
       ],
     )
@@ -821,7 +826,8 @@ async function createAndDispatchSoftwarePatch(session, plan) {
     eventType: 'patch.software.requested',
     category: 'patching',
     summary: label + ' started software patch ' + '“' + plan.manifest.applicationName + '”',
-    detail: plan.manifest.installedVersion + ' → ' + plan.manifest.targetVersion + ' via ' + plan.provider,
+    detail: plan.manifest.installedVersion + ' → ' + plan.manifest.targetVersion + ' via ' + plan.provider
+      + (cveId ? ' · ' + cveId : ''),
     outcome: 'requested',
     correlationId: created.job.correlation_id,
     jobId: created.job.id,
@@ -896,7 +902,7 @@ export function registerRmmPatchingRoutes(app) {
     }
 
     const plan = await softwarePatchPlan(auth.session.tenant_id, agentDeviceId, catalogueId)
-    if (plan.error) return c.json({ error: plan.error, offline: plan.offline, capabilityMissing: plan.capabilityMissing, current: plan.current }, plan.status || 400)
+    if (plan.error) return c.json({ error: plan.error, offline: plan.offline, capabilityMissing: plan.capabilityMissing, current: plan.current, providerBlocked: plan.providerBlocked }, plan.status || 400)
 
     const dispatched = await createAndDispatchSoftwarePatch(auth.session, plan)
     if (!dispatched.dispatched) {
@@ -905,6 +911,78 @@ export function registerRmmPatchingRoutes(app) {
 
     return c.json({
       success: true,
+      job: dispatched.job,
+      deployment: dispatched.deployment,
+      provider: plan.provider,
+      bundle: await patchBundle(auth.session.tenant_id),
+    }, 202)
+  })
+
+  app.post('/api/v1/rmm/vulnerability-exposures/:exposureId/remediate', async (c) => {
+    const auth = await requirePatchAccess(c, 'software')
+    if (auth.error) return auth.error
+    if (!hasPermission(auth.session.access, 'rmm.devices.control')) {
+      return c.json({ error: 'You do not have permission to control RMM devices.' }, 403)
+    }
+
+    const exposureId = clean(c.req.param('exposureId'))
+    const exposureResult = await pool.query(
+      `SELECT e.id::text,e.cve_id,e.status,e.remediation_state,e.catalogue_id,
+              a.agent_device_id
+         FROM rmm_vulnerability_exposures e
+         LEFT JOIN LATERAL (
+           SELECT id::text AS agent_device_id
+             FROM rmm_agent_devices
+            WHERE tenant_id=e.tenant_id AND inventory_id=e.inventory_id AND disabled_at IS NULL
+            ORDER BY last_telemetry_at DESC NULLS LAST
+            LIMIT 1
+         ) a ON true
+        WHERE e.tenant_id=$1 AND e.id::text=$2
+        LIMIT 1`,
+      [auth.session.tenant_id, exposureId],
+    )
+    const exposure = exposureResult.rows[0]
+    if (!exposure) return c.json({ error: 'Vulnerability exposure not found.' }, 404)
+    if (exposure.status !== 'open') {
+      return c.json({ error: 'This vulnerability exposure is no longer open.' }, 409)
+    }
+    if (exposure.remediation_state !== 'available' || !exposure.catalogue_id) {
+      return c.json({ error: 'No verified software remediation is currently available for this exposure.' }, 409)
+    }
+    if (!exposure.agent_device_id) {
+      return c.json({ error: 'This device is offline. No patch job was queued.', offline: true }, 409)
+    }
+
+    const plan = await softwarePatchPlan(
+      auth.session.tenant_id,
+      exposure.agent_device_id,
+      exposure.catalogue_id,
+    )
+    if (plan.error) {
+      return c.json({
+        error: plan.error,
+        offline: plan.offline,
+        capabilityMissing: plan.capabilityMissing,
+        current: plan.current,
+        providerBlocked: plan.providerBlocked,
+      }, plan.status || 400)
+    }
+
+    const dispatched = await createAndDispatchSoftwarePatch(auth.session, plan, {
+      source: 'rmm_vulnerability_remediation',
+      cveId: exposure.cve_id,
+      exposureId: exposure.id,
+    })
+    if (!dispatched.dispatched) {
+      return c.json({
+        error: 'The device went offline before the remediation could be dispatched. No patch job was retained.',
+        offline: true,
+      }, 409)
+    }
+
+    return c.json({
+      success: true,
+      cveId: exposure.cve_id,
       job: dispatched.job,
       deployment: dispatched.deployment,
       provider: plan.provider,

@@ -12,6 +12,7 @@ import {
   ShieldCheck,
   Trash2,
   WifiOff,
+  Wrench,
   X,
 } from 'lucide-react'
 import {
@@ -23,6 +24,7 @@ import {
   deploySoftwarePatch,
   loadRmmPatching,
   loadRmmVulnerabilities,
+  remediateVulnerabilityExposure,
 } from '../../lib/rmmPatchingApi.js'
 import { loadRmmScope } from '../../lib/rmmScopeApi.js'
 import './RmmPatching.css'
@@ -250,6 +252,7 @@ export function RmmPatching({ devices = [] }) {
   const [vulnerabilities, setVulnerabilities] = useState([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [remediatingExposureId, setRemediatingExposureId] = useState('')
   const [error, setError] = useState('')
   const [mappingApp, setMappingApp] = useState(null)
   const [patchApp, setPatchApp] = useState(null)
@@ -396,6 +399,20 @@ export function RmmPatching({ devices = [] }) {
       setError(requestError?.message || 'Unable to start software patch.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function remediateExposure(exposure) {
+    if (!exposure?.id || remediatingExposureId) return
+    setRemediatingExposureId(exposure.id)
+    setError('')
+    try {
+      const result = await remediateVulnerabilityExposure(exposure.id)
+      setBundle(result.bundle)
+    } catch (requestError) {
+      setError(requestError?.message || 'Unable to start vulnerability remediation.')
+    } finally {
+      setRemediatingExposureId('')
     }
   }
 
@@ -556,6 +573,7 @@ export function RmmPatching({ devices = [] }) {
         <div><small>Open exposures</small><strong>{exposureSummary.open ?? 0}</strong></div>
         <div><small>Known / active exploitation</small><strong>{exposureSummary.active_exploitation_open ?? exposureSummary.kev_open ?? 0}</strong></div>
         <div><small>Fix available</small><strong>{exposureSummary.fix_available_open ?? 0}</strong></div>
+        <div><small>Provider blocked</small><strong>{exposureSummary.provider_blocked_open ?? 0}</strong></div>
         <div><small>Overdue SLA</small><strong>{exposureSummary.overdue_open ?? 0}</strong></div>
         <div><small>CISA KEV exposures</small><strong>{exposureSummary.kev_open ?? 0}</strong></div>
         <div><small>Remediated</small><strong>{exposureSummary.remediated ?? 0}</strong></div>
@@ -571,19 +589,26 @@ export function RmmPatching({ devices = [] }) {
           const percentile = item.epss_percentile == null ? null : Number(item.epss_percentile)
           const exploitation = (item.ssvc_exploitation || '').toLowerCase()
           const riskCritical = item.kev || exploitation === 'active' || Number(item.cvss_score || 0) >= 9
-          const remediationTone = item.remediation_state === 'remediated'
-            ? 'healthy'
-            : item.remediation_state === 'in_progress'
-              ? 'running'
-              : item.remediation_state === 'available'
-                ? 'warning'
-                : 'neutral'
+          const providerBlocked = item.status === 'open' && item.patch_status === 'provider_blocked'
+          const canRemediate = item.status === 'open' && item.remediation_state === 'available' && !providerBlocked
+          const remediating = remediatingExposureId === item.id
+          const remediationTone = providerBlocked
+            ? 'critical'
+            : item.remediation_state === 'remediated'
+              ? 'healthy'
+              : item.remediation_state === 'in_progress'
+                ? 'running'
+                : item.remediation_state === 'available'
+                  ? 'warning'
+                  : 'neutral'
+          const remediationLabel = providerBlocked ? 'provider blocked' : (item.remediation_state || 'unavailable')
+          const blockedDetail = item.patch_evidence?.providerBlockedDetail || 'The selected provider cannot currently remediate this detected installation.'
           return <div className="row" key={item.id}>
             <span><strong>{item.cve_id}</strong><small>{item.kev ? 'CISA KEV' : item.severity || item.source}</small></span>
             <span><strong>{item.device_name}</strong><small>{item.application_name} {item.installed_version ? '· ' + item.installed_version : ''}</small></span>
             <span><strong>{item.cvss_score ?? '—'}</strong><small>{epss == null ? 'EPSS pending' : 'EPSS ' + (epss * 100).toFixed(1) + '%' + (percentile == null ? '' : ' · ' + Math.round(percentile * 100) + 'th pct')}</small></span>
             <span>{item.kev ? <StatusPill tone="critical">Known exploited</StatusPill> : exploitation ? <StatusPill tone={exploitation === 'active' ? 'critical' : exploitation === 'poc' ? 'warning' : 'neutral'}>{exploitation === 'poc' ? 'PoC observed' : exploitation}</StatusPill> : <StatusPill tone={riskCritical ? 'warning' : 'neutral'}>{item.severity || 'Observed'}</StatusPill>}<small>{item.known_ransomware_use ? 'Ransomware: ' + item.known_ransomware_use : item.ssvc_automatable ? 'Automatable: ' + item.ssvc_automatable : ''}</small></span>
-            <span><StatusPill tone={remediationTone}>{(item.remediation_state || 'unavailable').replaceAll('_', ' ')}</StatusPill><small>{item.remediation_target_version ? 'Target ' + item.remediation_target_version + (item.remediation_provider ? ' via ' + item.remediation_provider : '') : item.fixed_version ? 'Fixed in ' + item.fixed_version : 'No verified fix route yet'}</small></span>
+            <span className="rmm-vuln-remediation"><StatusPill tone={remediationTone}>{remediationLabel.replaceAll('_', ' ')}</StatusPill><small>{item.remediation_target_version ? 'Target ' + item.remediation_target_version + (item.remediation_provider ? ' via ' + item.remediation_provider : '') : item.fixed_version ? 'Fixed in ' + item.fixed_version : 'No verified fix route yet'}</small>{providerBlocked ? <small className="rmm-vuln-blocked-detail">{blockedDetail}</small> : canRemediate ? <button className="rmm-vuln-remediate" disabled={!item.device_online || remediating} onClick={() => remediateExposure(item)} type="button"><Wrench size={12} /> {remediating ? 'Starting…' : item.device_online ? 'Remediate' : 'Device offline'}</button> : null}</span>
             <span><strong>{item.remediation_due_at ? new Date(item.remediation_due_at).toLocaleDateString() : '—'}</strong><small>{item.remediation_sla_class ? item.remediation_sla_class.replaceAll('_', ' ') : ''}</small></span>
           </div>
         })}

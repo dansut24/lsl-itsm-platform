@@ -45,6 +45,12 @@ export function deploySoftwarePatch(agentDeviceId, catalogueId) {
   })
 }
 
+export function remediateVulnerabilityExposure(exposureId) {
+  return request('/api/v1/rmm/vulnerability-exposures/' + encodeURIComponent(exposureId) + '/remediate', {
+    method: 'POST',
+  })
+}
+
 export function createPatchPolicy(policy) {
   return request('/api/v1/rmm/patch-policies', {
     method: 'POST',
