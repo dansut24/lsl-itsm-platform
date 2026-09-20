@@ -268,6 +268,7 @@ export async function reconcileVendorArtifactInspections() {
           JSON.stringify(evidence),
           JSON.stringify({
             trustState,
+            deploymentMode: trustState === 'direct_ready' ? 'vendor_direct' : 'intelligence_only',
             expectedSigner,
             signerBaseline: signerBaseline || signer,
             artifactHashProvenance: hashProvenance,
@@ -384,6 +385,17 @@ export async function queueVendorArtifactInspections(limit = 2) {
   const runner = runners.rows[0]
   if (!runner) return []
 
+  const active = await pool.query(
+    `SELECT count(*)::int AS count
+       FROM rmm_agent_jobs
+      WHERE agent_device_id=$1
+        AND job_type='patch.vendor_artifact.inspect'
+        AND status IN ('queued','claimed')`,
+    [runner.agent_device_id],
+  )
+  const availableSlots = Math.max(0, cappedLimit - Number(active.rows[0]?.count || 0))
+  if (!availableSlots) return []
+
   const candidates = await pool.query(
     `SELECT DISTINCT ON (r.source_key,r.provider_package_id)
             r.id,r.source_key,r.provider_package_id,r.canonical_name,r.version,
@@ -408,7 +420,7 @@ export async function queueVendorArtifactInspections(limit = 2) {
         )
       ORDER BY r.source_key,r.provider_package_id,r.last_seen_at DESC
       LIMIT $1`,
-    [cappedLimit],
+    [availableSlots],
   )
 
   const queued = []

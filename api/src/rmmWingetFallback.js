@@ -215,6 +215,16 @@ export async function syncAutomaticWingetFallbacks({ force = false, dryRun = fal
 
     if (!dryRun) {
       for (const mapping of mappings) {
+        const terminalVendorTrust = ['rejected','signer_review_required'].includes(mapping.vendorTrustState)
+        const effectiveTrustState = mapping.vendorDirectReady
+          ? 'direct_ready'
+          : mapping.transportReady
+            ? 'winget_ready'
+            : terminalVendorTrust
+              ? mapping.vendorTrustState
+              : mapping.vendorHasAsset
+                ? 'asset_candidate'
+                : 'version_only'
         const evidence = {
           wingetPackageId: mapping.packageId,
           wingetPackageName: mapping.packageName,
@@ -226,18 +236,13 @@ export async function syncAutomaticWingetFallbacks({ force = false, dryRun = fal
           wingetPackageMapping: mapping.curatedPackageId ? 'curated' : 'automatic',
           wingetFallbackReady: mapping.transportReady,
           hasWingetFallback: mapping.transportReady,
+          vendorTrustState: mapping.vendorTrustState,
           deploymentMode: mapping.vendorDirectReady
             ? 'vendor_direct'
             : mapping.transportReady
               ? 'winget_preferred'
               : 'intelligence_only',
-          trustState: mapping.vendorDirectReady
-            ? 'direct_ready'
-            : mapping.transportReady
-              ? 'winget_ready'
-              : mapping.vendorHasAsset
-                ? 'asset_candidate'
-                : 'version_only',
+          trustState: effectiveTrustState,
         }
         if (!mapping.curatedPackageId) {
           evidence.autoWingetPackageId = mapping.packageId
@@ -257,9 +262,19 @@ export async function syncAutomaticWingetFallbacks({ force = false, dryRun = fal
         )
         await pool.query(
           `UPDATE rmm_software_vendor_releases
-              SET trust_state=$4,
+              SET trust_state=CASE
+                    WHEN trust_state IN ('direct_ready','rejected','signer_review_required') THEN trust_state
+                    ELSE $4
+                  END,
                   trust_evidence=trust_evidence || $5::jsonb,
-                  source_payload=source_payload || $6::jsonb,
+                  source_payload=(source_payload || $6::jsonb)
+                    || jsonb_build_object(
+                      'trustState',
+                      CASE
+                        WHEN trust_state IN ('direct_ready','rejected','signer_review_required') THEN trust_state
+                        ELSE $4
+                      END
+                    ),
                   last_seen_at=now()
             WHERE source_key=$1
               AND provider_package_id=$2

@@ -1262,9 +1262,9 @@ async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId, options =
   } else {
     const release = await pool.query(
       `SELECT r.source_key,r.version,r.release_date,r.installer_url,r.installer_sha256,r.installer_type,r.source_priority,
-              COALESCE(NULLIF(r.source_payload->>'trustState',''),NULLIF(b.metadata->>'trustState',''),'') AS trust_state,
-              COALESCE(NULLIF(r.source_payload->>'expectedSigner',''),NULLIF(b.metadata->>'expectedSigner',''),NULLIF(s.metadata->>'expectedSigner',''),'') AS expected_signer,
-              COALESCE(NULLIF(r.source_payload->>'deploymentMode',''),NULLIF(b.metadata->>'deploymentMode',''),'winget_preferred') AS deployment_mode,
+              COALESCE(NULLIF(r.trust_state,''),NULLIF(b.metadata->>'trustState',''),'') AS trust_state,
+              COALESCE(NULLIF(b.metadata->>'expectedSigner',''),NULLIF(r.source_payload->>'expectedSigner',''),NULLIF(s.metadata->>'expectedSigner',''),'') AS expected_signer,
+              COALESCE(NULLIF(b.metadata->>'deploymentMode',''),NULLIF(r.source_payload->>'deploymentMode',''),'winget_preferred') AS deployment_mode,
               COALESCE(NULLIF(b.metadata->>'wingetPackageId',''),'') AS winget_package_id
          FROM rmm_software_vendor_releases r
          JOIN rmm_software_vendor_sources s ON s.source_key=r.source_key AND s.enabled=true

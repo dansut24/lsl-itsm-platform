@@ -737,6 +737,24 @@ export function registerRmmAgentRoutes(app) {
     if (!result.rowCount) return c.json({ success: false, error: 'Job not found or already completed.' }, 404)
     const completedJob = { ...result.rows[0], inventory_id: agent.inventory_id }
 
+    if (
+      ['patch.software', 'patch.vendor_artifact.inspect'].includes(completedJob.job_type)
+      && resultPayload.capabilities
+      && typeof resultPayload.capabilities === 'object'
+      && !Array.isArray(resultPayload.capabilities)
+      && clean(resultPayload.capabilities.patchHostVersion)
+    ) {
+      await pool.query(
+        `UPDATE rmm_agent_devices
+            SET patch_capabilities=$2::jsonb,
+                patch_capabilities_at=now(),
+                last_authenticated_at=now(),
+                updated_at=now()
+          WHERE id=$1`,
+        [agent.id, JSON.stringify(resultPayload.capabilities)],
+      )
+    }
+
     if (completedJob.job_type === 'patch.software') {
       const rebootRequired = Boolean(resultPayload.rebootRequired || resultPayload.reboot_required)
       const verificationFailed = Boolean(resultPayload.verificationFailed || resultPayload.verification_failed)
