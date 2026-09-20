@@ -322,7 +322,118 @@ function buildSoftware(devices, catalogue, observations = []) {
   }
 }
 
+async function reconcileTerminalPatchDeployments(tenantId) {
+  await pool.query(
+    `UPDATE rmm_patch_deployments d
+        SET status=CASE
+              WHEN j.status='completed'
+                AND lower(COALESCE(j.result->>'rebootRequired',j.result->>'reboot_required','false'))='true'
+                THEN 'reboot_required'
+              WHEN j.status='completed' THEN 'succeeded'
+              WHEN j.status='cancelled' THEN 'cancelled'
+              WHEN j.status='failed'
+                AND lower(COALESCE(j.result->>'verificationFailed',j.result->>'verification_failed','false'))='true'
+                THEN 'verification_failed'
+              ELSE 'failed'
+            END,
+            result=COALESCE(j.result,'{}'::jsonb),
+            completed_at=COALESCE(d.completed_at,j.completed_at,now()),
+            updated_at=now()
+       FROM rmm_agent_jobs j
+      WHERE d.tenant_id=$1
+        AND d.agent_job_id=j.id
+        AND d.status IN ('eligible','running')
+        AND j.status IN ('completed','failed','cancelled')`,
+    [tenantId],
+  )
+}
+
+async function reconcileVendorProductCodeDeployments(tenantId) {
+  const result = await pool.query(
+    `SELECT d.id,d.agent_job_id,d.inventory_id,d.application_name,d.installed_version,d.target_version,d.provider,
+            c.verification,i.source_payload,
+            COALESCE(NULLIF(j.initiated_by_label,''),'Technician') AS actor_label
+       FROM rmm_patch_deployments d
+       JOIN rmm_software_catalogue c ON c.id=d.catalogue_id
+       JOIN rmm_device_inventory i ON i.id=d.inventory_id
+       LEFT JOIN rmm_agent_jobs j ON j.id=d.agent_job_id
+      WHERE d.tenant_id=$1
+        AND d.status='verification_failed'
+        AND d.provider='vendor_direct'
+        AND COALESCE(c.verification->>'method','')='uninstall_registry'
+        AND COALESCE(c.verification->>'productCode','')<>''
+        AND d.completed_at>now()-interval '24 hours'
+      ORDER BY d.created_at DESC`,
+    [tenantId],
+  )
+
+  for (const deployment of result.rows) {
+    if (!targetProductCodeInstalled(
+      softwareItems({ source_payload: deployment.source_payload }),
+      { verification: deployment.verification, target_version: deployment.target_version },
+    )) continue
+
+    const reconciliation = {
+      success: true,
+      verificationPassed: true,
+      verificationFailed: false,
+      lateVerification: true,
+      lateVerifiedVersion: clean(deployment.target_version),
+      lateVerifiedAt: new Date().toISOString(),
+      reconciliationSource: 'target_product_code_inventory',
+      targetProductCode: clean(object(deployment.verification).productCode),
+    }
+
+    await withTransaction(async (client) => {
+      await client.query(
+        `UPDATE rmm_patch_deployments
+            SET status='succeeded',
+                result=(result - 'error') || $3::jsonb,
+                updated_at=now()
+          WHERE tenant_id=$1 AND id=$2 AND status='verification_failed'`,
+        [tenantId, deployment.id, JSON.stringify(reconciliation)],
+      )
+      if (deployment.agent_job_id) {
+        await client.query(
+          `UPDATE rmm_agent_jobs
+              SET status='completed',
+                  result=(result - 'error') || $3::jsonb,
+                  error_message=NULL,
+                  updated_at=now()
+            WHERE tenant_id=$1 AND id=$2 AND status='failed'`,
+          [tenantId, deployment.agent_job_id, JSON.stringify(reconciliation)],
+        )
+        await client.query(
+          `UPDATE rmm_activity_events
+              SET outcome='success',
+                  severity='info',
+                  summary=$3,
+                  detail=$4,
+                  metadata=metadata || $5::jsonb
+            WHERE tenant_id=$1 AND job_id=$2 AND event_type='patch.software'`,
+          [
+            tenantId,
+            deployment.agent_job_id,
+            deployment.actor_label + ' patched “' + deployment.application_name + '”',
+            [
+              clean(deployment.installed_version) && clean(deployment.target_version)
+                ? clean(deployment.installed_version) + ' → ' + clean(deployment.target_version)
+                : '',
+              'Provider: vendor_direct',
+              'Verified by target MSI ProductCode after inventory refresh',
+              'Job successful · See details',
+            ].filter(Boolean).join(' · '),
+            JSON.stringify(reconciliation),
+          ],
+        )
+      }
+    })
+  }
+}
+
 async function patchBundle(tenantId) {
+  await reconcileTerminalPatchDeployments(tenantId)
+  await reconcileVendorProductCodeDeployments(tenantId)
   const [devices, catalogue, policies, assignments, vulnerabilities, discovery, vendorIntel, tenantVendorSources, exposureSummary, softwareVulnerabilityExposures, vulnerabilityExposureRowsData, deployments] = await Promise.all([
     patchDeviceRows(tenantId),
     catalogueRows(tenantId),
