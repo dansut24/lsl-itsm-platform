@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import zlib from 'node:zlib'
 import { DatabaseSync } from 'node:sqlite'
 import { pool } from './db.js'
+import { normalizeCatalogueVersion } from './rmmSoftwareVersioning.js'
 
 const SOURCE_URL = 'https://cdn.winget.microsoft.com/cache/source2.msix'
 const INDEX_DB_PATH = '/tmp/hi5central-winget-index.db'
@@ -193,7 +194,9 @@ export async function syncAutomaticWingetFallbacks({ force = false, dryRun = fal
         confidence = publisher.matched ? 'exact_name_publisher' : 'exact_unique_name'
       }
 
-      const versionComparison = compareVersions(match.latest_version, binding.target_version)
+      const providerVersion = normalizeCatalogueVersion(match.latest_version, { source_metadata: binding.source_metadata }, 'provider')
+      const targetVersion = normalizeCatalogueVersion(binding.target_version, { source_metadata: binding.source_metadata }, 'installed')
+      const versionComparison = compareVersions(providerVersion, targetVersion)
       mappings.push({
         sourceKey: binding.source_key,
         providerPackageId: binding.provider_package_id,
@@ -201,7 +204,9 @@ export async function syncAutomaticWingetFallbacks({ force = false, dryRun = fal
         packageId: clean(match.id),
         packageName: clean(match.name),
         packageVersion: clean(match.latest_version),
+        comparedPackageVersion: providerVersion,
         targetVersion: clean(binding.target_version),
+        comparedTargetVersion: targetVersion,
         vendorTrustState: clean(binding.vendor_trust_state || 'version_only'),
         vendorHasAsset: Boolean(clean(binding.vendor_installer_url)),
         vendorDirectReady: clean(binding.vendor_trust_state) === 'direct_ready',
