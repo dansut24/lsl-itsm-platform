@@ -518,6 +518,7 @@ export function RmmPatching({ devices = [] }) {
   const [patchApp, setPatchApp] = useState(null)
   const [catalogueInstallDeviceId, setCatalogueInstallDeviceId] = useState('')
   const [catalogueInstallId, setCatalogueInstallId] = useState('')
+  const [catalogueMaintenanceId, setCatalogueMaintenanceId] = useState('')
   const [bulkPatchDeviceId, setBulkPatchDeviceId] = useState('')
   const [bulkPatchMode, setBulkPatchMode] = useState('selected_catalogue')
   const [bulkPatchSelected, setBulkPatchSelected] = useState([])
@@ -597,6 +598,11 @@ export function RmmPatching({ devices = [] }) {
 
   const applications = bundle?.applications || []
   const catalogue = bundle?.catalogue || []
+  const catalogueMaintenanceItems = [...catalogue].sort((a, b) => String(a.canonicalName || '').localeCompare(String(b.canonicalName || '')))
+  const selectedCatalogueMaintenance = catalogueMaintenanceItems.find((item) => item.id === catalogueMaintenanceId) || null
+  const selectedCatalogueMaintenanceApp = selectedCatalogueMaintenance
+    ? { name: selectedCatalogueMaintenance.canonicalName, publisher: selectedCatalogueMaintenance.publisher, catalogue: selectedCatalogueMaintenance }
+    : null
   const patchDevices = bundle?.devices || []
   const catalogueCandidates = bundle?.catalogueCandidates || []
   const patchObservations = bundle?.patchObservations || []
@@ -1098,6 +1104,31 @@ export function RmmPatching({ devices = [] }) {
       <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Software patch catalogue</span><h2>Patchability by application</h2><p>{mappedApps.length} mapped application{mappedApps.length === 1 ? '' : 's'} · {applications.length - mappedApps.length} awaiting mapping · {catalogueCandidates.length} automatically discovered package{catalogueCandidates.length === 1 ? '' : 's'} · {overview.qualifiedCatalogue || 0} qualified · {overview.automaticAdmissionReadyCatalogue || 0} automatic-admission ready · {overview.candidateCatalogue || 0} deployment candidates.</p></div></div>
       <div className="rmm-vulnerability-coverage"><div><ShieldCheck size={17} /><span><strong>Catalogue vulnerability identity validation</strong><small>{vulnerabilityCatalogue.covered ?? 0} of {vulnerabilityCatalogue.total ?? catalogue.length} catalogue applications have completed source validation. NVD CPE and exact OSV identities are checked independently; endpoint exposures are still created only when that software/version is actually installed.</small></span></div><div className="stats"><span><small>NVD mapped</small><strong>{vulnerabilityCatalogue.nvd ?? 0}</strong></span><span><small>OSV mapped</small><strong>{vulnerabilityCatalogue.osv ?? 0}</strong></span><span><small>Validated</small><strong>{vulnerabilityCatalogue.covered ?? 0}</strong></span><span><small>Unchecked</small><strong>{vulnerabilityCatalogue.unchecked ?? 0}</strong></span><span><small>Mapping to validate</small><strong>{vulnerabilityCatalogue.validationPending ?? 0}</strong></span><span><small>Needs identity</small><strong>{vulnerabilityCatalogue.needsIdentity ?? 0}</strong></span><span><small>Source pending</small><strong>{vulnerabilityCatalogue.sourcePending ?? 0}</strong></span></div></div>
       {!!qualificationQueue.length && <div className="rmm-vulnerability-coverage"><div><PackageCheck size={17} /><span><strong>Automatic catalogue qualification</strong><small>One candidate at a time is clean-installed on the designated qualification runner, verified by PatchHost, uninstalled, then confirmed absent from inventory. Failures stop for review instead of retrying blindly.</small></span></div><div className="stats"><span><small>Queued</small><strong>{qualificationQueueCounts.queued || 0}</strong></span><span><small>Installing</small><strong>{qualificationQueueCounts.running || 0}</strong></span><span><small>Cleanup</small><strong>{(qualificationQueueCounts.cleanup_pending || 0) + (qualificationQueueCounts.cleanup_running || 0)}</strong></span><span><small>Passed</small><strong>{qualificationQueueCounts.passed || 0}</strong></span><span><small>Review</small><strong>{qualificationQueueCounts.review_required || 0}</strong></span></div>{!!qualificationReview.length && <div className="rmm-patch-candidate-footnote">{qualificationReview.slice(0, 5).map((item) => <span key={item.id}><strong>{item.canonical_name}</strong> · {item.target_version} · {readinessLabel(item.last_error || 'review required')}</span>)}</div>}</div>}
+      <div className="rmm-catalogue-install-card">
+        <div className="intro"><Wrench size={18} /><div><strong>Catalogue validation</strong><span>Edit, validate or retry one specific catalogue application without touching any other software.</span></div></div>
+        <div className="controls">
+          <label>Application<select value={catalogueMaintenanceId} onChange={(event) => setCatalogueMaintenanceId(event.target.value)}>
+            <option value="">Select catalogue application</option>
+            {catalogueMaintenanceItems.map((item) => <option key={item.id} value={item.id}>{item.canonicalName} · {item.targetVersion || 'No target'} · {qualificationLabel(item.qualificationState)}</option>)}
+          </select></label>
+          <div className="install-meta">
+            <span><small>Target</small><strong>{selectedCatalogueMaintenance?.targetVersion || '—'}</strong></span>
+            <span><small>Provider</small><strong>{selectedCatalogueMaintenance?.deploymentMode?.replaceAll('_', ' ') || selectedCatalogueMaintenance?.provider || '—'}</strong></span>
+            <span><small>Trust</small><strong>{readinessLabel(selectedCatalogueMaintenance?.trustState || 'pending')}</strong></span>
+            <span><small>Qualification</small><strong>{qualificationLabel(selectedCatalogueMaintenance?.qualificationState)}</strong></span>
+          </div>
+          <button disabled={saving || !selectedCatalogueMaintenanceApp} onClick={() => setValidationApp(selectedCatalogueMaintenanceApp)} type="button"><Wrench size={14} /> Edit</button>
+          <button disabled={saving || !selectedCatalogueMaintenanceApp?.catalogue?.sourceKey} onClick={() => revalidateApplication(selectedCatalogueMaintenanceApp)} type="button"><RefreshCw size={14} /> Validate</button>
+          <button disabled={saving || !selectedCatalogueMaintenanceApp || selectedCatalogueMaintenance?.deploymentMode !== 'vendor_direct'} onClick={() => retryApplicationQualification(selectedCatalogueMaintenanceApp)} type="button"><ShieldCheck size={14} /> Retry qualification</button>
+        </div>
+        {selectedCatalogueMaintenance?.qualificationReadiness && <div className="install-meta">
+          <span><small>Source</small><StatusPill tone={readinessTone(selectedCatalogueMaintenance.qualificationReadiness.source?.state)}>{readinessLabel(selectedCatalogueMaintenance.qualificationReadiness.source?.state)}</StatusPill></span>
+          <span><small>Artifact</small><StatusPill tone={readinessTone(selectedCatalogueMaintenance.qualificationReadiness.artifact?.state)}>{readinessLabel(selectedCatalogueMaintenance.qualificationReadiness.artifact?.state)}</StatusPill></span>
+          <span><small>Clean install</small><StatusPill tone={readinessTone(selectedCatalogueMaintenance.qualificationReadiness.installTest?.state)}>{readinessLabel(selectedCatalogueMaintenance.qualificationReadiness.installTest?.state)}</StatusPill></span>
+          <span><small>Uninstall</small><StatusPill tone={readinessTone(selectedCatalogueMaintenance.qualificationReadiness.uninstallTest?.state)}>{readinessLabel(selectedCatalogueMaintenance.qualificationReadiness.uninstallTest?.state)}</StatusPill></span>
+          <span><small>Upgrade</small><StatusPill tone={readinessTone(selectedCatalogueMaintenance.qualificationReadiness.upgradeTest?.state)}>{readinessLabel(selectedCatalogueMaintenance.qualificationReadiness.upgradeTest?.state)}</StatusPill></span>
+        </div>}
+      </div>
       <div className="rmm-catalogue-install-card">
         <div className="intro"><PackageCheck size={18} /><div><strong>Install from catalogue</strong><span>Install approved catalogue software on an online managed device. Existing installations stay in the normal Patch workflow.</span></div></div>
         <div className="controls">
