@@ -102,7 +102,7 @@ function agentUpgradeScript(release) {
     "$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ' + [char]34 + $runner + [char]34)",
     "$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(35)",
     "$principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest",
-    "$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 10)",
+    "$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 10)",
     "Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null",
     "Start-ScheduledTask -TaskName $taskName -ErrorAction Stop",
     "$task = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop",
