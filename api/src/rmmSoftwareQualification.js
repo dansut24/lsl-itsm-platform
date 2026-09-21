@@ -429,9 +429,7 @@ async function directReleaseForCatalogue(catalogueId) {
 
 async function dispatchCleanInstall(queue, runner) {
   const liveSocket = agentSocketForDevice(runner.agent_device_id)
-  if (!liveSocket || liveSocket.readyState !== 1) {
-    return { dispatched: false, offline: true }
-  }
+  const canPush = Boolean(liveSocket && liveSocket.readyState === 1)
 
   const catalogue = await directReleaseForCatalogue(queue.catalogue_id)
   if (!catalogue) {
@@ -558,45 +556,47 @@ async function dispatchCleanInstall(queue, runner) {
     )
     return { job, deployment }
   })
-  const claimed = await pool.query(
-    `UPDATE rmm_agent_jobs SET status='claimed',claimed_at=now(),updated_at=now()
-      WHERE id=$1 AND status='queued' RETURNING id`,
-    [created.job.id],
-  )
-  const pushed = claimed.rowCount > 0 && sendAgentMessage(runner.agent_device_id, {
-    type: 'job_execute',
-    job: {
-      id: created.job.id,
-      job_type: 'patch.software',
-      payload: manifest,
-      created_at: created.job.created_at,
-    },
-  })
-
-  if (!pushed) {
-    await withTransaction(async (client) => {
-      await client.query(
-        `UPDATE rmm_agent_jobs SET status='cancelled',claimed_at=NULL,completed_at=now(),
-            error_message='Qualification runner went offline before install dispatch.',updated_at=now()
-          WHERE id=$1`,
-        [created.job.id],
-      )
-      await client.query(
-        `UPDATE rmm_patch_deployments SET status='cancelled',completed_at=now(),updated_at=now()
-          WHERE id=$1`,
-        [created.deployment.id],
-      )
-      await client.query(
-        `UPDATE rmm_software_qualification_queue
-            SET state='queued',runner_agent_device_id=NULL,agent_job_id=NULL,deployment_id=NULL,
-                last_error='runner_offline_before_install_dispatch',updated_at=now()
-          WHERE id=$1`,
-        [queue.id],
-      )
-    })
-    return { dispatched: false, offline: true }
+  let delivery = 'queued_agent_channel'
+  if (canPush) {
+    const claimed = await pool.query(
+      `UPDATE rmm_agent_jobs SET status='claimed',claimed_at=now(),updated_at=now()
+        WHERE id=$1 AND status='queued' RETURNING id`,
+      [created.job.id],
+    )
+    if (claimed.rowCount) {
+      const pushed = sendAgentMessage(runner.agent_device_id, {
+        type: 'job_execute',
+        job: {
+          id: created.job.id,
+          job_type: 'patch.software',
+          payload: manifest,
+          created_at: created.job.created_at,
+        },
+      })
+      if (pushed) {
+        delivery = 'websocket'
+      } else {
+        await pool.query(
+          `UPDATE rmm_agent_jobs
+              SET status='queued',claimed_at=NULL,error_message='',updated_at=now()
+            WHERE id=$1 AND status='claimed'`,
+          [created.job.id],
+        )
+      }
+    }
   }
-  return { dispatched: true, jobId: created.job.id, deploymentId: created.deployment.id }
+  await pool.query(
+    `UPDATE rmm_software_qualification_queue
+        SET evidence=evidence || $2::jsonb,updated_at=now()
+      WHERE id=$1`,
+    [queue.id, JSON.stringify({ installDelivery: delivery })],
+  )
+  return {
+    dispatched: true,
+    queued: delivery !== 'websocket',
+    jobId: created.job.id,
+    deploymentId: created.deployment.id,
+  }
 }
 
 function compareVersionish(a, b) {
@@ -654,7 +654,7 @@ function strictDirectArtifactReady(release) {
 
 async function dispatchUpgradeInstall(queue, runner, release, { intent, installedVersion = '', stage }) {
   const liveSocket = agentSocketForDevice(runner.agent_device_id)
-  if (!liveSocket || liveSocket.readyState !== 1) return { dispatched: false, offline: true }
+  const canPush = Boolean(liveSocket && liveSocket.readyState === 1)
   if (!strictDirectArtifactReady(release)) {
     await markReview(queue.id, 'qualification_upgrade_artifact_gate_failed', { stage, releaseVersion: clean(release?.release_version) })
     return { dispatched: false }
@@ -757,20 +757,42 @@ async function dispatchUpgradeInstall(queue, runner, release, { intent, installe
     return { job, deployment }
   })
 
-  const claimed = await pool.query(
-    `UPDATE rmm_agent_jobs SET status='claimed',claimed_at=now(),updated_at=now()
-      WHERE id=$1 AND status='queued' RETURNING id`,
-    [created.job.id],
-  )
-  const pushed = claimed.rowCount > 0 && sendAgentMessage(runner.agent_device_id, {
-    type: 'job_execute',
-    job: { id: created.job.id, job_type: 'patch.software', payload: manifest, created_at: created.job.created_at },
-  })
-  if (!pushed) {
-    await markReview(queue.id, 'qualification_runner_offline_before_upgrade_dispatch', { stage })
-    return { dispatched: false, offline: true }
+  let delivery = 'queued_agent_channel'
+  if (canPush) {
+    const claimed = await pool.query(
+      `UPDATE rmm_agent_jobs SET status='claimed',claimed_at=now(),updated_at=now()
+        WHERE id=$1 AND status='queued' RETURNING id`,
+      [created.job.id],
+    )
+    if (claimed.rowCount) {
+      const pushed = sendAgentMessage(runner.agent_device_id, {
+        type: 'job_execute',
+        job: { id: created.job.id, job_type: 'patch.software', payload: manifest, created_at: created.job.created_at },
+      })
+      if (pushed) {
+        delivery = 'websocket'
+      } else {
+        await pool.query(
+          `UPDATE rmm_agent_jobs
+              SET status='queued',claimed_at=NULL,error_message='',updated_at=now()
+            WHERE id=$1 AND status='claimed'`,
+          [created.job.id],
+        )
+      }
+    }
   }
-  return { dispatched: true, jobId: created.job.id, deploymentId: created.deployment.id }
+  await pool.query(
+    `UPDATE rmm_software_qualification_queue
+        SET evidence=evidence || $2::jsonb,updated_at=now()
+      WHERE id=$1`,
+    [queue.id, JSON.stringify({ installDelivery: delivery })],
+  )
+  return {
+    dispatched: true,
+    queued: delivery !== 'websocket',
+    jobId: created.job.id,
+    deploymentId: created.deployment.id,
+  }
 }
 
 async function dispatchUpgradeBaseline(queue, runner) {
