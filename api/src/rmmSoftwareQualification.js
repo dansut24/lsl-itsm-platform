@@ -73,6 +73,26 @@ async function liveQualificationRunner() {
   return result.rows[0] || null
 }
 
+async function qualificationRunnerContaminants(runner, excludeQueueId = '') {
+  if (!runner?.agent_device_id) return []
+  const result = await pool.query(
+    `SELECT q.id,c.canonical_name,c.name_pattern,c.publisher_pattern
+       FROM rmm_software_qualification_queue q
+       JOIN rmm_software_catalogue c ON c.id=q.catalogue_id
+      WHERE q.runner_agent_device_id=$1
+        AND q.id<>COALESCE(NULLIF($2,'')::uuid,'00000000-0000-0000-0000-000000000000'::uuid)
+        AND q.evidence ? 'installCompletedAt'
+        AND q.state IN ('running','cleanup_pending','cleanup_running','review_required')
+      ORDER BY q.updated_at DESC
+      LIMIT 50`,
+    [runner.agent_device_id, clean(excludeQueueId)],
+  )
+  return result.rows
+    .filter((row) => installedMatches(runner.source_payload, row).length)
+    .map((row) => clean(row.canonical_name))
+    .filter(Boolean)
+}
+
 async function markReview(queueId, error, evidence = {}) {
   await pool.query(
     `UPDATE rmm_software_qualification_queue
@@ -454,6 +474,17 @@ async function dispatchCleanInstall(queue, runner) {
 
   const current = await qualificationRow(queue.id)
   if (!current) return { dispatched: false }
+  const contaminants = await qualificationRunnerContaminants(runner, queue.id)
+  if (contaminants.length) {
+    await pool.query(
+      `UPDATE rmm_software_qualification_queue
+          SET last_error='runner_contaminated_by_prior_qualification',
+              evidence=evidence || $2::jsonb,updated_at=now()
+        WHERE id=$1 AND state='queued'`,
+      [queue.id, JSON.stringify({ runnerContaminants: contaminants })],
+    )
+    return { dispatched: false, blocked: true, reason: 'runner_contaminated_by_prior_qualification', contaminants }
+  }
   if (installedMatches(runner.source_payload, current).length) {
     await markReview(queue.id, 'qualification_runner_not_clean', { stage: 'pre_install' })
     return { dispatched: false }
@@ -798,6 +829,17 @@ async function dispatchUpgradeInstall(queue, runner, release, { intent, installe
 async function dispatchUpgradeBaseline(queue, runner) {
   const current = await qualificationRow(queue.id)
   if (!current) return { dispatched: false }
+  const contaminants = await qualificationRunnerContaminants(runner, queue.id)
+  if (contaminants.length) {
+    await pool.query(
+      `UPDATE rmm_software_qualification_queue
+          SET last_error='runner_contaminated_by_prior_qualification',
+              evidence=evidence || $2::jsonb,updated_at=now()
+        WHERE id=$1 AND state='queued'`,
+      [queue.id, JSON.stringify({ runnerContaminants: contaminants })],
+    )
+    return { dispatched: false, blocked: true, reason: 'runner_contaminated_by_prior_qualification', contaminants }
+  }
   if (installedMatches(runner.source_payload, current).length) {
     await markReview(queue.id, 'qualification_runner_not_clean', { stage: 'upgrade_pre_install' })
     return { dispatched: false }

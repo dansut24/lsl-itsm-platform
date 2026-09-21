@@ -1759,6 +1759,20 @@ export async function softwareVendorSummary() {
 }
 
 let schedulerStarted = false
+let qualificationRunnerTickActive = false
+
+async function runQualificationRunnerTick() {
+  if (qualificationRunnerTickActive) return
+  qualificationRunnerTickActive = true
+  try {
+    await runSoftwareQualificationQueue({ dispatchLimit: 1 })
+    await promoteAutomaticAdmissionReady({ limit: 12 })
+  } catch (error) {
+    console.error('RMM qualification runner tick failed', error)
+  } finally {
+    qualificationRunnerTickActive = false
+  }
+}
 
 export function startSoftwareVendorSyncScheduler() {
   if (schedulerStarted) return
@@ -1773,8 +1787,6 @@ export function startSoftwareVendorSyncScheduler() {
       await queueCommonSoftwareQualifications({ limit: 50 })
       await queueAutomaticCleanInstallQualifications({ limit: 8, maxPending: 12 })
       await queueAutomaticUpgradeQualifications({ limit: 12 })
-      await runSoftwareQualificationQueue({ dispatchLimit: 1 })
-      await promoteAutomaticAdmissionReady({ limit: 12 })
     } catch (error) {
       console.error('RMM vendor/software qualification scheduler failed', error)
     }
@@ -1783,4 +1795,6 @@ export function startSoftwareVendorSyncScheduler() {
   setInterval(run, 5 * 60 * 1000).unref?.()
   setTimeout(qualify, 30_000).unref?.()
   setInterval(qualify, 60_000).unref?.()
+  setTimeout(runQualificationRunnerTick, 5_000).unref?.()
+  setInterval(runQualificationRunnerTick, 10_000).unref?.()
 }
