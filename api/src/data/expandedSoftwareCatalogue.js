@@ -988,6 +988,13 @@ export const expandedSoftwareCatalogue = [
     "sourceKey": "gh_zulip_zulip_desktop",
     "displayName": "Zulip Desktop",
     "canonicalName": "Zulip Desktop",
+    "namePattern": "Zulip",
+    "publisherPattern": "Kandra Labs",
+    "verificationConfig": {
+      "method": "uninstall_registry",
+      "displayNameContains": "Zulip",
+      "publisherContains": "Kandra Labs"
+    },
     "sourceType": "github_releases",
     "repository": "zulip/zulip-desktop",
     "deploymentMode": "intelligence_only",
@@ -1556,6 +1563,13 @@ export const expandedSoftwareCatalogue = [
     "sourceKey": "gh_onlyoffice_desktopeditors",
     "displayName": "OnlyOffice Desktop Editors",
     "canonicalName": "OnlyOffice Desktop Editors",
+    "namePattern": "ONLYOFFICE",
+    "publisherPattern": "Ascensio System SIA",
+    "verificationConfig": {
+      "method": "uninstall_registry",
+      "displayNameContains": "ONLYOFFICE",
+      "publisherContains": "Ascensio System SIA"
+    },
     "sourceType": "github_releases",
     "repository": "ONLYOFFICE/DesktopEditors",
     "deploymentMode": "intelligence_only",
