@@ -16,7 +16,7 @@ import {
 import { recalculateAllTenantVulnerabilityExposures } from './rmmVulnerabilityExposure.js'
 import { syncAutomaticWingetFallbacks } from './rmmWingetFallback.js'
 import { syncEvergreenCorroboration } from './rmmEvergreenIntel.js'
-import { promoteAutomaticAdmissionReady, queueAutomaticCleanInstallQualifications, queueAutomaticUpgradeQualifications, runSoftwareQualificationQueue } from './rmmSoftwareQualification.js'
+import { promoteAutomaticAdmissionReady, queueAutomaticCleanInstallQualifications, queueAutomaticUpgradeQualifications, queueCommonSoftwareQualifications, runSoftwareQualificationQueue } from './rmmSoftwareQualification.js'
 import {
   classifyGithubReleaseBacklog,
   discoverGithubWindowsInstaller,
@@ -177,7 +177,12 @@ async function upsertRelease({
          asset_final_url=CASE WHEN rmm_software_vendor_releases.installer_url IS DISTINCT FROM EXCLUDED.installer_url THEN '' ELSE rmm_software_vendor_releases.asset_final_url END,
          asset_health_error=CASE WHEN rmm_software_vendor_releases.installer_url IS DISTINCT FROM EXCLUDED.installer_url THEN '' ELSE rmm_software_vendor_releases.asset_health_error END,
          installer_url=EXCLUDED.installer_url,
-         installer_sha256=EXCLUDED.installer_sha256,
+         installer_sha256=CASE
+           WHEN EXCLUDED.installer_sha256<>'' THEN EXCLUDED.installer_sha256
+           WHEN rmm_software_vendor_releases.installer_url IS NOT DISTINCT FROM EXCLUDED.installer_url
+             THEN rmm_software_vendor_releases.installer_sha256
+           ELSE ''
+         END,
          installer_type=EXCLUDED.installer_type,
          release_url=EXCLUDED.release_url,
          asset_name=EXCLUDED.asset_name,
@@ -186,6 +191,7 @@ async function upsertRelease({
              THEN rmm_software_vendor_releases.trust_state
            WHEN rmm_software_vendor_releases.trust_state='direct_ready'
              AND EXCLUDED.trust_state<>'direct_ready'
+             AND rmm_software_vendor_releases.installer_url IS NOT DISTINCT FROM EXCLUDED.installer_url
              THEN 'direct_ready'
            ELSE EXCLUDED.trust_state
          END,
@@ -199,6 +205,7 @@ async function upsertRelease({
                  THEN rmm_software_vendor_releases.trust_state
                WHEN rmm_software_vendor_releases.trust_state='direct_ready'
                  AND EXCLUDED.trust_state<>'direct_ready'
+                 AND rmm_software_vendor_releases.installer_url IS NOT DISTINCT FROM EXCLUDED.installer_url
                  THEN 'direct_ready'
                ELSE EXCLUDED.trust_state
              END
@@ -1603,6 +1610,7 @@ export function startSoftwareVendorSyncScheduler() {
         runVendorArtifactQualification({ inspectLimit: 2 }),
         classifyGithubReleaseBacklog(8),
       ])
+      await queueCommonSoftwareQualifications({ limit: 50 })
       await queueAutomaticCleanInstallQualifications({ limit: 8, maxPending: 12 })
       await queueAutomaticUpgradeQualifications({ limit: 12 })
       await runSoftwareQualificationQueue({ dispatchLimit: 1 })

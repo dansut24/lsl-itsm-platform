@@ -1,4 +1,5 @@
 import { pool, withTransaction } from './db.js'
+import { COMMON_WINDOWS_SOFTWARE_LOWER } from './rmmCommonSoftware.js'
 import { publicHttpsUrl } from './rmmTenantVendorSources.js'
 
 function clean(value = '') { return String(value ?? '').trim() }
@@ -554,7 +555,7 @@ export async function queueVendorArtifactInspections(limit = 2) {
                   r.last_seen_at DESC
               ) AS rn
          FROM rmm_software_vendor_releases r
-        WHERE r.trust_state='asset_candidate'
+        WHERE r.trust_state IN ('asset_candidate','winget_ready')
           AND r.installer_url<>''
           AND r.installer_type IN ('msi','exe')
           AND NOT EXISTS (
@@ -575,9 +576,11 @@ export async function queueVendorArtifactInspections(limit = 2) {
             installer_url,installer_sha256,installer_type
        FROM ranked
       WHERE rn=1
-      ORDER BY priority_group,last_seen_at DESC
+      ORDER BY priority_group,
+               CASE WHEN lower(canonical_name)=ANY($2::text[]) THEN 0 ELSE 1 END,
+               last_seen_at DESC
       LIMIT $1`,
-    [availableSlots],
+    [availableSlots, COMMON_WINDOWS_SOFTWARE_LOWER],
   )
 
   const queued = []
@@ -709,6 +712,14 @@ export async function queueVendorArtifactInspectionForCatalogue(catalogueId) {
 }
 
 async function reconcileDirectReadyCatalogue() {
+  await pool.query(
+    `UPDATE rmm_software_vendor_releases
+        SET installer_sha256=upper(trust_evidence->>'sha256'),last_seen_at=last_seen_at
+      WHERE trust_state='direct_ready'
+        AND COALESCE(installer_sha256,'')=''
+        AND COALESCE(trust_evidence->>'signatureVerified','false')='true'
+        AND COALESCE(trust_evidence->>'sha256','') ~* '^[a-f0-9]{64}$'`,
+  )
   const result = await pool.query(
     `UPDATE rmm_software_catalogue c
         SET source_metadata=c.source_metadata || jsonb_build_object(

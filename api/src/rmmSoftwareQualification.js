@@ -1,6 +1,7 @@
 import { pool, withTransaction } from './db.js'
 import { agentSocketForDevice, sendAgentMessage } from './rmmAgent.js'
 import { verificationVersionForRelease } from './rmmSoftwareVersioning.js'
+import { COMMON_WINDOWS_SOFTWARE_LOWER } from './rmmCommonSoftware.js'
 
 function clean(value = '') { return String(value ?? '').trim() }
 function lower(value = '') { return clean(value).toLowerCase() }
@@ -823,6 +824,74 @@ async function reconcileQueueRow(queue, runner) {
   }
 
   return { id: current.id, state: current.state }
+}
+
+export async function queueCommonSoftwareQualifications({ limit = 50 } = {}) {
+  const safeLimit = Math.max(1, Math.min(COMMON_WINDOWS_SOFTWARE_LOWER.length, Number(limit) || 50))
+  const result = await pool.query(
+    `WITH candidates AS (
+       SELECT c.id AS catalogue_id,c.canonical_name,
+              2000-array_position($1::text[],lower(c.canonical_name)) AS priority
+         FROM rmm_software_catalogue c
+         JOIN rmm_software_vendor_sources s
+           ON s.source_key=c.source_metadata->>'latestSource' AND s.enabled=true
+         JOIN rmm_software_vendor_releases r
+           ON r.provider_package_id=c.external_key
+          AND r.source_key=c.source_metadata->>'latestSource'
+          AND r.version=c.target_version
+        WHERE c.tenant_id IS NULL
+          AND c.status='active'
+          AND c.qualification_state='deployment_candidate'
+          AND lower(c.canonical_name)=ANY($1::text[])
+          AND c.source_metadata->>'deploymentMode'='vendor_direct'
+          AND c.source_metadata->>'trustState'='direct_ready'
+          AND lower(COALESCE(c.installer_type,'')) IN ('msi','exe')
+          AND COALESCE(c.target_version,'')<>''
+          AND c.target_version !~* '(alpha|beta|rc|preview|eap|nightly|dev|canary)'
+          AND s.last_success_at IS NOT NULL
+          AND COALESCE(s.last_error,'')=''
+          AND r.trust_state='direct_ready'
+          AND r.installer_type IN ('msi','exe')
+          AND r.installer_url LIKE 'https://%'
+          AND r.installer_sha256 ~* '^[a-f0-9]{64}$'
+          AND COALESCE(
+            NULLIF(c.source_metadata->>'expectedSigner',''),
+            NULLIF(r.source_payload->>'expectedSigner',''),
+            NULLIF(r.trust_evidence->>'signer','')
+          ) IS NOT NULL
+          AND lower(COALESCE(c.qualification_evidence->>'sha256Verified','false'))='true'
+          AND lower(COALESCE(c.qualification_evidence->>'authenticodeVerified','false'))='true'
+          AND c.source_metadata->'vulnerabilityIdentityAudit'->>'state'='covered'
+          AND EXISTS (
+            SELECT 1
+              FROM rmm_software_vulnerability_identities vi
+             WHERE vi.catalogue_id=c.id AND vi.enabled=true
+          )
+          AND NOT EXISTS (
+            SELECT 1
+              FROM rmm_software_qualification_queue q
+             WHERE q.catalogue_id=c.id AND q.test_type='clean_install'
+          )
+        ORDER BY priority DESC,lower(c.canonical_name)
+        LIMIT $2
+     )
+     INSERT INTO rmm_software_qualification_queue
+       (catalogue_id,test_type,state,priority,attempt_count,last_error,evidence,created_at,updated_at)
+     SELECT catalogue_id,'clean_install','queued',priority,0,'',
+            jsonb_build_object(
+              'automaticCleanInstallQualification',true,
+              'qualificationCohort','common_50',
+              'vendorDirectRequired',true,
+              'wingetQualificationAllowed',false,
+              'queuedAt',now()
+            ),
+            now(),now()
+       FROM candidates
+     ON CONFLICT (catalogue_id,test_type) DO NOTHING
+     RETURNING id,catalogue_id,test_type,state,priority`,
+    [COMMON_WINDOWS_SOFTWARE_LOWER, safeLimit],
+  )
+  return result.rows
 }
 
 export async function queueAutomaticCleanInstallQualifications({ limit = 8, maxPending = 12 } = {}) {
