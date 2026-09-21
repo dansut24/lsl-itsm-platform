@@ -345,7 +345,22 @@ async function latestGithubTagViaRedirect(repository) {
       current = await publicHttpsUrl(new URL(location, current).toString())
       continue
     }
-    if (!response.ok) throw new Error('GitHub latest release HTTP ' + response.status)
+    if (!response.ok) {
+      if (response.status >= 500) {
+        try {
+          const fallback = await latestGithubRelease(repository)
+          const fallbackTag = clean(fallback?.tag_name || fallback?.name)
+          const fallbackUrl = clean(fallback?.html_url)
+          if (fallbackTag && fallbackUrl) {
+            return {
+              tag: fallbackTag,
+              releaseUrl: (await publicHttpsUrl(fallbackUrl)).toString(),
+            }
+          }
+        } catch {}
+      }
+      throw new Error('GitHub latest release HTTP ' + response.status)
+    }
     const match = current.pathname.match(/\/releases\/tag\/(.+)$/)
     if (!match) throw new Error(repository + ' has no usable latest GitHub release')
     return {
