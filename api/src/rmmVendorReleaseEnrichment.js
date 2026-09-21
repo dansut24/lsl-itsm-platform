@@ -166,6 +166,21 @@ export async function discoverGithubWindowsInstaller(repository, tag, productNam
   }
 }
 
+export async function classifyGithubReleaseBacklog(limit = 8) {
+  const rows = await pool.query(`SELECT c.id,c.canonical_name,b.metadata->>'repository' AS repository,r.source_payload->'github'->>'tag_name' AS tag_name FROM rmm_software_catalogue c JOIN rmm_software_vendor_releases r ON r.provider_package_id=c.external_key AND r.version=c.target_version JOIN rmm_software_vendor_bindings b ON b.source_key=r.source_key AND b.provider_package_id=r.provider_package_id WHERE c.tenant_id IS NULL AND c.status='active' AND c.qualification_state='intelligence_only' AND r.trust_state='version_only' AND r.source_key LIKE 'gh_%' AND COALESCE(c.source_metadata->>'releaseAssetClassifiedTag','')<>COALESCE(r.source_payload->'github'->>'tag_name','') ORDER BY c.updated_at ASC LIMIT $1`, [Math.max(1, Math.min(25, Number(limit)||8))])
+  const classified=[]
+  for (const row of rows.rows) {
+    if (!clean(row.repository) || !clean(row.tag_name)) continue
+    try {
+      const assets=await githubExpandedAssets(row.repository,row.tag_name)
+      const result=classifyWindowsReleaseAssets(assets)
+      await pool.query(`UPDATE rmm_software_catalogue SET source_metadata=source_metadata || $2::jsonb,updated_at=now() WHERE id=$1`,[row.id,JSON.stringify({releaseAssetClassifiedTag:row.tag_name,releaseAssetKind:result.kind,releaseAssetName:result.assetName,releaseAssetBlocker:result.blocker,releaseAssetClassifiedAt:new Date().toISOString()})])
+      classified.push({canonicalName:row.canonical_name,...result})
+    } catch {}
+  }
+  return classified
+}
+
 export function vendorReleaseTrustProfile(input = {}) {
   const installerUrl = clean(input.installerUrl)
   const installerSha256 = clean(input.installerSha256).toUpperCase()

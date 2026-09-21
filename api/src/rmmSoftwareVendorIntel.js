@@ -1386,7 +1386,7 @@ export async function softwareVendorSummary() {
     const source = object(row.source_metadata)
     const targetVersion = clean(row.target_version)
     const trustState = clean(row.trust_state || 'no_release')
-    let blocker = 'qualification_pending'
+    let blocker = clean(source.releaseAssetBlocker || 'qualification_pending')
     let state = 'automation_backlog'
     if (!targetVersion) blocker = 'target_version_missing'
     else if (trustState === 'no_release') blocker = 'release_not_correlated'
@@ -1397,18 +1397,6 @@ export async function softwareVendorSummary() {
     else if (trustState === 'version_only') blocker = 'deployment_transport_missing'
     return { id: row.id, canonical_name: row.canonical_name, target_version: targetVersion, source_key: row.source_key, platform: row.platform, architecture: row.architecture, trust_state: trustState, state, blocker, registry: clean(meta.registry), winget_package_id: clean(meta.wingetPackageId || source.wingetPackageId), installer_type: clean(row.installer_type), asset_name: clean(row.asset_name), repository: clean(meta.repository), release_tag: clean(object(row.release_source_payload).github?.tag_name || object(row.release_source_payload).github?.tagName) }
   })
-  const githubAssetBacklog = readiness.filter((item) => item.blocker === 'vendor_windows_asset_missing' && /^gh_/.test(clean(item.source_key)))
-  const bindingByKey = new Map(readinessResult.rows.map((row) => [row.id, object(row.binding_metadata)]))
-  await Promise.all(githubAssetBacklog.map(async (item) => {
-    const repository = item.repository
-    const tag = item.release_tag
-    if (!repository || !tag) return
-    try {
-      const assets = await githubExpandedAssets(repository, tag)
-      const classification = classifyWindowsReleaseAssets(assets)
-      if (classification.kind !== 'none') { item.blocker = classification.blocker; item.release_asset_kind = classification.kind; item.release_asset_name = classification.assetName }
-    } catch {}
-  }))
   const readinessCounts = readiness.reduce((counts, item) => { counts[item.blocker] = (counts[item.blocker] || 0) + 1; return counts }, {})
   return { sources: sources.rows, latest, sourceHealth, health, readiness, readinessCounts }
 }
@@ -1419,7 +1407,7 @@ export function startSoftwareVendorSyncScheduler() {
   if (schedulerStarted) return
   schedulerStarted = true
   const run = () => syncDueSoftwareVendorSources().catch((error) => console.error('RMM software vendor scheduler failed', error))
-  const qualify = () => runVendorArtifactQualification({ inspectLimit: 2 })
+  const qualify = () => Promise.all([runVendorArtifactQualification({ inspectLimit: 2 }), classifyGithubReleaseBacklog(8)])
     .catch((error) => console.error('RMM vendor artifact qualification scheduler failed', error))
   setTimeout(run, 10_000).unref?.()
   setInterval(run, 5 * 60 * 1000).unref?.()
