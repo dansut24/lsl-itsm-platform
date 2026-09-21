@@ -11,6 +11,7 @@ let lastIndexRefreshAt = 0
 let lastSummary = null
 
 function clean(value = '') { return String(value ?? '').trim() }
+function lower(value = '') { return clean(value).toLowerCase() }
 function normalizedName(value = '') {
   return clean(value).toLowerCase().replace(/[^a-z0-9]+/g, '')
 }
@@ -412,6 +413,225 @@ export async function wingetRepositorySearch({ query = '', page = 1, pageSize = 
         publishers: clean(row.publishers).split(' | ').filter(Boolean),
       })),
     }
+  } finally {
+    db.close()
+  }
+}
+
+
+const WINGET_MANIFEST_ROOT = 'https://raw.githubusercontent.com/microsoft/winget-pkgs/master'
+const ENTERPRISE_SEED_CSV = 'https://content.patchmypc.com/downloads/csv/PatchMyPC-SupportedProductsList.csv'
+
+function yamlScalar(value = '') {
+  const raw = clean(value)
+  if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
+    return raw.slice(1, -1)
+  }
+  return raw
+}
+
+function manifestValue(text, key) {
+  const escapedKey = String(key).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const match = String(text || '').match(new RegExp('^' + escapedKey + ':\\s*(.+?)\\s*$', 'mi'))
+  return yamlScalar(match?.[1] || '')
+}
+
+function parseWingetInstallers(text) {
+  const source = String(text || '').replaceAll('\r\n', '\n')
+  const marker = source.search(/^Installers:\s*$/mi)
+  if (marker < 0) return []
+  const header = source.slice(0, marker)
+  const section = source.slice(marker).replace(/^Installers:\s*\n?/i, '')
+  const globalInstallerType = lower(manifestValue(header, 'InstallerType'))
+  const globalScope = lower(manifestValue(header, 'Scope'))
+  const globalSilent = yamlScalar(header.match(/^\s{2}Silent:\s*(.+?)\s*$/mi)?.[1] || '')
+  const blocks = section.split(/\n(?=\s*-\s+(?:Architecture|InstallerUrl):)/g)
+  const installers = []
+  for (const raw of blocks) {
+    const url = yamlScalar(raw.match(/^\s*InstallerUrl:\s*(.+?)\s*$/mi)?.[1] || raw.match(/^\s*-\s*InstallerUrl:\s*(.+?)\s*$/mi)?.[1] || '')
+    const sha256 = clean(raw.match(/^\s*InstallerSha256:\s*([A-Fa-f0-9]{64})\s*$/mi)?.[1]).toUpperCase()
+    if (!url || !sha256) continue
+    const architecture = lower(yamlScalar(raw.match(/^\s*-?\s*Architecture:\s*(.+?)\s*$/mi)?.[1] || ''))
+    const declaredType = lower(yamlScalar(raw.match(/^\s*InstallerType:\s*(.+?)\s*$/mi)?.[1] || globalInstallerType))
+    const scope = lower(yamlScalar(raw.match(/^\s*Scope:\s*(.+?)\s*$/mi)?.[1] || globalScope))
+    const silent = yamlScalar(raw.match(/^\s+Silent:\s*(.+?)\s*$/mi)?.[1] || globalSilent)
+    let path = ''
+    try { path = new URL(url).pathname.toLowerCase() } catch {}
+    const installerType = path.endsWith('.msi') ? 'msi' : path.endsWith('.exe') ? 'exe' : ''
+    installers.push({ architecture, url, sha256, installerType, installerTechnology: declaredType, scope, silent })
+  }
+  return installers
+}
+
+function acceptableUpstreamInstaller(installer) {
+  if (!installer?.url || !installer?.sha256 || !['msi','exe'].includes(clean(installer.installerType))) return false
+  let url
+  try { url = new URL(installer.url) } catch { return false }
+  if (url.protocol !== 'https:') return false
+  const host = lower(url.hostname)
+  if (
+    host === 'cdn.winget.microsoft.com'
+    || host.endsWith('.winget.microsoft.com')
+    || host === 'apps.microsoft.com'
+    || (host === 'www.microsoft.com' && url.pathname.toLowerCase().includes('/store/'))
+  ) return false
+  return true
+}
+
+function wingetManifestPath(packageId, version, suffix = '.installer.yaml') {
+  const parts = clean(packageId).split('.').filter(Boolean)
+  if (parts.length < 2) return ''
+  return [
+    'manifests',
+    parts[0][0].toLowerCase(),
+    ...parts,
+    clean(version),
+    clean(packageId) + suffix,
+  ].map((segment) => encodeURIComponent(segment)).join('/')
+}
+
+async function fetchWingetManifest(packageId, version) {
+  for (const suffix of ['.installer.yaml', '.yaml']) {
+    const path = wingetManifestPath(packageId, version, suffix)
+    if (!path) continue
+    const url = WINGET_MANIFEST_ROOT + '/' + path
+    const response = await fetch(url, {
+      headers: { Accept: 'text/plain', 'User-Agent': 'Hi5Central-WinGet-Manifest/1.0' },
+      signal: AbortSignal.timeout(20_000),
+    })
+    if (response.status === 404) continue
+    if (!response.ok) throw new Error('WinGet manifest HTTP ' + response.status)
+    const text = await response.text()
+    if (text.length > 512 * 1024) throw new Error('WinGet manifest exceeded size limit')
+    return { url, text }
+  }
+  return null
+}
+
+export async function resolveWingetVendorInstaller(packageId, version = '') {
+  const index = await ensureIndexDatabase(false)
+  const db = new DatabaseSync(index.path, { readOnly: true })
+  try {
+    const pkg = db.prepare(
+      'SELECT rowid,id,name,latest_version FROM packages WHERE lower(id)=lower(?) LIMIT 1',
+    ).get(clean(packageId))
+    if (!pkg) return { ok: false, reason: 'winget_package_not_found', packageId: clean(packageId) }
+    const resolvedVersion = clean(version || pkg.latest_version)
+    const manifest = await fetchWingetManifest(clean(pkg.id), resolvedVersion)
+    if (!manifest) return { ok: false, reason: 'winget_installer_manifest_not_found', packageId: clean(pkg.id), version: resolvedVersion }
+    const installers = parseWingetInstallers(manifest.text)
+      .filter(acceptableUpstreamInstaller)
+      .sort((a, b) => {
+        const weight = (item) => item.architecture === 'x64' || item.architecture === 'amd64'
+          ? 0 : ['neutral',''].includes(item.architecture) ? 1 : item.architecture === 'x86' ? 2 : 9
+        return weight(a) - weight(b)
+      })
+    const selected = installers.find((item) => !['arm64','arm'].includes(item.architecture))
+    if (!selected) {
+      return {
+        ok: false,
+        reason: 'no_upstream_msi_or_exe',
+        packageId: clean(pkg.id),
+        name: clean(pkg.name),
+        version: resolvedVersion,
+        manifestUrl: manifest.url,
+      }
+    }
+    const publishers = db.prepare(
+      "SELECT DISTINCT norm_publisher FROM norm_publishers2 WHERE package=? AND norm_publisher<>'' ORDER BY norm_publisher LIMIT 6",
+    ).all(pkg.rowid).map((row) => clean(row.norm_publisher)).filter(Boolean)
+    return {
+      ok: true,
+      packageId: clean(pkg.id),
+      name: clean(pkg.name),
+      version: resolvedVersion,
+      publishers,
+      manifestUrl: manifest.url,
+      installerUrl: selected.url,
+      installerSha256: selected.sha256,
+      installerType: selected.installerType,
+      installerTechnology: selected.installerTechnology,
+      architecture: selected.architecture || 'any',
+      scope: selected.scope,
+      installArguments: selected.silent,
+      upstreamHost: new URL(selected.url).hostname,
+    }
+  } finally {
+    db.close()
+  }
+}
+
+function enterpriseSeedName(value = '') {
+  return clean(value)
+    .replace(/\s*\((?:User[- ]?)?(?:EXE|MSI|MSIX|ARM64|x64|x86|Machine|User)[^)]*\)\s*$/i, '')
+    .replace(/\s*\(User[^)]*\)\s*$/i, '')
+    .replace(/\s+-\s+MSI Install\s*$/i, '')
+    .replace(/\s+Latest\s*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function parseEnterpriseSeedCsv(text) {
+  const rows = []
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const match = line.match(/^"((?:[^"]|"")*)","((?:[^"]|"")*)","((?:[^"]|"")*)"\s*$/)
+    if (!match || match[1] === 'Product') continue
+    rows.push({
+      product: match[1].replaceAll('""', '"'),
+      vendor: match[2].replaceAll('""', '"'),
+      localContent: lower(match[3]) === 'true',
+    })
+  }
+  return rows
+}
+
+export async function wingetEnterpriseSeedMatches({ limit = 1200 } = {}) {
+  const index = await ensureIndexDatabase(false)
+  const db = new DatabaseSync(index.path, { readOnly: true })
+  try {
+    const response = await fetch(ENTERPRISE_SEED_CSV, {
+      headers: { Accept: 'text/csv', 'User-Agent': 'Hi5Central-Catalogue-Seed/1.0' },
+      signal: AbortSignal.timeout(30_000),
+    })
+    if (!response.ok) throw new Error('Enterprise seed catalogue HTTP ' + response.status)
+    const rows = parseEnterpriseSeedCsv(await response.text())
+    const packages = db.prepare('SELECT rowid,id,name,latest_version FROM packages').all()
+    const byName = new Map()
+    for (const pkg of packages) {
+      const key = normalizedName(pkg.name)
+      if (!key) continue
+      if (!byName.has(key)) byName.set(key, [])
+      byName.get(key).push(pkg)
+    }
+
+    const seenPackages = new Set()
+    const matches = []
+    for (const row of rows) {
+      const product = enterpriseSeedName(row.product)
+      if (!product || /\b(?:arm64|x86)\b/i.test(row.product)) continue
+      const candidates = byName.get(normalizedName(product)) || []
+      if (!candidates.length) continue
+      let selected = candidates[0]
+      if (candidates.length > 1 && row.vendor) {
+        selected = candidates.find((pkg) => publisherEvidence(db, pkg.rowid, row.vendor).matched) || selected
+      }
+      const packageKey = lower(selected.id)
+      if (!packageKey || seenPackages.has(packageKey)) continue
+      const publisher = publisherEvidence(db, selected.rowid, row.vendor)
+      if (row.vendor && !publisher.matched && candidates.length > 1) continue
+      seenPackages.add(packageKey)
+      matches.push({
+        packageId: clean(selected.id),
+        packageName: clean(selected.name),
+        version: clean(selected.latest_version),
+        seedProduct: product,
+        seedVendor: clean(row.vendor),
+        publishers: publisher.values,
+        source: ENTERPRISE_SEED_CSV,
+      })
+      if (matches.length >= Math.max(1, Math.min(2500, Number(limit) || 1200))) break
+    }
+    return matches
   } finally {
     db.close()
   }

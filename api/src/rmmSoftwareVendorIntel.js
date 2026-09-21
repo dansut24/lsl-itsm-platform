@@ -14,9 +14,11 @@ import {
   repositoryName,
 } from './rmmTenantVendorSources.js'
 import { recalculateAllTenantVulnerabilityExposures } from './rmmVulnerabilityExposure.js'
-import { syncAutomaticWingetFallbacks } from './rmmWingetFallback.js'
+import { resolveWingetVendorInstaller, syncAutomaticWingetFallbacks, wingetEnterpriseSeedMatches } from './rmmWingetFallback.js'
+import { importCuratedSoftwareCatalogue } from './rmmCuratedSoftwareCatalogue.js'
 import { syncEvergreenCorroboration } from './rmmEvergreenIntel.js'
 import { promoteAutomaticAdmissionReady, queueAutomaticCleanInstallQualifications, queueAutomaticUpgradeQualifications, queueCommonSoftwareQualifications, runSoftwareQualificationQueue } from './rmmSoftwareQualification.js'
+import { COMMON_WINDOWS_SOFTWARE_LOWER } from './rmmCommonSoftware.js'
 import {
   classifyGithubReleaseBacklog,
   discoverGithubWindowsInstaller,
@@ -27,6 +29,7 @@ import {
 } from './rmmVendorReleaseEnrichment.js'
 
 function clean(value = '') { return String(value ?? '').trim() }
+function lower(value = '') { return clean(value).toLowerCase() }
 function object(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {} }
 function versionNumbers(value = '') { return clean(value).match(/\d+/g)?.map(Number) || [] }
 function compareVersionValues(a, b) {
@@ -555,7 +558,33 @@ async function syncGenericConfigured(sourceKey, state) {
   let selectedAssetReason = ''
   let payload = {}
 
-  if (state.source_type === 'github_releases') {
+  if (state.source_type === 'winget_manifest') {
+    const packageId = clean(config.wingetPackageId || config.packageId)
+    if (!packageId) throw new Error(sourceKey + ' has no WinGet package ID')
+    const resolved = await resolveWingetVendorInstaller(packageId)
+    if (!resolved.ok) throw new Error(sourceKey + ' WinGet manifest: ' + clean(resolved.reason || 'installer unavailable'))
+    version = clean(resolved.version)
+    installerUrl = (await publicHttpsUrl(resolved.installerUrl)).toString()
+    installerSha256 = normalizedSha256(resolved.installerSha256)
+    resolvedInstallerType = clean(resolved.installerType)
+    releaseUrl = clean(resolved.manifestUrl)
+    selectedAssetReason = 'winget_manifest_upstream_installer'
+    payload = {
+      wingetManifest: {
+        packageId: resolved.packageId,
+        packageName: resolved.name,
+        version: resolved.version,
+        manifestUrl: resolved.manifestUrl,
+        upstreamHost: resolved.upstreamHost,
+        architecture: resolved.architecture,
+        installerTechnology: resolved.installerTechnology,
+        scope: resolved.scope,
+      },
+    }
+    if (!clean(config.installArguments) && clean(resolved.installArguments)) {
+      config.installArguments = clean(resolved.installArguments)
+    }
+  } else if (state.source_type === 'github_releases') {
     const repository = repositoryName(config.repository || state.source_url)
     if (!repository) throw new Error(sourceKey + ' has no valid GitHub repository')
     if (!clean(config.releaseTagPattern) && !clean(config.assetPattern) && !clean(config.checksumAssetPattern)) {
@@ -1360,11 +1389,130 @@ const adapters = {
   adobe_acrobat_reader: syncAdobeReader,
 }
 
+function normalizedSoftwareName(value = '') {
+  return clean(value).toLowerCase().replace(/[^a-z0-9]+/g, '')
+}
+
+function wingetManifestSourceKey(packageId = '') {
+  const value = clean(packageId).toLowerCase()
+  const slug = value.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 92)
+  let hash = 2166136261
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return 'winget_manifest_' + slug + '_' + (hash >>> 0).toString(36)
+}
+
+export async function seedEnterpriseWingetVendorCatalogue({ targetTotal = 500, scanLimit = 1200, resolveLimit = 400, syncLimit = 20 } = {}) {
+  const safeTarget = Math.max(1, Math.min(1000, Number(targetTotal) || 500))
+  const currentResult = await pool.query(`SELECT count(*)::int AS count FROM rmm_software_catalogue WHERE tenant_id IS NULL AND status='active'`)
+  const current = Number(currentResult.rows[0]?.count || 0)
+  if (current >= safeTarget) return { target: safeTarget, current, needed: 0, attempted: 0, imported: 0, synced: 0, rejected: [] }
+
+  const existingResult = await pool.query(
+    `SELECT canonical_name,provider_package_id,source_metadata
+       FROM rmm_software_catalogue
+      WHERE tenant_id IS NULL AND status='active'`,
+  )
+  const existingPackages = new Set()
+  const existingNames = new Set()
+  for (const row of existingResult.rows) {
+    existingNames.add(normalizedSoftwareName(row.canonical_name))
+    const metadata = object(row.source_metadata)
+    for (const value of [metadata.wingetPackageId, metadata.autoWingetPackageId, row.provider_package_id]) {
+      const packageId = clean(value)
+      if (packageId && !packageId.startsWith('vendor:')) existingPackages.add(packageId.toLowerCase())
+    }
+  }
+
+  const commonNames = new Set(COMMON_WINDOWS_SOFTWARE_LOWER.map(normalizedSoftwareName))
+  const seeds = await wingetEnterpriseSeedMatches({ limit: Math.max(100, Math.min(2500, Number(scanLimit) || 1200)) })
+  seeds.sort((a, b) => {
+    const aCommon = commonNames.has(normalizedSoftwareName(a.packageName)) || commonNames.has(normalizedSoftwareName(a.seedProduct))
+    const bCommon = commonNames.has(normalizedSoftwareName(b.packageName)) || commonNames.has(normalizedSoftwareName(b.seedProduct))
+    return Number(bCommon) - Number(aCommon) || clean(a.packageName).localeCompare(clean(b.packageName))
+  })
+
+  const needed = safeTarget - current
+  const maxResolve = Math.max(1, Math.min(1000, Number(resolveLimit) || 400))
+  const candidates = seeds.filter((item) =>
+    !existingPackages.has(lower(item.packageId))
+    && !existingNames.has(normalizedSoftwareName(item.packageName))
+    && !existingNames.has(normalizedSoftwareName(item.seedProduct)),
+  )
+  const entries = []
+  const rejected = []
+  let attempted = 0
+
+  for (let offset = 0; offset < candidates.length && entries.length < needed && attempted < maxResolve; offset += 8) {
+    const remaining = maxResolve - attempted
+    const batch = candidates.slice(offset, offset + Math.min(8, remaining))
+    attempted += batch.length
+    const results = await Promise.all(batch.map(async (seed) => {
+      try { return { seed, resolved: await resolveWingetVendorInstaller(seed.packageId, seed.version) } }
+      catch (error) { return { seed, error: clean(error?.message || error) } }
+    }))
+
+    for (const item of results) {
+      if (entries.length >= needed) break
+      const resolved = item.resolved
+      if (!resolved?.ok) {
+        rejected.push({ packageId: item.seed.packageId, reason: item.error || clean(resolved?.reason || 'not_resolved') })
+        continue
+      }
+      const publisher = clean(item.seed.seedVendor || resolved.publishers?.[0])
+      const canonicalName = clean(item.seed.seedProduct || resolved.name || item.seed.packageName)
+      entries.push({
+        sourceKey: wingetManifestSourceKey(resolved.packageId),
+        displayName: canonicalName,
+        canonicalName,
+        publisher,
+        sourceType: 'winget_manifest',
+        sourceUrl: 'https://github.com/microsoft/winget-pkgs',
+        deploymentMode: 'winget_preferred',
+        wingetPackageId: resolved.packageId,
+        installerType: resolved.installerType,
+        installArguments: clean(resolved.installArguments),
+        namePattern: clean(resolved.name || canonicalName),
+        publisherPattern: publisher,
+        verificationConfig: {
+          method: 'winget',
+          displayNameContains: clean(resolved.name || canonicalName),
+          publisherContains: publisher,
+        },
+        priority: commonNames.has(normalizedSoftwareName(canonicalName)) ? 650 : 450,
+        pollMinutes: 360,
+        qualificationNotes: 'Seeded from enterprise software coverage and resolved through the current WinGet manifest to an upstream MSI/EXE. Pending independent Hi5Central artifact and endpoint qualification.',
+      })
+      existingPackages.add(lower(resolved.packageId))
+      existingNames.add(normalizedSoftwareName(canonicalName))
+    }
+  }
+
+  if (entries.length) await importCuratedSoftwareCatalogue(entries)
+  const synced = []
+  const syncCount = Math.max(0, Math.min(entries.length, Number(syncLimit) || 0))
+  for (const entry of entries.slice(0, syncCount)) {
+    try { synced.push(await syncSoftwareVendorSource(entry.sourceKey)) }
+    catch (error) { synced.push({ sourceKey: entry.sourceKey, ok: false, error: clean(error?.message || error) }) }
+  }
+  return {
+    target: safeTarget,
+    current,
+    needed,
+    attempted,
+    imported: entries.length,
+    synced: synced.filter((item) => item?.ok).length,
+    syncResults: synced,
+    rejected: rejected.slice(0, 100),
+  }
+}
 export async function syncSoftwareVendorSource(sourceKey) {
   const state = await sourceState(sourceKey)
   if (!state?.enabled) return { sourceKey, skipped: true }
   const adapter = adapters[sourceKey]
-    || (['github_releases','gitlab_releases','vendor_json','vendor_text','hashicorp_releases','python_releases','adoptium','static_release','package_registry'].includes(state.source_type)
+    || (['github_releases','gitlab_releases','vendor_json','vendor_text','hashicorp_releases','python_releases','adoptium','static_release','package_registry','winget_manifest'].includes(state.source_type)
       ? () => syncGenericConfigured(sourceKey, state)
       : null)
   if (!adapter) throw new Error('No software vendor adapter registered for ' + sourceKey + ' (' + state.source_type + ')')

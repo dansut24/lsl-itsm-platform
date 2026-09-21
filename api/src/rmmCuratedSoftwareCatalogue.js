@@ -1,4 +1,4 @@
-import { pool, withTransaction } from './db.js'
+import { withTransaction } from './db.js'
 import {
   normalizedSha256,
   repositoryName,
@@ -65,7 +65,7 @@ async function normalizeEntry(raw = {}) {
   if (!displayName || !canonicalName) throw new Error(key + ': displayName and canonicalName are required.')
   const publisher = clean(raw.publisher).slice(0, 200)
   const sourceType = clean(raw.sourceType)
-  if (!['github_releases', 'gitlab_releases', 'vendor_json', 'vendor_text', 'hashicorp_releases', 'python_releases', 'adoptium', 'static_release', 'package_registry'].includes(sourceType)) {
+  if (!['github_releases', 'gitlab_releases', 'vendor_json', 'vendor_text', 'hashicorp_releases', 'python_releases', 'adoptium', 'static_release', 'package_registry', 'winget_manifest'].includes(sourceType)) {
     throw new Error(key + ': unsupported curated sourceType.')
   }
   const deploymentMode = ['vendor_direct', 'winget_preferred', 'intelligence_only'].includes(clean(raw.deploymentMode))
