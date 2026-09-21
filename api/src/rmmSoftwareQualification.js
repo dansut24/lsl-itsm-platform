@@ -210,9 +210,14 @@ async function learnVerifiedObservedIdentity(queue, runner) {
     return { learned: false, reason: 'strict_verification_not_satisfied' }
   }
 
-  const expectedPackageId = clean(object(queue.verification).packageId)
-  if (expectedPackageId && lower(result.packageId) !== lower(expectedPackageId)) {
-    return { learned: false, reason: 'package_identity_mismatch' }
+  const sourceMetadata = object(queue.source_metadata)
+  const expectedPackageId = clean(object(queue.verification).packageId || sourceMetadata.wingetPackageId)
+  if (!expectedPackageId || lower(result.packageId) !== lower(expectedPackageId)) {
+    return { learned: false, reason: expectedPackageId ? 'package_identity_mismatch' : 'package_identity_missing' }
+  }
+  const expectedSigner = clean(sourceMetadata.expectedSigner || sourceMetadata.signerBaseline)
+  if (!expectedSigner || !clean(result.signer)) {
+    return { learned: false, reason: 'signer_identity_missing' }
   }
 
   const verifiedVersion = clean(result.verifiedVersion || verification.installedVersion || evidence.verifiedVersion || queue.target_version)
