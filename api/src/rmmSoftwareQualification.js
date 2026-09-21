@@ -169,6 +169,8 @@ async function dispatchUninstall(queue, runner, item) {
       installLocation: clean(item?.install_location),
       installedScope: clean(item?.scope),
       installedUserProfile: clean(item?.user_profile),
+      uninstallString: clean(item?.uninstall_string),
+      quietUninstallString: clean(item?.quiet_uninstall_string),
     })],
   )
   return { dispatched: true, queued: delivery !== 'websocket', jobId: job.id }
@@ -176,8 +178,22 @@ async function dispatchUninstall(queue, runner, item) {
 
 function safeQualificationProgramPath(value = '') {
   const path = clean(value).replace(/\//g, '\\').replace(/\\+$/g, '')
-  if (!/^C:\\Program Files(?: \(x86\))?\\[^\\]+/i.test(path)) return ''
-  return path
+  if (/^C:\\Program Files(?: \(x86\))?\\[^\\]+/i.test(path)) return path
+  if (/^C:\\Users\\[^\\]+\\AppData\\Local\\Programs\\[^\\]+/i.test(path)) return path
+  if (/^C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local\\Programs\\[^\\]+/i.test(path)) return path
+  return ''
+}
+
+function qualificationInstallPath(evidence = {}) {
+  const direct = safeQualificationProgramPath(evidence.installLocation)
+  if (direct) return { path: direct, onlyNew: !/^C:\\Program Files/i.test(direct) }
+  const uninstall = clean(evidence.quietUninstallString || evidence.uninstallString)
+  const quoted = clean(uninstall.match(/^\s*"([^"]+\.exe)"/i)?.[1])
+  const bare = quoted || clean(uninstall.match(/^\s*([A-Za-z]:\\.*?\.exe)(?:\s|$)/i)?.[1])
+  if (!bare) return { path: '', onlyNew: true }
+  const parent = bare.replace(/\\[^\\]+\.exe$/i, '')
+  const safe = safeQualificationProgramPath(parent)
+  return { path: safe, onlyNew: safe ? !/^C:\\Program Files/i.test(safe) : true }
 }
 
 function safeQualificationAlias(value = '') {
@@ -200,7 +216,8 @@ async function dispatchQualificationResidueCleanup(queue, runner, {
   const liveSocket = agentSocketForDevice(runner.agent_device_id)
   const canPush = Boolean(liveSocket && liveSocket.readyState === 1)
   const evidence = object(queue.evidence)
-  const installLocation = safeQualificationProgramPath(evidence.installLocation)
+  const installTarget = qualificationInstallPath(evidence)
+  const installLocation = installTarget.path
   const aliases = [...new Set([
     safeQualificationAlias(queue.canonical_name),
     safeQualificationAlias(evidence.installedDisplayName),
@@ -218,7 +235,7 @@ async function dispatchQualificationResidueCleanup(queue, runner, {
     'function Remove-QualificationTree($p,$reason,$onlyNew){if(!$p -or !(Test-Path -LiteralPath $p)){return};$i=Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue;if($onlyNew -and $i -and $i.CreationTimeUtc -lt $start.AddMinutes(-2)){$script:retained+=[pscustomobject]@{Path=$p;Reason="pre_existing";Bytes=(Size-Bytes $p)};return};$b=Size-Bytes $p;Remove-Item -LiteralPath $p -Force -Recurse -ErrorAction SilentlyContinue;if(Test-Path -LiteralPath $p){$script:retained+=[pscustomobject]@{Path=$p;Reason="remove_failed";Bytes=(Size-Bytes $p)}}else{$script:removed+=[pscustomobject]@{Path=$p;Reason=$reason;Bytes=$b}}}',
     '$disk=Get-CimInstance Win32_LogicalDisk -Filter "DeviceID=\'C:\'"',
     '$before=[int64]$disk.FreeSpace',
-    installLocation ? `Remove-QualificationTree ${psSingleQuoted(installLocation)} 'captured_install_location' $false` : '',
+    installLocation ? `Remove-QualificationTree ${psSingleQuoted(installLocation)} 'captured_install_location' $${installTarget.onlyNew ? 'true' : 'false'}` : '',
     patchHostWorkDir ? `Remove-QualificationTree ${psSingleQuoted(patchHostWorkDir)} 'patchhost_job_workdir' $false` : '',
     `$aliases=@(${aliases.map(psSingleQuoted).join(',')})`,
     "foreach($u in Get-ChildItem 'C:\\Users' -Directory -ErrorAction SilentlyContinue){foreach($rel in @('AppData\\Local','AppData\\Roaming')){foreach($a in $aliases){$p=Join-Path (Join-Path $u.FullName $rel) $a;Remove-QualificationTree $p 'qualification_created_appdata' $true}}}",
