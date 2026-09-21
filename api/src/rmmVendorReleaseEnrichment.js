@@ -114,9 +114,9 @@ export function selectWindowsInstallerAsset(assets = [], productName = '') {
 export function classifyWindowsReleaseAssets(assets = []) {
   const names = assets.map((asset) => clean(asset?.name)).filter(Boolean)
   const x64 = (name) => /(?:windows|win(?:64)?|pc-windows).*(?:x64|amd64|x86_64)|(?:x64|amd64|x86_64).*(?:windows|win(?:64)?|pc-windows)/i.test(name)
-  const supported = names.filter((name) => x64(name) && /\.(?:msixbundle|appxbundle|msix|appx|zip|7z|tar\.gz|tgz|exe)$/i.test(name))
-  const packageAsset = supported.find((name) => /\.(?:msixbundle|appxbundle)$/i.test(name))
-    || supported.find((name) => /\.(?:msix|appx)$/i.test(name))
+  const packageAsset = names.find((name) => !/(?:arm64|aarch64|win32|x86(?:[-_.]|$))/i.test(name) && /\.(?:msixbundle|appxbundle)$/i.test(name))
+    || names.find((name) => !/(?:arm64|aarch64|win32|x86(?:[-_.]|$))/i.test(name) && /\.(?:msix|appx)$/i.test(name))
+  const supported = names.filter((name) => x64(name) && /\.(?:zip|7z|tar\.gz|tgz|exe)$/i.test(name))
   const portableAsset = supported.find((name) => /\.(?:zip|7z|tar\.gz|tgz)$/i.test(name))
   const binaryAsset = supported.find((name) => /\.exe$/i.test(name) && !/(?:setup|installer|install|nsis|inno|squirrel)/i.test(name))
   if (packageAsset) return { kind: /bundle$/i.test(packageAsset) ? 'msix_bundle' : 'msix', assetName: packageAsset, deployableNow: false, blocker: 'msix_transport_not_qualified' }
