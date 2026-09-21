@@ -840,7 +840,19 @@ export async function queueAutomaticCleanInstallQualifications({ limit = 8, maxP
   const result = await pool.query(
     `WITH candidates AS (
        SELECT c.id AS catalogue_id,c.canonical_name,
-              CASE WHEN lower(COALESCE(c.installer_type,''))='msi' THEN 110 ELSE 100 END AS priority
+              CASE
+                WHEN lower(c.canonical_name)='google chrome' THEN 350
+                WHEN lower(c.canonical_name)='microsoft edge' THEN 345
+                WHEN lower(c.canonical_name)='adobe acrobat reader' THEN 340
+                WHEN lower(c.canonical_name)='mozilla firefox' THEN 335
+                WHEN lower(c.canonical_name)='7-zip' THEN 330
+                WHEN lower(c.canonical_name) LIKE 'microsoft teams%' THEN 325
+                WHEN lower(c.canonical_name) LIKE 'zoom%' THEN 320
+                WHEN lower(c.canonical_name)='vlc media player' THEN 315
+                WHEN lower(c.canonical_name)='notepad++' THEN 310
+                WHEN lower(COALESCE(c.installer_type,''))='msi' THEN 110
+                ELSE 100
+              END AS priority
          FROM rmm_software_catalogue c
          JOIN rmm_software_vendor_sources s
            ON s.source_key=c.source_metadata->>'latestSource' AND s.enabled=true
@@ -888,8 +900,7 @@ export async function queueAutomaticCleanInstallQualifications({ limit = 8, maxP
                  )
                )
           )
-        ORDER BY CASE WHEN lower(COALESCE(c.installer_type,''))='msi' THEN 0 ELSE 1 END,
-                 lower(c.canonical_name)
+        ORDER BY priority DESC,lower(c.canonical_name)
         LIMIT $1
      )
      INSERT INTO rmm_software_qualification_queue

@@ -270,7 +270,7 @@ export async function reconcileVendorArtifactInspections() {
         AND b.platform=r.platform
         AND b.architecture=r.architecture
       WHERE j.job_type='patch.vendor_artifact.inspect'
-        AND j.request_metadata->>'source'='vendor_artifact_trust_probe'
+        AND j.request_metadata->>'source' IN ('vendor_artifact_trust_probe','manual_catalogue_revalidation')
         AND COALESCE(j.request_metadata->>'reconciled','false')<>'true'
         AND j.status IN ('completed','failed')
       ORDER BY j.completed_at NULLS LAST,j.created_at
