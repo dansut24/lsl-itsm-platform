@@ -472,6 +472,19 @@ async function dispatchCleanInstall(queue, runner) {
     return { dispatched: false }
   }
 
+  const releasePayload = object(catalogue.release_source_payload)
+  const wingetManifest = object(releasePayload.wingetManifest)
+  const declaredScope = lower(wingetManifest.scope)
+  if (declaredScope === 'user') {
+    await markReview(queue.id, 'qualification_scope_mismatch', {
+      stage: 'pre_install_scope_validation',
+      expectedScope: 'machine',
+      declaredScope,
+      selectedAsset: clean(object(catalogue.source_metadata).selectedAsset || catalogue.asset_name),
+    })
+    return { dispatched: false, blocked: true, reason: 'qualification_scope_mismatch' }
+  }
+
   const current = await qualificationRow(queue.id)
   if (!current) return { dispatched: false }
   const contaminants = await qualificationRunnerContaminants(runner, queue.id)
