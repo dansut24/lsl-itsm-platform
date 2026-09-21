@@ -34,7 +34,16 @@ function installedMatches(sourcePayload, catalogue) {
 function verifiedPatchResult(value) {
   const result = object(value)
   return result.success !== false
+    && result.fallbackUsed !== true
+    && (!clean(result.provider) || lower(result.provider) === 'vendor_direct')
     && (result.verificationPassed === true || object(result.verification).meetsTarget === true)
+}
+
+function qualificationProviderFailure(value) {
+  const result = object(value)
+  if (result.fallbackUsed === true) return 'qualification_vendor_direct_fallback_used'
+  if (clean(result.provider) && lower(result.provider) !== 'vendor_direct') return 'qualification_non_vendor_provider_used'
+  return ''
 }
 
 function terminalJobFailure(job) {
@@ -578,7 +587,8 @@ async function reconcileUpgradeQueueRow(queue, runner) {
     const job = jobResult.rows[0]
     if (!job || ['queued', 'claimed'].includes(clean(job.status))) return { id: current.id, state: current.state }
     const failure = terminalJobFailure(job)
-    if (failure || clean(job.status) !== 'completed' || !verifiedPatchResult(job.result)) {
+    const providerFailure = qualificationProviderFailure(job.result)
+    if (failure || providerFailure || clean(job.status) !== 'completed' || !verifiedPatchResult(job.result)) {
       if (current.deployment_id) {
         await pool.query(
           `UPDATE rmm_patch_deployments SET status=$2,result=COALESCE($3::jsonb,'{}'::jsonb),
@@ -586,7 +596,7 @@ async function reconcileUpgradeQueueRow(queue, runner) {
           [current.deployment_id, clean(job.status) === 'cancelled' ? 'cancelled' : 'verification_failed', JSON.stringify(object(job?.result))],
         )
       }
-      await markReview(current.id, failure || 'qualification_upgrade_verification_failed', { stage: clean(evidence.stage) })
+      await markReview(current.id, failure || providerFailure || 'qualification_upgrade_verification_failed', { stage: clean(evidence.stage) })
       return { id: current.id, state: 'review_required' }
     }
 
@@ -717,7 +727,8 @@ async function reconcileQueueRow(queue, runner) {
     const job = jobResult.rows[0]
     if (!job || ['queued', 'claimed'].includes(clean(job.status))) return { id: current.id, state: current.state }
     const failure = terminalJobFailure(job)
-    if (failure || clean(job.status) !== 'completed' || !verifiedPatchResult(job.result)) {
+    const providerFailure = qualificationProviderFailure(job.result)
+    if (failure || providerFailure || clean(job.status) !== 'completed' || !verifiedPatchResult(job.result)) {
       if (current.deployment_id) {
         await pool.query(
           `UPDATE rmm_patch_deployments SET status=$2,result=COALESCE($3::jsonb,'{}'::jsonb),
@@ -725,7 +736,7 @@ async function reconcileQueueRow(queue, runner) {
           [current.deployment_id, clean(job.status) === 'cancelled' ? 'cancelled' : 'verification_failed', JSON.stringify(object(job?.result))],
         )
       }
-      await markReview(current.id, failure || 'qualification_install_verification_failed', { stage: 'install' })
+      await markReview(current.id, failure || providerFailure || 'qualification_install_verification_failed', { stage: 'install' })
       return { id: current.id, state: 'review_required' }
     }
 
