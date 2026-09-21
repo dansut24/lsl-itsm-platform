@@ -215,7 +215,7 @@ async function upsertRelease({
     const existing = await client.query(
       `SELECT id FROM rmm_software_catalogue
         WHERE tenant_id IS NULL AND catalogue_source='vendor' AND external_key=$1
-          AND status<>'archived' LIMIT 1`,
+          ORDER BY (status='active') DESC,created_at LIMIT 1`,
       [packageId],
     )
     if (existing.rowCount) {
