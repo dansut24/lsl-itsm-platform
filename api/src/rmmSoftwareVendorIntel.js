@@ -223,8 +223,8 @@ async function upsertRelease({
       await client.query(
         `UPDATE rmm_software_catalogue
             SET canonical_name=$2,publisher=$3,
-                name_pattern=COALESCE(NULLIF($8,''),NULLIF($12::jsonb->>'displayNameContains',''),NULLIF(c.name_pattern,''),$2),
-                publisher_pattern=COALESCE(NULLIF($9,''),NULLIF($12::jsonb->>'publisherContains',''),NULLIF(c.publisher_pattern,''),$3),
+                name_pattern=COALESCE(NULLIF($8,''),NULLIF($12::jsonb->>'displayNameContains',''),NULLIF(name_pattern,''),$2),
+                publisher_pattern=COALESCE(NULLIF($9,''),NULLIF($12::jsonb->>'publisherContains',''),NULLIF(publisher_pattern,''),$3),
                 provider=$10,provider_package_id=$1,target_version=$4,
                 release_channel=$5,installer_type=$11,verification=$12::jsonb,execution=$13::jsonb,source_revision=$4,
                 source_metadata=(source_metadata || $6::jsonb || $14::jsonb)
