@@ -300,6 +300,7 @@ export async function reconcileVendorArtifactInspections() {
     const installerTechnologyRecognized = result.installerTechnologyRecognized === true
       || ['msi','inno','nullsoft','nsis','burn','installshield','squirrel','install4j'].includes(installerTechnology)
     const curatedInstallArguments = clean(sourcePayload.installArguments || metadata.installArguments)
+    const deploymentSupported = ['msi', 'exe'].includes(lower(row.installer_type))
     const technologyRequired = lower(row.installer_type) === 'exe'
       && !curatedInstallArguments
     const signerBaseline = clean(metadata.signerBaseline || metadata.expectedSigner)
@@ -311,6 +312,9 @@ export async function reconcileVendorArtifactInspections() {
       if (signerBaseline && !signerEquivalent(signerBaseline, signer)) {
         trustState = 'signer_review_required'
         reason = 'signer_changed_from_baseline'
+      } else if (!deploymentSupported) {
+        trustState = 'asset_candidate'
+        reason = 'inspection_only_transport_not_qualified'
       } else if (technologyRequired && !installerTechnologyRecognized) {
         trustState = 'installer_review_required'
         reason = 'installer_technology_unrecognized'
@@ -352,6 +356,9 @@ export async function reconcileVendorArtifactInspections() {
       installerTechnology,
       installerTechnologyRecognized,
       installerTechnologyRequired: technologyRequired,
+      deploymentSupported,
+      packageIdentity: object(result.packageIdentity),
+      packageInspection: object(result.packageInspection),
       patchHostVersion: clean(object(result.capabilities).patchHostVersion),
     }
 
@@ -454,7 +461,7 @@ export async function reconcileVendorArtifactInspections() {
               AND catalogue_source='vendor'
               AND external_key=$1
               AND status='active'`,
-          [row.provider_package_id, JSON.stringify({ trustState, trustEvidence: evidence })],
+          [row.provider_package_id, JSON.stringify({ trustState, trustEvidence: evidence, ...(!deploymentSupported ? { deploymentMode: 'intelligence_only' } : {}) })],
         )
       }
 
@@ -602,7 +609,7 @@ async function reconcileDirectReadyCatalogue() {
         AND b.channel=r.channel AND b.platform=r.platform AND b.architecture=r.architecture AND b.enabled=true
       WHERE c.tenant_id IS NULL AND c.catalogue_source='vendor' AND c.status='active'
         AND c.external_key=r.provider_package_id AND c.target_version=r.version
-        AND r.trust_state='direct_ready' AND r.installer_url LIKE 'https://%'
+        AND r.trust_state='direct_ready' AND r.installer_type IN ('msi','exe') AND r.installer_url LIKE 'https://%'
         AND r.installer_sha256 ~* '^[a-f0-9]{64}$'
         AND (COALESCE(c.source_metadata->>'deploymentMode','')<>'vendor_direct'
           OR COALESCE(c.source_metadata->>'trustState','')<>'direct_ready'
