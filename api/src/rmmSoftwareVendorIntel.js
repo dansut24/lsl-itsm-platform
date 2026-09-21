@@ -223,7 +223,8 @@ async function upsertRelease({
       await client.query(
         `UPDATE rmm_software_catalogue
             SET canonical_name=$2,publisher=$3,
-                name_pattern=COALESCE(NULLIF($8,''),$2),publisher_pattern=COALESCE(NULLIF($9,''),$3),
+                name_pattern=COALESCE(NULLIF($8,''),NULLIF($12::jsonb->>'displayNameContains',''),NULLIF(c.name_pattern,''),$2),
+                publisher_pattern=COALESCE(NULLIF($9,''),NULLIF($12::jsonb->>'publisherContains',''),NULLIF(c.publisher_pattern,''),$3),
                 provider=$10,provider_package_id=$1,target_version=$4,
                 release_channel=$5,installer_type=$11,verification=$12::jsonb,execution=$13::jsonb,source_revision=$4,
                 source_metadata=(source_metadata || $6::jsonb || $14::jsonb)
@@ -284,7 +285,10 @@ async function upsertRelease({
           (tenant_id,canonical_name,publisher,name_pattern,publisher_pattern,provider,provider_package_id,
            target_version,release_channel,installer_type,verification,execution,catalogue_source,external_key,source_revision,source_metadata,
            qualification_state,qualification_evidence,qualification_notes)
-         VALUES (NULL,$2,$3,COALESCE(NULLIF($7,''),$2),COALESCE(NULLIF($8,''),$3),$9,$1,$4,$5,$10,$11::jsonb,$12::jsonb,'vendor',$1,$4,
+         VALUES (NULL,$2,$3,
+           COALESCE(NULLIF($7,''),NULLIF($11::jsonb->>'displayNameContains',''),$2),
+           COALESCE(NULLIF($8,''),NULLIF($11::jsonb->>'publisherContains',''),$3),
+           $9,$1,$4,$5,$10,$11::jsonb,$12::jsonb,'vendor',$1,$4,
            $6::jsonb || $13::jsonb,$14,$15::jsonb,$16)`,
         [
           packageId, canonicalName, publisher, normalizedVersion, channel,
