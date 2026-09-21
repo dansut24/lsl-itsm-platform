@@ -1710,7 +1710,55 @@ export async function promoteAutomaticAdmissionReady({ limit = 12 } = {}) {
   return result.rows
 }
 
+async function dispatchEmergencyAgentControlJobs({ limit = 3 } = {}) {
+  const pending = await pool.query(
+    `SELECT id,agent_device_id,job_type,payload,created_at
+       FROM rmm_agent_jobs
+      WHERE status='queued'
+        AND job_type='custom.command'
+        AND request_metadata->>'emergencyWebsocketDispatch'='true'
+      ORDER BY created_at
+      LIMIT $1`,
+    [Math.max(1, Math.min(10, Number(limit) || 3))],
+  )
+  const dispatched = []
+  for (const row of pending.rows) {
+    const socket = agentSocketForDevice(row.agent_device_id)
+    if (!socket || socket.readyState !== 1) continue
+    const claimed = await pool.query(
+      `UPDATE rmm_agent_jobs
+          SET status='claimed',claimed_at=now(),updated_at=now()
+        WHERE id=$1 AND status='queued'
+        RETURNING id,agent_device_id,job_type,payload,created_at`,
+      [row.id],
+    )
+    if (!claimed.rowCount) continue
+    const job = claimed.rows[0]
+    const pushed = sendAgentMessage(job.agent_device_id, {
+      type: 'job_execute',
+      job: {
+        id: job.id,
+        job_type: job.job_type,
+        payload: job.payload,
+        created_at: job.created_at,
+      },
+    })
+    if (!pushed) {
+      await pool.query(
+        `UPDATE rmm_agent_jobs
+            SET status='queued',claimed_at=NULL,updated_at=now()
+          WHERE id=$1 AND status='claimed'`,
+        [job.id],
+      )
+      continue
+    }
+    dispatched.push(job.id)
+  }
+  return dispatched
+}
+
 export async function runSoftwareQualificationQueue({ dispatchLimit = 1 } = {}) {
+  const emergencyDispatched = await dispatchEmergencyAgentControlJobs()
   const runner = await liveQualificationRunner()
   const active = await pool.query(
     `SELECT id,state,test_type FROM rmm_software_qualification_queue
@@ -1724,7 +1772,7 @@ export async function runSoftwareQualificationQueue({ dispatchLimit = 1 } = {}) 
       : await reconcileQueueRow(row, runner))
   }
 
-  if (!runner) return { runner: null, reconciled, dispatched: [] }
+  if (!runner) return { runner: null, reconciled, dispatched: [], emergencyDispatched }
 
   const stillActive = await pool.query(
     `SELECT count(*)::int AS count
@@ -1732,7 +1780,7 @@ export async function runSoftwareQualificationQueue({ dispatchLimit = 1 } = {}) 
       WHERE state IN ('running','cleanup_pending','cleanup_running')`,
   )
   if (Number(stillActive.rows[0]?.count || 0) > 0) {
-    return { runner: runner.device_name, reconciled, dispatched: [] }
+    return { runner: runner.device_name, reconciled, dispatched: [], emergencyDispatched }
   }
 
   const queued = await pool.query(
@@ -1766,7 +1814,7 @@ export async function runSoftwareQualificationQueue({ dispatchLimit = 1 } = {}) 
     dispatched.push({ id: queue.id, applicationName: queue.canonical_name, testType: queue.test_type, ...result })
     if (result.dispatched) break
   }
-  return { runner: runner.device_name, reconciled, dispatched }
+  return { runner: runner.device_name, reconciled, dispatched, emergencyDispatched }
 }
 
 export async function retrySoftwareQualification(catalogueId) {
