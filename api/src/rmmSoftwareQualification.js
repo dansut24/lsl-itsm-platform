@@ -165,8 +165,14 @@ async function directReleaseForCatalogue(catalogueId) {
             r.trust_state,r.asset_health_state,r.source_payload AS release_source_payload,
             s.last_success_at AS source_last_success_at,s.last_error AS source_last_error,
             COALESCE(NULLIF(b.metadata->>'expectedSigner',''),
+                     NULLIF(b.metadata->>'autoExpectedSigner',''),
+                     NULLIF(b.metadata->>'signerBaseline',''),
                      NULLIF(r.source_payload->>'expectedSigner',''),
-                     NULLIF(s.metadata->>'expectedSigner',''),NULLIF(c.publisher,''),'') AS expected_signer,
+                     NULLIF(r.source_payload->>'signerBaseline',''),
+                     NULLIF(r.trust_evidence->>'signer',''),
+                     NULLIF(s.metadata->>'expectedSigner',''),
+                     NULLIF(s.metadata->>'signerBaseline',''),
+                     NULLIF(c.publisher,''),'') AS expected_signer,
             COALESCE(NULLIF(b.metadata->>'installerTechnology',''),
                      NULLIF(r.source_payload->>'installerTechnology',''),'') AS installer_technology,
             COALESCE(NULLIF(b.metadata->>'wingetPackageId',''),'') AS binding_winget_package_id
@@ -853,6 +859,11 @@ export async function queueAutomaticCleanInstallQualifications({ limit = 8, maxP
           AND r.installer_type IN ('msi','exe')
           AND r.installer_url LIKE 'https://%'
           AND r.installer_sha256 ~* '^[a-f0-9]{64}$'
+          AND COALESCE(
+            NULLIF(c.source_metadata->>'expectedSigner',''),
+            NULLIF(r.source_payload->>'expectedSigner',''),
+            NULLIF(r.trust_evidence->>'signer','')
+          ) IS NOT NULL
           AND lower(COALESCE(c.qualification_evidence->>'sha256Verified','false'))='true'
           AND lower(COALESCE(c.qualification_evidence->>'authenticodeVerified','false'))='true'
           AND c.source_metadata->'vulnerabilityIdentityAudit'->>'state'='covered'
@@ -866,6 +877,13 @@ export async function queueAutomaticCleanInstallQualifications({ limit = 8, maxP
               FROM rmm_software_qualification_queue existing
              WHERE existing.catalogue_id=c.id
                AND existing.test_type='clean_install'
+               AND NOT (
+                 existing.state='review_required'
+                 AND existing.last_error IN (
+                   'qualification_artifact_gate_failed',
+                   'qualification_source_health_not_ready'
+                 )
+               )
           )
         ORDER BY CASE WHEN lower(COALESCE(c.installer_type,''))='msi' THEN 0 ELSE 1 END,
                  lower(c.canonical_name)
@@ -880,7 +898,26 @@ export async function queueAutomaticCleanInstallQualifications({ limit = 8, maxP
             ),
             now(),now()
        FROM candidates
-     ON CONFLICT (catalogue_id,test_type) DO NOTHING
+     ON CONFLICT (catalogue_id,test_type)
+     DO UPDATE SET
+       state='queued',
+       priority=EXCLUDED.priority,
+       attempt_count=0,
+       runner_agent_device_id=NULL,
+       agent_job_id=NULL,
+       deployment_id=NULL,
+       cleanup_job_id=NULL,
+       last_error='',
+       evidence=rmm_software_qualification_queue.evidence || EXCLUDED.evidence
+         || jsonb_build_object('recoveredGateAt',now()),
+       started_at=NULL,
+       completed_at=NULL,
+       updated_at=now()
+     WHERE rmm_software_qualification_queue.state='review_required'
+       AND rmm_software_qualification_queue.last_error IN (
+         'qualification_artifact_gate_failed',
+         'qualification_source_health_not_ready'
+       )
      RETURNING id,catalogue_id,test_type,state,priority`,
     [Math.min(safeLimit, available)],
   )

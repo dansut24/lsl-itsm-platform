@@ -185,7 +185,6 @@ export function vendorReleaseTrustProfile(input = {}) {
   const installerUrl = clean(input.installerUrl)
   const installerSha256 = clean(input.installerSha256).toUpperCase()
   const installerType = lower(input.installerType)
-  const publisher = clean(input.publisher)
   const expectedSigner = clean(input.expectedSigner)
   const verification = object(input.verification)
   const wingetPackageId = clean(input.wingetPackageId)
@@ -613,8 +612,44 @@ async function reconcileDirectReadyCatalogue() {
         AND r.installer_sha256 ~* '^[a-f0-9]{64}$'
         AND (COALESCE(c.source_metadata->>'deploymentMode','')<>'vendor_direct'
           OR COALESCE(c.source_metadata->>'trustState','')<>'direct_ready'
+          OR COALESCE(c.source_metadata->>'expectedSigner','')=''
           OR c.qualification_state='intelligence_only')
      RETURNING c.id,c.canonical_name,c.target_version`)
+  await pool.query(
+    `UPDATE rmm_software_vendor_bindings b
+        SET metadata=b.metadata || jsonb_build_object(
+              'expectedSigner',COALESCE(
+                NULLIF(b.metadata->>'expectedSigner',''),
+                NULLIF(r.source_payload->>'expectedSigner',''),
+                NULLIF(r.source_payload->>'signerBaseline',''),
+                NULLIF(r.trust_evidence->>'signer',''),
+                ''
+              ),
+              'signerBaseline',COALESCE(
+                NULLIF(b.metadata->>'signerBaseline',''),
+                NULLIF(r.source_payload->>'signerBaseline',''),
+                NULLIF(r.trust_evidence->>'signer',''),
+                ''
+              )
+            )
+       FROM rmm_software_catalogue c
+       JOIN rmm_software_vendor_releases r
+         ON r.provider_package_id=c.external_key
+        AND r.source_key=c.source_metadata->>'latestSource'
+        AND r.version=c.target_version
+      WHERE b.source_key=r.source_key
+        AND b.provider_package_id=r.provider_package_id
+        AND b.channel=r.channel
+        AND b.platform=r.platform
+        AND b.architecture=r.architecture
+        AND b.enabled=true
+        AND c.tenant_id IS NULL
+        AND c.status='active'
+        AND r.trust_state='direct_ready'
+        AND COALESCE(r.trust_evidence->>'signatureVerified','false')='true'
+        AND COALESCE(r.trust_evidence->>'signer','')<>''
+        AND COALESCE(b.metadata->>'expectedSigner','')=''`,
+  )
   return result.rows
 }
 
