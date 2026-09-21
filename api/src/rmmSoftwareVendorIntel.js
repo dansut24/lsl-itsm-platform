@@ -1371,7 +1371,34 @@ export async function softwareVendorSummary() {
     return { source_key: source.source_key, display_name: source.display_name, state, stale, last_success_at: source.last_success_at, last_attempt_at: source.last_attempt_at, last_error: source.last_error, records_seen: Number(source.records_seen || 0), release_count: rows.length, healthy_assets: rows.filter((r) => r.asset_health_state === 'healthy').length, unhealthy_assets: rows.filter((r) => ['dead','degraded'].includes(r.asset_health_state)).length, unknown_assets: rows.filter((r) => !r.asset_health_state || r.asset_health_state === 'unknown').length }
   })
   const health = { total: sourceHealth.length, healthy: sourceHealth.filter((x) => x.state === 'healthy').length, attention: sourceHealth.filter((x) => x.state === 'attention').length, stale: sourceHealth.filter((x) => x.state === 'stale').length, pending: sourceHealth.filter((x) => x.state === 'pending').length, unhealthy_assets: sourceHealth.reduce((sum,x) => sum + x.unhealthy_assets,0), unknown_assets: sourceHealth.reduce((sum,x) => sum + x.unknown_assets,0) }
-  return { sources: sources.rows, latest, sourceHealth, health }
+  const readinessResult = await pool.query(
+    `SELECT c.id,c.canonical_name,c.target_version,c.external_key,c.qualification_state,c.source_metadata,
+            b.source_key,b.platform,b.architecture,b.metadata AS binding_metadata,
+            r.trust_state,r.installer_url,r.installer_type,r.asset_name,r.trust_evidence
+       FROM rmm_software_catalogue c
+       LEFT JOIN rmm_software_vendor_bindings b ON b.provider_package_id=c.external_key AND b.enabled=true
+       LEFT JOIN rmm_software_vendor_releases r ON r.provider_package_id=c.external_key AND r.version=c.target_version
+      WHERE c.tenant_id IS NULL AND c.status='active' AND c.qualification_state='intelligence_only'
+      ORDER BY c.canonical_name`,
+  )
+  const readiness = readinessResult.rows.map((row) => {
+    const meta = object(row.binding_metadata)
+    const source = object(row.source_metadata)
+    const targetVersion = clean(row.target_version)
+    const trustState = clean(row.trust_state || 'no_release')
+    let blocker = 'qualification_pending'
+    let state = 'automation_backlog'
+    if (!targetVersion) blocker = 'target_version_missing'
+    else if (trustState === 'no_release') blocker = 'release_not_correlated'
+    else if (['rejected','signer_review_required','installer_review_required'].includes(trustState)) { blocker = trustState; state = 'manual_review' }
+    else if (trustState === 'version_only' && clean(meta.registry) && !['chocolatey'].includes(clean(meta.registry))) { blocker = 'ecosystem_intelligence_only'; state = 'intelligence_only' }
+    else if (trustState === 'version_only' && /^gh_/.test(clean(row.source_key)) && !clean(row.installer_url)) blocker = 'vendor_windows_asset_missing'
+    else if (trustState === 'version_only' && clean(meta.wingetPackageId) && meta.wingetFallbackReady !== true) blocker = 'winget_target_lagging'
+    else if (trustState === 'version_only') blocker = 'deployment_transport_missing'
+    return { id: row.id, canonical_name: row.canonical_name, target_version: targetVersion, source_key: row.source_key, platform: row.platform, architecture: row.architecture, trust_state: trustState, state, blocker, registry: clean(meta.registry), winget_package_id: clean(meta.wingetPackageId || source.wingetPackageId), installer_type: clean(row.installer_type), asset_name: clean(row.asset_name) }
+  })
+  const readinessCounts = readiness.reduce((counts, item) => { counts[item.blocker] = (counts[item.blocker] || 0) + 1; return counts }, {})
+  return { sources: sources.rows, latest, sourceHealth, health, readiness, readinessCounts }
 }
 
 let schedulerStarted = false
