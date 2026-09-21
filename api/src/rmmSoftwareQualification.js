@@ -24,11 +24,50 @@ function identityPhraseMatches(value, pattern) {
   }
   return false
 }
-function installedMatches(sourcePayload, catalogue) {
+function softwareItems(sourcePayload) {
   return array(object(object(sourcePayload).software).items)
     .filter((item) => clean(item?.name))
-    .filter((item) => identityPhraseMatches(item?.name, catalogue.name_pattern)
-      && identityPhraseMatches(item?.publisher, catalogue.publisher_pattern))
+}
+
+function softwareIdentityKey(item) {
+  return [
+    lower(item?.registry_key),
+    lower(item?.scope),
+    lower(item?.user_profile),
+    lower(item?.name),
+    lower(item?.version),
+    lower(item?.publisher),
+  ].join('|')
+}
+
+function observedQualificationIdentities(catalogue) {
+  return array(object(catalogue?.source_metadata).qualificationObservedIdentities)
+    .map((item) => object(item))
+    .filter((item) => clean(item.name))
+}
+
+function qualificationScope(value = '') {
+  const scope = lower(value)
+  if (scope.startsWith('machine')) return 'machine'
+  if (scope === 'user') return 'user'
+  return scope
+}
+
+function installedMatches(sourcePayload, catalogue) {
+  const identities = [
+    {
+      name: clean(catalogue?.name_pattern),
+      publisher: clean(catalogue?.publisher_pattern),
+      scope: '',
+    },
+    ...observedQualificationIdentities(catalogue),
+  ]
+  return softwareItems(sourcePayload).filter((item) => identities.some((identity) => {
+    const scope = qualificationScope(identity.scope)
+    return identityPhraseMatches(item?.name, identity.name)
+      && identityPhraseMatches(item?.publisher, identity.publisher)
+      && (!scope || qualificationScope(item?.scope) === scope)
+  }))
 }
 
 function verifiedPatchResult(value) {
@@ -76,7 +115,7 @@ async function liveQualificationRunner() {
 async function qualificationRunnerContaminants(runner, excludeQueueId = '') {
   if (!runner?.agent_device_id) return []
   const result = await pool.query(
-    `SELECT q.id,c.canonical_name,c.name_pattern,c.publisher_pattern
+    `SELECT q.id,c.canonical_name,c.name_pattern,c.publisher_pattern,c.source_metadata
        FROM rmm_software_qualification_queue q
        JOIN rmm_software_catalogue c ON c.id=q.catalogue_id
       WHERE q.runner_agent_device_id=$1
@@ -117,6 +156,145 @@ async function qualificationRow(queueId) {
     [queueId],
   )
   return result.rows[0] || null
+}
+
+function versionIdentity(value = '') {
+  return lower(value).replace(/^v(?=\d)/, '')
+}
+
+function verificationObservedName(result = {}) {
+  const verification = object(result.verification)
+  const packageId = clean(verification.packageId || result.packageId)
+  const output = clean(verification.output)
+  if (!packageId || !output) return ''
+  const packageNeedle = lower(packageId)
+  const versionNeedle = versionIdentity(result.verifiedVersion || verification.installedVersion)
+  for (const line of output.split(/\r?\n/)) {
+    const lowered = lower(line)
+    const index = lowered.indexOf(packageNeedle)
+    if (index <= 0) continue
+    if (versionNeedle && !lowered.includes(versionNeedle)) continue
+    return clean(line.slice(0, index))
+  }
+  return ''
+}
+
+function observedNameIsPlausible(itemName, catalogue, result) {
+  const observed = verificationObservedName(result)
+  if (observed) {
+    return identityPhraseMatches(itemName, observed)
+      || identityPhraseMatches(observed, itemName)
+  }
+  return identityPhraseMatches(itemName, catalogue.name_pattern)
+    || identityPhraseMatches(catalogue.name_pattern, itemName)
+}
+
+async function learnVerifiedObservedIdentity(queue, runner) {
+  const evidence = object(queue.evidence)
+  const beforeKeys = new Set(array(evidence.preInstallInventoryKeys).map(clean).filter(Boolean))
+  if (!beforeKeys.size || !queue.agent_job_id) return { learned: false, reason: 'preinstall_inventory_missing' }
+
+  const jobResult = await pool.query(
+    `SELECT status,result,error_message,completed_at FROM rmm_agent_jobs WHERE id=$1 LIMIT 1`,
+    [queue.agent_job_id],
+  )
+  const job = jobResult.rows[0]
+  const result = object(job?.result)
+  const verification = object(result.verification)
+  if (!job
+    || clean(job.status) !== 'completed'
+    || !verifiedPatchResult(result)
+    || result.sha256Verified !== true
+    || result.signatureVerified !== true
+    || verification.meetsTarget !== true) {
+    return { learned: false, reason: 'strict_verification_not_satisfied' }
+  }
+
+  const expectedPackageId = clean(object(queue.verification).packageId)
+  if (expectedPackageId && lower(result.packageId) !== lower(expectedPackageId)) {
+    return { learned: false, reason: 'package_identity_mismatch' }
+  }
+
+  const verifiedVersion = clean(result.verifiedVersion || verification.installedVersion || evidence.verifiedVersion || queue.target_version)
+  if (!verifiedVersion) return { learned: false, reason: 'verified_version_missing' }
+
+  const candidates = softwareItems(runner.source_payload)
+    .filter((item) => !beforeKeys.has(softwareIdentityKey(item)))
+    .filter((item) => versionIdentity(item?.version) === versionIdentity(verifiedVersion))
+    .filter((item) => observedNameIsPlausible(item?.name, queue, result))
+
+  if (candidates.length !== 1) {
+    return {
+      learned: false,
+      reason: candidates.length ? 'observed_identity_ambiguous' : 'observed_identity_not_visible',
+      candidates: candidates.map((item) => ({
+        name: clean(item?.name),
+        publisher: clean(item?.publisher),
+        version: clean(item?.version),
+        scope: clean(item?.scope),
+      })),
+    }
+  }
+
+  const item = candidates[0]
+  const scope = qualificationScope(item?.scope)
+  const userProfile = lower(item?.user_profile)
+  if (scope === 'user' || userProfile.includes('systemprofile')) {
+    return { learned: false, scopeMismatch: true, item }
+  }
+
+  const identity = {
+    name: clean(item?.name),
+    publisher: clean(item?.publisher),
+    scope,
+    registryKey: clean(item?.registry_key),
+    learnedVersion: verifiedVersion,
+    learnedAt: new Date().toISOString(),
+    packageId: clean(result.packageId),
+    signer: clean(result.signer),
+    source: 'verified_vendor_qualification',
+  }
+  if (!identity.name || !identity.publisher) return { learned: false, reason: 'observed_identity_incomplete' }
+
+  const existing = observedQualificationIdentities(queue)
+  const key = `${lower(identity.name)}|${lower(identity.publisher)}|${lower(identity.scope)}`
+  const merged = [
+    ...existing.filter((entry) => `${lower(entry.name)}|${lower(entry.publisher)}|${lower(entry.scope)}` !== key),
+    identity,
+  ].slice(-12)
+  const metadataPatch = {
+    qualificationObservedIdentities: merged,
+    qualificationObservedIdentityUpdatedAt: identity.learnedAt,
+  }
+
+  await withTransaction(async (client) => {
+    await client.query(
+      `UPDATE rmm_software_catalogue
+          SET source_metadata=source_metadata || $2::jsonb,updated_at=now()
+        WHERE id=$1`,
+      [queue.catalogue_id, JSON.stringify(metadataPatch)],
+    )
+    await client.query(
+      `UPDATE rmm_software_vendor_bindings b
+          SET metadata=metadata || $2::jsonb
+         FROM rmm_software_catalogue c
+        WHERE c.id=$1
+          AND b.provider_package_id=c.external_key
+          AND b.source_key=c.source_metadata->>'latestSource'
+          AND b.enabled=true`,
+      [queue.catalogue_id, JSON.stringify(metadataPatch)],
+    )
+    await client.query(
+      `UPDATE rmm_software_qualification_queue
+          SET evidence=evidence || $2::jsonb,updated_at=now()
+        WHERE id=$1`,
+      [queue.id, JSON.stringify({
+        observedIdentityLearned: identity,
+        observedIdentityLearnedAt: identity.learnedAt,
+      })],
+    )
+  })
+  return { learned: true, identity }
 }
 
 async function dispatchUninstall(queue, runner, item) {
@@ -596,6 +774,7 @@ async function dispatchCleanInstall(queue, runner) {
         vendorSource: catalogue.source_key,
         vendorReleaseId: catalogue.vendor_release_id,
         dispatchedAt: new Date().toISOString(),
+        preInstallInventoryKeys: softwareItems(runner.source_payload).map(softwareIdentityKey),
       })],
     )
     return { job, deployment }
@@ -795,6 +974,7 @@ async function dispatchUpgradeInstall(queue, runner, release, { intent, installe
         releaseVersion: targetVersion,
         vendorReleaseId: release.vendor_release_id,
         dispatchedAt: new Date().toISOString(),
+        preInstallInventoryKeys: softwareItems(runner.source_payload).map(softwareIdentityKey),
         ...(intent === 'install' ? { previousVersion: targetVersion } : { targetVersion }),
       }), stage],
     )
@@ -946,7 +1126,39 @@ async function reconcileUpgradeQueueRow(queue, runner) {
 
   if (current.state === 'cleanup_pending') {
     if (!runner || clean(current.runner_agent_device_id) !== clean(runner.agent_device_id)) return { id: current.id, state: current.state }
-    const installed = installedMatches(runner.source_payload, current)
+    let installed = installedMatches(runner.source_payload, current)
+    if (!installed.length) {
+      const learned = await learnVerifiedObservedIdentity(current, runner)
+      if (learned.scopeMismatch) {
+        await pool.query(
+          `UPDATE rmm_software_qualification_queue
+              SET evidence=evidence || $2::jsonb,updated_at=now()
+            WHERE id=$1`,
+          [current.id, JSON.stringify({
+            postInstallScopeMismatch: true,
+            expectedScope: 'machine',
+            actualScope: clean(learned.item?.scope),
+            actualUserProfile: clean(learned.item?.user_profile),
+            observedScopeIdentity: {
+              name: clean(learned.item?.name),
+              publisher: clean(learned.item?.publisher),
+              version: clean(learned.item?.version),
+              registryKey: clean(learned.item?.registry_key),
+            },
+          })],
+        )
+        const dispatched = await dispatchUninstall(current, runner, learned.item)
+        return { id: current.id, state: dispatched.dispatched ? 'cleanup_running' : 'cleanup_pending' }
+      }
+      if (learned.learned) {
+        const refreshed = await qualificationRow(current.id)
+        installed = refreshed ? installedMatches(runner.source_payload, refreshed) : []
+        if (installed.length) {
+          const dispatched = await dispatchUninstall(refreshed, runner, installed[installed.length - 1])
+          return { id: current.id, state: dispatched.dispatched ? 'cleanup_running' : 'cleanup_pending' }
+        }
+      }
+    }
     if (installed.length) {
       const dispatched = await dispatchUninstall(current, runner, installed[installed.length - 1])
       return { id: current.id, state: dispatched.dispatched ? 'cleanup_running' : 'cleanup_pending' }
@@ -997,8 +1209,10 @@ async function reconcileUpgradeQueueRow(queue, runner) {
       return { id: current.id, state: current.state }
     }
 
+    const scopeMismatch = object(current.evidence).postInstallScopeMismatch === true
     const dispatched = await dispatchQualificationResidueCleanup(current, runner, {
-      finalState: 'passed',
+      finalState: scopeMismatch ? 'review_required' : 'passed',
+      finalError: scopeMismatch ? 'qualification_scope_mismatch' : '',
       uninstallCompletedAt: cleanup.completed_at || '',
     })
     return { id: current.id, state: dispatched.dispatched ? 'cleanup_running' : current.state }
@@ -1058,7 +1272,39 @@ async function reconcileQueueRow(queue, runner) {
     if (!runner || clean(current.runner_agent_device_id) !== clean(runner.agent_device_id)) {
       return { id: current.id, state: current.state }
     }
-    const installed = installedMatches(runner.source_payload, current)
+    let installed = installedMatches(runner.source_payload, current)
+    if (!installed.length) {
+      const learned = await learnVerifiedObservedIdentity(current, runner)
+      if (learned.scopeMismatch) {
+        await pool.query(
+          `UPDATE rmm_software_qualification_queue
+              SET evidence=evidence || $2::jsonb,updated_at=now()
+            WHERE id=$1`,
+          [current.id, JSON.stringify({
+            postInstallScopeMismatch: true,
+            expectedScope: 'machine',
+            actualScope: clean(learned.item?.scope),
+            actualUserProfile: clean(learned.item?.user_profile),
+            observedScopeIdentity: {
+              name: clean(learned.item?.name),
+              publisher: clean(learned.item?.publisher),
+              version: clean(learned.item?.version),
+              registryKey: clean(learned.item?.registry_key),
+            },
+          })],
+        )
+        const dispatched = await dispatchUninstall(current, runner, learned.item)
+        return { id: current.id, state: dispatched.dispatched ? 'cleanup_running' : 'cleanup_pending' }
+      }
+      if (learned.learned) {
+        const refreshed = await qualificationRow(current.id)
+        installed = refreshed ? installedMatches(runner.source_payload, refreshed) : []
+        if (installed.length) {
+          const dispatched = await dispatchUninstall(refreshed, runner, installed[installed.length - 1])
+          return { id: current.id, state: dispatched.dispatched ? 'cleanup_running' : 'cleanup_pending' }
+        }
+      }
+    }
     if (installed.length) {
       const dispatched = await dispatchUninstall(current, runner, installed[installed.length - 1])
       return { id: current.id, state: dispatched.dispatched ? 'cleanup_running' : 'cleanup_pending' }
@@ -1111,8 +1357,10 @@ async function reconcileQueueRow(queue, runner) {
       return { id: current.id, state: current.state }
     }
 
+    const scopeMismatch = object(current.evidence).postInstallScopeMismatch === true
     const dispatched = await dispatchQualificationResidueCleanup(current, runner, {
-      finalState: 'passed',
+      finalState: scopeMismatch ? 'review_required' : 'passed',
+      finalError: scopeMismatch ? 'qualification_scope_mismatch' : '',
       uninstallCompletedAt: cleanup.completed_at || '',
     })
     return { id: current.id, state: dispatched.dispatched ? 'cleanup_running' : current.state }
