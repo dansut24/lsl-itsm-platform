@@ -271,7 +271,7 @@ async function dispatchCleanInstall(queue, runner) {
     installerTechnology: clean(catalogue.installer_technology),
     installArguments: clean(execution.installArguments),
     expectedSigner: clean(catalogue.expected_signer),
-    fallbackProvider: fallbackPackageId ? 'winget' : '',
+    fallbackProvider: '',
     verification: {
       ...verification,
       method: verificationMethod,
