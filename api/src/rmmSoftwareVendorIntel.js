@@ -166,7 +166,7 @@ async function upsertRelease({
       `INSERT INTO rmm_software_vendor_releases
         (source_key,provider_package_id,canonical_name,publisher,channel,platform,architecture,
          version,release_date,installer_url,installer_sha256,installer_type,release_url,asset_name,
-         trust_state,trust_evidence,source_payload,source_priority,source_payload,last_seen_at)
+         trust_state,trust_evidence,source_priority,source_payload,last_seen_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,$17,$18::jsonb,now())
        ON CONFLICT (source_key,provider_package_id,channel,platform,architecture,version)
        DO UPDATE SET release_date=COALESCE(EXCLUDED.release_date,rmm_software_vendor_releases.release_date),
