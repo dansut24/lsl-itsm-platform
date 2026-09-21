@@ -570,6 +570,10 @@ export async function queueVendorArtifactInspections(limit = 2) {
                AND j.request_metadata->>'vendor_release_id'=r.id::text
                AND j.status IN ('completed','failed')
                AND j.created_at>now()-interval '24 hours'
+               AND NOT (
+                 j.status='failed'
+                 AND lower(COALESCE(j.error_message,''))='patchhost did not return a result.'
+               )
           )
      )
      SELECT id,source_key,provider_package_id,canonical_name,version,
