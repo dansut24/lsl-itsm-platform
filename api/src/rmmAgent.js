@@ -104,6 +104,7 @@ function agentUpgradeScript(release) {
     "$principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest",
     "$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 10)",
     "Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null",
+    "Start-ScheduledTask -TaskName $taskName -ErrorAction Stop",
     "$task = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop",
     "$taskInfo = Get-ScheduledTaskInfo -TaskName $taskName -ErrorAction Stop",
     "[pscustomobject]@{ status='scheduled'; task=$taskName; installer=$installer; log=$logPath; sha256=$actualSha256; scheduled_for=$trigger.StartBoundary; task_state=[string]$task.State; task_last_result=$taskInfo.LastTaskResult } | ConvertTo-Json -Compress",
