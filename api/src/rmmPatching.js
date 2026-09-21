@@ -18,7 +18,7 @@ import {
   testTenantVendorSource,
   updateTenantVendorSource,
 } from './rmmTenantVendorSources.js'
-import { vulnerabilityExposureByInstallation, vulnerabilityExposureRows, vulnerabilityExposureSummary } from './rmmVulnerabilityExposure.js'
+import { recalculateTenantVulnerabilityExposures, vulnerabilityExposureByInstallation, vulnerabilityExposureRows, vulnerabilityExposureSummary } from './rmmVulnerabilityExposure.js'
 import { resolveSession } from './session.js'
 
 function clean(value = '') { return String(value ?? '').trim() }
@@ -1358,72 +1358,22 @@ async function ingestPatchDiscovery(agent, body = {}) {
       let catalogue = await client.query(
         `SELECT id,target_version,tenant_id,catalogue_source,source_metadata
            FROM rmm_software_catalogue
-          WHERE status='active' AND provider='winget' AND lower(provider_package_id)=lower($2)
+          WHERE status='active'
+            AND (
+              (provider='winget' AND lower(provider_package_id)=lower($2))
+              OR lower(COALESCE(source_metadata->>'wingetPackageId',''))=lower($2)
+              OR lower(COALESCE(source_metadata->>'autoWingetPackageId',''))=lower($2)
+            )
             AND (tenant_id=$1 OR tenant_id IS NULL)
-          ORDER BY tenant_id NULLS LAST
+          ORDER BY tenant_id NULLS LAST,
+                   CASE WHEN source_metadata->>'deploymentMode'='vendor_direct' THEN 0 ELSE 1 END
           LIMIT 1`,
         [agent.tenant_id, item.packageId],
       )
 
-      if (!catalogue.rowCount) {
-        const automaticTarget = item.availableVersion
-        catalogue = await client.query(
-          `INSERT INTO rmm_software_catalogue
-            (tenant_id,canonical_name,publisher,name_pattern,publisher_pattern,provider,provider_package_id,
-             target_version,release_channel,detection,verification,catalogue_source,external_key,source_metadata)
-           SELECT $1,$2,$3,$2,$3,'winget',$4,$5,'stable',$6::jsonb,$7::jsonb,'patchhost',$8,$9::jsonb
-            WHERE NOT EXISTS (
-              SELECT 1 FROM rmm_software_catalogue
-               WHERE tenant_id=$1 AND status='active' AND provider='winget'
-                 AND lower(provider_package_id)=lower($4)
-            )
-           RETURNING id,target_version,tenant_id,catalogue_source,source_metadata`,
-          [
-            agent.tenant_id,
-            item.name || item.packageId,
-            item.publisher,
-            item.packageId,
-            automaticTarget,
-            JSON.stringify({ source: 'patchhost_winget', confidence: 'source' }),
-            JSON.stringify({ provider: 'winget', packageId: item.packageId }),
-            'winget:' + lower(item.packageId),
-            JSON.stringify({ firstObservedFromAgent: agent.id, sourceName: item.source }),
-          ],
-        )
-        if (!catalogue.rowCount) {
-          catalogue = await client.query(
-            `SELECT id,target_version,tenant_id,catalogue_source,source_metadata
-               FROM rmm_software_catalogue
-              WHERE tenant_id=$1 AND status='active' AND provider='winget'
-                AND lower(provider_package_id)=lower($2)
-              LIMIT 1`,
-            [agent.tenant_id, item.packageId],
-          )
-        }
-      } else if (
-        catalogue.rows[0]?.tenant_id
-        && catalogue.rows[0]?.catalogue_source === 'patchhost'
-        && item.availableVersion
-      ) {
-        catalogue = await client.query(
-          `UPDATE rmm_software_catalogue
-              SET target_version=$3,
-                  canonical_name=CASE WHEN $4<>'' THEN $4 ELSE canonical_name END,
-                  publisher=CASE WHEN $5<>'' THEN $5 ELSE publisher END,
-                  source_metadata=source_metadata || $6::jsonb,
-                  updated_at=now()
-            WHERE id=$1 AND tenant_id=$2
-            RETURNING id,target_version,tenant_id,catalogue_source,source_metadata`,
-          [
-            catalogue.rows[0].id,
-            agent.tenant_id,
-            item.availableVersion,
-            item.name,
-            item.publisher,
-            JSON.stringify({ lastObservedFromAgent: agent.id, sourceName: item.source }),
-          ],
-        )
-      }
+      // WinGet discovery remains a repository/observation layer. It no longer
+      // manufactures catalogue rows for every package seen on an endpoint.
+      // Only explicitly curated or user-added catalogue entries are attached.
 
       const catalogueEntry = catalogue.rows[0] || {}
       const targetVersion = clean(catalogueEntry.target_version)
@@ -2279,6 +2229,8 @@ export function registerRmmPatchingRoutes(app) {
     if (!agent) return c.json({ success: false, error: 'Agent authentication failed.' }, 401)
     const body = await c.req.json().catch(() => ({}))
     const result = await ingestPatchDiscovery(agent, body)
+    void recalculateTenantVulnerabilityExposures(agent.tenant_id, [agent.inventory_id])
+      .catch((error) => console.error('RMM post-discovery vulnerability calculation failed', error))
     const automaticVerificationProbes = await queueAutomaticVendorVerificationProbes(agent.tenant_id).catch(() => [])
     const discoveryResult = { ...result, automaticVerificationProbes }
     await recordRmmActivity({
