@@ -5,6 +5,7 @@ import { agentSocketForDevice, authenticateAgent, sendAgentMessage } from './rmm
 import { recordRmmActivity } from './rmmActivity.js'
 import { recentVulnerabilities, vulnerabilitySummary } from './rmmVulnerabilityIntel.js'
 import { softwareVendorSummary } from './rmmSoftwareVendorIntel.js'
+import { qualificationQueueSummary } from './rmmSoftwareQualification.js'
 import { wingetRepositorySearch } from './rmmWingetFallback.js'
 import { normalizeCatalogueVersion } from './rmmSoftwareVersioning.js'
 import {
@@ -312,31 +313,27 @@ async function catalogueRows(tenantId) {
             c.provider_package_id,c.target_version,c.release_channel,c.installer_type,c.detection,c.execution,c.verification,c.status,
             c.catalogue_source,c.external_key,c.source_metadata,c.qualification_state,c.qualification_version,
             c.qualification_evidence,c.qualification_notes,c.qualified_at,c.created_at,c.updated_at,
-            COALESCE(qt.install_test_passed,false) AS install_test_passed,
-            qt.install_tested_at,qt.install_test_version,
+            COALESCE(qi.install_test_passed,false) AS install_test_passed,
+            qi.install_tested_at,qi.install_test_version,
             COALESCE(qt.upgrade_test_passed,false) AS upgrade_test_passed,
             qt.upgrade_tested_at,qt.upgrade_test_version,
             COALESCE(vi.identity_count,0)::int AS vulnerability_identity_count,
             s.last_success_at AS qualification_source_last_success_at,
-            s.last_error AS qualification_source_error
+            s.last_error AS qualification_source_error,
+            qq.state AS qualification_queue_state,
+            qq.last_error AS qualification_queue_error,
+            qq.updated_at AS qualification_queue_updated_at
        FROM rmm_software_catalogue c
        LEFT JOIN LATERAL (
          SELECT
-           bool_or(
-             d.status='succeeded'
-             AND lower(COALESCE(d.result->>'verificationPassed',d.result->'verification'->>'meetsTarget','false'))='true'
-             AND COALESCE(NULLIF(d.result->>'intent',''),CASE WHEN COALESCE(d.installed_version,'')='' THEN 'install' ELSE 'update' END)='install'
-           ) AS install_test_passed,
-           max(d.completed_at) FILTER (
-             WHERE d.status='succeeded'
-               AND lower(COALESCE(d.result->>'verificationPassed',d.result->'verification'->>'meetsTarget','false'))='true'
-               AND COALESCE(NULLIF(d.result->>'intent',''),CASE WHEN COALESCE(d.installed_version,'')='' THEN 'install' ELSE 'update' END)='install'
-           ) AS install_tested_at,
-           max(d.target_version) FILTER (
-             WHERE d.status='succeeded'
-               AND lower(COALESCE(d.result->>'verificationPassed',d.result->'verification'->>'meetsTarget','false'))='true'
-               AND COALESCE(NULLIF(d.result->>'intent',''),CASE WHEN COALESCE(d.installed_version,'')='' THEN 'install' ELSE 'update' END)='install'
-           ) AS install_test_version,
+           bool_or(q.state='passed') AS install_test_passed,
+           max(q.completed_at) FILTER (WHERE q.state='passed') AS install_tested_at,
+           max(c.target_version) FILTER (WHERE q.state='passed') AS install_test_version
+         FROM rmm_software_qualification_queue q
+        WHERE q.catalogue_id=c.id AND q.test_type='clean_install'
+       ) qi ON true
+       LEFT JOIN LATERAL (
+         SELECT
            bool_or(
              d.status='succeeded'
              AND lower(COALESCE(d.result->>'verificationPassed',d.result->'verification'->>'meetsTarget','false'))='true'
@@ -362,6 +359,13 @@ async function catalogueRows(tenantId) {
            FROM rmm_software_vulnerability_identities vi
           WHERE vi.catalogue_id=c.id AND vi.enabled=true
        ) vi ON true
+       LEFT JOIN LATERAL (
+         SELECT state,last_error,updated_at
+           FROM rmm_software_qualification_queue qq
+          WHERE qq.catalogue_id=c.id AND qq.test_type='clean_install'
+          ORDER BY qq.updated_at DESC
+          LIMIT 1
+       ) qq ON true
        LEFT JOIN rmm_software_vendor_sources s
          ON s.source_key=c.source_metadata->>'latestSource'
       WHERE c.status<>'archived' AND (c.tenant_id=$1 OR c.tenant_id IS NULL)
@@ -393,12 +397,37 @@ async function catalogueRows(tenantId) {
       : officialWinget
     const vulnerabilityCovered = clean(identityAudit.state) === 'covered'
       && Number(row.vulnerability_identity_count || 0) > 0
-    const installTestPassed = row.install_test_passed === true
+    const targetVersion = clean(row.target_version)
+    const cleanInstallVersion = clean(qualificationEvidence.cleanInstallVersion)
+    const installTestPassed = qualificationEvidence.cleanInstallVerified === true
+      && Boolean(targetVersion)
+      && cleanInstallVersion === targetVersion
+    const uninstallTestPassed = qualificationEvidence.uninstallVerified === true
+      && installTestPassed
+    const rawInstallExecutionPassed = row.install_test_passed === true
+      && clean(row.install_test_version) === targetVersion
     const upgradeTestPassed = row.upgrade_test_passed === true
+      && clean(row.upgrade_test_version) === targetVersion
+    const queueState = clean(row.qualification_queue_state)
+    const installTestState = installTestPassed
+      ? 'passed'
+      : ['running','cleanup_pending','cleanup_running','queued','review_required'].includes(queueState)
+        ? queueState
+        : rawInstallExecutionPassed
+          ? 'cleanup_pending'
+          : 'not_tested'
+    const uninstallTestState = uninstallTestPassed
+      ? 'passed'
+      : ['cleanup_pending','cleanup_running','review_required'].includes(queueState)
+        ? queueState
+        : queueState === 'passed'
+          ? 'pending'
+          : 'not_tested'
     const automaticAdmissionReady = Boolean(
       sourceHealthy
       && artifactVerified
       && installTestPassed
+      && uninstallTestPassed
       && upgradeTestPassed
       && vulnerabilityCovered,
     )
@@ -406,6 +435,7 @@ async function catalogueRows(tenantId) {
     if (!sourceHealthy) blockers.push('source_health')
     if (!artifactVerified) blockers.push('artifact_verification')
     if (!installTestPassed) blockers.push('clean_install_test')
+    if (!uninstallTestPassed) blockers.push('uninstall_test')
     if (!upgradeTestPassed) blockers.push('upgrade_test')
     if (!vulnerabilityCovered) blockers.push('vulnerability_identity')
 
@@ -428,9 +458,20 @@ async function catalogueRows(tenantId) {
           authenticodeVerified: qualificationEvidence.authenticodeVerified === true,
         },
         installTest: {
-          state: installTestPassed ? 'passed' : 'not_tested',
-          testedAt: row.install_tested_at || null,
-          version: clean(row.install_test_version),
+          state: installTestState,
+          testedAt: clean(qualificationEvidence.cleanInstallVerifiedAt) || row.install_tested_at || null,
+          version: cleanInstallVersion || clean(row.install_test_version),
+          executionPassed: rawInstallExecutionPassed,
+          queueState,
+          error: clean(row.qualification_queue_error),
+          queueUpdatedAt: row.qualification_queue_updated_at || null,
+        },
+        uninstallTest: {
+          state: uninstallTestState,
+          testedAt: clean(qualificationEvidence.uninstallVerifiedAt) || null,
+          version: cleanInstallVersion,
+          queueState,
+          error: clean(row.qualification_queue_error),
         },
         upgradeTest: {
           state: upgradeTestPassed ? 'passed' : 'not_tested',
@@ -1111,7 +1152,7 @@ async function patchBundle(tenantId) {
   await reconcileSupersededPatchDeployments(tenantId)
   await reconcileTerminalPatchDeployments(tenantId)
   await reconcileVendorProductCodeDeployments(tenantId)
-  const [devices, catalogue, policies, assignments, vulnerabilities, discovery, vendorIntel, tenantVendorSources, exposureSummary, softwareVulnerabilityExposures, vulnerabilityExposureRowsData, deployments, vulnerabilityCatalogue, devicePatchRejections] = await Promise.all([
+  const [devices, catalogue, policies, assignments, vulnerabilities, discovery, vendorIntel, tenantVendorSources, exposureSummary, softwareVulnerabilityExposures, vulnerabilityExposureRowsData, deployments, vulnerabilityCatalogue, devicePatchRejections, qualificationQueue] = await Promise.all([
     patchDeviceRows(tenantId),
     catalogueRows(tenantId),
     policyRows(tenantId),
@@ -1126,6 +1167,7 @@ async function patchBundle(tenantId) {
     patchDeploymentRows(tenantId),
     vulnerabilityCatalogueCoverage(),
     devicePatchRejectionRows(tenantId),
+    qualificationQueueSummary(tenantId),
   ])
   const software = buildSoftware(devices, catalogue, discovery.observations)
   const vulnerabilityHydration = await vulnerabilityHydrationRows(software.deviceSoftware)
@@ -1161,6 +1203,7 @@ async function patchBundle(tenantId) {
     vulnerabilityExposureRows: vulnerabilityExposureRowsData,
     vulnerabilityCatalogue,
     devicePatchRejections,
+    qualificationQueue,
     vendorIntel: { ...vendorIntel, tenantSources: tenantVendorSources },
     devices: devices.map((device) => ({
       id: device.reference,
