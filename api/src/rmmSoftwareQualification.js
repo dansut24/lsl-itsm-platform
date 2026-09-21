@@ -164,9 +164,209 @@ async function dispatchUninstall(queue, runner, item) {
       cleanupDelivery: delivery,
       uninstallName: payload.name,
       uninstallRegistryKey: payload.registry_key,
+      installedDisplayName: clean(item?.name),
+      installedPublisher: clean(item?.publisher),
+      installLocation: clean(item?.install_location),
+      installedScope: clean(item?.scope),
+      installedUserProfile: clean(item?.user_profile),
     })],
   )
   return { dispatched: true, queued: delivery !== 'websocket', jobId: job.id }
+}
+
+function safeQualificationProgramPath(value = '') {
+  const path = clean(value).replace(/\//g, '\\').replace(/\\+$/g, '')
+  if (!/^C:\\Program Files(?: \(x86\))?\\[^\\]+/i.test(path)) return ''
+  return path
+}
+
+function safeQualificationAlias(value = '') {
+  const alias = clean(value)
+    .replace(/\s+\((?:32|64)-bit\)$/i, '')
+    .replace(/\s+\(x64\)$/i, '')
+  if (!alias || alias.length > 100 || /[\\/:*?"<>|]/.test(alias)) return ''
+  return alias
+}
+
+function psSingleQuoted(value = '') {
+  return "'" + clean(value).replace(/'/g, "''") + "'"
+}
+
+async function dispatchQualificationResidueCleanup(queue, runner, {
+  finalState = 'passed',
+  finalError = '',
+  uninstallCompletedAt = '',
+} = {}) {
+  const liveSocket = agentSocketForDevice(runner.agent_device_id)
+  const canPush = Boolean(liveSocket && liveSocket.readyState === 1)
+  const evidence = object(queue.evidence)
+  const installLocation = safeQualificationProgramPath(evidence.installLocation)
+  const aliases = [...new Set([
+    safeQualificationAlias(queue.canonical_name),
+    safeQualificationAlias(evidence.installedDisplayName),
+    safeQualificationAlias(evidence.uninstallName),
+  ].filter(Boolean))]
+  const startedAt = clean(queue.started_at || evidence.dispatchedAt || evidence.installCompletedAt || new Date().toISOString())
+  const patchHostWorkDir = clean(queue.agent_job_id)
+    ? `C:\\ProgramData\\Hi5Central\\Agent\\PatchHost\\jobs\\${clean(queue.agent_job_id)}`
+    : ''
+  const command = [
+    "$ErrorActionPreference='SilentlyContinue'",
+    `$start=[DateTime]::Parse(${psSingleQuoted(startedAt)}).ToUniversalTime()`,
+    '$removed=@();$retained=@()',
+    'function Size-Bytes($p){if(!(Test-Path -LiteralPath $p)){return 0};$m=Get-ChildItem -LiteralPath $p -Force -Recurse -File -ErrorAction SilentlyContinue|Measure-Object Length -Sum;return [int64]($m.Sum)}',
+    'function Remove-QualificationTree($p,$reason,$onlyNew){if(!$p -or !(Test-Path -LiteralPath $p)){return};$i=Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue;if($onlyNew -and $i -and $i.CreationTimeUtc -lt $start.AddMinutes(-2)){$script:retained+=[pscustomobject]@{Path=$p;Reason="pre_existing";Bytes=(Size-Bytes $p)};return};$b=Size-Bytes $p;Remove-Item -LiteralPath $p -Force -Recurse -ErrorAction SilentlyContinue;if(Test-Path -LiteralPath $p){$script:retained+=[pscustomobject]@{Path=$p;Reason="remove_failed";Bytes=(Size-Bytes $p)}}else{$script:removed+=[pscustomobject]@{Path=$p;Reason=$reason;Bytes=$b}}}',
+    '$disk=Get-CimInstance Win32_LogicalDisk -Filter "DeviceID=\'C:\'"',
+    '$before=[int64]$disk.FreeSpace',
+    installLocation ? `Remove-QualificationTree ${psSingleQuoted(installLocation)} 'captured_install_location' $false` : '',
+    patchHostWorkDir ? `Remove-QualificationTree ${psSingleQuoted(patchHostWorkDir)} 'patchhost_job_workdir' $false` : '',
+    `$aliases=@(${aliases.map(psSingleQuoted).join(',')})`,
+    "foreach($u in Get-ChildItem 'C:\\Users' -Directory -ErrorAction SilentlyContinue){foreach($rel in @('AppData\\Local','AppData\\Roaming')){foreach($a in $aliases){$p=Join-Path (Join-Path $u.FullName $rel) $a;Remove-QualificationTree $p 'qualification_created_appdata' $true}}}",
+    "foreach($a in $aliases){$p=Join-Path 'C:\\ProgramData' $a;Remove-QualificationTree $p 'qualification_created_programdata' $true}",
+    '$after=[int64](Get-CimInstance Win32_LogicalDisk -Filter "DeviceID=\'C:\'").FreeSpace',
+    '[pscustomobject]@{BeforeFreeBytes=$before;AfterFreeBytes=$after;ReclaimedMiB=[math]::Round((($after-$before)/1MB),2);InstallLocation=' + psSingleQuoted(installLocation) + ';Removed=$removed;Retained=$retained}|ConvertTo-Json -Depth 6 -Compress',
+  ].filter(Boolean).join(';')
+
+  const inserted = await pool.query(
+    `INSERT INTO rmm_agent_jobs
+      (tenant_id,agent_device_id,job_type,payload,initiated_by,initiated_by_label,request_metadata)
+     VALUES ($1,$2,'custom.command',$3::jsonb,'system','Catalogue qualification residue cleanup',$4::jsonb)
+     RETURNING id,status,created_at`,
+    [
+      runner.tenant_id,
+      runner.agent_device_id,
+      JSON.stringify({ command, timeout_seconds: 180 }),
+      JSON.stringify({
+        source: 'catalogue_qualification_residue_cleanup',
+        qualification_queue_id: queue.id,
+        catalogue_id: queue.catalogue_id,
+      }),
+    ],
+  )
+  const job = inserted.rows[0]
+  let delivery = 'queued_agent_channel'
+  if (canPush) {
+    const claimed = await pool.query(
+      `UPDATE rmm_agent_jobs SET status='claimed',claimed_at=now(),updated_at=now()
+        WHERE id=$1 AND status='queued' RETURNING id`,
+      [job.id],
+    )
+    if (claimed.rowCount) {
+      const pushed = sendAgentMessage(runner.agent_device_id, {
+        type: 'job_execute',
+        job: { id: job.id, job_type: 'custom.command', payload: { command, timeout_seconds: 180 }, created_at: job.created_at },
+      })
+      if (pushed) delivery = 'websocket'
+      else {
+        await pool.query(
+          `UPDATE rmm_agent_jobs SET status='queued',claimed_at=NULL,error_message='',updated_at=now()
+            WHERE id=$1 AND status='claimed'`,
+          [job.id],
+        )
+      }
+    }
+  }
+
+  await pool.query(
+    `UPDATE rmm_software_qualification_queue
+        SET state='cleanup_running',cleanup_job_id=$2,
+            evidence=evidence || $3::jsonb,updated_at=now()
+      WHERE id=$1`,
+    [queue.id, job.id, JSON.stringify({
+      cleanupPhase: 'residue_cleanup',
+      uninstallJobId: queue.cleanup_job_id,
+      uninstallCompletedAt,
+      residueCleanupDispatchedAt: new Date().toISOString(),
+      residueCleanupDelivery: delivery,
+      residueFinalState: finalState,
+      residueFinalError: clean(finalError),
+      residueInstallLocation: installLocation,
+      residueAliases: aliases,
+    })],
+  )
+  return { dispatched: true, queued: delivery !== 'websocket', jobId: job.id }
+}
+
+function residueCleanupSummary(job) {
+  const result = object(job?.result)
+  const parsed = object(result.parsed)
+  const data = Object.keys(parsed).length ? parsed : result
+  return {
+    reclaimedMiB: Number(data.ReclaimedMiB || 0) || 0,
+    installLocation: clean(data.InstallLocation),
+    removed: array(data.Removed).map((item) => ({
+      path: clean(item?.Path),
+      reason: clean(item?.Reason),
+      bytes: Number(item?.Bytes || 0) || 0,
+    })),
+    retained: array(data.Retained).map((item) => ({
+      path: clean(item?.Path),
+      reason: clean(item?.Reason),
+      bytes: Number(item?.Bytes || 0) || 0,
+    })),
+  }
+}
+
+async function finalizeResidueCleanup(current, cleanup, { upgrade = false } = {}) {
+  const failure = terminalJobFailure(cleanup)
+  if (failure || clean(cleanup?.status) !== 'completed') {
+    await markReview(current.id, failure || 'qualification_residue_cleanup_failed', { stage: 'residue_cleanup' })
+    return { id: current.id, state: 'review_required' }
+  }
+  const evidence = object(current.evidence)
+  const summary = residueCleanupSummary(cleanup)
+  if (clean(evidence.residueFinalState) === 'review_required') {
+    await markReview(current.id, clean(evidence.residueFinalError) || 'qualification_cleanup_failed', {
+      stage: 'residue_cleanup',
+      residueCleanup: summary,
+      residueCleanupCompletedAt: cleanup.completed_at || new Date().toISOString(),
+    })
+    return { id: current.id, state: 'review_required' }
+  }
+
+  const now = new Date().toISOString()
+  await withTransaction(async (client) => {
+    await client.query(
+      `UPDATE rmm_software_qualification_queue
+          SET state='passed',last_error='',completed_at=now(),
+              evidence=evidence || $2::jsonb,updated_at=now()
+        WHERE id=$1`,
+      [current.id, JSON.stringify({
+        stage: 'passed',
+        residueCleanupCompletedAt: cleanup.completed_at || now,
+        residueCleanup: summary,
+        inventoryRemovalConfirmedAt: now,
+      })],
+    )
+    await client.query(
+      `UPDATE rmm_software_catalogue
+          SET qualification_evidence=qualification_evidence || $2::jsonb,updated_at=now()
+        WHERE id=$1`,
+      [current.catalogue_id, JSON.stringify(upgrade ? {
+        upgradeVerified: true,
+        upgradeFromVersion: clean(evidence.previousVersion),
+        upgradeVersion: current.target_version,
+        upgradeVerifiedAt: now,
+        upgradeQualificationQueueId: current.id,
+        qualificationRunnerAgentDeviceId: current.runner_agent_device_id,
+        residueCleanupVerified: true,
+        residueCleanupVerifiedAt: now,
+        residueCleanupReclaimedMiB: summary.reclaimedMiB,
+      } : {
+        cleanInstallVerified: true,
+        cleanInstallVersion: current.target_version,
+        cleanInstallVerifiedAt: now,
+        uninstallVerified: true,
+        uninstallVerifiedAt: now,
+        qualificationQueueId: current.id,
+        qualificationRunnerAgentDeviceId: current.runner_agent_device_id,
+        residueCleanupVerified: true,
+        residueCleanupVerifiedAt: now,
+        residueCleanupReclaimedMiB: summary.reclaimedMiB,
+      })],
+    )
+  })
+  return { id: current.id, state: 'passed' }
 }
 
 async function directReleaseForCatalogue(catalogueId) {
@@ -667,8 +867,20 @@ async function reconcileUpgradeQueueRow(queue, runner) {
     )
     const cleanup = cleanupResult.rows[0]
     if (!cleanup || ['queued', 'claimed'].includes(clean(cleanup.status))) return { id: current.id, state: current.state }
+    if (clean(object(current.evidence).cleanupPhase) === 'residue_cleanup') {
+      return finalizeResidueCleanup(current, cleanup, { upgrade: true })
+    }
     const failure = terminalJobFailure(cleanup)
     if (failure || clean(cleanup.status) !== 'completed') {
+      if (runner && clean(current.runner_agent_device_id) === clean(runner.agent_device_id)
+        && !installedMatches(runner.source_payload, current).length) {
+        const dispatched = await dispatchQualificationResidueCleanup(current, runner, {
+          finalState: 'review_required',
+          finalError: failure || 'qualification_upgrade_cleanup_failed',
+          uninstallCompletedAt: cleanup.completed_at || '',
+        })
+        return { id: current.id, state: dispatched.dispatched ? 'cleanup_running' : current.state }
+      }
       await markReview(current.id, failure || 'qualification_upgrade_cleanup_failed', { stage: 'upgrade_cleanup' })
       return { id: current.id, state: 'review_required' }
     }
@@ -686,30 +898,11 @@ async function reconcileUpgradeQueueRow(queue, runner) {
       return { id: current.id, state: current.state }
     }
 
-    const now = new Date().toISOString()
-    await withTransaction(async (client) => {
-      await client.query(
-        `UPDATE rmm_software_qualification_queue
-            SET state='passed',last_error='',completed_at=now(),
-                evidence=evidence || $2::jsonb,updated_at=now()
-          WHERE id=$1`,
-        [current.id, JSON.stringify({ stage: 'passed', cleanupCompletedAt: cleanup.completed_at || now, inventoryRemovalConfirmedAt: now })],
-      )
-      await client.query(
-        `UPDATE rmm_software_catalogue
-            SET qualification_evidence=qualification_evidence || $2::jsonb,updated_at=now()
-          WHERE id=$1`,
-        [current.catalogue_id, JSON.stringify({
-          upgradeVerified: true,
-          upgradeFromVersion: clean(evidence.previousVersion),
-          upgradeVersion: current.target_version,
-          upgradeVerifiedAt: now,
-          upgradeQualificationQueueId: current.id,
-          qualificationRunnerAgentDeviceId: current.runner_agent_device_id,
-        })],
-      )
+    const dispatched = await dispatchQualificationResidueCleanup(current, runner, {
+      finalState: 'passed',
+      uninstallCompletedAt: cleanup.completed_at || '',
     })
-    return { id: current.id, state: 'passed' }
+    return { id: current.id, state: dispatched.dispatched ? 'cleanup_running' : current.state }
   }
 
   return { id: current.id, state: current.state }
@@ -786,8 +979,20 @@ async function reconcileQueueRow(queue, runner) {
     )
     const cleanup = cleanupResult.rows[0]
     if (!cleanup || ['queued', 'claimed'].includes(clean(cleanup.status))) return { id: current.id, state: current.state }
+    if (clean(object(current.evidence).cleanupPhase) === 'residue_cleanup') {
+      return finalizeResidueCleanup(current, cleanup)
+    }
     const failure = terminalJobFailure(cleanup)
     if (failure || clean(cleanup.status) !== 'completed') {
+      if (runner && clean(current.runner_agent_device_id) === clean(runner.agent_device_id)
+        && !installedMatches(runner.source_payload, current).length) {
+        const dispatched = await dispatchQualificationResidueCleanup(current, runner, {
+          finalState: 'review_required',
+          finalError: failure || 'qualification_cleanup_failed',
+          uninstallCompletedAt: cleanup.completed_at || '',
+        })
+        return { id: current.id, state: dispatched.dispatched ? 'cleanup_running' : current.state }
+      }
       await markReview(current.id, failure || 'qualification_cleanup_failed', { stage: 'cleanup' })
       return { id: current.id, state: 'review_required' }
     }
@@ -807,31 +1012,11 @@ async function reconcileQueueRow(queue, runner) {
       return { id: current.id, state: current.state }
     }
 
-    const now = new Date().toISOString()
-    await withTransaction(async (client) => {
-      await client.query(
-        `UPDATE rmm_software_qualification_queue
-            SET state='passed',last_error='',completed_at=now(),
-                evidence=evidence || $2::jsonb,updated_at=now()
-          WHERE id=$1`,
-        [current.id, JSON.stringify({ stage: 'passed', cleanupCompletedAt: cleanup.completed_at || now, inventoryRemovalConfirmedAt: now })],
-      )
-      await client.query(
-        `UPDATE rmm_software_catalogue
-            SET qualification_evidence=qualification_evidence || $2::jsonb,updated_at=now()
-          WHERE id=$1`,
-        [current.catalogue_id, JSON.stringify({
-          cleanInstallVerified: true,
-          cleanInstallVersion: current.target_version,
-          cleanInstallVerifiedAt: now,
-          uninstallVerified: true,
-          uninstallVerifiedAt: now,
-          qualificationQueueId: current.id,
-          qualificationRunnerAgentDeviceId: current.runner_agent_device_id,
-        })],
-      )
+    const dispatched = await dispatchQualificationResidueCleanup(current, runner, {
+      finalState: 'passed',
+      uninstallCompletedAt: cleanup.completed_at || '',
     })
-    return { id: current.id, state: 'passed' }
+    return { id: current.id, state: dispatched.dispatched ? 'cleanup_running' : current.state }
   }
 
   return { id: current.id, state: current.state }
