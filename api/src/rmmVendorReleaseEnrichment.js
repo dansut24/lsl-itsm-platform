@@ -496,6 +496,9 @@ export async function queueVendorArtifactInspections(limit = 2) {
         AND a.last_telemetry_at>now()-interval '90 seconds'
         AND COALESCE((a.patch_capabilities->'vendorDirect'->>'artifactInspection')::boolean,false)=true
         AND COALESCE((a.patch_capabilities->'vendorDirect'->>'artifactTechnologyDetection')::boolean,false)=true
+        AND COALESCE((a.patch_capabilities->'vendorDirect'->>'artifactStorage'),'')='job_scoped'
+        AND COALESCE((a.patch_capabilities->'vendorDirect'->>'jobDirectoryPurgedOnExit')::boolean,false)=true
+        AND COALESCE((a.patch_capabilities->'vendorDirect'->>'winInetCacheUsed')::boolean,true)=false
       ORDER BY a.last_telemetry_at DESC
       LIMIT 1`,
   )
@@ -670,6 +673,9 @@ export async function queueVendorArtifactInspectionForCatalogue(catalogueId) {
         AND a.last_telemetry_at>now()-interval '90 seconds'
         AND COALESCE((a.patch_capabilities->'vendorDirect'->>'artifactInspection')::boolean,false)=true
         AND COALESCE((a.patch_capabilities->'vendorDirect'->>'artifactTechnologyDetection')::boolean,false)=true
+        AND COALESCE((a.patch_capabilities->'vendorDirect'->>'artifactStorage'),'')='job_scoped'
+        AND COALESCE((a.patch_capabilities->'vendorDirect'->>'jobDirectoryPurgedOnExit')::boolean,false)=true
+        AND COALESCE((a.patch_capabilities->'vendorDirect'->>'winInetCacheUsed')::boolean,true)=false
       ORDER BY a.last_telemetry_at DESC LIMIT 1`,
   )
   const runner = runnerResult.rows[0]

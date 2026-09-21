@@ -64,6 +64,9 @@ async function liveQualificationRunner() {
         AND a.websocket_status='Connected'
         AND a.last_telemetry_at>now()-interval '90 seconds'
         AND COALESCE((a.patch_capabilities->>'softwareInstall')::boolean,false)=true
+        AND COALESCE((a.patch_capabilities->'vendorDirect'->>'artifactStorage'),'')='job_scoped'
+        AND COALESCE((a.patch_capabilities->'vendorDirect'->>'jobDirectoryPurgedOnExit')::boolean,false)=true
+        AND COALESCE((a.patch_capabilities->'vendorDirect'->>'winInetCacheUsed')::boolean,true)=false
       ORDER BY a.last_telemetry_at DESC
       LIMIT 1`,
   )
