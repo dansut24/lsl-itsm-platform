@@ -52,70 +52,33 @@ $result | ConvertTo-Json -Depth 5 -Compress
 const SAFE_DISK_CLEANUP = String.raw`$ErrorActionPreference = 'SilentlyContinue'
 $before = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
 $beforeFree = [int64]$before.FreeSpace
-$cutoff = (Get-Date).AddDays(-2)
-$weekCutoff = (Get-Date).AddDays(-7)
 $results = [System.Collections.Generic.List[object]]::new()
-function Remove-StaleFiles([string]$Name,[string]$Path,[datetime]$OlderThan) {
+function Clean-Stale([string]$Name,[string]$Path,[int]$Days) {
   if (-not (Test-Path -LiteralPath $Path)) { return }
-  $beforeBytes = (Get-ChildItem -LiteralPath $Path -File -Recurse -Force -ErrorAction SilentlyContinue |
+  $cutoff = (Get-Date).AddDays(-$Days)
+  $beforeBytes = (Get-ChildItem $Path -File -Recurse -Force -ErrorAction SilentlyContinue |
     Measure-Object Length -Sum).Sum
   if ($null -eq $beforeBytes) { $beforeBytes = 0 }
-  Get-ChildItem -LiteralPath $Path -File -Recurse -Force -ErrorAction SilentlyContinue |
-    Where-Object { $_.LastWriteTime -lt $OlderThan } |
+  Get-ChildItem $Path -File -Recurse -Force -ErrorAction SilentlyContinue |
+    Where-Object LastWriteTime -lt $cutoff |
     Remove-Item -Force -ErrorAction SilentlyContinue
-  Get-ChildItem -LiteralPath $Path -Directory -Recurse -Force -ErrorAction SilentlyContinue |
-    Sort-Object FullName -Descending |
-    Where-Object { -not (Get-ChildItem -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue) } |
-    Remove-Item -Force -ErrorAction SilentlyContinue
-  $afterBytes = (Get-ChildItem -LiteralPath $Path -File -Recurse -Force -ErrorAction SilentlyContinue |
+  $afterBytes = (Get-ChildItem $Path -File -Recurse -Force -ErrorAction SilentlyContinue |
     Measure-Object Length -Sum).Sum
   if ($null -eq $afterBytes) { $afterBytes = 0 }
   $results.Add([pscustomobject]@{
-    Name=$Name; Path=$Path; FreedBytes=[math]::Max(0,[int64]$beforeBytes-[int64]$afterBytes)
+    Name=$Name
+    FreedGiB=[math]::Round(([math]::Max(0,[int64]$beforeBytes-[int64]$afterBytes))/1GB,3)
   })
 }
-Remove-StaleFiles 'Windows Temp' 'C:\Windows\Temp' $cutoff
-Remove-StaleFiles 'System Profile Temp' 'C:\Windows\System32\config\systemprofile\AppData\Local\Temp' $cutoff
-Remove-StaleFiles 'Windows Error Reports' 'C:\ProgramData\Microsoft\Windows\WER\ReportArchive' $cutoff
-Remove-StaleFiles 'Windows Error Queue' 'C:\ProgramData\Microsoft\Windows\WER\ReportQueue' $cutoff
-Remove-StaleFiles 'Windows Minidumps' 'C:\Windows\Minidump' $cutoff
-Remove-StaleFiles 'Windows Update Downloads' 'C:\Windows\SoftwareDistribution\Download' $weekCutoff
-if (Test-Path 'C:\Windows\MEMORY.DMP') {
-  $dump = Get-Item 'C:\Windows\MEMORY.DMP' -Force -ErrorAction SilentlyContinue
-  if ($dump -and $dump.LastWriteTime -lt (Get-Date).AddDays(-7)) {
-    $dumpBytes = [int64]$dump.Length
-    Remove-Item -LiteralPath $dump.FullName -Force -ErrorAction SilentlyContinue
-    if (-not (Test-Path -LiteralPath $dump.FullName)) {
-      $results.Add([pscustomobject]@{Name='Windows Memory Dump';Path=$dump.FullName;FreedBytes=$dumpBytes})
-    }
-  }
-}
+Clean-Stale 'Windows Temp' 'C:\Windows\Temp' 2
+Clean-Stale 'System Temp' 'C:\Windows\System32\config\systemprofile\AppData\Local\Temp' 2
+Clean-Stale 'Windows Error Reports' 'C:\ProgramData\Microsoft\Windows\WER' 2
+Clean-Stale 'Windows Update Downloads' 'C:\Windows\SoftwareDistribution\Download' 7
 Get-ChildItem 'C:\Users' -Directory -Force -ErrorAction SilentlyContinue | ForEach-Object {
-  $profile = $_.FullName
-  Remove-StaleFiles ($_.Name + ' Temp') (Join-Path $profile 'AppData\Local\Temp') $cutoff
-  Remove-StaleFiles ($_.Name + ' Chrome Cache') (Join-Path $profile 'AppData\Local\Google\Chrome\User Data\Default\Cache') $cutoff
-  Remove-StaleFiles ($_.Name + ' Chrome Code Cache') (Join-Path $profile 'AppData\Local\Google\Chrome\User Data\Default\Code Cache') $cutoff
-  Remove-StaleFiles ($_.Name + ' Edge Cache') (Join-Path $profile 'AppData\Local\Microsoft\Edge\User Data\Default\Cache') $cutoff
-  Remove-StaleFiles ($_.Name + ' Edge Code Cache') (Join-Path $profile 'AppData\Local\Microsoft\Edge\User Data\Default\Code Cache') $cutoff
-  $firefoxProfiles = Join-Path $profile 'AppData\Local\Mozilla\Firefox\Profiles'
-  Get-ChildItem $firefoxProfiles -Directory -Force -ErrorAction SilentlyContinue | ForEach-Object {
-    Remove-StaleFiles ($_.Name + ' Firefox Cache') (Join-Path $_.FullName 'cache2') $cutoff
-  }
+  Clean-Stale ($_.Name + ' Temp') (Join-Path $_.FullName 'AppData\Local\Temp') 2
 }
 if (Get-Command Delete-DeliveryOptimizationCache -ErrorAction SilentlyContinue) {
-  $doPath = 'C:\Windows\ServiceProfiles\NetworkService\AppData\Local\Microsoft\Windows\DeliveryOptimization\Cache'
-  $doBefore = 0
-  if (Test-Path $doPath) {
-    $doBefore = (Get-ChildItem $doPath -File -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
-    if ($null -eq $doBefore) { $doBefore = 0 }
-  }
   Delete-DeliveryOptimizationCache -Force -ErrorAction SilentlyContinue
-  $doAfter = 0
-  if (Test-Path $doPath) {
-    $doAfter = (Get-ChildItem $doPath -File -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
-    if ($null -eq $doAfter) { $doAfter = 0 }
-  }
-  $results.Add([pscustomobject]@{Name='Delivery Optimization Cache';Path=$doPath;FreedBytes=[math]::Max(0,[int64]$doBefore-[int64]$doAfter)})
 }
 $after = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
 $afterFree = [int64]$after.FreeSpace
@@ -125,8 +88,58 @@ $afterFree = [int64]$after.FreeSpace
   AfterFreeGiB=[math]::Round($afterFree/1GB,2)
   ReclaimedGiB=[math]::Round(($afterFree-$beforeFree)/1GB,2)
   FreePercent=[math]::Round(([double]$afterFree/[double]$after.Size)*100,2)
-  Categories=$results | Where-Object FreedBytes -gt 0 | Sort-Object FreedBytes -Descending
-} | ConvertTo-Json -Depth 5 -Compress
+  Categories=$results | Where-Object FreedGiB -gt 0 | Sort-Object FreedGiB -Descending
+} | ConvertTo-Json -Depth 4 -Compress
+`
+
+const BROWSER_CACHE_CLEANUP = String.raw`$ErrorActionPreference = 'SilentlyContinue'
+$before = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
+$beforeFree = [int64]$before.FreeSpace
+$cutoff = (Get-Date).AddDays(-2)
+$results = [System.Collections.Generic.List[object]]::new()
+function Clean-Cache([string]$Name,[string]$Path) {
+  if (-not (Test-Path -LiteralPath $Path)) { return }
+  $beforeBytes = (Get-ChildItem $Path -File -Recurse -Force -ErrorAction SilentlyContinue |
+    Measure-Object Length -Sum).Sum
+  if ($null -eq $beforeBytes) { $beforeBytes = 0 }
+  Get-ChildItem $Path -File -Recurse -Force -ErrorAction SilentlyContinue |
+    Where-Object LastWriteTime -lt $cutoff |
+    Remove-Item -Force -ErrorAction SilentlyContinue
+  $afterBytes = (Get-ChildItem $Path -File -Recurse -Force -ErrorAction SilentlyContinue |
+    Measure-Object Length -Sum).Sum
+  if ($null -eq $afterBytes) { $afterBytes = 0 }
+  $freed = [math]::Max(0,[int64]$beforeBytes-[int64]$afterBytes)
+  if ($freed -gt 0) { $results.Add([pscustomobject]@{Name=$Name;FreedGiB=[math]::Round($freed/1GB,3)}) }
+}
+Get-ChildItem 'C:\Users' -Directory -Force -ErrorAction SilentlyContinue | ForEach-Object {
+  $user = $_.Name
+  $local = Join-Path $_.FullName 'AppData\Local'
+  foreach ($browser in @(
+    @{Name='Chrome';Root=(Join-Path $local 'Google\Chrome\User Data')},
+    @{Name='Edge';Root=(Join-Path $local 'Microsoft\Edge\User Data')}
+  )) {
+    Get-ChildItem $browser.Root -Directory -Force -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -eq 'Default' -or $_.Name -like 'Profile *' } |
+      ForEach-Object {
+        Clean-Cache ($user+' '+$browser.Name+' '+$_.Name) (Join-Path $_.FullName 'Cache')
+        Clean-Cache ($user+' '+$browser.Name+' Code '+$_.Name) (Join-Path $_.FullName 'Code Cache')
+      }
+  }
+  $ff = Join-Path $local 'Mozilla\Firefox\Profiles'
+  Get-ChildItem $ff -Directory -Force -ErrorAction SilentlyContinue | ForEach-Object {
+    Clean-Cache ($user+' Firefox '+$_.Name) (Join-Path $_.FullName 'cache2')
+  }
+}
+$after = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
+$afterFree = [int64]$after.FreeSpace
+[pscustomobject]@{
+  ComputerName=$env:COMPUTERNAME
+  BeforeFreeGiB=[math]::Round($beforeFree/1GB,2)
+  AfterFreeGiB=[math]::Round($afterFree/1GB,2)
+  ReclaimedGiB=[math]::Round(($afterFree-$beforeFree)/1GB,2)
+  FreePercent=[math]::Round(([double]$afterFree/[double]$after.Size)*100,2)
+  Categories=$results | Sort-Object FreedGiB -Descending
+} | ConvertTo-Json -Depth 4 -Compress
 `
 
 const COMPONENT_CLEANUP = String.raw`$ErrorActionPreference = 'Stop'
@@ -160,10 +173,18 @@ export const BUILTIN_AUTOMATIONS = [
   {
     key: 'disk-cleanup-safe',
     name: 'Disk Cleanup - Safe',
-    description: 'Removes stale temporary files, crash reports and browser/Delivery Optimization caches. Does not touch Documents, Downloads, Recycle Bin or installed applications.',
+    description: 'Removes stale Windows/user temporary files, Windows error/update caches and Delivery Optimization cache. Does not touch Documents, Downloads, Recycle Bin or installed applications.',
     category: 'Maintenance',
     timeoutSeconds: 900,
     scriptText: SAFE_DISK_CLEANUP,
+  },
+  {
+    key: 'browser-cache-cleanup-safe',
+    name: 'Browser Cache Cleanup - Safe',
+    description: 'Removes browser cache files older than two days from Chrome, Edge and Firefox profiles without deleting history, cookies, passwords or bookmarks.',
+    category: 'Maintenance',
+    timeoutSeconds: 900,
+    scriptText: BROWSER_CACHE_CLEANUP,
   },
   {
     key: 'windows-component-cleanup',
@@ -176,17 +197,53 @@ export const BUILTIN_AUTOMATIONS = [
 ]
 
 export async function ensureBuiltinAutomations(tenantId) {
-  if (!tenantId) return { created: 0, existing: 0 }
+  if (!tenantId) return { created: 0, updated: 0, existing: 0 }
   return withTransaction(async (client) => {
     let created = 0
+    let updated = 0
     let existing = 0
     for (const item of BUILTIN_AUTOMATIONS) {
+      const desiredHash = sha256(item.scriptText)
       const found = await client.query(
-        "SELECT id FROM rmm_automations WHERE tenant_id=$1 AND lower(name)=lower($2) AND status<>'archived' LIMIT 1",
+        `SELECT a.id,a.published_version_id,pv.version_number,pv.content_sha256,pv.release_notes,
+                EXISTS(
+                  SELECT 1 FROM rmm_automation_versions d
+                   WHERE d.automation_id=a.id AND d.state='draft'
+                ) AS has_draft
+           FROM rmm_automations a
+           LEFT JOIN rmm_automation_versions pv ON pv.id=a.published_version_id
+          WHERE a.tenant_id=$1 AND lower(a.name)=lower($2) AND a.status<>'archived'
+          LIMIT 1`,
         [tenantId, item.name],
       )
       if (found.rowCount) {
-        existing += 1
+        const current = found.rows[0]
+        const systemManaged = String(current.release_notes || '').startsWith('Built-in Hi5Central maintenance automation.')
+        if (systemManaged && !current.has_draft && current.content_sha256 !== desiredHash) {
+          const nextVersion = Number(current.version_number || 0) + 1
+          await client.query(
+            `UPDATE rmm_automation_versions SET state='superseded'
+              WHERE automation_id=$1 AND state='published'`,
+            [current.id],
+          )
+          const version = await client.query(
+            `INSERT INTO rmm_automation_versions
+              (tenant_id,automation_id,version_number,state,script_text,content_sha256,timeout_seconds,run_as,release_notes,published_at)
+             VALUES ($1,$2,$3,'published',$4,$5,$6,'system',$7,now())
+             RETURNING id`,
+            [tenantId,current.id,nextVersion,item.scriptText,desiredHash,item.timeoutSeconds,
+             'Built-in Hi5Central maintenance automation. Updated published version.'],
+          )
+          await client.query(
+            `UPDATE rmm_automations
+                SET description=$2,category=$3,status='published',published_version_id=$4,updated_at=now()
+              WHERE id=$1`,
+            [current.id,item.description,item.category,version.rows[0].id],
+          )
+          updated += 1
+        } else {
+          existing += 1
+        }
         continue
       }
       const automation = await client.query(
@@ -202,14 +259,8 @@ export async function ensureBuiltinAutomations(tenantId) {
           (tenant_id,automation_id,version_number,state,script_text,content_sha256,timeout_seconds,run_as,release_notes,published_at)
          VALUES ($1,$2,1,'published',$3,$4,$5,'system',$6,now())
          RETURNING id`,
-        [
-          tenantId,
-          automationId,
-          item.scriptText,
-          sha256(item.scriptText),
-          item.timeoutSeconds,
-          'Built-in Hi5Central maintenance automation. Initial published version.',
-        ],
+        [tenantId,automationId,item.scriptText,desiredHash,item.timeoutSeconds,
+         'Built-in Hi5Central maintenance automation. Initial published version.'],
       )
       await client.query(
         `UPDATE rmm_automations
@@ -219,6 +270,6 @@ export async function ensureBuiltinAutomations(tenantId) {
       )
       created += 1
     }
-    return { created, existing }
+    return { created, updated, existing }
   })
 }
