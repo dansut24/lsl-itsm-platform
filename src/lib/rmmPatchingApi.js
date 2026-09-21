@@ -48,6 +48,25 @@ export function deleteSoftwareCatalogueEntry(catalogueId) {
   })
 }
 
+export function updateSoftwareValidation(catalogueId, validation) {
+  return request('/api/v1/rmm/software-catalogue/' + encodeURIComponent(catalogueId) + '/validation', {
+    method: 'PUT',
+    body: JSON.stringify(validation),
+  })
+}
+
+export function revalidateSoftwareCatalogueEntry(catalogueId) {
+  return request('/api/v1/rmm/software-catalogue/' + encodeURIComponent(catalogueId) + '/revalidate', {
+    method: 'POST',
+  })
+}
+
+export function retrySoftwareQualification(catalogueId) {
+  return request('/api/v1/rmm/software-catalogue/' + encodeURIComponent(catalogueId) + '/retry-qualification', {
+    method: 'POST',
+  })
+}
+
 export function createVendorSource(source) {
   return request('/api/v1/rmm/vendor-sources', {
     method: 'POST',

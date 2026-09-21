@@ -37,6 +37,9 @@ import {
   searchWingetRepository,
   testVendorSource,
   updateVendorSource,
+  updateSoftwareValidation,
+  revalidateSoftwareCatalogueEntry,
+  retrySoftwareQualification,
 } from '../../lib/rmmPatchingApi.js'
 import { loadRmmScope } from '../../lib/rmmScopeApi.js'
 import './RmmPatching.css'
@@ -156,6 +159,89 @@ function MappingModal({ application, onClose, onSave }) {
         <button onClick={onClose} type="button">Cancel</button>
         <button className="rmm-primary" disabled={!valid} type="submit"><PackageCheck size={15} /> Save mapping</button>
       </footer>
+    </form>
+  </div>
+}
+
+function SoftwareValidationModal({ application, source, onClose, onSave, saving }) {
+  const catalogue = application?.catalogue || {}
+  const sourceMeta = source?.metadata || {}
+  const verification = catalogue.verification || {}
+  const execution = catalogue.execution || {}
+  const [form, setForm] = useState({
+    canonicalName: catalogue.canonicalName || application?.name || '',
+    publisher: catalogue.publisher || application?.publisher || '',
+    namePattern: catalogue.namePattern || application?.name || '',
+    publisherPattern: catalogue.publisherPattern || application?.publisher || '',
+    sourceUrl: source?.source_url || '',
+    repository: sourceMeta.repository || '',
+    assetPattern: sourceMeta.assetPattern || '',
+    checksumAssetPattern: sourceMeta.checksumAssetPattern || '',
+    releaseTagPattern: sourceMeta.releaseTagPattern || '',
+    staticInstallerUrl: sourceMeta.staticInstallerUrl || '',
+    staticSha256: sourceMeta.staticSha256 || '',
+    staticReleaseUrl: sourceMeta.staticReleaseUrl || '',
+    expectedSigner: catalogue.expectedSigner || '',
+    displayNameContains: verification.displayNameContains || catalogue.namePattern || '',
+    verificationPublisher: verification.publisherContains || catalogue.publisherPattern || '',
+    versionTransform: verification.versionTransform || '',
+    installArguments: execution.installArguments || '',
+  })
+  const update = (key, value) => setForm((current) => ({ ...current, [key]: value }))
+  const vendorManaged = Boolean(catalogue.builtIn && catalogue.sourceKey)
+
+  return <div className="rmm-patch-modal-backdrop">
+    <form className="rmm-patch-modal" onSubmit={(event) => {
+      event.preventDefault()
+      onSave({
+        canonicalName: form.canonicalName,
+        publisher: form.publisher,
+        namePattern: form.namePattern,
+        publisherPattern: form.publisherPattern,
+        sourceUrl: form.sourceUrl,
+        repository: form.repository,
+        assetPattern: form.assetPattern,
+        checksumAssetPattern: form.checksumAssetPattern,
+        releaseTagPattern: form.releaseTagPattern,
+        staticInstallerUrl: form.staticInstallerUrl,
+        staticSha256: form.staticSha256,
+        staticReleaseUrl: form.staticReleaseUrl,
+        expectedSigner: form.expectedSigner,
+        verification: {
+          ...verification,
+          displayNameContains: form.displayNameContains,
+          publisherContains: form.verificationPublisher,
+          versionTransform: form.versionTransform,
+        },
+        execution: { ...execution, installArguments: form.installArguments },
+      })
+    }}>
+      <header>
+        <div><span className="rmm-eyebrow">Per-software validation</span><h2>{catalogue.canonicalName || application?.name}</h2></div>
+        <button aria-label="Close" onClick={onClose} type="button"><X size={17} /></button>
+      </header>
+      <p>Changes affect only this catalogue item. Trust-affecting edits remove its previous qualification until the source, artifact and endpoint tests pass again.</p>
+      <div className="rmm-patch-form-grid">
+        <label>Canonical application<input value={form.canonicalName} onChange={(event) => update('canonicalName', event.target.value)} /></label>
+        <label>Publisher<input value={form.publisher} onChange={(event) => update('publisher', event.target.value)} /></label>
+        <label>Installed name contains<input value={form.namePattern} onChange={(event) => update('namePattern', event.target.value)} /></label>
+        <label>Installed publisher contains<input value={form.publisherPattern} onChange={(event) => update('publisherPattern', event.target.value)} /></label>
+        {vendorManaged && <><label>Vendor source URL<input value={form.sourceUrl} onChange={(event) => update('sourceUrl', event.target.value)} /></label>
+        <label>Repository<input value={form.repository} onChange={(event) => update('repository', event.target.value)} placeholder="owner/repository" /></label>
+        <label>Installer asset pattern<input value={form.assetPattern} onChange={(event) => update('assetPattern', event.target.value)} /></label>
+        <label>Checksum asset pattern<input value={form.checksumAssetPattern} onChange={(event) => update('checksumAssetPattern', event.target.value)} /></label>
+        <label>Release tag pattern<input value={form.releaseTagPattern} onChange={(event) => update('releaseTagPattern', event.target.value)} /></label>
+        <label>Static installer URL<input value={form.staticInstallerUrl} onChange={(event) => update('staticInstallerUrl', event.target.value)} /></label>
+        <label>Static SHA-256<input value={form.staticSha256} onChange={(event) => update('staticSha256', event.target.value)} /></label>
+        <label>Static release URL<input value={form.staticReleaseUrl} onChange={(event) => update('staticReleaseUrl', event.target.value)} /></label>
+        <label>Expected Authenticode signer<input value={form.expectedSigner} onChange={(event) => update('expectedSigner', event.target.value)} /></label></>}
+        <label>Verification display name<input value={form.displayNameContains} onChange={(event) => update('displayNameContains', event.target.value)} /></label>
+        <label>Verification publisher<input value={form.verificationPublisher} onChange={(event) => update('verificationPublisher', event.target.value)} /></label>
+        <label>Version transform<input value={form.versionTransform} onChange={(event) => update('versionTransform', event.target.value)} placeholder="Normally blank" /></label>
+        <label>Silent install arguments<input value={form.installArguments} onChange={(event) => update('installArguments', event.target.value)} /></label>
+      </div>
+      <div className="rmm-patch-security-note"><ShieldCheck size={16} /><span><strong>Fail closed:</strong> a changed source or signer is not deployable again until validation succeeds.</span></div>
+      <footer><button onClick={onClose} type="button">Cancel</button><button className="rmm-primary" disabled={saving || form.canonicalName.trim().length < 2 || form.namePattern.trim().length < 2} type="submit"><RefreshCw size={15} /> Save & revalidate</button></footer>
     </form>
   </div>
 }
@@ -429,6 +515,7 @@ export function RmmPatching({ devices = [] }) {
   const [remediatingExposureId, setRemediatingExposureId] = useState('')
   const [error, setError] = useState('')
   const [mappingApp, setMappingApp] = useState(null)
+  const [validationApp, setValidationApp] = useState(null)
   const [patchApp, setPatchApp] = useState(null)
   const [catalogueInstallDeviceId, setCatalogueInstallDeviceId] = useState('')
   const [catalogueInstallId, setCatalogueInstallId] = useState('')
@@ -515,6 +602,9 @@ export function RmmPatching({ devices = [] }) {
   const catalogueCandidates = bundle?.catalogueCandidates || []
   const patchObservations = bundle?.patchObservations || []
   const vendorSources = bundle?.vendorIntel?.sources || []
+  const validationSource = validationApp?.catalogue?.sourceKey
+    ? vendorSources.find((source) => source.source_key === validationApp.catalogue.sourceKey) || null
+    : null
   const vendorLatest = bundle?.vendorIntel?.latest || []
   const vendorReview = vendorLatest.filter((item) => ['rejected', 'signer_review_required', 'installer_review_required'].includes(item.trust_state))
   const vendorReviewCounts = vendorReview.reduce((counts, item) => ({ ...counts, [item.trust_state]: (counts[item.trust_state] || 0) + 1 }), {})
@@ -749,6 +839,54 @@ export function RmmPatching({ devices = [] }) {
       setBundle(result.bundle)
     } catch (requestError) {
       setError(requestError?.message || 'Unable to archive software mapping.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function saveSoftwareValidation(form) {
+    if (!validationApp?.catalogue?.id) return
+    setSaving(true)
+    setError('')
+    try {
+      const updated = await updateSoftwareValidation(validationApp.catalogue.id, form)
+      setBundle(updated.bundle)
+      const validated = await revalidateSoftwareCatalogueEntry(validationApp.catalogue.id)
+      setBundle(validated.bundle)
+      setValidationApp(null)
+    } catch (requestError) {
+      if (requestError?.data?.bundle) setBundle(requestError.data.bundle)
+      setError(requestError?.message || 'Unable to update and revalidate this software.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function revalidateApplication(application) {
+    if (!application?.catalogue?.id || !application.catalogue.sourceKey) return
+    setSaving(true)
+    setError('')
+    try {
+      const result = await revalidateSoftwareCatalogueEntry(application.catalogue.id)
+      setBundle(result.bundle)
+    } catch (requestError) {
+      if (requestError?.data?.bundle) setBundle(requestError.data.bundle)
+      setError(requestError?.message || 'Software validation failed.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function retryApplicationQualification(application) {
+    if (!application?.catalogue?.id) return
+    setSaving(true)
+    setError('')
+    try {
+      const result = await retrySoftwareQualification(application.catalogue.id)
+      setBundle(result.bundle)
+    } catch (requestError) {
+      if (requestError?.data?.bundle) setBundle(requestError.data.bundle)
+      setError(requestError?.message || 'Unable to retry software qualification.')
     } finally {
       setSaving(false)
     }
@@ -1051,6 +1189,9 @@ export function RmmPatching({ devices = [] }) {
               : <small>Needs mapping</small>}</span>
             <span className="actions">{application.catalogue ? <>
               <button disabled={saving || application.updateAvailable < 1} onClick={() => setPatchApp(application)} type="button"><PackageCheck size={14} /> Patch</button>
+              <button disabled={saving} onClick={() => setValidationApp(application)} type="button"><Wrench size={14} /> Edit</button>
+              {application.catalogue.sourceKey && <button disabled={saving} onClick={() => revalidateApplication(application)} type="button"><RefreshCw size={14} /> Validate</button>}
+              {application.catalogue.deploymentMode === 'vendor_direct' && application.catalogue.qualificationState !== 'qualified' && <button disabled={saving} onClick={() => retryApplicationQualification(application)} type="button"><ShieldCheck size={14} /> Retry</button>}
               {!application.catalogue.builtIn && <button aria-label={'Archive ' + application.name} disabled={saving} onClick={() => removeMapping(application)} type="button"><Trash2 size={14} /></button>}
             </> : <button disabled={saving} onClick={() => setMappingApp(application)} type="button"><Plus size={14} /> Map</button>}</span>
           </div>
@@ -1266,6 +1407,7 @@ export function RmmPatching({ devices = [] }) {
     </section>}
 
     {mappingApp && <MappingModal application={mappingApp} onClose={() => setMappingApp(null)} onSave={saveMapping} />}
+    {validationApp && <SoftwareValidationModal application={validationApp} source={validationSource} saving={saving} onClose={() => setValidationApp(null)} onSave={saveSoftwareValidation} />}
     {showVendorSource && <VendorSourceModal source={editingVendorSource} saving={saving} onClose={() => { setShowVendorSource(false); setEditingVendorSource(null) }} onSave={saveVendorSource} />}
     {patchApp && <SoftwarePatchModal
       application={patchApp}

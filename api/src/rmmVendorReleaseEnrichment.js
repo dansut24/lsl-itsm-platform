@@ -623,6 +623,91 @@ export async function queueVendorArtifactInspections(limit = 2) {
   return queued
 }
 
+export async function queueVendorArtifactInspectionForCatalogue(catalogueId) {
+  const releaseResult = await pool.query(
+    `SELECT r.id,r.source_key,r.provider_package_id,r.canonical_name,r.version,
+            r.installer_url,r.installer_sha256,r.installer_type
+       FROM rmm_software_catalogue c
+       JOIN rmm_software_vendor_releases r
+         ON r.provider_package_id=c.external_key
+        AND r.source_key=c.source_metadata->>'latestSource'
+        AND r.version=c.target_version
+      WHERE c.id=$1 AND c.tenant_id IS NULL AND c.status='active'
+        AND r.installer_url<>'' AND r.installer_type IN ('msi','exe')
+      LIMIT 1`,
+    [catalogueId],
+  )
+  const release = releaseResult.rows[0]
+  if (!release) return { queued: false, reason: 'vendor_release_not_ready' }
+
+  const existing = await pool.query(
+    `SELECT id,status
+       FROM rmm_agent_jobs
+      WHERE job_type='patch.vendor_artifact.inspect'
+        AND request_metadata->>'vendor_release_id'=$1
+        AND status IN ('queued','claimed')
+      ORDER BY created_at DESC LIMIT 1`,
+    [release.id],
+  )
+  if (existing.rowCount) {
+    return { queued: false, active: true, jobId: existing.rows[0].id, releaseId: release.id }
+  }
+
+  const runnerResult = await pool.query(
+    `SELECT a.id AS agent_device_id,a.tenant_id,i.name AS device_name
+       FROM rmm_software_vendor_qualification_runners q
+       JOIN rmm_agent_devices a ON a.id=q.agent_device_id AND a.disabled_at IS NULL
+       JOIN rmm_device_inventory i ON i.id=a.inventory_id AND i.active=true
+      WHERE q.enabled=true
+        AND a.websocket_status='Connected'
+        AND a.last_telemetry_at>now()-interval '90 seconds'
+        AND COALESCE((a.patch_capabilities->'vendorDirect'->>'artifactInspection')::boolean,false)=true
+        AND COALESCE((a.patch_capabilities->'vendorDirect'->>'artifactTechnologyDetection')::boolean,false)=true
+      ORDER BY a.last_telemetry_at DESC LIMIT 1`,
+  )
+  const runner = runnerResult.rows[0]
+  if (!runner) return { queued: false, reason: 'qualification_runner_offline' }
+
+  const safeUrl = await publicHttpsUrl(release.installer_url)
+  const inserted = await pool.query(
+    `INSERT INTO rmm_agent_jobs
+      (tenant_id,agent_device_id,job_type,payload,initiated_by,initiated_by_label,request_metadata)
+     VALUES ($1,$2,'patch.vendor_artifact.inspect',$3::jsonb,'system','Manual catalogue revalidation',$4::jsonb)
+     RETURNING id,status,created_at`,
+    [
+      runner.tenant_id,
+      runner.agent_device_id,
+      JSON.stringify({
+        protocolVersion: 1,
+        action: 'software.inspect',
+        provider: 'vendor_direct',
+        applicationName: release.canonical_name,
+        targetVersion: release.version,
+        downloadUrl: safeUrl.toString(),
+        sha256: clean(release.installer_sha256),
+        installerType: release.installer_type,
+      }),
+      JSON.stringify({
+        source: 'manual_catalogue_revalidation',
+        vendor_release_id: release.id,
+        vendor_source_key: release.source_key,
+        canonical_name: release.canonical_name,
+        expected_version: release.version,
+        catalogue_id: catalogueId,
+      }),
+    ],
+  )
+  return {
+    queued: true,
+    jobId: inserted.rows[0].id,
+    releaseId: release.id,
+    sourceKey: release.source_key,
+    applicationName: release.canonical_name,
+    version: release.version,
+    deviceName: runner.device_name,
+  }
+}
+
 async function reconcileDirectReadyCatalogue() {
   const result = await pool.query(
     `UPDATE rmm_software_catalogue c

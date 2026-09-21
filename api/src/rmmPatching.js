@@ -4,8 +4,9 @@ import { pool, withTransaction } from './db.js'
 import { agentSocketForDevice, authenticateAgent, sendAgentMessage } from './rmmAgent.js'
 import { recordRmmActivity } from './rmmActivity.js'
 import { recentVulnerabilities, vulnerabilitySummary } from './rmmVulnerabilityIntel.js'
-import { softwareVendorSummary } from './rmmSoftwareVendorIntel.js'
-import { qualificationQueueSummary } from './rmmSoftwareQualification.js'
+import { softwareVendorSummary, syncSoftwareVendorSource } from './rmmSoftwareVendorIntel.js'
+import { qualificationQueueSummary, retrySoftwareQualification } from './rmmSoftwareQualification.js'
+import { queueVendorArtifactInspectionForCatalogue } from './rmmVendorReleaseEnrichment.js'
 import { wingetRepositorySearch } from './rmmWingetFallback.js'
 import { normalizeCatalogueVersion, verificationVersionForRelease } from './rmmSoftwareVersioning.js'
 import {
@@ -640,6 +641,9 @@ function publicCatalogue(entry) {
     trustEvidence: object(sourceMetadata.trustEvidence),
     releaseUrl: clean(sourceMetadata.releaseUrl),
     selectedAsset: clean(sourceMetadata.selectedAsset),
+    expectedSigner: clean(sourceMetadata.expectedSigner || sourceMetadata.signerBaseline),
+    verification: object(entry.verification),
+    execution: object(entry.execution),
     installable,
     qualificationState: clean(entry.qualification_state || 'intelligence_only'),
     qualificationVersion: clean(entry.qualification_version),
@@ -2658,6 +2662,213 @@ export function registerRmmPatchingRoutes(app) {
       provider: plan.provider,
       bundle: await patchBundle(auth.session.tenant_id),
     }, 202)
+  })
+
+  app.put('/api/v1/rmm/software-catalogue/:catalogueId/validation', async (c) => {
+    const auth = await requirePatchAccess(c, 'software')
+    if (auth.error) return auth.error
+    const catalogueId = clean(c.req.param('catalogueId'))
+    const body = await c.req.json().catch(() => ({}))
+
+    const currentResult = await pool.query(
+      `SELECT c.*,s.source_key AS vendor_source_key,s.source_type AS vendor_source_type,
+              s.source_url AS vendor_source_url,s.metadata AS vendor_source_metadata
+         FROM rmm_software_catalogue c
+         LEFT JOIN rmm_software_vendor_sources s
+           ON s.source_key=c.source_metadata->>'latestSource'
+        WHERE c.id=$1 AND c.status<>'archived'
+          AND (c.tenant_id=$2 OR c.tenant_id IS NULL)
+        LIMIT 1`,
+      [catalogueId, auth.session.tenant_id],
+    )
+    const current = currentResult.rows[0]
+    if (!current) return c.json({ error: 'Software catalogue entry not found.' }, 404)
+
+    const active = await pool.query(
+      `SELECT id,state FROM rmm_software_qualification_queue
+        WHERE catalogue_id=$1 AND state IN ('running','cleanup_pending','cleanup_running')
+        LIMIT 1`,
+      [catalogueId],
+    )
+    if (active.rowCount) {
+      return c.json({ error: 'This software is currently being qualified. Finish the active test before editing validation settings.', state: active.rows[0].state }, 409)
+    }
+
+    const canonicalName = clean(body.canonicalName || current.canonical_name)
+    const publisher = clean(body.publisher ?? current.publisher)
+    const namePattern = clean(body.namePattern || current.name_pattern || canonicalName)
+    const publisherPattern = clean(body.publisherPattern ?? current.publisher_pattern)
+    const verification = {
+      ...object(current.verification),
+      ...(body.verification && typeof body.verification === 'object' ? object(body.verification) : {}),
+    }
+    const execution = {
+      ...object(current.execution),
+      ...(body.execution && typeof body.execution === 'object' ? object(body.execution) : {}),
+    }
+
+    const sourceUrl = clean(body.sourceUrl ?? current.vendor_source_url)
+    const sourcePatch = {}
+    for (const key of ['repository','assetPattern','checksumAssetPattern','releaseTagPattern','staticInstallerUrl','staticSha256','staticReleaseUrl']) {
+      if (body[key] !== undefined) sourcePatch[key] = clean(body[key])
+    }
+    for (const key of ['sourceUrl','staticInstallerUrl','staticReleaseUrl']) {
+      const value = key === 'sourceUrl' ? sourceUrl : clean(sourcePatch[key])
+      if (value && !/^https:\/\//i.test(value)) return c.json({ error: key + ' must use HTTPS.' }, 400)
+    }
+
+    const expectedSigner = clean(body.expectedSigner ?? object(current.source_metadata).expectedSigner)
+    if (!current.tenant_id && clean(current.catalogue_source) === 'vendor' && current.vendor_source_key) {
+      const bindingPatch = {
+        ...sourcePatch,
+        expectedSigner,
+        signerBaseline: expectedSigner || clean(object(current.source_metadata).signerBaseline),
+        namePattern,
+        publisherPattern,
+        installArguments: clean(execution.installArguments),
+        verificationConfig: verification,
+      }
+      await withTransaction(async (client) => {
+        await client.query(
+          `UPDATE rmm_software_vendor_sources
+              SET source_url=$2,
+                  metadata=metadata || $3::jsonb,
+                  last_error='',
+                  updated_at=now()
+            WHERE source_key=$1`,
+          [current.vendor_source_key, sourceUrl, JSON.stringify(sourcePatch)],
+        )
+        await client.query(
+          `UPDATE rmm_software_vendor_bindings
+              SET publisher=$3,metadata=metadata || $4::jsonb
+            WHERE source_key=$1 AND provider_package_id=$2 AND enabled=true`,
+          [current.vendor_source_key, current.external_key, publisher, JSON.stringify(bindingPatch)],
+        )
+        await client.query(
+          `UPDATE rmm_software_vendor_releases
+              SET trust_state='asset_candidate',
+                  source_payload=source_payload || jsonb_build_object(
+                    'expectedSigner',$3,
+                    'verification',$4::jsonb,
+                    'manualValidationEditAt',now()
+                  ),
+                  last_seen_at=last_seen_at
+            WHERE source_key=$1 AND provider_package_id=$2 AND version=$5`,
+          [current.vendor_source_key, current.external_key, expectedSigner, JSON.stringify(verification), current.target_version],
+        )
+        await client.query(
+          `UPDATE rmm_software_catalogue
+              SET canonical_name=$2,publisher=$3,name_pattern=$4,publisher_pattern=$5,
+                  verification=$6::jsonb,execution=$7::jsonb,
+                  qualification_state='deployment_candidate',qualification_version='',qualified_at=NULL,
+                  qualification_evidence=qualification_evidence
+                    - 'cleanInstallVerified' - 'cleanInstallVersion' - 'cleanInstallVerifiedAt'
+                    - 'uninstallVerified' - 'uninstallVerifiedAt'
+                    - 'upgradeVerified' - 'upgradeFromVersion' - 'upgradeVersion' - 'upgradeVerifiedAt'
+                    - 'sha256Verified' - 'authenticodeVerified'
+                    || jsonb_build_object('manualValidationEditAt',now()),
+                  source_metadata=source_metadata || jsonb_build_object(
+                    'expectedSigner',$8,'trustState','asset_candidate','manualValidationEditAt',now()
+                  ),
+                  updated_by_user_id=$9,updated_at=now()
+            WHERE id=$1`,
+          [catalogueId, canonicalName, publisher, namePattern, publisherPattern, JSON.stringify(verification), JSON.stringify(execution), expectedSigner, auth.session.user_id],
+        )
+        await client.query(
+          `UPDATE rmm_software_qualification_queue
+              SET state='cancelled',last_error='manual_validation_edit',
+                  completed_at=now(),updated_at=now()
+            WHERE catalogue_id=$1
+              AND state NOT IN ('running','cleanup_pending','cleanup_running')`,
+          [catalogueId],
+        )
+      })
+    } else {
+      await pool.query(
+        `UPDATE rmm_software_catalogue
+            SET canonical_name=$3,publisher=$4,name_pattern=$5,publisher_pattern=$6,
+                verification=$7::jsonb,execution=$8::jsonb,
+                qualification_state=CASE WHEN qualification_state='blocked' THEN qualification_state ELSE 'deployment_candidate' END,
+                updated_by_user_id=$9,updated_at=now()
+          WHERE id=$1 AND (tenant_id=$2 OR tenant_id IS NULL)`,
+        [catalogueId, auth.session.tenant_id, canonicalName, publisher, namePattern, publisherPattern, JSON.stringify(verification), JSON.stringify(execution), auth.session.user_id],
+      )
+    }
+
+    await audit(auth.session, 'software_catalogue.validation_updated', 'Updated validation settings for “' + canonicalName + '”', '', { catalogueId })
+    return c.json({ success: true, bundle: await patchBundle(auth.session.tenant_id) })
+  })
+
+  app.post('/api/v1/rmm/software-catalogue/:catalogueId/revalidate', async (c) => {
+    const auth = await requirePatchAccess(c, 'software')
+    if (auth.error) return auth.error
+    const catalogueId = clean(c.req.param('catalogueId'))
+    const result = await pool.query(
+      `SELECT c.id,c.canonical_name,c.tenant_id,c.catalogue_source,c.source_metadata->>'latestSource' AS source_key
+         FROM rmm_software_catalogue c
+        WHERE c.id=$1 AND c.status='active' AND (c.tenant_id=$2 OR c.tenant_id IS NULL)
+        LIMIT 1`,
+      [catalogueId, auth.session.tenant_id],
+    )
+    const item = result.rows[0]
+    if (!item) return c.json({ error: 'Software catalogue entry not found.' }, 404)
+    if (!item.source_key) return c.json({ error: 'This software does not have a refreshable vendor source.' }, 409)
+
+    let source
+    try {
+      source = await syncSoftwareVendorSource(item.source_key)
+    } catch (error) {
+      await audit(auth.session, 'software_catalogue.revalidation_failed', 'Vendor source validation failed for “' + item.canonical_name + '”', clean(error?.message || error), { catalogueId, sourceKey: item.source_key })
+      return c.json({ error: clean(error?.message || error) || 'Vendor source validation failed.', sourceKey: item.source_key, bundle: await patchBundle(auth.session.tenant_id) }, 409)
+    }
+
+    let inspection = { queued: false, reason: 'artifact_probe_not_required_for_this_source' }
+    if (!item.tenant_id && clean(item.catalogue_source) === 'vendor') {
+      await withTransaction(async (client) => {
+        await client.query(
+          `UPDATE rmm_software_vendor_releases r
+              SET trust_state='asset_candidate',
+                  trust_evidence=trust_evidence || jsonb_build_object('manualRevalidationRequestedAt',now())
+             FROM rmm_software_catalogue c
+            WHERE c.id=$1
+              AND r.provider_package_id=c.external_key
+              AND r.source_key=c.source_metadata->>'latestSource'
+              AND r.version=c.target_version`,
+          [catalogueId],
+        )
+        await client.query(
+          `UPDATE rmm_software_catalogue
+              SET source_metadata=source_metadata || jsonb_build_object(
+                    'trustState','asset_candidate',
+                    'manualRevalidationRequestedAt',now()
+                  ),
+                  updated_at=now()
+            WHERE id=$1`,
+          [catalogueId],
+        )
+      })
+      inspection = await queueVendorArtifactInspectionForCatalogue(catalogueId)
+    }
+    await audit(auth.session, 'software_catalogue.revalidation_requested', 'Revalidated vendor source for “' + item.canonical_name + '”', item.source_key, { catalogueId, sourceKey: item.source_key, inspection })
+    return c.json({ success: true, source, inspection, bundle: await patchBundle(auth.session.tenant_id) })
+  })
+
+  app.post('/api/v1/rmm/software-catalogue/:catalogueId/retry-qualification', async (c) => {
+    const auth = await requirePatchAccess(c, 'software')
+    if (auth.error) return auth.error
+    const catalogueId = clean(c.req.param('catalogueId'))
+    const visible = await pool.query(
+      `SELECT id,canonical_name FROM rmm_software_catalogue
+        WHERE id=$1 AND status='active' AND (tenant_id=$2 OR tenant_id IS NULL) LIMIT 1`,
+      [catalogueId, auth.session.tenant_id],
+    )
+    if (!visible.rowCount) return c.json({ error: 'Software catalogue entry not found.' }, 404)
+    const retry = await retrySoftwareQualification(catalogueId)
+    if (!retry.queued) {
+      return c.json({ error: 'Qualification cannot be retried yet: ' + clean(retry.reason || retry.state || 'not ready').replaceAll('_', ' '), retry, bundle: await patchBundle(auth.session.tenant_id) }, 409)
+    }
+    await audit(auth.session, 'software_catalogue.qualification_retried', 'Retried catalogue qualification for “' + visible.rows[0].canonical_name + '”', '', { catalogueId })
+    return c.json({ success: true, retry, bundle: await patchBundle(auth.session.tenant_id) }, 202)
   })
 
   app.post('/api/v1/rmm/software-catalogue', async (c) => {
