@@ -1374,7 +1374,7 @@ export async function softwareVendorSummary() {
   const readinessResult = await pool.query(
     `SELECT c.id,c.canonical_name,c.target_version,c.external_key,c.qualification_state,c.source_metadata,
             b.source_key,b.platform,b.architecture,b.metadata AS binding_metadata,
-            r.trust_state,r.installer_url,r.installer_type,r.asset_name,r.trust_evidence
+            r.trust_state,r.installer_url,r.installer_type,r.asset_name,r.trust_evidence,r.source_payload AS release_source_payload
        FROM rmm_software_catalogue c
        LEFT JOIN rmm_software_vendor_bindings b ON b.provider_package_id=c.external_key AND b.enabled=true
        LEFT JOIN rmm_software_vendor_releases r ON r.provider_package_id=c.external_key AND r.version=c.target_version
@@ -1395,14 +1395,13 @@ export async function softwareVendorSummary() {
     else if (trustState === 'version_only' && /^gh_/.test(clean(row.source_key)) && !clean(row.installer_url)) blocker = 'vendor_windows_asset_missing'
     else if (trustState === 'version_only' && clean(meta.wingetPackageId) && meta.wingetFallbackReady !== true) blocker = 'winget_target_lagging'
     else if (trustState === 'version_only') blocker = 'deployment_transport_missing'
-    return { id: row.id, canonical_name: row.canonical_name, target_version: targetVersion, source_key: row.source_key, platform: row.platform, architecture: row.architecture, trust_state: trustState, state, blocker, registry: clean(meta.registry), winget_package_id: clean(meta.wingetPackageId || source.wingetPackageId), installer_type: clean(row.installer_type), asset_name: clean(row.asset_name), repository: clean(meta.repository) }
+    return { id: row.id, canonical_name: row.canonical_name, target_version: targetVersion, source_key: row.source_key, platform: row.platform, architecture: row.architecture, trust_state: trustState, state, blocker, registry: clean(meta.registry), winget_package_id: clean(meta.wingetPackageId || source.wingetPackageId), installer_type: clean(row.installer_type), asset_name: clean(row.asset_name), repository: clean(meta.repository), release_tag: clean(object(row.release_source_payload).github?.tag_name || object(row.release_source_payload).github?.tagName) }
   })
   const githubAssetBacklog = readiness.filter((item) => item.blocker === 'vendor_windows_asset_missing' && /^gh_/.test(clean(item.source_key)))
   const bindingByKey = new Map(readinessResult.rows.map((row) => [row.id, object(row.binding_metadata)]))
   await Promise.all(githubAssetBacklog.map(async (item) => {
-    const release = latest.find((row) => row.source_key === item.source_key && clean(row.version) === item.target_version)
     const repository = item.repository
-    const tag = clean(object(release?.source_payload).github?.tag_name || object(release?.source_payload).github?.tagName)
+    const tag = item.release_tag
     if (!repository || !tag) return
     try {
       const assets = await githubExpandedAssets(repository, tag)
