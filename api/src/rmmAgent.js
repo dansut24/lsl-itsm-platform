@@ -53,6 +53,18 @@ function patchHostVersionAtLeast(currentValue, targetValue) {
   if (!target) return true
   return Boolean(current && versionCompare(current, target) >= 0)
 }
+async function reconcileAgentUpgradeAfterHello(agent, reportedVersion) {
+  const pending = await pool.query(`SELECT id,request_metadata,initiated_by_label,queued_by_user_id,correlation_id FROM rmm_agent_jobs WHERE tenant_id=$1 AND agent_device_id=$2 AND request_metadata->>'source'='agent_upgrade' AND status IN ('queued','claimed') ORDER BY created_at DESC LIMIT 1`, [agent.tenant_id, agent.id])
+  const job = pending.rows[0]
+  if (!job) return
+  const target = clean(object(job.request_metadata).release_version)
+  if (!target || !agentReleaseVersionAtLeast(reportedVersion, target)) return
+  const updated = await pool.query(`UPDATE rmm_agent_jobs SET status='completed',result=jsonb_build_object('status','succeeded_after_reconnect','reportedAgentVersion',$3),error_message=NULL,completed_at=now(),updated_at=now() WHERE id=$1 AND tenant_id=$2 AND status IN ('queued','claimed') RETURNING id`, [job.id, agent.tenant_id, reportedVersion])
+  if (!updated.rowCount) return
+  const actor = clean(job.initiated_by_label || 'Technician')
+  await recordRmmActivity({ tenantId: agent.tenant_id, agentDeviceId: agent.id, inventoryId: agent.inventory_id, actorUserId: job.queued_by_user_id, actorType: 'technician', actorLabel: actor, eventType: 'agent.upgrade.completed', category: 'device', summary: actor + ' upgraded Hi5Central Agent to ' + target, detail: 'Verified after Agent reconnect · reported version ' + reportedVersion, outcome: 'success', jobId: job.id, correlationId: job.correlation_id, metadata: { targetVersion: target, reportedVersion, verification: 'agent_reconnect_hello' } })
+}
+
 async function requireRmmManager(c) {
   const session = await resolveSession(c)
   if (!session) return { error: c.json({ error: 'Authentication required.' }, 401) }
@@ -999,6 +1011,7 @@ export function attachRmmAgentWebSocket(server) {
               WHERE id=$1`,
             [agent.id, reportedVersion],
           ).catch(() => {})
+          reconcileAgentUpgradeAfterHello(agent, reportedVersion).catch((error) => console.error('Agent upgrade reconnect reconciliation failed', agent.id, error.message))
         }
         if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'hello_ack' }))
         return
