@@ -1395,14 +1395,13 @@ export async function softwareVendorSummary() {
     else if (trustState === 'version_only' && /^gh_/.test(clean(row.source_key)) && !clean(row.installer_url)) blocker = 'vendor_windows_asset_missing'
     else if (trustState === 'version_only' && clean(meta.wingetPackageId) && meta.wingetFallbackReady !== true) blocker = 'winget_target_lagging'
     else if (trustState === 'version_only') blocker = 'deployment_transport_missing'
-    return { id: row.id, canonical_name: row.canonical_name, target_version: targetVersion, source_key: row.source_key, platform: row.platform, architecture: row.architecture, trust_state: trustState, state, blocker, registry: clean(meta.registry), winget_package_id: clean(meta.wingetPackageId || source.wingetPackageId), installer_type: clean(row.installer_type), asset_name: clean(row.asset_name) }
+    return { id: row.id, canonical_name: row.canonical_name, target_version: targetVersion, source_key: row.source_key, platform: row.platform, architecture: row.architecture, trust_state: trustState, state, blocker, registry: clean(meta.registry), winget_package_id: clean(meta.wingetPackageId || source.wingetPackageId), installer_type: clean(row.installer_type), asset_name: clean(row.asset_name), repository: clean(meta.repository) }
   })
   const githubAssetBacklog = readiness.filter((item) => item.blocker === 'vendor_windows_asset_missing' && /^gh_/.test(clean(item.source_key)))
   const bindingByKey = new Map(readinessResult.rows.map((row) => [row.id, object(row.binding_metadata)]))
   await Promise.all(githubAssetBacklog.map(async (item) => {
-    const meta = bindingByKey.get(item.id) || {}
-    const release = latest.find((row) => row.provider_package_id === readinessResult.rows.find((x) => x.id === item.id)?.external_key && clean(row.version) === item.target_version)
-    const repository = clean(meta.repository)
+    const release = latest.find((row) => row.source_key === item.source_key && clean(row.version) === item.target_version)
+    const repository = item.repository
     const tag = clean(object(release?.source_payload).github?.tag_name || object(release?.source_payload).github?.tagName)
     if (!repository || !tag) return
     try {
