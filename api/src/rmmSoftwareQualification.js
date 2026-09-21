@@ -1,5 +1,6 @@
 import { pool, withTransaction } from './db.js'
 import { agentSocketForDevice, sendAgentMessage } from './rmmAgent.js'
+import { verificationVersionForRelease } from './rmmSoftwareVersioning.js'
 
 function clean(value = '') { return String(value ?? '').trim() }
 function lower(value = '') { return clean(value).toLowerCase() }
@@ -241,6 +242,7 @@ async function dispatchCleanInstall(queue, runner) {
     return { dispatched: false }
   }
 
+  const verificationTargetVersion = verificationVersionForRelease(catalogue.target_version, verification)
   const manifest = {
     protocolVersion: 1,
     action: 'software.install',
@@ -264,7 +266,7 @@ async function dispatchCleanInstall(queue, runner) {
       ...verification,
       method: verificationMethod,
       packageId: clean(verification.packageId || executionPackageId),
-      targetVersion: clean(catalogue.target_version),
+      targetVersion: verificationTargetVersion,
     },
   }
 
@@ -436,6 +438,7 @@ async function dispatchUpgradeInstall(queue, runner, release, { intent, installe
     return { dispatched: false }
   }
 
+  const verificationTargetVersion = verificationVersionForRelease(targetVersion, verification)
   const manifest = {
     protocolVersion: 1,
     action: 'software.install',
@@ -459,7 +462,7 @@ async function dispatchUpgradeInstall(queue, runner, release, { intent, installe
       ...verification,
       method: verificationMethod,
       packageId: clean(verification.packageId || packageId),
-      targetVersion,
+      targetVersion: verificationTargetVersion,
     },
   }
 

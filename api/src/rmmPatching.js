@@ -7,7 +7,7 @@ import { recentVulnerabilities, vulnerabilitySummary } from './rmmVulnerabilityI
 import { softwareVendorSummary } from './rmmSoftwareVendorIntel.js'
 import { qualificationQueueSummary } from './rmmSoftwareQualification.js'
 import { wingetRepositorySearch } from './rmmWingetFallback.js'
-import { normalizeCatalogueVersion } from './rmmSoftwareVersioning.js'
+import { normalizeCatalogueVersion, verificationVersionForRelease } from './rmmSoftwareVersioning.js'
 import {
   approveTenantVendorSource,
   archiveTenantVendorSource,
@@ -24,7 +24,6 @@ function clean(value = '') { return String(value ?? '').trim() }
 function lower(value = '') { return clean(value).toLowerCase() }
 function object(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {} }
 function array(value) { return Array.isArray(value) ? value : [] }
-function contains(value, pattern) { return !clean(pattern) || lower(value).includes(lower(pattern)) }
 function identityPhraseMatches(value, pattern) {
   const haystack = lower(value)
   const needle = lower(pattern)
@@ -1807,7 +1806,7 @@ export async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId, op
         ...object(row.verification),
         method: clean(object(row.verification).method || object(row.verification).provider || 'winget'),
         packageId: clean(object(row.verification).packageId || executionPackageId),
-        targetVersion,
+        targetVersion: verificationVersionForRelease(targetVersion, object(row.verification)),
       },
     },
   }
