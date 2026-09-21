@@ -816,6 +816,81 @@ async function reconcileQueueRow(queue, runner) {
   return { id: current.id, state: current.state }
 }
 
+export async function queueAutomaticUpgradeQualifications({ limit = 12 } = {}) {
+  const safeLimit = Math.max(1, Math.min(50, Number(limit) || 12))
+  const result = await pool.query(
+    `WITH candidates AS (
+       SELECT c.id AS catalogue_id,c.canonical_name,q.priority
+         FROM rmm_software_catalogue c
+         JOIN rmm_software_qualification_queue q
+           ON q.catalogue_id=c.id
+          AND q.test_type='clean_install'
+          AND q.state='passed'
+        WHERE c.tenant_id IS NULL
+          AND c.status='active'
+          AND c.qualification_state='deployment_candidate'
+          AND c.source_metadata->>'deploymentMode'='vendor_direct'
+          AND c.source_metadata->>'trustState'='direct_ready'
+          AND EXISTS (
+            SELECT 1
+              FROM rmm_software_vendor_releases current_release
+             WHERE current_release.provider_package_id=c.external_key
+               AND current_release.source_key=c.source_metadata->>'latestSource'
+               AND current_release.version=c.target_version
+               AND current_release.trust_state='direct_ready'
+          )
+          AND EXISTS (
+            SELECT 1
+              FROM rmm_software_vendor_releases previous_release
+             WHERE previous_release.provider_package_id=c.external_key
+               AND previous_release.source_key=c.source_metadata->>'latestSource'
+               AND previous_release.version<>c.target_version
+               AND previous_release.trust_state='direct_ready'
+          )
+          AND NOT EXISTS (
+            SELECT 1
+              FROM rmm_software_qualification_queue existing_upgrade
+             WHERE existing_upgrade.catalogue_id=c.id
+               AND existing_upgrade.test_type='upgrade'
+               AND existing_upgrade.state IN ('queued','running','cleanup_pending','cleanup_running','passed')
+          )
+        ORDER BY q.priority DESC,lower(c.canonical_name)
+        LIMIT $1
+     )
+     INSERT INTO rmm_software_qualification_queue
+       (catalogue_id,test_type,state,priority,attempt_count,last_error,evidence,created_at,updated_at)
+     SELECT catalogue_id,'upgrade','queued',priority,0,'',
+            jsonb_build_object(
+              'automaticUpgradeQualification',true,
+              'queuedAt',now()
+            ),
+            now(),now()
+       FROM candidates
+     ON CONFLICT (catalogue_id,test_type)
+     DO UPDATE SET
+       state='queued',
+       priority=EXCLUDED.priority,
+       attempt_count=0,
+       runner_agent_device_id=NULL,
+       agent_job_id=NULL,
+       deployment_id=NULL,
+       cleanup_job_id=NULL,
+       last_error='',
+       evidence=rmm_software_qualification_queue.evidence || EXCLUDED.evidence,
+       started_at=NULL,
+       completed_at=NULL,
+       updated_at=now()
+     WHERE rmm_software_qualification_queue.state='review_required'
+       AND rmm_software_qualification_queue.last_error IN (
+         'previous_trusted_release_not_available',
+         'qualification_current_trusted_release_not_available'
+       )
+     RETURNING id,catalogue_id,test_type,state,priority`,
+    [safeLimit],
+  )
+  return result.rows
+}
+
 export async function promoteAutomaticAdmissionReady({ limit = 12 } = {}) {
   const safeLimit = Math.max(1, Math.min(50, Number(limit) || 12))
   const result = await pool.query(

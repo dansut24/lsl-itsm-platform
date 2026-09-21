@@ -388,7 +388,7 @@ export async function reconcileVendorArtifactInspections() {
         ],
       )
 
-      if (trustState === 'direct_ready') {
+      if (trustState === 'direct_ready' && sourcePayload.historicalReleaseCandidate !== true) {
         await client.query(
           `UPDATE rmm_software_vendor_bindings
               SET metadata=metadata || $3::jsonb
@@ -453,7 +453,7 @@ export async function reconcileVendorArtifactInspections() {
             }),
           ],
         )
-      } else {
+      } else if (sourcePayload.historicalReleaseCandidate !== true) {
         await client.query(
           `UPDATE rmm_software_catalogue
               SET source_metadata=source_metadata || $2::jsonb,updated_at=now()

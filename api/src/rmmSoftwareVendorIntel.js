@@ -16,7 +16,7 @@ import {
 import { recalculateAllTenantVulnerabilityExposures } from './rmmVulnerabilityExposure.js'
 import { syncAutomaticWingetFallbacks } from './rmmWingetFallback.js'
 import { syncEvergreenCorroboration } from './rmmEvergreenIntel.js'
-import { promoteAutomaticAdmissionReady, runSoftwareQualificationQueue } from './rmmSoftwareQualification.js'
+import { promoteAutomaticAdmissionReady, queueAutomaticUpgradeQualifications, runSoftwareQualificationQueue } from './rmmSoftwareQualification.js'
 import {
   classifyGithubReleaseBacklog,
   discoverGithubWindowsInstaller,
@@ -372,6 +372,146 @@ async function matchingGithubRelease(repository, pattern) {
     .find((item) => !item?.draft && matcher.test(clean(item?.tag_name)))
   if (!release) throw new Error(repository + ' has no release matching ' + pattern)
   return release
+}
+
+async function retainPreviousGithubReleaseCandidate({ sourceKey, binding: b, config, repository, currentVersion }) {
+  if (!repository || !currentVersion || clean(b.platform) !== 'windows') return null
+
+  const eligible = await pool.query(
+    `SELECT c.id
+       FROM rmm_software_catalogue c
+       JOIN rmm_software_qualification_queue q
+         ON q.catalogue_id=c.id AND q.test_type='clean_install' AND q.state='passed'
+      WHERE c.tenant_id IS NULL
+        AND c.status='active'
+        AND c.qualification_state='deployment_candidate'
+        AND c.external_key=$1
+        AND c.target_version=$2
+        AND NOT EXISTS (
+          SELECT 1
+            FROM rmm_software_vendor_releases r
+           WHERE r.provider_package_id=c.external_key
+             AND r.source_key=c.source_metadata->>'latestSource'
+             AND r.version<>c.target_version
+             AND r.trust_state IN ('asset_candidate','direct_ready')
+        )
+      LIMIT 1`,
+    [b.provider_package_id, currentVersion],
+  )
+  if (!eligible.rowCount) return null
+
+  const response = await fetch('https://api.github.com/repos/' + repository + '/releases?per_page=30', {
+    headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Hi5Central-Software-Catalogue/1.0' },
+    signal: AbortSignal.timeout(30_000),
+  })
+  if (!response.ok) throw new Error('GitHub release history HTTP ' + response.status)
+  const payload = await response.json()
+  const matcher = clean(config.releaseTagPattern) ? globMatcher(config.releaseTagPattern) : null
+  if (clean(config.releaseTagPattern) && !matcher) throw new Error(repository + ' has an invalid releaseTagPattern')
+
+  const previous = (Array.isArray(payload) ? payload : [])
+    .filter((item) => !item?.draft && !item?.prerelease)
+    .filter((item) => !matcher || matcher.test(clean(item?.tag_name)))
+    .map((item) => ({ item, version: normalizedGithubVersion(item?.tag_name || item?.name) }))
+    .filter((item) => item.version && compareVersionValues(item.version, currentVersion) < 0)
+    .sort((a, bValue) => compareVersionValues(bValue.version, a.version))[0]
+  if (!previous) return null
+
+  const assets = Array.isArray(previous.item?.assets) ? previous.item.assets : []
+  const installerMatch = globMatcher(config.assetPattern)
+  const checksumMatch = globMatcher(config.checksumAssetPattern)
+  const installer = installerMatch
+    ? assets.find((asset) => installerMatch.test(clean(asset?.name)))
+    : selectWindowsInstallerAsset(assets, b.canonical_name)
+  const checksum = checksumMatch
+    ? assets.find((asset) => checksumMatch.test(clean(asset?.name)))
+    : selectChecksumAsset(assets)
+  if (!installer?.browser_download_url) return null
+
+  const installerUrl = (await publicHttpsUrl(installer.browser_download_url)).toString()
+  const installerType = detectInstallerType(installer?.name, clean(config.installerType).toLowerCase())
+  if (!['msi','exe'].includes(installerType)) return null
+  let installerSha256 = ''
+  if (checksum?.browser_download_url) {
+    installerSha256 = normalizedSha256(
+      await publishedChecksum(checksum.browser_download_url, installer.name).catch(() => ''),
+    )
+  }
+
+  const expectedSigner = clean(config.autoExpectedSigner || config.expectedSigner || config.signerBaseline)
+  const verification = { ...object(config.verificationConfig) }
+  const selectedAssetReason = installerMatch ? 'configured_asset_pattern' : clean(installer?.selectionReason)
+  const sourcePayload = {
+    historicalReleaseCandidate: true,
+    historicalRole: 'upgrade_baseline',
+    github: {
+      id: previous.item?.id,
+      tag_name: previous.item?.tag_name,
+      html_url: previous.item?.html_url,
+      historical: true,
+      selectedAsset: clean(installer?.name),
+      selectedAssetReason,
+      checksumAsset: clean(checksum?.name),
+    },
+    releaseUrl: clean(previous.item?.html_url),
+    expectedSigner,
+    signerBaseline: expectedSigner,
+    deploymentMode: 'intelligence_only',
+    verification,
+    installArguments: clean(config.installArguments),
+    trustEvidence: {
+      source: 'github_release_history',
+      historicalReleaseCandidate: true,
+      vendorChecksumPresent: Boolean(installerSha256),
+      selectedAsset: clean(installer?.name),
+      selectedAssetReason,
+    },
+  }
+
+  const inserted = await pool.query(
+    `INSERT INTO rmm_software_vendor_releases
+      (source_key,provider_package_id,canonical_name,publisher,channel,platform,architecture,
+       version,release_date,installer_url,installer_sha256,installer_type,release_url,asset_name,
+       trust_state,trust_evidence,source_priority,source_payload,last_seen_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'asset_candidate',$15::jsonb,$16,$17::jsonb,now())
+     ON CONFLICT (source_key,provider_package_id,channel,platform,architecture,version)
+     DO UPDATE SET release_date=COALESCE(EXCLUDED.release_date,rmm_software_vendor_releases.release_date),
+       asset_health_state=CASE WHEN rmm_software_vendor_releases.installer_url IS DISTINCT FROM EXCLUDED.installer_url THEN 'unknown' ELSE rmm_software_vendor_releases.asset_health_state END,
+       asset_last_checked_at=CASE WHEN rmm_software_vendor_releases.installer_url IS DISTINCT FROM EXCLUDED.installer_url THEN NULL ELSE rmm_software_vendor_releases.asset_last_checked_at END,
+       asset_failure_count=CASE WHEN rmm_software_vendor_releases.installer_url IS DISTINCT FROM EXCLUDED.installer_url THEN 0 ELSE rmm_software_vendor_releases.asset_failure_count END,
+       installer_url=EXCLUDED.installer_url,
+       installer_sha256=CASE WHEN EXCLUDED.installer_sha256<>'' THEN EXCLUDED.installer_sha256 ELSE rmm_software_vendor_releases.installer_sha256 END,
+       installer_type=EXCLUDED.installer_type,
+       release_url=EXCLUDED.release_url,
+       asset_name=EXCLUDED.asset_name,
+       trust_state=CASE
+         WHEN rmm_software_vendor_releases.trust_state IN ('direct_ready','rejected','signer_review_required','installer_review_required')
+           THEN rmm_software_vendor_releases.trust_state
+         ELSE 'asset_candidate'
+       END,
+       trust_evidence=rmm_software_vendor_releases.trust_evidence || EXCLUDED.trust_evidence,
+       source_payload=rmm_software_vendor_releases.source_payload || EXCLUDED.source_payload,
+       last_seen_at=now()
+     RETURNING id,version,trust_state`,
+    [
+      sourceKey,b.provider_package_id,b.canonical_name,b.publisher,b.channel,b.platform,b.architecture,
+      previous.version,normalizedReleaseDate(previous.item?.published_at || previous.item?.created_at),
+      installerUrl,installerSha256,installerType,clean(previous.item?.html_url),clean(installer?.name),
+      JSON.stringify(sourcePayload.trustEvidence),b.priority,JSON.stringify(sourcePayload),
+    ],
+  )
+
+  await pool.query(
+    `UPDATE rmm_software_vendor_sources
+        SET metadata=metadata || $2::jsonb,updated_at=now()
+      WHERE source_key=$1`,
+    [sourceKey, JSON.stringify({
+      retainedPreviousRelease: previous.version,
+      retainedPreviousReleaseAt: new Date().toISOString(),
+      retainedPreviousReleaseState: inserted.rows[0]?.trust_state || 'asset_candidate',
+    })],
+  )
+  return inserted.rows[0] || null
 }
 
 async function syncGenericConfigured(sourceKey, state) {
@@ -896,6 +1036,34 @@ async function syncGenericConfigured(sourceKey, state) {
     selectedAssetReason,
   }
 
+  if (state.source_type === 'github_releases') {
+    try {
+      await retainPreviousGithubReleaseCandidate({
+        sourceKey,
+        binding: b,
+        config,
+        repository: repositoryName(config.repository || state.source_url),
+        currentVersion: version,
+      })
+      await pool.query(
+        `UPDATE rmm_software_vendor_sources
+            SET metadata=metadata - 'previousReleaseRetentionError',updated_at=now()
+          WHERE source_key=$1`,
+        [sourceKey],
+      )
+    } catch (error) {
+      await pool.query(
+        `UPDATE rmm_software_vendor_sources
+            SET metadata=metadata || $2::jsonb,updated_at=now()
+          WHERE source_key=$1`,
+        [sourceKey, JSON.stringify({
+          previousReleaseRetentionError: clean(error?.message || error).slice(0, 1000),
+          previousReleaseRetentionFailedAt: new Date().toISOString(),
+        })],
+      ).catch(() => null)
+    }
+  }
+
   return upsertRelease({
     sourceKey: b.source_key,
     packageId: b.provider_package_id,
@@ -1415,8 +1583,9 @@ export function startSoftwareVendorSyncScheduler() {
       await Promise.all([
         runVendorArtifactQualification({ inspectLimit: 2 }),
         classifyGithubReleaseBacklog(8),
-        runSoftwareQualificationQueue({ dispatchLimit: 1 }),
       ])
+      await queueAutomaticUpgradeQualifications({ limit: 12 })
+      await runSoftwareQualificationQueue({ dispatchLimit: 1 })
       await promoteAutomaticAdmissionReady({ limit: 12 })
     } catch (error) {
       console.error('RMM vendor/software qualification scheduler failed', error)
