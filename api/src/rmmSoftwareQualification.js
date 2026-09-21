@@ -226,7 +226,9 @@ async function dispatchQualificationResidueCleanup(queue, runner, {
     safeQualificationAlias(evidence.installedDisplayName),
     safeQualificationAlias(evidence.uninstallName),
   ].filter(Boolean))]
-  const startedAt = clean(queue.started_at || evidence.dispatchedAt || evidence.installCompletedAt || new Date().toISOString())
+  const startedAtValue = queue.started_at || evidence.dispatchedAt || evidence.installCompletedAt || new Date().toISOString()
+  const startedAtDate = startedAtValue instanceof Date ? startedAtValue : new Date(startedAtValue)
+  const startedAt = Number.isNaN(startedAtDate.getTime()) ? new Date().toISOString() : startedAtDate.toISOString()
   const patchHostWorkDir = clean(queue.agent_job_id)
     ? `C:\\ProgramData\\Hi5Central\\Agent\\PatchHost\\jobs\\${clean(queue.agent_job_id)}`
     : ''
