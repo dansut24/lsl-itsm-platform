@@ -165,7 +165,7 @@ async function upsertRelease({
       `INSERT INTO rmm_software_vendor_releases
         (source_key,provider_package_id,canonical_name,publisher,channel,platform,architecture,
          version,release_date,installer_url,installer_sha256,installer_type,release_url,asset_name,
-         trust_state,trust_evidence,source_priority,source_payload,last_seen_at)
+         trust_state,trust_evidence,source_payload,source_priority,source_payload,last_seen_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,$17,$18::jsonb,now())
        ON CONFLICT (source_key,provider_package_id,channel,platform,architecture,version)
        DO UPDATE SET release_date=COALESCE(EXCLUDED.release_date,rmm_software_vendor_releases.release_date),
@@ -1354,7 +1354,7 @@ export async function softwareVendorSummary() {
       `SELECT DISTINCT ON (provider_package_id,channel,platform,architecture)
               source_key,provider_package_id,canonical_name,publisher,channel,platform,architecture,
               version,release_date,release_url,asset_name,installer_url,installer_sha256,installer_type,
-              trust_state,trust_evidence,source_priority,last_seen_at,
+              trust_state,trust_evidence,source_payload,source_priority,last_seen_at,
               asset_health_state,asset_last_checked_at,asset_http_status,asset_failure_count,
               asset_final_url,asset_content_type,asset_content_length,asset_etag,asset_last_modified,asset_health_error
          FROM rmm_software_vendor_releases
@@ -1397,6 +1397,20 @@ export async function softwareVendorSummary() {
     else if (trustState === 'version_only') blocker = 'deployment_transport_missing'
     return { id: row.id, canonical_name: row.canonical_name, target_version: targetVersion, source_key: row.source_key, platform: row.platform, architecture: row.architecture, trust_state: trustState, state, blocker, registry: clean(meta.registry), winget_package_id: clean(meta.wingetPackageId || source.wingetPackageId), installer_type: clean(row.installer_type), asset_name: clean(row.asset_name) }
   })
+  const githubAssetBacklog = readiness.filter((item) => item.blocker === 'vendor_windows_asset_missing' && /^gh_/.test(clean(item.source_key)))
+  const bindingByKey = new Map(readinessResult.rows.map((row) => [row.id, object(row.binding_metadata)]))
+  await Promise.all(githubAssetBacklog.map(async (item) => {
+    const meta = bindingByKey.get(item.id) || {}
+    const release = latest.find((row) => row.provider_package_id === readinessResult.rows.find((x) => x.id === item.id)?.external_key && clean(row.version) === item.target_version)
+    const repository = clean(meta.repository)
+    const tag = clean(object(release?.source_payload).github?.tag_name || object(release?.source_payload).github?.tagName)
+    if (!repository || !tag) return
+    try {
+      const assets = await githubExpandedAssets(repository, tag)
+      const classification = classifyWindowsReleaseAssets(assets)
+      if (classification.kind !== 'none') { item.blocker = classification.blocker; item.release_asset_kind = classification.kind; item.release_asset_name = classification.assetName }
+    } catch {}
+  }))
   const readinessCounts = readiness.reduce((counts, item) => { counts[item.blocker] = (counts[item.blocker] || 0) + 1; return counts }, {})
   return { sources: sources.rows, latest, sourceHealth, health, readiness, readinessCounts }
 }
