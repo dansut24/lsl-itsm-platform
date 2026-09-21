@@ -131,8 +131,8 @@ async function catalogueBindings() {
           ORDER BY r.last_seen_at DESC
           LIMIT 1
        ) vr ON true
-      WHERE b.enabled=true AND b.platform='windows'
-        AND b.architecture IN ('x64','amd64')
+      WHERE b.enabled=true AND b.platform IN ('windows','cross_platform')
+        AND b.architecture IN ('x64','amd64','any')
       ORDER BY lower(b.canonical_name)`
   )
   return result.rows
@@ -215,6 +215,10 @@ export async function syncAutomaticWingetFallbacks({ force = false, dryRun = fal
 
     if (!dryRun) {
       for (const mapping of mappings) {
+        // A rejected/signer-review vendor artifact must never be used directly, but
+        // that failure is transport-specific. A separately version-verified WinGet
+        // package can still provide a safe fallback while preserving the vendor
+        // failure in vendorTrustState for manual review.
         const terminalVendorTrust = ['rejected','signer_review_required'].includes(mapping.vendorTrustState)
         const effectiveTrustState = mapping.vendorDirectReady
           ? 'direct_ready'
@@ -263,7 +267,9 @@ export async function syncAutomaticWingetFallbacks({ force = false, dryRun = fal
         await pool.query(
           `UPDATE rmm_software_vendor_releases
               SET trust_state=CASE
-                    WHEN trust_state IN ('direct_ready','rejected','signer_review_required') THEN trust_state
+                    WHEN trust_state='direct_ready' THEN trust_state
+                    WHEN $7::boolean THEN 'winget_ready'
+                    WHEN trust_state IN ('rejected','signer_review_required') THEN trust_state
                     ELSE $4
                   END,
                   trust_evidence=trust_evidence || $5::jsonb,
@@ -271,7 +277,9 @@ export async function syncAutomaticWingetFallbacks({ force = false, dryRun = fal
                     || jsonb_build_object(
                       'trustState',
                       CASE
-                        WHEN trust_state IN ('direct_ready','rejected','signer_review_required') THEN trust_state
+                        WHEN trust_state='direct_ready' THEN trust_state
+                        WHEN $7::boolean THEN 'winget_ready'
+                        WHEN trust_state IN ('rejected','signer_review_required') THEN trust_state
                         ELSE $4
                       END
                     ),
@@ -296,6 +304,7 @@ export async function syncAutomaticWingetFallbacks({ force = false, dryRun = fal
               deploymentMode: evidence.deploymentMode,
               wingetFallbackReady: mapping.transportReady,
             }),
+            mapping.transportReady,
           ],
         )
         if (mapping.catalogueId) {
@@ -340,6 +349,64 @@ export async function syncAutomaticWingetFallbacks({ force = false, dryRun = fal
       lastSummary = { ...summary, mappings: mappings.slice(0, 25) }
     }
     return summary
+  } finally {
+    db.close()
+  }
+}
+
+export async function wingetRepositorySearch({ query = '', page = 1, pageSize = 50, forceRefresh = false } = {}) {
+  const index = await ensureIndexDatabase(forceRefresh)
+  const db = new DatabaseSync(index.path, { readOnly: true })
+  try {
+    const q = clean(query).slice(0, 160).toLowerCase()
+    const safePageSize = Math.max(10, Math.min(100, Number(pageSize) || 50))
+    const safePage = Math.max(1, Number(page) || 1)
+    const pattern = '%' + q + '%'
+    const where = q
+      ? `WHERE lower(p.id) LIKE ?
+          OR lower(p.name) LIKE ?
+          OR lower(COALESCE(p.moniker,'')) LIKE ?
+          OR EXISTS (
+            SELECT 1 FROM norm_publishers2 np
+             WHERE np.package=p.rowid AND lower(np.norm_publisher) LIKE ?
+          )`
+      : ''
+    const args = q ? [pattern, pattern, pattern, pattern] : []
+    const total = Number(db.prepare(`SELECT count(*) AS total FROM packages p ${where}`).get(...args)?.total || 0)
+    const pages = Math.max(1, Math.ceil(total / safePageSize))
+    const resolvedPage = Math.min(safePage, pages)
+    const rows = db.prepare(
+      `SELECT p.rowid,p.id,p.name,p.moniker,p.latest_version,
+              (SELECT group_concat(norm_publisher,' | ') FROM (
+                 SELECT DISTINCT norm_publisher
+                   FROM norm_publishers2
+                  WHERE package=p.rowid AND norm_publisher<>''
+                  ORDER BY norm_publisher
+                  LIMIT 4
+               )) AS publishers
+         FROM packages p
+         ${where}
+        ORDER BY lower(p.name),lower(p.id)
+        LIMIT ? OFFSET ?`,
+    ).all(...args, safePageSize, (resolvedPage - 1) * safePageSize)
+
+    return {
+      query: clean(query).slice(0, 160),
+      page: resolvedPage,
+      pageSize: safePageSize,
+      pages,
+      total,
+      source: SOURCE_URL,
+      indexRefreshed: index.refreshed,
+      indexRefreshedAt: lastIndexRefreshAt ? new Date(lastIndexRefreshAt).toISOString() : null,
+      packages: rows.map((row) => ({
+        id: clean(row.id),
+        name: clean(row.name),
+        moniker: clean(row.moniker),
+        version: clean(row.latest_version),
+        publishers: clean(row.publishers).split(' | ').filter(Boolean),
+      })),
+    }
   } finally {
     db.close()
   }

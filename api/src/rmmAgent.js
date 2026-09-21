@@ -95,12 +95,18 @@ function agentUpgradeScript(release) {
     "if ($actualSha256 -ne $expectedSha256) { Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue; throw ('Installer SHA-256 mismatch. Expected ' + $expectedSha256 + ' but got ' + $actualSha256) }",
     "$taskName = '" + psSingleQuote(taskName) + "'",
     "$installerArgs = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /INSTALL_SOURCE=agent-upgrade /LOG=' + [char]34 + $logPath + [char]34",
-    "$action = New-ScheduledTaskAction -Execute $installer -Argument $installerArgs",
+    "$runner = Join-Path $upgradeDir 'run-upgrade-" + version + ".ps1'",
+    "$resultPath = Join-Path $upgradeDir 'result-" + version + ".json'",
+    "$runnerScript = '$ErrorActionPreference = ''Stop''' + [Environment]::NewLine + '$installer = ''' + $installer + '''' + [Environment]::NewLine + '$installerArgs = ''' + $installerArgs + '''' + [Environment]::NewLine + '$resultPath = ''' + $resultPath + '''' + [Environment]::NewLine + '$started = Get-Date' + [Environment]::NewLine + 'try { Stop-Service -Name Hi5CentralAgent -Force -ErrorAction SilentlyContinue; $deadline=(Get-Date).AddSeconds(30); do { $p=Get-Process Hi5CentralAgentService -ErrorAction SilentlyContinue; if (-not $p) { break }; Start-Sleep -Milliseconds 500 } while ((Get-Date) -lt $deadline); if ($p) { Stop-Process -Id $p.Id -Force -ErrorAction Stop; Start-Sleep -Seconds 2 }; $proc=Start-Process -FilePath $installer -ArgumentList $installerArgs -Wait -PassThru; $code=$proc.ExitCode; if ($code -ne 0) { throw (''Installer exited with code '' + $code) }; Start-Service -Name Hi5CentralAgent -ErrorAction Stop; [pscustomobject]@{status=''succeeded'';started=$started;completed=(Get-Date);installer_exit_code=$code} | ConvertTo-Json -Compress | Set-Content -LiteralPath $resultPath -Encoding UTF8 } catch { $message=$_.Exception.Message; Start-Service -Name Hi5CentralAgent -ErrorAction SilentlyContinue; [pscustomobject]@{status=''failed'';started=$started;completed=(Get-Date);error=$message} | ConvertTo-Json -Compress | Set-Content -LiteralPath $resultPath -Encoding UTF8; exit 1 }'",
+    "Set-Content -LiteralPath $runner -Value $runnerScript -Encoding UTF8",
+    "$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ' + [char]34 + $runner + [char]34)",
     "$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(35)",
     "$principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest",
     "$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 10)",
     "Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null",
-    "[pscustomobject]@{ status='scheduled'; task=$taskName; installer=$installer; sha256=$actualSha256; scheduled_for=$trigger.StartBoundary } | ConvertTo-Json -Compress",
+    "$task = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop",
+    "$taskInfo = Get-ScheduledTaskInfo -TaskName $taskName -ErrorAction Stop",
+    "[pscustomobject]@{ status='scheduled'; task=$taskName; installer=$installer; log=$logPath; sha256=$actualSha256; scheduled_for=$trigger.StartBoundary; task_state=[string]$task.State; task_last_result=$taskInfo.LastTaskResult } | ConvertTo-Json -Compress",
   ].join("\n")
 }
 
@@ -409,7 +415,7 @@ export function registerRmmAgentRoutes(app) {
       ),
       agentReleaseRows(),
       pool.query(
-        `SELECT id,status,error_message,created_at,claimed_at,completed_at,request_metadata
+        `SELECT id,status,error_message,result,created_at,claimed_at,completed_at,updated_at,request_metadata
            FROM rmm_agent_jobs
           WHERE tenant_id=$1 AND agent_device_id=$2
             AND request_metadata->>'source'='agent_upgrade'
@@ -449,6 +455,43 @@ export function registerRmmAgentRoutes(app) {
       })),
       latestUpgrade: jobResult.rows[0] || null,
     })
+  })
+
+  app.get('/api/v1/rmm/agent/devices/:agentDeviceId/upgrade-diagnostics', async (c) => {
+    const auth = await requireRmmDeviceControl(c)
+    if (auth.error) return auth.error
+    const agentDeviceId = clean(c.req.param('agentDeviceId'))
+    if (!isUuid(agentDeviceId)) return c.json({ error: 'A valid managed Agent ID is required.' }, 400)
+    const deviceResult = await pool.query(
+      `SELECT a.id,a.agent_version,a.patch_capabilities,i.name FROM rmm_agent_devices a JOIN rmm_device_inventory i ON i.id=a.inventory_id WHERE a.id=$1 AND a.tenant_id=$2 AND a.disabled_at IS NULL LIMIT 1`,
+      [agentDeviceId, auth.session.tenant_id],
+    )
+    const device = deviceResult.rows[0]
+    if (!device) return c.json({ error: 'Managed Agent not found for this device.' }, 404)
+    const socket = agentSocketForDevice(device.id)
+    if (!socket || socket.readyState !== 1) return c.json({ error: 'This device is offline.', offline: true }, 409)
+    const script = [
+      "$ErrorActionPreference = 'SilentlyContinue'",
+      "$dir = Join-Path $env:ProgramData 'Hi5Central\\Agent\\Upgrade'",
+      "$tasks = @(Get-ScheduledTask -TaskName 'Hi5CentralAgentUpgrade-*' | ForEach-Object { $i=Get-ScheduledTaskInfo -TaskName $_.TaskName; [pscustomobject]@{name=$_.TaskName;state=[string]$_.State;last_run=$i.LastRunTime;next_run=$i.NextRunTime;last_result=$i.LastTaskResult} })",
+      "$logs = @(); if (Test-Path $dir) { $logs = @(Get-ChildItem $dir -Filter 'installer-*.log' -File | Sort-Object LastWriteTime -Descending | Select-Object -First 3 | ForEach-Object { $tail=@(Get-Content $_.FullName -Tail 80 -ErrorAction SilentlyContinue); [pscustomobject]@{name=$_.Name;last_write=$_.LastWriteTime;length=$_.Length;tail=($tail -join [Environment]::NewLine)} }) }",
+      "$files = @(); if (Test-Path $dir) { $files = @(Get-ChildItem $dir -Filter 'Hi5CentralAgentSetup-*.exe' -File | ForEach-Object { [pscustomobject]@{name=$_.Name;length=$_.Length;sha256=(Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant();last_write=$_.LastWriteTime} }) }",
+      "[pscustomobject]@{tasks=$tasks;logs=$logs;installers=$files;service=(Get-Service Hi5CentralAgent | Select-Object Name,Status,StartType)} | ConvertTo-Json -Depth 6 -Compress",
+    ].join("\n")
+    const correlationId = randomUUID()
+    const inserted = await pool.query(
+      `INSERT INTO rmm_agent_jobs (tenant_id,agent_device_id,job_type,payload,queued_by_user_id,initiated_by,initiated_by_label,correlation_id,request_metadata) VALUES ($1,$2,'custom.command',$3::jsonb,$4,'technician',$5,$6,$7::jsonb) RETURNING id,job_type,status,created_at`,
+      [auth.session.tenant_id,device.id,JSON.stringify({command:script,timeout_seconds:60}),auth.session.user_id,clean(auth.session.name || auth.session.email || 'Technician').slice(0,255),correlationId,JSON.stringify({source:'agent_upgrade_diagnostics'})],
+    )
+    const job = inserted.rows[0]
+    const claimed = await pool.query(`UPDATE rmm_agent_jobs SET status='claimed',claimed_at=now(),updated_at=now() WHERE id=$1 AND tenant_id=$2 AND status='queued' RETURNING status,claimed_at`,[job.id,auth.session.tenant_id])
+    if (!claimed.rowCount) return c.json({ error: 'Unable to claim diagnostics job.' }, 409)
+    Object.assign(job, claimed.rows[0])
+    if (!sendAgentMessage(device.id,{type:'job_execute',job:{id:job.id,job_type:'custom.command',payload:{command:script,timeout_seconds:60},created_at:job.created_at}})) {
+      await pool.query(`UPDATE rmm_agent_jobs SET status='cancelled',completed_at=now(),error_message='Device went offline before diagnostics could run.',updated_at=now() WHERE id=$1`,[job.id])
+      return c.json({ error: 'Device went offline before diagnostics could run.', offline:true },409)
+    }
+    return c.json({success:true,job},202)
   })
 
   app.post('/api/v1/rmm/agent/devices/:agentDeviceId/upgrade', async (c) => {
@@ -692,6 +735,7 @@ export function registerRmmAgentRoutes(app) {
             SET status='queued',claimed_at=NULL,updated_at=now()
           WHERE agent_device_id=$1 AND status='claimed'
             AND claimed_at < now() - CASE
+              WHEN job_type='patch.software.bulk' THEN interval '6 hours'
               WHEN job_type='patch.software' THEN interval '35 minutes'
               WHEN job_type='custom.command' THEN interval '15 minutes'
               ELSE interval '5 minutes'
@@ -738,7 +782,7 @@ export function registerRmmAgentRoutes(app) {
     const completedJob = { ...result.rows[0], inventory_id: agent.inventory_id }
 
     if (
-      ['patch.software', 'patch.vendor_artifact.inspect'].includes(completedJob.job_type)
+      ['patch.software', 'patch.software.bulk', 'patch.vendor_artifact.inspect'].includes(completedJob.job_type)
       && resultPayload.capabilities
       && typeof resultPayload.capabilities === 'object'
       && !Array.isArray(resultPayload.capabilities)
@@ -807,6 +851,50 @@ export function registerRmmAgentRoutes(app) {
           }
         }
       }).catch((error) => console.error('RMM patch deployment result update failed', completedJob.id, error.message))
+    }
+
+    if (completedJob.job_type === 'patch.software.bulk') {
+      const itemResults = Array.isArray(resultPayload.items) ? resultPayload.items : []
+      await withTransaction(async (client) => {
+        for (const item of itemResults) {
+          const catalogueId = clean(item.catalogueId)
+          const packageId = clean(item.packageId)
+          const itemSuccess = item.success === true
+          const verificationFailed = Boolean(item.verificationFailed || item.verification_failed)
+          const rebootRequired = Boolean(item.rebootRequired || item.reboot_required)
+          const deploymentStatus = itemSuccess
+            ? (rebootRequired ? 'reboot_required' : 'succeeded')
+            : (verificationFailed ? 'verification_failed' : 'failed')
+          const params = [agent.tenant_id, completedJob.id, agent.inventory_id, deploymentStatus, JSON.stringify(item)]
+          let identityClause = ''
+          if (catalogueId) {
+            params.push(catalogueId)
+            identityClause = ' AND catalogue_id=$6::uuid'
+          } else if (packageId) {
+            params.push(packageId)
+            identityClause = ' AND lower(provider_package_id)=lower($6)'
+          } else {
+            continue
+          }
+          const deployment = await client.query(
+            `UPDATE rmm_patch_deployments
+                SET status=$4,result=$5::jsonb,completed_at=now(),updated_at=now()
+              WHERE tenant_id=$1 AND agent_job_id=$2 AND inventory_id=$3${identityClause}
+              RETURNING catalogue_id`,
+            params,
+          )
+          const affectedCatalogueId = deployment.rows[0]?.catalogue_id
+          if (!itemSuccess && affectedCatalogueId) {
+            await client.query(
+              `UPDATE rmm_vulnerability_exposures
+                  SET remediation_state='available',last_seen_at=now()
+                WHERE tenant_id=$1 AND inventory_id=$2 AND catalogue_id=$3
+                  AND status='open' AND remediation_state='in_progress'`,
+              [agent.tenant_id, agent.inventory_id, affectedCatalogueId],
+            )
+          }
+        }
+      }).catch((error) => console.error('RMM bulk patch deployment result update failed', completedJob.id, error.message))
     }
 
     await recordJobCompletionActivity(completedJob, success, resultPayload, errorMessage).catch((error) => {

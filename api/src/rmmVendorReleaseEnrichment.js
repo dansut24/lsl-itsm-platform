@@ -270,8 +270,9 @@ export async function reconcileVendorArtifactInspections() {
     const installerTechnology = lower(clean(result.installerTechnology))
     const installerTechnologyRecognized = result.installerTechnologyRecognized === true
       || ['msi','inno','nullsoft','nsis','burn','installshield','squirrel','install4j'].includes(installerTechnology)
+    const curatedInstallArguments = clean(sourcePayload.installArguments || metadata.installArguments)
     const technologyRequired = lower(row.installer_type) === 'exe'
-      && selectionReason === 'product_windows_executable'
+      && !curatedInstallArguments
     const signerBaseline = clean(metadata.signerBaseline || metadata.expectedSigner)
     const inspectionError = lower(clean(result.error || row.error_message))
 
@@ -546,8 +547,44 @@ export async function queueVendorArtifactInspections(limit = 2) {
   return queued
 }
 
+async function reconcileDirectReadyCatalogue() {
+  const result = await pool.query(
+    `UPDATE rmm_software_catalogue c
+        SET source_metadata=c.source_metadata || jsonb_build_object(
+              'deploymentMode','vendor_direct',
+              'trustState','direct_ready',
+              'automaticVendorRelease',true,
+              'expectedSigner',COALESCE(NULLIF(b.metadata->>'expectedSigner',''),NULLIF(r.source_payload->>'expectedSigner',''),NULLIF(r.trust_evidence->>'signer',''),''),
+              'installerTechnology',COALESCE(NULLIF(b.metadata->>'installerTechnology',''),NULLIF(r.source_payload->>'installerTechnology',''),NULLIF(r.trust_evidence->>'installerTechnology',''),''),
+              'artifactHashProvenance',COALESCE(NULLIF(r.source_payload->>'artifactHashProvenance',''),NULLIF(r.trust_evidence->>'hashProvenance',''),'endpoint_pinned_sha256')
+            ),
+            qualification_state=CASE WHEN c.qualification_state IN ('qualified','blocked') THEN c.qualification_state ELSE 'deployment_candidate' END,
+            qualification_evidence=c.qualification_evidence || jsonb_build_object(
+              'source','vendor_release_trust_reconciliation',
+              'vendorReleaseId',r.id,
+              'authenticodeVerified',COALESCE((r.trust_evidence->>'signatureVerified')::boolean,false),
+              'sha256Verified',(r.installer_sha256 ~* '^[a-f0-9]{64}$')
+            ),
+            qualification_notes=CASE WHEN c.qualification_notes<>'' THEN c.qualification_notes ELSE 'Deployment-ready vendor artifact reconciled from verified release trust evidence.' END,
+            updated_at=now()
+       FROM rmm_software_vendor_releases r
+       LEFT JOIN rmm_software_vendor_bindings b
+         ON b.source_key=r.source_key AND b.provider_package_id=r.provider_package_id
+        AND b.channel=r.channel AND b.platform=r.platform AND b.architecture=r.architecture AND b.enabled=true
+      WHERE c.tenant_id IS NULL AND c.catalogue_source='vendor' AND c.status='active'
+        AND c.external_key=r.provider_package_id AND c.target_version=r.version
+        AND r.trust_state='direct_ready' AND r.installer_url LIKE 'https://%'
+        AND r.installer_sha256 ~* '^[a-f0-9]{64}$'
+        AND (COALESCE(c.source_metadata->>'deploymentMode','')<>'vendor_direct'
+          OR COALESCE(c.source_metadata->>'trustState','')<>'direct_ready'
+          OR c.qualification_state='intelligence_only')
+     RETURNING c.id,c.canonical_name,c.target_version`)
+  return result.rows
+}
+
 export async function runVendorArtifactQualification({ inspectLimit = 2 } = {}) {
   const reconciled = await reconcileVendorArtifactInspections()
+  const recovered = await reconcileDirectReadyCatalogue()
   const queued = await queueVendorArtifactInspections(inspectLimit)
-  return { reconciled, queued }
+  return { reconciled, recovered, queued }
 }

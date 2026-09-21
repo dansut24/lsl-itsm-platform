@@ -11,12 +11,22 @@ async function request(path, options = {}) {
     },
   })
   const payload = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(payload.error || 'RMM patching request failed.')
+  if (!response.ok) {
+    const error = new Error(payload.error || 'RMM patching request failed.')
+    error.status = response.status
+    error.data = payload
+    throw error
+  }
   return payload
 }
 
 export function loadRmmPatching() {
   return request('/api/v1/rmm/patching')
+}
+
+export function searchWingetRepository(query = '', page = 1, pageSize = 50) {
+  const params = new URLSearchParams({ q: query, page: String(page), pageSize: String(pageSize) })
+  return request('/api/v1/rmm/patching/winget/repository?' + params.toString())
 }
 
 export function createSoftwareCatalogueEntry(entry) {
@@ -69,6 +79,22 @@ export function deploySoftwarePatch(agentDeviceId, catalogueId) {
     method: 'POST',
     body: JSON.stringify({ agentDeviceId, catalogueId }),
   })
+}
+
+export function planSoftwarePatches(agentDeviceId, catalogueIds = [], mode = 'selected_catalogue') {
+  return request('/api/v1/rmm/patching/software/plan-bulk', { method: 'POST', body: JSON.stringify({ agentDeviceId, catalogueIds, mode }) })
+}
+
+export function deploySoftwarePatches(agentDeviceId, catalogueIds = [], mode = 'selected_catalogue') {
+  return request('/api/v1/rmm/patching/software/deploy-bulk', { method: 'POST', body: JSON.stringify({ agentDeviceId, catalogueIds, mode }) })
+}
+
+export function rejectDeviceSoftwarePatch(agentDeviceId, catalogueId, targetVersion, reason = '') {
+  return request('/api/v1/rmm/patching/software/reject', { method: 'POST', body: JSON.stringify({ agentDeviceId, catalogueId, targetVersion, reason }) })
+}
+
+export function restoreDeviceSoftwarePatch(rejectionId) {
+  return request('/api/v1/rmm/patching/software/rejections/' + encodeURIComponent(rejectionId), { method: 'DELETE' })
 }
 
 export function installSoftwareFromCatalogue(agentDeviceId, catalogueId) {

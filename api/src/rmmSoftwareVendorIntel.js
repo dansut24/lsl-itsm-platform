@@ -15,6 +15,7 @@ import {
 } from './rmmTenantVendorSources.js'
 import { recalculateAllTenantVulnerabilityExposures } from './rmmVulnerabilityExposure.js'
 import { syncAutomaticWingetFallbacks } from './rmmWingetFallback.js'
+import { syncEvergreenCorroboration } from './rmmEvergreenIntel.js'
 import {
   discoverGithubWindowsInstaller,
   runVendorArtifactQualification,
@@ -168,6 +169,11 @@ async function upsertRelease({
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,$17,$18::jsonb,now())
        ON CONFLICT (source_key,provider_package_id,channel,platform,architecture,version)
        DO UPDATE SET release_date=COALESCE(EXCLUDED.release_date,rmm_software_vendor_releases.release_date),
+         asset_health_state=CASE WHEN rmm_software_vendor_releases.installer_url IS DISTINCT FROM EXCLUDED.installer_url THEN 'unknown' ELSE rmm_software_vendor_releases.asset_health_state END,
+         asset_last_checked_at=CASE WHEN rmm_software_vendor_releases.installer_url IS DISTINCT FROM EXCLUDED.installer_url THEN NULL ELSE rmm_software_vendor_releases.asset_last_checked_at END,
+         asset_failure_count=CASE WHEN rmm_software_vendor_releases.installer_url IS DISTINCT FROM EXCLUDED.installer_url THEN 0 ELSE rmm_software_vendor_releases.asset_failure_count END,
+         asset_final_url=CASE WHEN rmm_software_vendor_releases.installer_url IS DISTINCT FROM EXCLUDED.installer_url THEN '' ELSE rmm_software_vendor_releases.asset_final_url END,
+         asset_health_error=CASE WHEN rmm_software_vendor_releases.installer_url IS DISTINCT FROM EXCLUDED.installer_url THEN '' ELSE rmm_software_vendor_releases.asset_health_error END,
          installer_url=EXCLUDED.installer_url,
          installer_sha256=EXCLUDED.installer_sha256,
          installer_type=EXCLUDED.installer_type,
@@ -569,6 +575,122 @@ async function syncGenericConfigured(sourceKey, state) {
     installerSha256 = normalizedSha256(installer?.checksum)
     resolvedInstallerType = detectInstallerType(installer?.name, resolvedInstallerType)
     payload = { adoptium: { lts, release_name: asset.release_name, installer: installer?.name || '' } }
+  } else if (state.source_type === 'package_registry') {
+    const registry = clean(config.registry).toLowerCase()
+    const registryPackage = clean(config.registryPackage)
+    if (registry === 'chocolatey') {
+      const body = await fetchPublicText(state.source_url, {
+        accept: 'application/atom+xml, application/xml',
+        maxBytes: 5 * 1024 * 1024,
+      })
+      const entries = [...body.matchAll(/<entry>[\s\S]*?<\/entry>/gi)].map((match) => match[0])
+      const latest = entries.find((entry) =>
+        /<d:IsLatestVersion[^>]*>true<\/d:IsLatestVersion>/i.test(entry)
+        && /<d:IsPrerelease[^>]*>false<\/d:IsPrerelease>/i.test(entry)
+      ) || entries[0] || ''
+      version = clean(latest.match(/<d:Version[^>]*>([^<]+)<\/d:Version>/i)?.[1])
+      releaseDate = normalizedReleaseDate(latest.match(/<d:Published[^>]*>([^<]+)<\/d:Published>/i)?.[1])
+      releaseUrl = clean(latest.match(/<d:GalleryDetailsUrl[^>]*>([^<]+)<\/d:GalleryDetailsUrl>/i)?.[1])
+      payload = { registry: { registry, package: registryPackage, latest: version } }
+    } else {
+      let response
+      if (registry === 'snapcraft') {
+        const url = await publicHttpsUrl(state.source_url)
+        const raw = await fetch(url, {
+          headers: {
+            Accept: 'application/json',
+            'Snap-Device-Series': '16',
+            'User-Agent': 'Hi5Central-Software-Catalogue/1.0',
+          },
+          signal: AbortSignal.timeout(60_000),
+        })
+        if (!raw.ok) throw new Error('Snapcraft HTTP ' + raw.status)
+        response = await raw.json()
+      } else {
+        response = await fetchPublicJson(state.source_url)
+      }
+
+      if (registry === 'npm') {
+        version = clean(response?.version)
+        releaseUrl = clean(response?.homepage || response?.repository?.url)
+      } else if (registry === 'pypi') {
+        version = clean(response?.info?.version)
+        releaseUrl = clean(response?.info?.project_url || response?.info?.package_url || response?.info?.home_page)
+      } else if (registry === 'crates') {
+        version = clean(response?.crate?.max_stable_version || response?.crate?.max_version || response?.crate?.newest_version)
+        releaseUrl = clean(response?.crate?.repository || response?.crate?.homepage)
+      } else if (registry === 'rubygems') {
+        version = clean(response?.version)
+        releaseDate = normalizedReleaseDate(response?.version_created_at)
+        releaseUrl = clean(response?.project_uri || response?.homepage_uri)
+      } else if (registry === 'nuget') {
+        const versions = (Array.isArray(response?.versions) ? response.versions : [])
+          .filter((item) => /^\d+(?:\.\d+)+(?:\.\d+)?$/.test(clean(item)))
+          .sort(compareVersionValues)
+        version = clean(versions.at(-1))
+      } else if (registry === 'packagist') {
+        const releases = Array.isArray(response?.packages?.[registryPackage])
+          ? response.packages[registryPackage]
+          : []
+        const stable = releases.find((item) => /^v?\d+(?:\.\d+)+$/.test(clean(item?.version)))
+          || releases.find((item) => !/[A-Za-z-](?:dev|alpha|beta|rc)/i.test(clean(item?.version)))
+          || releases[0]
+        version = releaseVersion(clean(stable?.version_normalized || stable?.version).replace(/\.0$/, ''))
+        releaseDate = normalizedReleaseDate(stable?.['published-time'] || stable?.time)
+        releaseUrl = clean(stable?.source?.url || stable?.support?.source)
+      } else if (registry === 'snapcraft') {
+        const channels = Array.isArray(response?.['channel-map']) ? response['channel-map'] : []
+        const stable = channels.find((item) =>
+          clean(item?.channel?.architecture).toLowerCase() === 'amd64'
+          && clean(item?.channel?.risk).toLowerCase() === 'stable'
+          && clean(item?.channel?.track).toLowerCase() === 'latest'
+        ) || channels.find((item) => clean(item?.channel?.risk).toLowerCase() === 'stable')
+        version = clean(stable?.version)
+        releaseDate = normalizedReleaseDate(stable?.channel?.['released-at'] || stable?.['created-at'])
+      } else if (registry === 'flathub') {
+        const releases = (Array.isArray(response?.releases) ? response.releases : [])
+          .filter((item) => clean(item?.type).toLowerCase() !== 'development')
+          .sort((a, b) => Number(a?.timestamp || 0) - Number(b?.timestamp || 0))
+        const latest = releases.at(-1) || releases[0]
+        version = clean(latest?.version)
+        if (latest?.timestamp) releaseDate = new Date(Number(latest.timestamp) * 1000).toISOString()
+        releaseUrl = clean(response?.urls?.homepage || response?.urls?.bugtracker)
+      } else if (registry === 'apple') {
+        const results = Array.isArray(response?.results) ? response.results : []
+        const expected = clean(b.canonical_name).toLowerCase()
+        const latest = results.find((item) =>
+          clean(item?.trackName || item?.trackCensoredName).toLowerCase() === expected
+        ) || results[0]
+        version = clean(latest?.version)
+        releaseDate = normalizedReleaseDate(latest?.currentVersionReleaseDate)
+        releaseUrl = clean(latest?.trackViewUrl)
+        if (latest?.bundleId) payload = { registry: { registry, package: latest.bundleId, searchedFor: registryPackage, latest: version } }
+      } else if (registry === 'go') {
+        version = releaseVersion(clean(response?.Version))
+        releaseDate = normalizedReleaseDate(response?.Time)
+        releaseUrl = clean(response?.Origin?.URL)
+      } else if (registry === 'maven') {
+        const latest = Array.isArray(response?.response?.docs) ? response.response.docs[0] : null
+        version = clean(latest?.latestVersion)
+        releaseDate = latest?.timestamp ? new Date(Number(latest.timestamp)).toISOString() : null
+      } else if (registry === 'homebrew') {
+        version = clean(response?.version)
+        releaseUrl = clean(response?.homepage)
+      } else {
+        throw new Error(sourceKey + ' uses unsupported package registry ' + registry)
+      }
+      payload = {
+        registry: {
+          registry,
+          package: registryPackage,
+          group: clean(config.registryGroup),
+          artifact: clean(config.registryArtifact),
+          latest: version,
+          osvEcosystem: clean(config.osvEcosystem),
+          osvPackage: clean(config.osvPackage),
+        },
+      }
+    }
   } else if (state.source_type === 'vendor_text') {
     const body = await fetchPublicText(state.source_url, { maxBytes: 5 * 1024 * 1024 })
     if (config.adapter === 'signal_yaml') {
@@ -1046,7 +1168,7 @@ export async function syncSoftwareVendorSource(sourceKey) {
   const state = await sourceState(sourceKey)
   if (!state?.enabled) return { sourceKey, skipped: true }
   const adapter = adapters[sourceKey]
-    || (['github_releases','gitlab_releases','vendor_json','vendor_text','hashicorp_releases','python_releases','adoptium','static_release'].includes(state.source_type)
+    || (['github_releases','gitlab_releases','vendor_json','vendor_text','hashicorp_releases','python_releases','adoptium','static_release','package_registry'].includes(state.source_type)
       ? () => syncGenericConfigured(sourceKey, state)
       : null)
   if (!adapter) throw new Error('No software vendor adapter registered for ' + sourceKey + ' (' + state.source_type + ')')
@@ -1065,13 +1187,103 @@ export async function syncSoftwareVendorSource(sourceKey) {
   }
 }
 
+async function probeVendorAssetUrl(value, redirects = 0) {
+  if (redirects > 4) throw new Error('Vendor asset redirected too many times.')
+  const url = await publicHttpsUrl(value)
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      Accept: 'application/octet-stream,*/*;q=0.8',
+      Range: 'bytes=0-0',
+      'User-Agent': 'Hi5Central-Software-Catalogue/1.0',
+    },
+    redirect: 'manual',
+    signal: AbortSignal.timeout(20_000),
+  })
+  if ([301,302,303,307,308].includes(response.status)) {
+    const location = clean(response.headers.get('location'))
+    await response.body?.cancel().catch(() => null)
+    if (!location) throw new Error('Vendor asset redirected without a location.')
+    return probeVendorAssetUrl(new URL(location, url).toString(), redirects + 1)
+  }
+
+  const status = Number(response.status) || 0
+  const contentType = clean(response.headers.get('content-type'))
+  const etag = clean(response.headers.get('etag'))
+  const lastModified = clean(response.headers.get('last-modified'))
+  const contentRange = clean(response.headers.get('content-range'))
+  const rawLength = Number(response.headers.get('content-length'))
+  const rangeTotal = Number(contentRange.match(/\/(\d+)$/)?.[1])
+  const contentLength = Number.isFinite(rangeTotal) && rangeTotal >= 0
+    ? rangeTotal
+    : (Number.isFinite(rawLength) && rawLength >= 0 ? rawLength : null)
+  await response.body?.cancel().catch(() => null)
+
+  if (![200,206].includes(status)) throw new Error('Vendor asset HTTP ' + status)
+  if (/text\/html/i.test(contentType)) throw new Error('Vendor asset returned HTML instead of an installer.')
+  return {
+    status,
+    finalUrl: url.toString(),
+    contentType,
+    contentLength,
+    etag,
+    lastModified,
+  }
+}
+
+export async function probeDueSoftwareVendorAssets({ limit = 20 } = {}) {
+  const due = await pool.query(
+    `SELECT DISTINCT ON (provider_package_id,channel,platform,architecture)
+            id,source_key,provider_package_id,canonical_name,version,installer_url,
+            asset_health_state,asset_failure_count
+       FROM rmm_software_vendor_releases
+      WHERE trust_state='direct_ready'
+        AND installer_url<>''
+        AND (asset_last_checked_at IS NULL OR asset_last_checked_at <= now() - interval '60 minutes')
+      ORDER BY provider_package_id,channel,platform,architecture,
+               COALESCE(release_date,last_seen_at) DESC,source_priority DESC
+      LIMIT $1`,
+    [Math.max(1, Math.min(100, Number(limit) || 20))],
+  )
+
+  const results = []
+  for (const row of due.rows) {
+    try {
+      const probe = await probeVendorAssetUrl(row.installer_url)
+      await pool.query(
+        `UPDATE rmm_software_vendor_releases
+            SET asset_health_state='healthy',asset_last_checked_at=now(),asset_http_status=$2,
+                asset_failure_count=0,asset_final_url=$3,asset_content_type=$4,asset_content_length=$5,
+                asset_etag=$6,asset_last_modified=$7,asset_health_error=''
+          WHERE id=$1`,
+        [row.id, probe.status, probe.finalUrl, probe.contentType, probe.contentLength, probe.etag, probe.lastModified],
+      )
+      results.push({ id: row.id, name: row.canonical_name, version: row.version, state: 'healthy' })
+    } catch (error) {
+      const failures = Number(row.asset_failure_count || 0) + 1
+      const state = failures >= 3 ? 'dead' : 'degraded'
+      const message = clean(error?.message || error).slice(0, 1000)
+      await pool.query(
+        `UPDATE rmm_software_vendor_releases
+            SET asset_health_state=$2,asset_last_checked_at=now(),asset_failure_count=$3,
+                asset_health_error=$4
+          WHERE id=$1`,
+        [row.id, state, failures, message],
+      )
+      results.push({ id: row.id, name: row.canonical_name, version: row.version, state, error: message })
+    }
+  }
+  return results
+}
+
 export async function syncDueSoftwareVendorSources() {
   const due = await pool.query(
     `SELECT source_key
        FROM rmm_software_vendor_sources
       WHERE enabled=true
         AND (last_attempt_at IS NULL OR last_attempt_at + (poll_minutes || ' minutes')::interval <= now())
-      ORDER BY priority DESC,source_key`,
+      ORDER BY priority DESC,source_key
+      LIMIT 40`,
   )
   const results = []
   for (const row of due.rows) {
@@ -1095,8 +1307,28 @@ export async function syncDueSoftwareVendorSources() {
   }
 
   try {
+    const assetHealth = await probeDueSoftwareVendorAssets({ limit: 20 })
+    const unhealthy = assetHealth.filter((item) => item.state !== 'healthy')
+    if (unhealthy.length) console.warn('RMM vendor asset health warnings', unhealthy)
+  } catch (error) {
+    console.error('RMM vendor asset health sweep failed', error.message)
+  }
+
+  try {
+    const evergreen = await syncEvergreenCorroboration()
+    if (!evergreen.skipped && (evergreen.promoted || evergreen.checked)) {
+      console.log('RMM Evergreen corroboration', {
+        checked: evergreen.checked,
+        promoted: evergreen.promoted,
+      })
+    }
+  } catch (error) {
+    console.error('RMM Evergreen corroboration failed', error.message)
+  }
+
+  try {
     const qualification = await runVendorArtifactQualification({ inspectLimit: 2 })
-    if (qualification.reconciled.length || qualification.queued.length) {
+    if (qualification.reconciled.length || qualification.recovered.length || qualification.queued.length) {
       console.log('RMM vendor artifact qualification', qualification)
     }
   } catch (error) {
@@ -1122,13 +1354,24 @@ export async function softwareVendorSummary() {
       `SELECT DISTINCT ON (provider_package_id,channel,platform,architecture)
               source_key,provider_package_id,canonical_name,publisher,channel,platform,architecture,
               version,release_date,release_url,asset_name,installer_url,installer_sha256,installer_type,
-              trust_state,trust_evidence,source_priority,last_seen_at
+              trust_state,trust_evidence,source_priority,last_seen_at,
+              asset_health_state,asset_last_checked_at,asset_http_status,asset_failure_count,
+              asset_final_url,asset_content_type,asset_content_length,asset_etag,asset_last_modified,asset_health_error
          FROM rmm_software_vendor_releases
         ORDER BY provider_package_id,channel,platform,architecture,source_priority DESC,
                  COALESCE(release_date,last_seen_at) DESC`,
     ),
   ])
-  return { sources: sources.rows, latest: releases.rows }
+  const latest = releases.rows
+  const sourceHealth = sources.rows.map((source) => {
+    const rows = latest.filter((release) => release.source_key === source.source_key)
+    const staleMs = Math.max(Number(source.poll_minutes || 60) * 3, 180) * 60000
+    const stale = Boolean(source.last_success_at && Date.now() - new Date(source.last_success_at).getTime() > staleMs)
+    const state = source.last_error ? 'attention' : stale ? 'stale' : source.last_success_at ? 'healthy' : 'pending'
+    return { source_key: source.source_key, display_name: source.display_name, state, stale, last_success_at: source.last_success_at, last_attempt_at: source.last_attempt_at, last_error: source.last_error, records_seen: Number(source.records_seen || 0), release_count: rows.length, healthy_assets: rows.filter((r) => r.asset_health_state === 'healthy').length, unhealthy_assets: rows.filter((r) => ['dead','degraded'].includes(r.asset_health_state)).length, unknown_assets: rows.filter((r) => !r.asset_health_state || r.asset_health_state === 'unknown').length }
+  })
+  const health = { total: sourceHealth.length, healthy: sourceHealth.filter((x) => x.state === 'healthy').length, attention: sourceHealth.filter((x) => x.state === 'attention').length, stale: sourceHealth.filter((x) => x.state === 'stale').length, pending: sourceHealth.filter((x) => x.state === 'pending').length, unhealthy_assets: sourceHealth.reduce((sum,x) => sum + x.unhealthy_assets,0), unknown_assets: sourceHealth.reduce((sum,x) => sum + x.unknown_assets,0) }
+  return { sources: sources.rows, latest, sourceHealth, health }
 }
 
 let schedulerStarted = false

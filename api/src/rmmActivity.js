@@ -64,7 +64,7 @@ export function jobActivityDescriptor(job, success, result = {}, errorMessage = 
   const actor = actorFromJob(job)
   const ok = Boolean(success)
   const outcome = ok ? 'success' : 'failed'
-  const suffix = ok ? 'Job successful · See details' : 'Job failed' + (errorMessage ? ' · ' + clean(errorMessage).slice(0, 260) : '') + ' · See details'
+  const suffix = ok ? 'Job completed · See details' : 'Job failed' + (errorMessage ? ' · ' + clean(errorMessage).slice(0, 260) : '') + ' · See details'
   const common = { ...actor, outcome, severity: ok ? 'info' : 'warning', category: 'job' }
 
   if (type === 'software.uninstall') {
@@ -90,7 +90,7 @@ export function jobActivityDescriptor(job, success, result = {}, errorMessage = 
         || installerOutput.includes('no newer package versions are available')
       )
     const patchSuffix = ok
-      ? 'Job successful · See details'
+      ? 'Job completed · See details'
       : providerBlocked
         ? 'Verification failed · WinGet reports no applicable upgrade · See details'
         : verificationFailed
@@ -148,8 +148,9 @@ export function jobActivityDescriptor(job, success, result = {}, errorMessage = 
     if (clean(requestMetadata.source) === 'agent_upgrade') {
       const version = clean(requestMetadata.release_version) || 'selected release'
       const targetPatchHost = clean(requestMetadata.target_patch_host_version)
+      const scheduledCommon = ok ? { ...common, outcome: 'info' } : common
       return {
-        ...common,
+        ...scheduledCommon,
         eventType: ok ? 'agent.upgrade.scheduled' : 'agent.upgrade.failed',
         category: 'device',
         summary: ok

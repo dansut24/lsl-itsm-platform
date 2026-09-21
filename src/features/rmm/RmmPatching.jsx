@@ -3,12 +3,15 @@ import {
   AlertTriangle,
   Box,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   GitBranch,
   Monitor,
   PackageCheck,
   Plus,
   RefreshCw,
+  Search,
   ShieldCheck,
   Trash2,
   WifiOff,
@@ -25,10 +28,13 @@ import {
   deletePatchAssignment,
   deleteSoftwareCatalogueEntry,
   deploySoftwarePatch,
+  deploySoftwarePatches,
   installSoftwareFromCatalogue,
   loadRmmPatching,
   loadRmmVulnerabilities,
+  planSoftwarePatches,
   remediateVulnerabilityExposure,
+  searchWingetRepository,
   testVendorSource,
   updateVendorSource,
 } from '../../lib/rmmPatchingApi.js'
@@ -297,6 +303,12 @@ function PolicyModal({ onClose, onSave }) {
     maxRetries: 2,
     maintenanceStart: '18:00',
     maintenanceEnd: '05:00',
+    criticalExploited: 'automatic',
+    critical: 'automatic',
+    high: 'manual',
+    medium: 'manual',
+    low: 'skip',
+    advisory: 'skip',
   })
   const update = (key, value) => setForm((current) => ({ ...current, [key]: value }))
   return <div className="rmm-patch-modal-backdrop">
@@ -309,6 +321,16 @@ function PolicyModal({ onClose, onSave }) {
           start: form.maintenanceStart,
           end: form.maintenanceEnd,
           timezone: 'tenant',
+        },
+        softwareRules: {
+          vulnerabilityRules: {
+            critical_exploited: form.criticalExploited,
+            critical: form.critical,
+            high: form.high,
+            medium: form.medium,
+            low: form.low,
+            advisory: form.advisory,
+          },
         },
       })
     }}>
@@ -325,6 +347,15 @@ function PolicyModal({ onClose, onSave }) {
         <label>Window ends<input type="time" value={form.maintenanceEnd} onChange={(event) => update('maintenanceEnd', event.target.value)} /></label>
         <label>Reboot policy<select value={form.rebootPolicy} onChange={(event) => update('rebootPolicy', event.target.value)}><option value="never">Never automatically</option><option value="maintenance_window">During maintenance window</option><option value="notify_user">Notify user</option></select></label>
         <label>Retries<input min="0" max="10" type="number" value={form.maxRetries} onChange={(event) => update('maxRetries', event.target.value)} /></label>
+        <div className="wide"><strong>Vulnerability-driven approvals</strong><small>Automatic still requires a qualified, trusted remediation. Skip suppresses automatic deployment, not vulnerability visibility.</small></div>
+        {[
+          ['criticalExploited', 'Critical / known exploited'],
+          ['critical', 'Critical (CVSS ≥ 9.0)'],
+          ['high', 'High (CVSS 7.0–8.9)'],
+          ['medium', 'Medium (CVSS 4.0–6.9)'],
+          ['low', 'Low (CVSS < 4.0)'],
+          ['advisory', 'Advisory / no scored CVE'],
+        ].map(([key, label]) => <label key={key}>{label}<select value={form[key]} onChange={(event) => update(key, event.target.value)}><option value="automatic">Auto approve</option><option value="manual">Manual approval</option><option value="skip">Skip automatic patching</option></select></label>)}
       </div>
       <div className="rmm-patch-checks">
         <label><input checked={form.softwareEnabled} onChange={(event) => update('softwareEnabled', event.target.checked)} type="checkbox" /><span><strong>Software patching</strong><small>Prioritised for the first execution release.</small></span></label>
@@ -392,6 +423,24 @@ export function RmmPatching({ devices = [] }) {
   const [patchApp, setPatchApp] = useState(null)
   const [catalogueInstallDeviceId, setCatalogueInstallDeviceId] = useState('')
   const [catalogueInstallId, setCatalogueInstallId] = useState('')
+  const [bulkPatchDeviceId, setBulkPatchDeviceId] = useState('')
+  const [bulkPatchMode, setBulkPatchMode] = useState('selected_catalogue')
+  const [bulkPatchSelected, setBulkPatchSelected] = useState([])
+  const [bulkPatchPreview, setBulkPatchPreview] = useState(null)
+  const [bulkPatchBusy, setBulkPatchBusy] = useState(false)
+  const [softwareSearch, setSoftwareSearch] = useState('')
+  const [softwareStateFilter, setSoftwareStateFilter] = useState('all')
+  const [softwareProviderFilter, setSoftwareProviderFilter] = useState('all')
+  const [softwareSourceFilter, setSoftwareSourceFilter] = useState('all')
+  const [softwareHealthFilter, setSoftwareHealthFilter] = useState('all')
+  const [softwareQualificationFilter, setSoftwareQualificationFilter] = useState('all')
+  const [softwarePage, setSoftwarePage] = useState(1)
+  const [softwarePageSize, setSoftwarePageSize] = useState(25)
+  const [wingetQuery, setWingetQuery] = useState('')
+  const [wingetPage, setWingetPage] = useState(1)
+  const [wingetPageSize, setWingetPageSize] = useState(50)
+  const [wingetRepository, setWingetRepository] = useState({ packages: [], total: 0, pages: 1, page: 1 })
+  const [wingetLoading, setWingetLoading] = useState(false)
   const [showVendorSource, setShowVendorSource] = useState(false)
   const [editingVendorSource, setEditingVendorSource] = useState(null)
   const [showPolicy, setShowPolicy] = useState(false)
@@ -434,6 +483,23 @@ export function RmmPatching({ devices = [] }) {
     return () => { active = false }
   }, [])
 
+  useEffect(() => {
+    setWingetPage(1)
+  }, [wingetQuery, wingetPageSize])
+
+  useEffect(() => {
+    if (tab !== 'winget') return undefined
+    let active = true
+    const timer = window.setTimeout(() => {
+      setWingetLoading(true)
+      searchWingetRepository(wingetQuery, wingetPage, wingetPageSize)
+        .then((result) => { if (active) setWingetRepository(result) })
+        .catch((requestError) => { if (active) setError(requestError?.message || 'Unable to load WinGet repository.') })
+        .finally(() => { if (active) setWingetLoading(false) })
+    }, 250)
+    return () => { active = false; window.clearTimeout(timer) }
+  }, [tab, wingetQuery, wingetPage, wingetPageSize])
+
   const applications = bundle?.applications || []
   const catalogue = bundle?.catalogue || []
   const patchDevices = bundle?.devices || []
@@ -441,6 +507,11 @@ export function RmmPatching({ devices = [] }) {
   const patchObservations = bundle?.patchObservations || []
   const vendorSources = bundle?.vendorIntel?.sources || []
   const vendorLatest = bundle?.vendorIntel?.latest || []
+  const vendorReview = vendorLatest.filter((item) => ['rejected', 'signer_review_required', 'installer_review_required'].includes(item.trust_state))
+  const vendorReviewCounts = vendorReview.reduce((counts, item) => ({ ...counts, [item.trust_state]: (counts[item.trust_state] || 0) + 1 }), {})
+  const vendorSourceHealth = bundle?.vendorIntel?.sourceHealth || []
+  const vendorSourceHealthMap = new Map(vendorSourceHealth.map((item) => [item.source_key, item]))
+  const vendorHealth = bundle?.vendorIntel?.health || {}
   const tenantVendorSources = bundle?.vendorIntel?.tenantSources || []
   const policies = bundle?.policies || []
   const assignments = bundle?.assignments || []
@@ -449,6 +520,7 @@ export function RmmPatching({ devices = [] }) {
   const softwareVulnerabilityExposures = bundle?.softwareVulnerabilityExposures || []
   const vulnerabilityHydration = bundle?.vulnerabilityHydration || []
   const vulnerabilityExposureRows = bundle?.vulnerabilityExposureRows || []
+  const vulnerabilityCatalogue = bundle?.vulnerabilityCatalogue || {}
   const exposureSummary = bundle?.vulnerabilityExposures || {}
   const overview = bundle?.overview || {}
   const exposedApps = applications.filter((item) => item.updateAvailable > 0)
@@ -476,6 +548,18 @@ export function RmmPatching({ devices = [] }) {
     && versionAtLeast(selectedInstallPatchHost, '0.2.5'),
   )
 
+
+  const bulkPatchDevice = patchDevices.find((device) => device.agentDeviceId === bulkPatchDeviceId) || null
+  const bulkPatchDeviceUpdates = deviceSoftware
+    .filter((item) => item.agentDeviceId === bulkPatchDeviceId && item.patchStatus === 'update_available' && item.catalogue?.id)
+    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
+  const bulkPatchCapabilityReady = Boolean(bulkPatchDevice?.online && bulkPatchDevice?.patchCapabilities?.softwareBulk)
+  const bulkPatchSelectedIds = bulkPatchMode === 'selected_catalogue'
+    ? bulkPatchSelected.filter((id) => bulkPatchDeviceUpdates.some((item) => item.catalogue?.id === id))
+    : []
+  const bulkCatalogueUpdateCount = bulkPatchDeviceUpdates.filter((item) => item.catalogue?.catalogueSource !== 'patchhost').length
+  const bulkWingetUpdateCount = patchObservations.filter((item) => item.inventory_id === bulkPatchDevice?.inventoryId && item.provider === 'winget' && item.patch_status === 'update_available').length
+
   useEffect(() => {
     if (!catalogueInstallDeviceId && onlineInstallDevices.length) {
       setCatalogueInstallDeviceId(onlineInstallDevices[0].agentDeviceId)
@@ -487,6 +571,21 @@ export function RmmPatching({ devices = [] }) {
       setCatalogueInstallId('')
     }
   }, [catalogueInstallId, installableCatalogue])
+
+  useEffect(() => {
+    if (!bulkPatchDeviceId && onlineInstallDevices.length) {
+      setBulkPatchDeviceId(onlineInstallDevices[0].agentDeviceId)
+    }
+  }, [bulkPatchDeviceId, onlineInstallDevices])
+
+  useEffect(() => {
+    setBulkPatchPreview(null)
+    if (bulkPatchMode !== 'selected_catalogue') setBulkPatchSelected([])
+  }, [bulkPatchDeviceId, bulkPatchMode])
+
+  useEffect(() => {
+    setBulkPatchSelected((current) => current.filter((id) => bulkPatchDeviceUpdates.some((item) => item.catalogue?.id === id)))
+  }, [bulkPatchDeviceId, bundle])
 
   function patchInstallsForApplication(application) {
     const grouped = new Map()
@@ -536,10 +635,76 @@ export function RmmPatching({ devices = [] }) {
         total: summary.total + 1,
         checked: summary.checked + Number(item.checked === true || item.status === 'checked'),
         pending: summary.pending + Number(item.checked !== true && item.status !== 'checked'),
-      }), { total: 0, checked: 0, pending: 0 })
+        unresolvedIdentity: summary.unresolvedIdentity + Number(item.status === 'pending_identity'),
+        unresolvedVersion: summary.unresolvedVersion + Number(item.status === 'pending_version'),
+      }), { total: 0, checked: 0, pending: 0, unresolvedIdentity: 0, unresolvedVersion: 0 })
 
     return { ...exposure, ...hydration }
   }
+
+  function applicationPatchState(application) {
+    if (application.updateAvailable) return 'update_available'
+    if (application.providerBlocked) return 'provider_blocked'
+    if (application.olderVersionPresent) return 'older_version_present'
+    if (application.catalogue?.targetVersion) return 'current'
+    if (application.catalogue) return 'detection_pending'
+    return 'unmapped'
+  }
+
+  function applicationSourceState(application) {
+    if (!application.catalogue) return { type: 'unmapped', health: 'unmapped' }
+    const type = application.catalogue.sourceType || application.catalogue.catalogueSource || 'other'
+    if (application.catalogue.sourceEnabled === false) return { type, health: 'disabled' }
+    const monitored = application.catalogue.sourceKey ? vendorSourceHealthMap.get(application.catalogue.sourceKey) : null
+    return { type, health: monitored?.state || (application.catalogue.catalogueSource === 'patchhost' ? 'endpoint' : 'unmonitored') }
+  }
+
+  const softwareSourceOptions = [...new Set(applications.map((application) => applicationSourceState(application).type).filter(Boolean))].sort()
+  const softwareQuery = softwareSearch.trim().toLowerCase()
+  const filteredApplications = applications.filter((application) => {
+    const state = applicationPatchState(application)
+    const exposure = exposureForApplication(application)
+    const provider = String(application.catalogue?.provider || 'unmapped').toLowerCase()
+    const source = applicationSourceState(application)
+    const qualification = application.catalogue?.qualificationState || 'unmapped'
+    if (softwareStateFilter === 'updates' && !['update_available', 'older_version_present', 'provider_blocked'].includes(state)) return false
+    if (softwareStateFilter === 'vulnerable' && Number(exposure.open || 0) < 1) return false
+    if (softwareStateFilter === 'unmapped' && state !== 'unmapped') return false
+    if (softwareStateFilter === 'current' && state !== 'current') return false
+    if (softwareProviderFilter !== 'all' && provider !== softwareProviderFilter) return false
+    if (softwareSourceFilter !== 'all' && source.type !== softwareSourceFilter) return false
+    if (softwareHealthFilter !== 'all' && source.health !== softwareHealthFilter) return false
+    if (softwareQualificationFilter !== 'all' && qualification !== softwareQualificationFilter) return false
+    if (!softwareQuery) return true
+    const searchable = [
+      application.name,
+      application.publisher,
+      application.catalogue?.canonicalName,
+      application.catalogue?.packageId,
+      application.catalogue?.provider,
+      application.catalogue?.targetVersion,
+      application.catalogue?.sourceKey,
+      application.catalogue?.sourceType,
+      application.catalogue?.registry,
+      application.catalogue?.trustState,
+      qualification,
+      source.health,
+      ...(application.versions || []).map((item) => item.version),
+      state,
+    ].filter(Boolean).join(' ').toLowerCase()
+    return searchable.includes(softwareQuery)
+  })
+  const softwarePageCount = Math.max(1, Math.ceil(filteredApplications.length / softwarePageSize))
+  const safeSoftwarePage = Math.min(softwarePage, softwarePageCount)
+  const pagedApplications = filteredApplications.slice((safeSoftwarePage - 1) * softwarePageSize, safeSoftwarePage * softwarePageSize)
+
+  useEffect(() => {
+    setSoftwarePage(1)
+  }, [softwareSearch, softwareStateFilter, softwareProviderFilter, softwareSourceFilter, softwareHealthFilter, softwareQualificationFilter, softwarePageSize])
+
+  useEffect(() => {
+    if (softwarePage > softwarePageCount) setSoftwarePage(softwarePageCount)
+  }, [softwarePage, softwarePageCount])
 
   async function saveMapping(form) {
     setSaving(true)
@@ -596,6 +761,42 @@ export function RmmPatching({ devices = [] }) {
       setError(requestError?.message || 'Unable to start software installation.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function previewBulkSoftwarePatch() {
+    if (!bulkPatchDeviceId) return
+    if (bulkPatchMode === 'selected_catalogue' && !bulkPatchSelectedIds.length) {
+      setError('Select at least one application to preview.')
+      return
+    }
+    setBulkPatchBusy(true)
+    setError('')
+    try {
+      const preview = await planSoftwarePatches(bulkPatchDeviceId, bulkPatchSelectedIds, bulkPatchMode)
+      setBulkPatchPreview(preview)
+    } catch (requestError) {
+      setBulkPatchPreview(requestError?.data || null)
+      setError(requestError?.message || 'Unable to preview software patches.')
+    } finally {
+      setBulkPatchBusy(false)
+    }
+  }
+
+  async function executeBulkSoftwarePatch() {
+    if (!bulkPatchDeviceId || !bulkPatchPreview?.eligibleCount || !bulkPatchCapabilityReady) return
+    setBulkPatchBusy(true)
+    setError('')
+    try {
+      const result = await deploySoftwarePatches(bulkPatchDeviceId, bulkPatchSelectedIds, bulkPatchMode)
+      setBundle(result.bundle)
+      setBulkPatchPreview(null)
+      setBulkPatchSelected([])
+    } catch (requestError) {
+      setBulkPatchPreview(requestError?.data || bulkPatchPreview)
+      setError(requestError?.message || 'Unable to start bulk software patching.')
+    } finally {
+      setBulkPatchBusy(false)
     }
   }
 
@@ -728,6 +929,7 @@ export function RmmPatching({ devices = [] }) {
     <nav className="rmm-patch-tabs">
       {[
         ['software', 'Software', exposedApps.length],
+        ['winget', 'WinGet Repository', wingetRepository.total || 0],
         ['vendors', 'Vendors', vendorSources.length + tenantVendorSources.length],
         ['vulnerabilities', 'Vulnerabilities', bundle?.vulnerabilities?.kev || 0],
         ['windows', 'Windows Update', windowsPending],
@@ -737,6 +939,7 @@ export function RmmPatching({ devices = [] }) {
 
     {tab === 'software' && <section className="rmm-patch-panel">
       <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Software patch catalogue</span><h2>Patchability by application</h2><p>{mappedApps.length} mapped application{mappedApps.length === 1 ? '' : 's'} · {applications.length - mappedApps.length} awaiting mapping · {catalogueCandidates.length} automatically discovered package{catalogueCandidates.length === 1 ? '' : 's'} · {overview.qualifiedCatalogue || 0} qualified · {overview.candidateCatalogue || 0} deployment candidates.</p></div></div>
+      <div className="rmm-vulnerability-coverage"><div><ShieldCheck size={17} /><span><strong>Catalogue vulnerability identity validation</strong><small>{vulnerabilityCatalogue.covered ?? 0} of {vulnerabilityCatalogue.total ?? catalogue.length} catalogue applications have completed source validation. NVD CPE and exact OSV identities are checked independently; endpoint exposures are still created only when that software/version is actually installed.</small></span></div><div className="stats"><span><small>NVD mapped</small><strong>{vulnerabilityCatalogue.nvd ?? 0}</strong></span><span><small>OSV mapped</small><strong>{vulnerabilityCatalogue.osv ?? 0}</strong></span><span><small>Validated</small><strong>{vulnerabilityCatalogue.covered ?? 0}</strong></span><span><small>Unchecked</small><strong>{vulnerabilityCatalogue.unchecked ?? 0}</strong></span><span><small>Mapping to validate</small><strong>{vulnerabilityCatalogue.validationPending ?? 0}</strong></span><span><small>Needs identity</small><strong>{vulnerabilityCatalogue.needsIdentity ?? 0}</strong></span><span><small>Source pending</small><strong>{vulnerabilityCatalogue.sourcePending ?? 0}</strong></span></div></div>
       <div className="rmm-catalogue-install-card">
         <div className="intro"><PackageCheck size={18} /><div><strong>Install from catalogue</strong><span>Install approved catalogue software on an online managed device. Existing installations stay in the normal Patch workflow.</span></div></div>
         <div className="controls">
@@ -759,21 +962,33 @@ export function RmmPatching({ devices = [] }) {
         {selectedInstallDevice && !selectedInstallCapabilityReady && <small className="capability-note">Catalogue installation requires PatchHost 0.2.5 or newer. {selectedInstallPatchHost ? 'This device currently reports ' + selectedInstallPatchHost + '.' : 'This device has not reported a compatible PatchHost version yet.'}</small>}
         {catalogueInstallDeviceId && !installableCatalogue.length && <small className="capability-note">No installable catalogue applications remain for this device.</small>}
       </div>
+      <div className="rmm-bulk-patch-card">
+        <div className="intro"><ShieldCheck size={18} /><div><strong>Bulk application patching</strong><span>Preview an endpoint-specific plan before anything is queued. Choose selected catalogue applications, every eligible Hi5Central catalogue update, or every WinGet-discovered update.</span></div></div>
+        <div className="controls">
+          <label>Device<select value={bulkPatchDeviceId} onChange={(event) => setBulkPatchDeviceId(event.target.value)}><option value="">Select online device</option>{onlineInstallDevices.map((device) => <option key={device.agentDeviceId} value={device.agentDeviceId}>{device.name}</option>)}</select></label>
+          <label>Patch mode<select value={bulkPatchMode} onChange={(event) => setBulkPatchMode(event.target.value)}><option value="selected_catalogue">Selected catalogue applications</option><option value="all_catalogue">All Hi5Central catalogue updates ({bulkCatalogueUpdateCount})</option><option value="all_winget">All WinGet updates ({bulkWingetUpdateCount})</option></select></label>
+          <button disabled={bulkPatchBusy || !bulkPatchDeviceId || (bulkPatchMode === 'selected_catalogue' && !bulkPatchSelectedIds.length)} onClick={previewBulkSoftwarePatch} type="button"><Search size={14} /> Preview plan</button>
+        </div>
+        {bulkPatchMode === 'selected_catalogue' && <div className="rmm-bulk-patch-selection"><div className="selection-head"><strong>{bulkPatchDeviceUpdates.length} updates detected</strong><button disabled={!bulkPatchDeviceUpdates.length} onClick={() => setBulkPatchSelected(bulkPatchSelectedIds.length === bulkPatchDeviceUpdates.length ? [] : bulkPatchDeviceUpdates.map((item) => item.catalogue.id))} type="button">{bulkPatchSelectedIds.length === bulkPatchDeviceUpdates.length && bulkPatchDeviceUpdates.length ? 'Clear all' : 'Select all'}</button></div>{bulkPatchDeviceUpdates.map((item) => <label key={item.catalogue.id}><input checked={bulkPatchSelectedIds.includes(item.catalogue.id)} onChange={(event) => setBulkPatchSelected((current) => event.target.checked ? [...new Set([...current, item.catalogue.id])] : current.filter((id) => id !== item.catalogue.id))} type="checkbox" /><span><strong>{item.name}</strong><small>{item.installedVersion || 'Unknown'} → {item.targetVersion || 'Unknown'} · {item.catalogue.provider}</small></span></label>)}</div>}
+        {bulkPatchDevice && !bulkPatchCapabilityReady && <small className="capability-note">This endpoint is online but has not reported verified bulk software-patch capability yet. Upgrade the Agent before executing a bulk plan.</small>}
+        {bulkPatchPreview && <div className="rmm-bulk-patch-preview"><div className="stats"><span><small>Eligible</small><strong>{bulkPatchPreview.eligibleCount || 0}</strong></span><span><small>Ignored</small><strong>{bulkPatchPreview.ignoredCount || 0}</strong></span><span><small>Skipped</small><strong>{bulkPatchPreview.rejectedCount || 0}</strong></span></div><div className="items">{(bulkPatchPreview.items || []).map((item) => <span key={item.catalogueId}><strong>{item.applicationName}</strong><small>{item.installedVersion} → {item.targetVersion} · {item.provider}</small></span>)}</div><button className="rmm-primary" disabled={bulkPatchBusy || !bulkPatchCapabilityReady || !bulkPatchPreview.eligibleCount} onClick={executeBulkSoftwarePatch} type="button"><PackageCheck size={14} /> Patch {bulkPatchPreview.eligibleCount || 0} application{bulkPatchPreview.eligibleCount === 1 ? '' : 's'}</button></div>}
+      </div>
+      <div className="rmm-software-toolbar">
+        <label className="search"><Search size={14} /><input value={softwareSearch} onChange={(event) => setSoftwareSearch(event.target.value)} placeholder="Search application, publisher, package ID, provider or version…" /></label>
+        <select aria-label="Software state filter" value={softwareStateFilter} onChange={(event) => setSoftwareStateFilter(event.target.value)}><option value="all">All states</option><option value="updates">Updates / attention</option><option value="vulnerable">Vulnerable</option><option value="current">Current</option><option value="unmapped">Unmapped</option></select>
+        <select aria-label="Software provider filter" value={softwareProviderFilter} onChange={(event) => setSoftwareProviderFilter(event.target.value)}><option value="all">All providers</option><option value="winget">WinGet</option><option value="managed">Hi5Central managed</option><option value="vendor">Vendor</option><option value="unmapped">Unmapped</option></select>
+        <select aria-label="Software source filter" value={softwareSourceFilter} onChange={(event) => setSoftwareSourceFilter(event.target.value)}><option value="all">All sources</option>{softwareSourceOptions.map((source) => <option key={source} value={source}>{source.replaceAll('_', ' ')}</option>)}</select>
+        <select aria-label="Software source health filter" value={softwareHealthFilter} onChange={(event) => setSoftwareHealthFilter(event.target.value)}><option value="all">All source health</option><option value="healthy">Healthy</option><option value="attention">Needs attention</option><option value="stale">Stale</option><option value="pending">Pending</option><option value="disabled">Disabled</option><option value="endpoint">Endpoint discovery</option><option value="unmonitored">Unmonitored</option></select>
+        <select aria-label="Software qualification filter" value={softwareQualificationFilter} onChange={(event) => setSoftwareQualificationFilter(event.target.value)}><option value="all">All qualification</option><option value="qualified">Qualified</option><option value="deployment_candidate">Deployment candidate</option><option value="intelligence_only">Intelligence only</option><option value="blocked">Blocked</option><option value="unmapped">Unmapped</option></select>
+        <select aria-label="Rows per page" value={softwarePageSize} onChange={(event) => setSoftwarePageSize(Number(event.target.value))}><option value={10}>10 / page</option><option value={25}>25 / page</option><option value={50}>50 / page</option><option value={100}>100 / page</option></select>
+        <span className="summary">{filteredApplications.length} of {applications.length} applications</span>
+      </div>
       <div className="rmm-patch-table software">
         <div className="head"><span>Application</span><span>Installed</span><span>Target</span><span>Patch state</span><span>Vulnerabilities</span><span>Provider</span><span /></div>
-        {applications.map((application) => {
-          const status = application.updateAvailable
-            ? 'update_available'
-            : application.providerBlocked
-              ? 'provider_blocked'
-              : application.olderVersionPresent
-                ? 'older_version_present'
-                : application.catalogue?.targetVersion
-                ? 'current'
-                : application.catalogue
-                  ? 'detection_pending'
-                  : 'unmapped'
+        {pagedApplications.map((application) => {
+          const status = applicationPatchState(application)
           const exposure = exposureForApplication(application)
+          const sourceState = applicationSourceState(application)
           return <div className="row" key={application.key}>
             <span><strong>{application.name}</strong><small>{application.publisher || 'Publisher not reported'} · {application.deviceCount} device{application.deviceCount === 1 ? '' : 's'}</small></span>
             <span className="versions"><strong title={application.versions?.map((version) => version.version).join(' · ') || ''}>{application.versions?.map((version) => version.version).join(' · ') || 'Not reported'}</strong>{application.installs > application.deviceCount && <small>{application.installs} registrations across {application.deviceCount} device{application.deviceCount === 1 ? '' : 's'}</small>}</span>
@@ -784,21 +999,25 @@ export function RmmPatching({ devices = [] }) {
               : !application.catalogue
                 ? <StatusPill tone="neutral">Unmapped</StatusPill>
                 : exposure.checked > 0 && exposure.pending === 0
-                  ? <StatusPill tone="healthy">None known</StatusPill>
-                  : <StatusPill tone="running">Checking NVD</StatusPill>}
+                  ? <StatusPill tone="healthy">Covered · none known</StatusPill>
+                  : exposure.unresolvedIdentity > 0
+                    ? <StatusPill tone="warning">Coverage unresolved</StatusPill>
+                    : <StatusPill tone="running">Coverage pending</StatusPill>}
               <small>{[
                 exposure.kev > 0 ? exposure.kev + ' CISA KEV' : exposure.maxCvss > 0 ? 'Max CVSS ' + exposure.maxCvss : '',
                 application.catalogue && exposure.pending > 0
                   ? exposure.checked > 0
                     ? exposure.checked + ' checked · ' + exposure.pending + ' pending'
-                    : 'Installed version awaiting NVD lookup'
+                    : exposure.unresolvedIdentity > 0
+                      ? 'No validated vulnerability identity yet; zero is not asserted'
+                      : 'Installed version awaiting vulnerability lookup'
                   : application.catalogue && exposure.checked > 0
-                    ? 'NVD checked for installed version'
+                    ? 'Installed version assessed; zero means no applicable known vulnerabilities'
                     : '',
               ].filter(Boolean).join(' · ')}</small>
             </span>
             <span><strong>{application.catalogue?.provider || 'Unmapped'}</strong>{application.catalogue
-              ? <><StatusPill tone={qualificationTone(application.catalogue.qualificationState)}>{qualificationLabel(application.catalogue.qualificationState)}</StatusPill><small>{application.catalogue.builtIn ? 'Hi5Central catalogue' : 'Tenant mapping'}{application.catalogue.qualificationVersion ? ' · tested ' + application.catalogue.qualificationVersion : ''}</small></>
+              ? <><StatusPill tone={qualificationTone(application.catalogue.qualificationState)}>{qualificationLabel(application.catalogue.qualificationState)}</StatusPill><small>{application.catalogue.builtIn ? 'Hi5Central catalogue' : 'Tenant mapping'}{application.catalogue.qualificationVersion ? ' · tested ' + application.catalogue.qualificationVersion : ''}</small><small>{sourceState.type.replaceAll('_', ' ')} · source {sourceState.health.replaceAll('_', ' ')}</small></>
               : <small>Needs mapping</small>}</span>
             <span className="actions">{application.catalogue ? <>
               <button disabled={saving || application.updateAvailable < 1} onClick={() => setPatchApp(application)} type="button"><PackageCheck size={14} /> Patch</button>
@@ -807,7 +1026,9 @@ export function RmmPatching({ devices = [] }) {
           </div>
         })}
       </div>
+      {!!filteredApplications.length && <div className="rmm-software-pagination"><span>Showing {(safeSoftwarePage - 1) * softwarePageSize + 1}–{Math.min(safeSoftwarePage * softwarePageSize, filteredApplications.length)} of {filteredApplications.length}</span><div><button disabled={safeSoftwarePage <= 1} onClick={() => setSoftwarePage((page) => Math.max(1, page - 1))} type="button"><ChevronLeft size={14} /> Previous</button><strong>Page {safeSoftwarePage} of {softwarePageCount}</strong><button disabled={safeSoftwarePage >= softwarePageCount} onClick={() => setSoftwarePage((page) => Math.min(softwarePageCount, page + 1))} type="button">Next <ChevronRight size={14} /></button></div></div>}
       {!applications.length && <div className="rmm-empty"><Box size={24} /><strong>{loading ? 'Loading software inventory…' : 'No software inventory'}</strong><span>Patchability appears after an Agent reports installed applications.</span></div>}
+      {!!applications.length && !filteredApplications.length && <div className="rmm-empty compact"><Search size={22} /><strong>No matching software</strong><span>Clear the search or filters to see the full software inventory.</span></div>}
       {!!catalogueCandidates.length && <div className="rmm-patch-candidate-section">
         <div><span className="rmm-eyebrow">PatchHost discovery</span><h3>Automatically learned package mappings</h3><p>These package IDs came from WinGet matching on managed endpoints. They are catalogue candidates, not manually entered records.</p></div>
         <div className="rmm-patch-table candidates">
@@ -836,6 +1057,27 @@ export function RmmPatching({ devices = [] }) {
           </div>)}
         </div>
       </div>}
+    </section>}
+
+    {tab === 'winget' && <section className="rmm-patch-panel">
+      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Microsoft WinGet source</span><h2>Full WinGet repository</h2><p>{wingetLoading ? 'Refreshing repository index…' : (wingetRepository.total || 0) + ' packages available from the current WinGet community source index.'} This repository is searchable independently from the curated Hi5Central catalogue.</p></div></div>
+      <div className="rmm-patch-security-banner inline"><PackageCheck size={18} /><div><strong>Repository ≠ automatic trust</strong><span>WinGet provides broad Windows package coverage. Hi5Central still keeps curated vendor sources and vulnerability identities separate, and only creates vulnerability exposures for software actually detected on an endpoint.</span></div><StatusPill tone="healthy">Live index</StatusPill></div>
+      <div className="rmm-winget-toolbar">
+        <label><Search size={14} /><input value={wingetQuery} onChange={(event) => setWingetQuery(event.target.value)} placeholder="Search all WinGet packages, IDs, monikers or publishers…" /></label>
+        <select value={wingetPageSize} onChange={(event) => setWingetPageSize(Number(event.target.value))}><option value={25}>25 / page</option><option value={50}>50 / page</option><option value={100}>100 / page</option></select>
+        <span>{wingetLoading ? 'Searching…' : (wingetRepository.total || 0) + ' matches'}</span>
+      </div>
+      <div className="rmm-patch-table winget-repository">
+        <div className="head"><span>Application</span><span>Package ID</span><span>Latest version</span><span>Publisher</span></div>
+        {(wingetRepository.packages || []).map((item) => <div className="row" key={item.id}>
+          <span><strong>{item.name || item.id}</strong><small>{item.moniker || 'No moniker'}</small></span>
+          <span><strong>{item.id}</strong><small>WinGet community source</small></span>
+          <span><strong>{item.version || 'Unknown'}</strong></span>
+          <span><strong>{item.publishers?.[0] || 'Not reported'}</strong><small>{item.publishers?.slice(1).join(' · ')}</small></span>
+        </div>)}
+      </div>
+      {!wingetLoading && !(wingetRepository.packages || []).length && <div className="rmm-empty compact"><Search size={22} /><strong>No WinGet packages matched</strong><span>Try another application name, package ID or publisher.</span></div>}
+      <div className="rmm-software-pagination"><span>Page {wingetRepository.page || wingetPage} of {wingetRepository.pages || 1}</span><div><button disabled={wingetLoading || Number(wingetRepository.page || wingetPage) <= 1} onClick={() => setWingetPage((page) => Math.max(1, page - 1))} type="button"><ChevronLeft size={14} /> Previous</button><strong>{wingetRepository.total || 0} packages</strong><button disabled={wingetLoading || Number(wingetRepository.page || wingetPage) >= Number(wingetRepository.pages || 1)} onClick={() => setWingetPage((page) => Math.min(Number(wingetRepository.pages || 1), page + 1))} type="button">Next <ChevronRight size={14} /></button></div></div>
     </section>}
 
     {tab === 'vendors' && <section className="rmm-patch-panel">
@@ -871,6 +1113,10 @@ export function RmmPatching({ devices = [] }) {
         </div>
         {!tenantVendorSources.length && <div className="rmm-empty compact"><GitBranch size={22} /><strong>No self-service sources yet</strong><span>Add a public GitHub Releases or vendor JSON source to test vendor-first version intelligence without changing the global Hi5Central catalogue.</span></div>}
       </div>
+      <div className="rmm-vendor-health-summary"><div><small>Sources</small><strong>{vendorHealth.total ?? vendorSources.length}</strong></div><div><small>Healthy</small><strong>{vendorHealth.healthy ?? 0}</strong></div><div><small>Needs attention</small><strong>{Number(vendorHealth.attention || 0) + Number(vendorHealth.stale || 0)}</strong></div><div><small>Unhealthy assets</small><strong>{vendorHealth.unhealthy_assets ?? 0}</strong></div><div><small>Awaiting asset check</small><strong>{vendorHealth.unknown_assets ?? 0}</strong></div></div>
+      <div className="rmm-patch-security-banner inline"><RefreshCw size={18} /><div><strong>Automatic VPS qualification</strong><span>Hi5Central continuously discovers releases, checks deployment transports, probes vendor assets and promotes only artifacts that satisfy the trust gates. Items that fail cryptographic, signer or installer-technology checks stay non-deployable and appear in Manual review below.</span></div><StatusPill tone={vendorReview.length ? 'warning' : 'healthy'}>{vendorReview.length ? vendorReview.length + ' to review' : 'No failures'}</StatusPill></div>
+      {!!vendorReview.length && <div className="rmm-patch-deployment-history"><div><span className="rmm-eyebrow">Manual review</span><h3>Automatic qualification failures</h3><p>These releases remain intelligence-only. Review the evidence before changing a source or trust rule; Hi5Central will not deploy them automatically.</p></div><div className="rmm-vendor-health-summary"><div><small>Rejected</small><strong>{vendorReviewCounts.rejected || 0}</strong></div><div><small>Signer review</small><strong>{vendorReviewCounts.signer_review_required || 0}</strong></div><div><small>Installer review</small><strong>{vendorReviewCounts.installer_review_required || 0}</strong></div></div><div className="rmm-patch-table deployments"><div className="head"><span>Application</span><span>Version</span><span>Source</span><span>Installer</span><span>Review state</span></div>{vendorReview.map((item) => <div className="row" key={'review:' + item.source_key + ':' + item.provider_package_id}><span><strong>{item.canonical_name}</strong><small>{item.publisher || item.provider_package_id}</small></span><span><strong>{item.version}</strong><small>{item.channel} · {item.architecture}</small></span><span><strong>{item.source_key.replaceAll('_', ' ')}</strong><small>{item.release_date ? new Date(item.release_date).toLocaleDateString() : 'Current release'}</small></span><span><strong>{item.installer_type ? item.installer_type.toUpperCase() : 'Unknown'}</strong><small>{item.installer_sha256 ? 'SHA-256 recorded' : 'No published SHA-256'}</small></span><span><StatusPill tone={item.trust_state === 'rejected' ? 'critical' : 'warning'}>{item.trust_state.replaceAll('_', ' ')}</StatusPill><small>{item.trust_evidence?.reason || item.asset_health_error || 'Trust evidence requires review'}</small></span></div>)}</div></div>}
+      {!!vendorSourceHealth.length && <div className="rmm-patch-table source-health"><div className="head"><span>Source health</span><span>State</span><span>Releases</span><span>Assets</span><span>Last success</span></div>{vendorSourceHealth.map((item) => <div className="row" key={item.source_key}><span><strong>{item.display_name}</strong><small>{item.records_seen} records observed</small></span><span><StatusPill tone={item.state === 'healthy' ? 'healthy' : item.state === 'pending' ? 'neutral' : 'warning'}>{item.state}</StatusPill><small>{item.last_error || (item.stale ? 'Feed is older than its freshness window' : '')}</small></span><span><strong>{item.release_count}</strong></span><span><strong>{item.healthy_assets} healthy</strong><small>{item.unhealthy_assets} unhealthy · {item.unknown_assets} awaiting check</small></span><span><strong>{item.last_success_at ? new Date(item.last_success_at).toLocaleString() : 'Pending'}</strong></span></div>)}</div>}
       <div className="rmm-patch-vendor-section standalone">
         <div className="rmm-patch-vendor-grid">
           {vendorSources.map((source) => {

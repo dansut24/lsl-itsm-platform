@@ -65,7 +65,7 @@ async function normalizeEntry(raw = {}) {
   if (!displayName || !canonicalName) throw new Error(key + ': displayName and canonicalName are required.')
   const publisher = clean(raw.publisher).slice(0, 200)
   const sourceType = clean(raw.sourceType)
-  if (!['github_releases', 'gitlab_releases', 'vendor_json', 'vendor_text', 'hashicorp_releases', 'python_releases', 'adoptium', 'static_release'].includes(sourceType)) {
+  if (!['github_releases', 'gitlab_releases', 'vendor_json', 'vendor_text', 'hashicorp_releases', 'python_releases', 'adoptium', 'static_release', 'package_registry'].includes(sourceType)) {
     throw new Error(key + ': unsupported curated sourceType.')
   }
   const deploymentMode = ['vendor_direct', 'winget_preferred', 'intelligence_only'].includes(clean(raw.deploymentMode))
@@ -128,7 +128,14 @@ async function normalizeEntry(raw = {}) {
   const priority = Math.max(1, Math.min(1000, Number(raw.priority || 700) || 700))
   const pollMinutes = Math.max(5, Math.min(10080, Number(raw.pollMinutes || 60) || 60))
   const channel = clean(raw.channel || 'stable').slice(0, 80)
-  const platform = clean(raw.platform || 'windows').slice(0, 40)
+  const requestedPlatform = clean(raw.platform || 'windows').toLowerCase().slice(0, 40)
+  const platform = requestedPlatform === 'any' ? 'cross_platform' : requestedPlatform
+  if (!['windows', 'macos', 'linux', 'cross_platform'].includes(platform)) {
+    throw new Error(key + ': platform must be windows, macos, linux or cross_platform.')
+  }
+  if (platform !== 'windows' && deploymentMode !== 'intelligence_only') {
+    throw new Error(key + ': non-Windows catalogue entries must remain intelligence_only until an OS-specific deployment executor is implemented.')
+  }
   const architecture = clean(raw.architecture || 'x64').slice(0, 40)
   const nvdVendor = clean(raw.nvdVendor).slice(0, 160)
   const nvdProduct = clean(raw.nvdProduct).slice(0, 160)
@@ -154,8 +161,20 @@ async function normalizeEntry(raw = {}) {
   }
 
   const adapter = clean(raw.adapter).slice(0, 80)
-  if (sourceType === 'vendor_text' && !['signal_yaml','vlc_directory','jenkins_jsonp'].includes(adapter)) {
+  if (sourceType === 'vendor_text' && !['signal_yaml','vlc_directory','jenkins_jsonp','element_windows_index','grafana_windows_download','nextcloud_windows_index','qgis_windows_download','gimp_windows_index','wazuh_windows_packages'].includes(adapter)) {
     throw new Error(key + ': vendor_text requires a supported adapter.')
+  }
+  const registry = clean(raw.registry).toLowerCase().slice(0, 40)
+  const registryPackage = clean(raw.registryPackage || raw.packageName).slice(0, 300)
+  const registryGroup = clean(raw.registryGroup).slice(0, 240)
+  const registryArtifact = clean(raw.registryArtifact).slice(0, 240)
+  const osvEcosystem = clean(raw.osvEcosystem).slice(0, 80)
+  const osvPackage = clean(raw.osvPackage || registryPackage).slice(0, 300)
+  if (sourceType === 'package_registry') {
+    const supportedRegistries = ['npm','pypi','crates','rubygems','nuget','packagist','snapcraft','flathub','apple','go','maven','homebrew','chocolatey']
+    if (!supportedRegistries.includes(registry)) throw new Error(key + ': unsupported package registry.')
+    if (!registryPackage && registry !== 'maven') throw new Error(key + ': package_registry requires registryPackage.')
+    if (registry === 'maven' && (!registryGroup || !registryArtifact)) throw new Error(key + ': Maven sources require registryGroup and registryArtifact.')
   }
   const sourceMetadata = {
     curated: true,
@@ -171,6 +190,12 @@ async function normalizeEntry(raw = {}) {
     staticReleaseUrl,
     nvdVendor,
     nvdProduct,
+    registry,
+    registryPackage,
+    registryGroup,
+    registryArtifact,
+    osvEcosystem,
+    osvPackage,
     versionNormalization,
   }
   const bindingMetadata = {
@@ -199,6 +224,12 @@ async function normalizeEntry(raw = {}) {
     staticReleaseUrl,
     nvdVendor,
     nvdProduct,
+    registry,
+    registryPackage,
+    registryGroup,
+    registryArtifact,
+    osvEcosystem,
+    osvPackage,
     versionNormalization,
   }
 
@@ -227,6 +258,10 @@ async function normalizeEntry(raw = {}) {
     expectedSigner,
     nvdVendor,
     nvdProduct,
+    osvEcosystem,
+    osvPackage,
+    registry,
+    registryPackage,
     versionNormalization,
     verification: bindingMetadata.verificationConfig,
     execution: { installArguments },
@@ -340,6 +375,10 @@ export async function importCuratedSoftwareCatalogue(entries = [], { dryRun = fa
             wingetPackageId: item.wingetPackageId,
             nvdVendor: item.nvdVendor,
             nvdProduct: item.nvdProduct,
+            osvEcosystem: item.osvEcosystem,
+            osvPackage: item.osvPackage,
+            registry: item.registry,
+            registryPackage: item.registryPackage,
             versionNormalization: item.versionNormalization,
             qualificationStatePinned: item.qualificationStatePinned,
           }),
@@ -347,6 +386,43 @@ export async function importCuratedSoftwareCatalogue(entries = [], { dryRun = fa
           item.qualificationNotes,
         ],
       )
+      const catalogueIdentity = await client.query(
+        `UPDATE rmm_software_catalogue
+            SET cpe_vendor=$2,cpe_product=$3,osv_ecosystem=$4,osv_package_name=$5,updated_at=now()
+          WHERE tenant_id IS NULL AND catalogue_source='vendor' AND external_key=$1 AND status='active'
+          RETURNING id`,
+        [item.catalogueKey,item.nvdVendor,item.nvdProduct,item.osvEcosystem,item.osvPackage],
+      )
+      const catalogueId = catalogueIdentity.rows[0]?.id
+      if (catalogueId) {
+        await client.query(
+          `UPDATE rmm_software_vulnerability_identities
+              SET enabled=false,updated_at=now()
+            WHERE catalogue_id=$1 AND source IN ('nvd','osv')
+              AND metadata->>'origin'='curated_catalogue_import'`,
+          [catalogueId],
+        )
+        if (item.nvdVendor && item.nvdProduct) {
+          await client.query(
+            `INSERT INTO rmm_software_vulnerability_identities
+              (catalogue_id,source,vendor,product,cpe,ecosystem,package_name,confidence,enabled,metadata)
+             VALUES ($1,'nvd',$2,$3,'','','','curated',true,$4::jsonb)
+             ON CONFLICT (catalogue_id,source,vendor,product,cpe,ecosystem,package_name)
+             DO UPDATE SET confidence='curated',enabled=true,metadata=EXCLUDED.metadata,updated_at=now()`,
+            [catalogueId,item.nvdVendor,item.nvdProduct,JSON.stringify({ origin: 'curated_catalogue_import', sourceKey: item.sourceKey })],
+          )
+        }
+        if (item.osvEcosystem && item.osvPackage) {
+          await client.query(
+            `INSERT INTO rmm_software_vulnerability_identities
+              (catalogue_id,source,vendor,product,cpe,ecosystem,package_name,confidence,enabled,metadata)
+             VALUES ($1,'osv','','','',$2,$3,'curated',true,$4::jsonb)
+             ON CONFLICT (catalogue_id,source,vendor,product,cpe,ecosystem,package_name)
+             DO UPDATE SET confidence='curated',enabled=true,metadata=EXCLUDED.metadata,updated_at=now()`,
+            [catalogueId,item.osvEcosystem,item.osvPackage,JSON.stringify({ origin: 'curated_catalogue_import', sourceKey: item.sourceKey, registry: item.registry })],
+          )
+        }
+      }
       if (existed.rowCount) updated += 1
       else created += 1
     }

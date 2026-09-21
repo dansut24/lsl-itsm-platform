@@ -52,6 +52,7 @@ import {
 import { deploymentConfig } from '../../lib/deploymentConfig.js'
 import { resolveTenantSurface, rmmPath, rmmRouteFromLocation } from '../../lib/tenantSurface.js'
 import { loadRmmScope } from '../../lib/rmmScopeApi.js'
+import { deploySoftwarePatch, deploySoftwarePatches, loadRmmPatching, rejectDeviceSoftwarePatch, restoreDeviceSoftwarePatch } from '../../lib/rmmPatchingApi.js'
 import {
   RmmDeviceGroupsManagement,
   RmmDeviceInventory,
@@ -287,7 +288,10 @@ function AgentMaintenance({ device }) {
   const latestTargetsTarget = Boolean(target?.id && latest?.request_metadata?.release_id === target.id)
   const verified = Boolean(target?.installed)
   const running = latestTargetsTarget && ['queued', 'claimed'].includes(latest?.status)
-  const scheduled = latestTargetsTarget && latest?.status === 'completed' && !verified
+  const scheduledAt = latest?.completed_at || latest?.updated_at || latest?.created_at
+  const scheduledAgeMs = scheduledAt ? Date.now() - new Date(scheduledAt).getTime() : 0
+  const scheduled = latestTargetsTarget && latest?.status === 'completed' && !verified && scheduledAgeMs < 180000
+  const staleScheduled = latestTargetsTarget && latest?.status === 'completed' && !verified && scheduledAgeMs >= 180000
   const failed = latestTargetsTarget && ['failed', 'cancelled'].includes(latest?.status)
 
   async function upgrade() {
@@ -324,6 +328,7 @@ function AgentMaintenance({ device }) {
       </div>
       {target?.releaseNotes && <p>{target.releaseNotes}</p>}
       {scheduled && <div className="rmm-agent-maintenance-state running"><Clock3 size={14} /><span>Installer scheduled. Waiting for the Agent to restart and report PatchHost {target.patchHostVersion}.</span></div>}
+      {staleScheduled && <div className="rmm-agent-maintenance-state critical"><AlertTriangle size={14} /><span>The scheduled upgrade did not report the target Agent/PatchHost within 3 minutes. The device is still online, so you can retry the upgrade.</span></div>}
       {verified && <div className="rmm-agent-maintenance-state healthy"><CheckCircle2 size={14} /><span>PatchHost {info?.device?.patchHostVersion} is reporting. This release is verified on the endpoint.</span></div>}
       {failed && <div className="rmm-agent-maintenance-state critical"><AlertTriangle size={14} /><span>{latest?.error_message || 'The Agent upgrade preparation job failed.'}</span></div>}
       {error && <div className="rmm-agent-maintenance-state critical"><AlertTriangle size={14} /><span>{error}</span></div>}
@@ -539,25 +544,62 @@ function DeviceSoftware({ device }) {
 }
 
 function DevicePatching({ device }) {
-  const updates = device.patches || []
-  const lastScan = device.inventory?.windows_updates?.last_scan_utc
-  return (
-    <>
-      <div className="rmm-device-patch-summary">
-        <div><span><ShieldCheck size={18} /></span><div><strong>{device.pendingPatches == null ? 'Not reported' : device.pendingPatches}</strong><small>Pending updates</small></div></div>
-        <div><span><Download size={18} /></span><div><strong>{updates.filter((patch) => patch.downloaded).length}</strong><small>Downloaded</small></div></div>
-        <div><span><Clock3 size={18} /></span><div><strong>{lastScan ? new Date(lastScan).toLocaleString() : 'Not reported'}</strong><small>Last Windows Update scan</small></div></div>
-      </div>
-      <section className="rmm-table-card">
-        <div className="rmm-device-section-heading"><div><span className="rmm-eyebrow">Live inventory</span><h2>Pending Windows updates</h2><p>Reported directly by the Windows Update Agent on this endpoint.</p></div></div>
-        <div className="rmm-table rmm-device-patch-table">
-          <div className="rmm-table-head"><span>Update</span><span>Categories</span><span>Severity</span><span>Downloaded</span><span>Mandatory</span><span>Reboot</span></div>
-          {updates.map((patch, index) => <div className="rmm-table-row" key={(patch.kb || []).join('-') || patch.title || index}><span><strong>{patch.title || 'Windows update'}</strong><small>{(patch.kb || []).map((kb) => 'KB' + kb).join(', ') || 'No KB reference'}</small></span><span><strong>{(patch.categories || []).join(', ') || 'Not classified'}</strong></span><span><StatusPill tone={healthClass(patch.severity)}>{patch.severity || 'Not rated'}</StatusPill></span><span><strong>{patch.downloaded ? 'Yes' : 'No'}</strong></span><span><strong>{patch.mandatory ? 'Yes' : 'No'}</strong></span><span><strong>{patch.reboot_required ? 'Required' : 'No'}</strong></span></div>)}
-        </div>
-        {!updates.length && <div className="rmm-empty"><ShieldCheck size={24} /><strong>{device.pendingPatches === 0 ? 'No pending updates' : 'No update inventory reported'}</strong><span>{device.pendingPatches === 0 ? 'Windows Update currently reports this device as clear.' : 'Run or wait for an Agent inventory scan to populate this view.'}</span></div>}
-      </section>
-    </>
-  )
+  const windowsUpdates = device.patches || []
+  const online = deviceIsOnline(device)
+  const [bundle, setBundle] = useState(null)
+  const [selected, setSelected] = useState([])
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  const refresh = () => loadRmmPatching().then(setBundle).catch((error) => setMessage(error?.message || 'Patch state could not be loaded.'))
+  useEffect(() => { refresh() }, [device.agentDeviceId])
+  const rejections = (bundle?.devicePatchRejections || []).filter((row) => row.agent_device_id === device.agentDeviceId)
+  const rejectionFor = (row) => rejections.find((item) => item.catalogue_id === row.catalogue?.id && item.target_version === (row.targetVersion || row.availableVersion))
+  const actionableUpdate = (row) => row.catalogue?.installable === true
+  const appUpdates = (bundle?.deviceSoftware || []).filter((row) => row.agentDeviceId === device.agentDeviceId && row.patchStatus === 'update_available' && actionableUpdate(row) && !rejectionFor(row))
+  const ignoredUpdates = (bundle?.deviceSoftware || []).filter((row) => row.agentDeviceId === device.agentDeviceId && row.patchStatus === 'update_available' && actionableUpdate(row) && rejectionFor(row))
+  const exposures = bundle?.vulnerabilityExposureRows || []
+  async function patch(rows) {
+    if (!online || busy || !rows.length) return
+    setBusy(true); setMessage('')
+    try {
+      if (rows.length === 1) await deploySoftwarePatch(device.agentDeviceId, rows[0].catalogue.id)
+      else if (rows.length === appUpdates.length) await deploySoftwarePatches(device.agentDeviceId, [], 'all_catalogue')
+      else await deploySoftwarePatches(device.agentDeviceId, rows.map((row) => row.catalogue.id))
+      setSelected([])
+      setMessage(`${rows.length} update${rows.length === 1 ? '' : 's'} dispatched. Follow progress in Jobs and Activity.`)
+    } catch (error) {
+      const rejected = Array.isArray(error?.data?.rejected) ? error.data.rejected : []
+      setMessage(rejected.length ? `Nothing was queued. ${rejected[0].error}` : (error?.message || 'The patch request could not be dispatched.'))
+    } finally {
+      setBusy(false); refresh()
+    }
+  }
+  async function ignorePatch(row) {
+    if (!row.catalogue?.id) return
+    setBusy(true); setMessage('')
+    try { await rejectDeviceSoftwarePatch(device.agentDeviceId, row.catalogue.id, row.targetVersion || row.availableVersion, 'Ignored from Device Details'); setMessage('Update ignored for this device and exact target version.') }
+    catch (error) { setMessage(error?.message || 'Update could not be ignored.') }
+    finally { setBusy(false); refresh() }
+  }
+  async function restorePatch(row) {
+    const rejection = rejectionFor(row); if (!rejection) return
+    setBusy(true); setMessage('')
+    try { await restoreDeviceSoftwarePatch(rejection.id); setMessage('Ignored update restored for this device.') }
+    catch (error) { setMessage(error?.message || 'Update could not be restored.') }
+    finally { setBusy(false); refresh() }
+  }
+  const selectedRows = appUpdates.filter((row) => selected.includes(row.catalogue?.id))
+  return <>
+    <div className="rmm-device-patch-summary"><div><span><PackageCheck size={18} /></span><div><strong>{appUpdates.length}</strong><small>Application updates</small></div></div><div><span><ShieldCheck size={18} /></span><div><strong>{device.pendingPatches ?? 'Not reported'}</strong><small>Windows updates</small></div></div><div><span><Clock3 size={18} /></span><div><strong>{device.inventory?.windows_updates?.last_scan_utc ? new Date(device.inventory.windows_updates.last_scan_utc).toLocaleString() : 'Not reported'}</strong><small>Last scan</small></div></div></div>
+    <section className="rmm-table-card"><div className="rmm-device-section-heading"><div><span className="rmm-eyebrow">Device-scoped patching</span><h2>Application updates</h2><p>Vendor catalogue and WinGet discovery combined for this endpoint.</p></div><div className="rmm-row-actions"><button disabled={!online || busy || !selectedRows.length} onClick={() => patch(selectedRows)} type="button">Patch selected ({selectedRows.length})</button><button className="rmm-primary" disabled={!online || busy || !appUpdates.length} onClick={() => patch(appUpdates)} type="button">Patch all</button></div></div>
+    {!online && <div className="rmm-device-action-message"><WifiOff size={14} /> Offline — update state is visible but execution is disabled and no job is queued.</div>}{message && <div className="rmm-device-action-message">{message}</div>}
+    <div className="rmm-table rmm-device-patch-table rmm-app-patch-table"><div className="rmm-table-head"><span>Select</span><span>Application</span><span>Version</span><span>Provider / trust</span><span>Vulnerabilities</span><span>Action</span></div>{appUpdates.map((row) => { const id = row.catalogue?.id; const vulns = exposures.filter((v) => v.agent_device_id === device.agentDeviceId && v.catalogue_id === id); const kev = vulns.some((v) => v.cisa_kev || v.cisaKev); return <div className="rmm-table-row" key={row.inventoryId + ':' + (id || row.applicationKey)}><span><input checked={selected.includes(id)} disabled={!online || !id} onChange={(event) => setSelected((current) => event.target.checked ? [...new Set([...current, id])] : current.filter((value) => value !== id))} type="checkbox" /></span><span><strong>{row.name}</strong><small>{row.publisher || row.catalogue?.publisher || 'Publisher not reported'}</small></span><span><strong>{row.installedVersion || '—'} → {row.targetVersion || row.availableVersion || '—'}</strong></span><span><strong>{row.provider || row.catalogue?.provider || 'catalogue'}</strong><small>{row.catalogue?.qualificationState || 'qualification pending'}</small></span><span><strong>{vulns.length ? `${vulns.length} linked CVEs` : 'No linked exposure'}</strong><small>{kev ? 'CISA KEV' : ''}</small></span><span><div className="rmm-row-actions"><button disabled={!online || busy || !id} onClick={() => patch([row])} type="button">Patch</button><button disabled={busy || !id} onClick={() => ignorePatch(row)} type="button">Ignore</button></div></span></div> })}</div>
+    {!appUpdates.length && <div className="rmm-empty"><PackageCheck size={24} /><strong>{bundle ? 'No application updates detected' : 'Loading application patch state…'}</strong><span>Only installed software with a verified update is offered here.</span></div>}
+    {ignoredUpdates.length > 0 && <div className="rmm-device-ignored-patches"><strong>Ignored on this device ({ignoredUpdates.length})</strong>{ignoredUpdates.map((row) => <div className="rmm-device-action-message" key={'ignored:' + row.catalogue?.id}><span>{row.name} · {row.targetVersion || row.availableVersion}</span><button disabled={busy} onClick={() => restorePatch(row)} type="button">Restore</button></div>)}</div>}</section>
+    <section className="rmm-table-card"><div className="rmm-device-section-heading"><div><span className="rmm-eyebrow">Windows Update</span><h2>Pending Windows updates</h2><p>Reported directly by the Windows Update Agent.</p></div></div>
+    <div className="rmm-table rmm-device-patch-table"><div className="rmm-table-head"><span>Update</span><span>Categories</span><span>Severity</span><span>Downloaded</span><span>Mandatory</span><span>Reboot</span></div>{windowsUpdates.map((item, index) => <div className="rmm-table-row" key={(item.kb || []).join('-') || item.title || index}><span><strong>{item.title || 'Windows update'}</strong><small>{(item.kb || []).map((kb) => 'KB' + kb).join(', ') || 'No KB reference'}</small></span><span>{(item.categories || []).join(', ') || 'Not classified'}</span><span>{item.severity || 'Not rated'}</span><span>{item.downloaded ? 'Yes' : 'No'}</span><span>{item.mandatory ? 'Yes' : 'No'}</span><span>{item.reboot_required ? 'Required' : 'No'}</span></div>)}</div>
+    {!windowsUpdates.length && <div className="rmm-empty"><ShieldCheck size={24} /><strong>No pending Windows updates reported</strong></div>}</section>
+  </>
 }
 
 function DeviceSecurity({ device }) {

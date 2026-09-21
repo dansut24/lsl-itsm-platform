@@ -150,17 +150,93 @@
 .rmm-patch-checks small { color:var(--rmm-muted); font-size:7px; }
 .rmm-patch-modal footer { display:flex; justify-content:flex-end; gap:8px; margin-top:12px; }
 .rmm-patch-modal footer button { min-height:38px; display:inline-flex; align-items:center; justify-content:center; gap:5px; border:1px solid var(--rmm-border); border-radius:8px; padding:0 12px; background:var(--rmm-surface); color:var(--rmm-text); font:inherit; font-size:8px; font-weight:850; cursor:pointer; }
+.rmm-vulnerability-coverage { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:12px; margin:0 12px 12px; border:1px solid var(--rmm-border); border-radius:10px; padding:10px 12px; background:var(--rmm-soft); }
+.rmm-vulnerability-coverage > div:first-child { min-width:0; display:flex; align-items:flex-start; gap:8px; }
+.rmm-vulnerability-coverage > div:first-child > svg { flex:0 0 auto; color:var(--rmm-accent); }
+.rmm-vulnerability-coverage > div:first-child > span { display:grid; gap:2px; }
+.rmm-vulnerability-coverage strong { font-size:8px; }
+.rmm-vulnerability-coverage small { color:var(--rmm-muted); font-size:7px; line-height:1.4; }
+.rmm-vulnerability-coverage .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(70px,1fr)); gap:6px; }
+.rmm-vulnerability-coverage .stats > span { display:grid; gap:1px; min-width:70px; border:1px solid var(--rmm-border); border-radius:7px; padding:6px 8px; background:var(--rmm-surface); }
+.rmm-vulnerability-coverage .stats strong { font-size:10px; }
+.rmm-winget-toolbar { display:grid; grid-template-columns:minmax(280px,1fr) auto auto; align-items:center; gap:8px; padding:10px 12px; border-top:1px solid var(--rmm-border); border-bottom:1px solid var(--rmm-border); background:var(--rmm-soft); }
+.rmm-winget-toolbar label { min-width:0; min-height:36px; display:flex; align-items:center; gap:7px; border:1px solid var(--rmm-border); border-radius:8px; padding:0 9px; background:var(--rmm-surface); color:var(--rmm-muted); }
+.rmm-winget-toolbar input { min-width:0; width:100%; border:0; outline:0; background:transparent; color:var(--rmm-text); font:inherit; font-size:8px; }
+.rmm-winget-toolbar select { min-height:36px; border:1px solid var(--rmm-border); border-radius:8px; padding:0 8px; background:var(--rmm-surface); color:var(--rmm-text); font:inherit; font-size:8px; }
+.rmm-winget-toolbar > span { color:var(--rmm-muted); font-size:7px; font-weight:800; white-space:nowrap; }
+.rmm-patch-table.winget-repository .head,.rmm-patch-table.winget-repository .row { grid-template-columns:1.15fr 1.25fr .55fr 1fr; }
+.rmm-patch-security-banner.inline { margin:0 12px 12px; }
+.rmm-bulk-patch-card { display:grid; gap:10px; padding:12px; border-bottom:1px solid var(--rmm-border); background:var(--rmm-surface); }
+.rmm-bulk-patch-card .intro { display:flex; align-items:flex-start; gap:9px; }
+.rmm-bulk-patch-card .intro > svg { flex:0 0 auto; color:var(--rmm-accent); }
+.rmm-bulk-patch-card .intro > div { display:grid; gap:2px; }
+.rmm-bulk-patch-card .intro strong { font-size:9px; }
+.rmm-bulk-patch-card .intro span,.rmm-bulk-patch-card .capability-note { color:var(--rmm-muted); font-size:7px; line-height:1.45; }
+.rmm-bulk-patch-card .controls { display:grid; grid-template-columns:minmax(170px,.8fr) minmax(260px,1.2fr) auto; align-items:end; gap:8px; }
+.rmm-bulk-patch-card label { display:grid; gap:4px; color:var(--rmm-muted); font-size:7px; font-weight:800; }
+.rmm-bulk-patch-card select { width:100%; min-height:34px; border:1px solid var(--rmm-border); border-radius:8px; padding:0 9px; background:var(--rmm-surface); color:var(--rmm-text); font:inherit; font-size:8px; }
+.rmm-bulk-patch-card button { min-height:34px; display:inline-flex; align-items:center; justify-content:center; gap:5px; border:1px solid var(--rmm-border); border-radius:8px; padding:0 11px; background:var(--rmm-surface); color:var(--rmm-text); font:inherit; font-size:8px; font-weight:850; cursor:pointer; }
+.rmm-bulk-patch-card button:disabled { opacity:.45; cursor:not-allowed; }
+.rmm-bulk-patch-selection { max-height:220px; overflow:auto; display:grid; gap:5px; border:1px solid var(--rmm-border); border-radius:9px; padding:8px; background:var(--rmm-soft); }
+.rmm-bulk-patch-selection .selection-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.rmm-bulk-patch-selection .selection-head > strong { font-size:8px; }
+.rmm-bulk-patch-selection label { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:center; gap:8px; border-radius:7px; padding:6px 7px; background:var(--rmm-surface); }
+.rmm-bulk-patch-selection label > span { display:grid; gap:1px; min-width:0; }
+.rmm-bulk-patch-selection label strong { overflow:hidden; color:var(--rmm-text); font-size:8px; text-overflow:ellipsis; white-space:nowrap; }
+.rmm-bulk-patch-selection label small { color:var(--rmm-muted); font-size:7px; }
+.rmm-bulk-patch-selection input { accent-color:var(--rmm-accent); }
+.rmm-bulk-patch-preview { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:end; gap:9px; border:1px solid rgba(35,158,99,.22); border-radius:9px; padding:9px; background:rgba(35,158,99,.05); }
+.rmm-bulk-patch-preview .stats { display:grid; grid-template-columns:repeat(3,minmax(64px,1fr)); gap:5px; }
+.rmm-bulk-patch-preview .stats span,.rmm-bulk-patch-preview .items span { display:grid; gap:1px; }
+.rmm-bulk-patch-preview .stats span { border:1px solid var(--rmm-border); border-radius:7px; padding:6px; background:var(--rmm-surface); }
+.rmm-bulk-patch-preview .stats small,.rmm-bulk-patch-preview .items small { color:var(--rmm-muted); font-size:6px; }
+.rmm-bulk-patch-preview .stats strong { font-size:10px; }
+.rmm-bulk-patch-preview .items { max-height:110px; overflow:auto; display:grid; gap:4px; }
+.rmm-bulk-patch-preview .items strong { font-size:7px; }
+.rmm-software-toolbar { display:grid; grid-template-columns:minmax(260px,1fr) repeat(6,auto) auto; align-items:center; gap:8px; padding:10px 12px; border-top:1px solid var(--rmm-border); border-bottom:1px solid var(--rmm-border); background:var(--rmm-soft); }
+.rmm-software-toolbar .search { min-width:0; min-height:36px; display:flex; align-items:center; gap:7px; border:1px solid var(--rmm-border); border-radius:8px; padding:0 9px; background:var(--rmm-surface); color:var(--rmm-muted); }
+.rmm-software-toolbar .search input { min-width:0; width:100%; border:0; outline:0; background:transparent; color:var(--rmm-text); font:inherit; font-size:8px; }
+.rmm-software-toolbar select { min-height:36px; border:1px solid var(--rmm-border); border-radius:8px; padding:0 8px; background:var(--rmm-surface); color:var(--rmm-text); font:inherit; font-size:8px; }
+.rmm-software-toolbar .summary { color:var(--rmm-muted); font-size:7px; font-weight:750; white-space:nowrap; }
+.rmm-software-pagination { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 12px; border-top:1px solid var(--rmm-border); color:var(--rmm-muted); font-size:7px; }
+.rmm-software-pagination > div { display:flex; align-items:center; gap:8px; }
+.rmm-software-pagination strong { color:var(--rmm-text); font-size:7px; }
+.rmm-software-pagination button { min-height:30px; display:inline-flex; align-items:center; gap:4px; border:1px solid var(--rmm-border); border-radius:7px; padding:0 8px; background:var(--rmm-surface); color:var(--rmm-text); font:inherit; font-size:7px; font-weight:800; cursor:pointer; }
+.rmm-software-pagination button:disabled { opacity:.45; cursor:not-allowed; }
+
 @media (max-width: 900px) {
+  .rmm-vulnerability-coverage { grid-template-columns:1fr; }
+  .rmm-winget-toolbar { grid-template-columns:minmax(0,1fr) auto auto; }
+  .rmm-software-toolbar { grid-template-columns:minmax(0,1fr) 1fr 1fr; }
+  .rmm-software-toolbar .search { grid-column:1/-1; }
+  .rmm-software-toolbar .summary { justify-self:end; }
   .rmm-catalogue-install-card .controls { grid-template-columns:1fr 1fr; }
   .rmm-catalogue-install-card .install-meta { grid-column:1/-1; }
+  .rmm-bulk-patch-card .controls { grid-template-columns:1fr 1fr; }
+  .rmm-bulk-patch-card .controls > button { grid-column:1/-1; width:100%; }
+  .rmm-bulk-patch-preview { grid-template-columns:1fr; }
   .rmm-catalogue-install-card .controls > button { width:100%; }
   .rmm-patch-metrics { grid-template-columns:1fr 1fr; }
   .rmm-vuln-source-grid { grid-template-columns:1fr 1fr; }
   .rmm-vuln-exposure-summary { grid-template-columns:repeat(auto-fit,minmax(105px,1fr)); }
 }
 @media (max-width: 700px) {
+  .rmm-vulnerability-coverage { margin:0 8px 10px; }
+  .rmm-patch-security-banner.inline { margin:0 8px 10px; }
+  .rmm-winget-toolbar { grid-template-columns:1fr; padding:9px 8px; }
+  .rmm-patch-table.winget-repository .row { grid-template-columns:1fr 1fr; }
+  .rmm-vulnerability-coverage .stats { grid-template-columns:1fr 1fr; }
+  .rmm-software-toolbar { grid-template-columns:1fr; padding:9px 8px; }
+  .rmm-software-toolbar .search,.rmm-software-toolbar .summary { grid-column:auto; }
+  .rmm-software-toolbar .summary { justify-self:start; }
+  .rmm-software-pagination { align-items:stretch; flex-direction:column; padding:9px 8px; }
+  .rmm-software-pagination > div { justify-content:space-between; }
   .rmm-catalogue-install-card .controls { grid-template-columns:1fr; }
   .rmm-catalogue-install-card .install-meta { grid-column:auto; grid-template-columns:1fr 1fr 1fr; }
+  .rmm-bulk-patch-card { padding:9px 8px; }
+  .rmm-bulk-patch-card .controls { grid-template-columns:1fr; }
+  .rmm-bulk-patch-card .controls > button { grid-column:auto; }
+  .rmm-bulk-patch-preview .stats { grid-template-columns:1fr 1fr 1fr; }
   .rmm-catalogue-install-card .controls > button { width:100%; }
   .rmm-patch-heading-actions { width:100%; display:grid; grid-template-columns:1fr 1fr; }
   .rmm-patch-heading-actions button { width:100%; justify-content:center; }
