@@ -16,7 +16,7 @@ import {
 import { recalculateAllTenantVulnerabilityExposures } from './rmmVulnerabilityExposure.js'
 import { syncAutomaticWingetFallbacks } from './rmmWingetFallback.js'
 import { syncEvergreenCorroboration } from './rmmEvergreenIntel.js'
-import { promoteAutomaticAdmissionReady, queueAutomaticUpgradeQualifications, runSoftwareQualificationQueue } from './rmmSoftwareQualification.js'
+import { promoteAutomaticAdmissionReady, queueAutomaticCleanInstallQualifications, queueAutomaticUpgradeQualifications, runSoftwareQualificationQueue } from './rmmSoftwareQualification.js'
 import {
   classifyGithubReleaseBacklog,
   discoverGithubWindowsInstaller,
@@ -1584,6 +1584,7 @@ export function startSoftwareVendorSyncScheduler() {
         runVendorArtifactQualification({ inspectLimit: 2 }),
         classifyGithubReleaseBacklog(8),
       ])
+      await queueAutomaticCleanInstallQualifications({ limit: 8, maxPending: 12 })
       await queueAutomaticUpgradeQualifications({ limit: 12 })
       await runSoftwareQualificationQueue({ dispatchLimit: 1 })
       await promoteAutomaticAdmissionReady({ limit: 12 })

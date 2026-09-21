@@ -816,6 +816,77 @@ async function reconcileQueueRow(queue, runner) {
   return { id: current.id, state: current.state }
 }
 
+export async function queueAutomaticCleanInstallQualifications({ limit = 8, maxPending = 12 } = {}) {
+  const safeLimit = Math.max(1, Math.min(25, Number(limit) || 8))
+  const safeMaxPending = Math.max(1, Math.min(50, Number(maxPending) || 12))
+  const pending = await pool.query(
+    `SELECT count(*)::int AS count
+       FROM rmm_software_qualification_queue
+      WHERE test_type='clean_install'
+        AND state IN ('queued','running','cleanup_pending','cleanup_running')`,
+  )
+  const available = Math.max(0, safeMaxPending - Number(pending.rows[0]?.count || 0))
+  if (!available) return []
+
+  const result = await pool.query(
+    `WITH candidates AS (
+       SELECT c.id AS catalogue_id,c.canonical_name,
+              CASE WHEN lower(COALESCE(c.installer_type,''))='msi' THEN 110 ELSE 100 END AS priority
+         FROM rmm_software_catalogue c
+         JOIN rmm_software_vendor_sources s
+           ON s.source_key=c.source_metadata->>'latestSource' AND s.enabled=true
+         JOIN rmm_software_vendor_releases r
+           ON r.provider_package_id=c.external_key
+          AND r.source_key=c.source_metadata->>'latestSource'
+          AND r.version=c.target_version
+        WHERE c.tenant_id IS NULL
+          AND c.status='active'
+          AND c.qualification_state='deployment_candidate'
+          AND c.source_metadata->>'deploymentMode'='vendor_direct'
+          AND c.source_metadata->>'trustState'='direct_ready'
+          AND lower(COALESCE(c.installer_type,'')) IN ('msi','exe')
+          AND COALESCE(c.target_version,'')<>''
+          AND c.target_version !~* '(alpha|beta|rc|preview|eap|nightly|dev|canary)'
+          AND s.last_success_at IS NOT NULL
+          AND COALESCE(s.last_error,'')=''
+          AND r.trust_state='direct_ready'
+          AND r.installer_type IN ('msi','exe')
+          AND r.installer_url LIKE 'https://%'
+          AND r.installer_sha256 ~* '^[a-f0-9]{64}$'
+          AND lower(COALESCE(c.qualification_evidence->>'sha256Verified','false'))='true'
+          AND lower(COALESCE(c.qualification_evidence->>'authenticodeVerified','false'))='true'
+          AND c.source_metadata->'vulnerabilityIdentityAudit'->>'state'='covered'
+          AND EXISTS (
+            SELECT 1
+              FROM rmm_software_vulnerability_identities vi
+             WHERE vi.catalogue_id=c.id AND vi.enabled=true
+          )
+          AND NOT EXISTS (
+            SELECT 1
+              FROM rmm_software_qualification_queue existing
+             WHERE existing.catalogue_id=c.id
+               AND existing.test_type='clean_install'
+          )
+        ORDER BY CASE WHEN lower(COALESCE(c.installer_type,''))='msi' THEN 0 ELSE 1 END,
+                 lower(c.canonical_name)
+        LIMIT $1
+     )
+     INSERT INTO rmm_software_qualification_queue
+       (catalogue_id,test_type,state,priority,attempt_count,last_error,evidence,created_at,updated_at)
+     SELECT catalogue_id,'clean_install','queued',priority,0,'',
+            jsonb_build_object(
+              'automaticCleanInstallQualification',true,
+              'queuedAt',now()
+            ),
+            now(),now()
+       FROM candidates
+     ON CONFLICT (catalogue_id,test_type) DO NOTHING
+     RETURNING id,catalogue_id,test_type,state,priority`,
+    [Math.min(safeLimit, available)],
+  )
+  return result.rows
+}
+
 export async function queueAutomaticUpgradeQualifications({ limit = 12 } = {}) {
   const safeLimit = Math.max(1, Math.min(50, Number(limit) || 12))
   const result = await pool.query(
