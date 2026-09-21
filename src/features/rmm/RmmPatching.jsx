@@ -287,7 +287,6 @@ function VendorSourceModal({ source, onClose, onSave, saving }) {
   const winget = form.deploymentMode === 'winget_preferred'
   const github = form.sourceType === 'github_releases'
   const json = form.sourceType === 'vendor_json'
-  const staticRelease = form.sourceType === 'static_release'
   const sourceReady = github
     ? form.repository.trim().length > 2
     : json
