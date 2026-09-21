@@ -816,6 +816,86 @@ async function reconcileQueueRow(queue, runner) {
   return { id: current.id, state: current.state }
 }
 
+export async function promoteAutomaticAdmissionReady({ limit = 12 } = {}) {
+  const safeLimit = Math.max(1, Math.min(50, Number(limit) || 12))
+  const result = await pool.query(
+    `WITH ready AS (
+       SELECT c.id,c.canonical_name,c.target_version
+         FROM rmm_software_catalogue c
+         JOIN rmm_software_vendor_sources s
+           ON s.source_key=c.source_metadata->>'latestSource' AND s.enabled=true
+        WHERE c.tenant_id IS NULL
+          AND c.status='active'
+          AND c.qualification_state='deployment_candidate'
+          AND c.source_metadata->>'deploymentMode'='vendor_direct'
+          AND c.source_metadata->>'trustState'='direct_ready'
+          AND lower(COALESCE(c.installer_type,'')) IN ('msi','exe')
+          AND s.last_success_at IS NOT NULL
+          AND COALESCE(s.last_error,'')=''
+          AND lower(COALESCE(c.qualification_evidence->>'sha256Verified','false'))='true'
+          AND lower(COALESCE(c.qualification_evidence->>'authenticodeVerified','false'))='true'
+          AND lower(COALESCE(c.qualification_evidence->>'cleanInstallVerified','false'))='true'
+          AND c.qualification_evidence->>'cleanInstallVersion'=c.target_version
+          AND lower(COALESCE(c.qualification_evidence->>'uninstallVerified','false'))='true'
+          AND c.source_metadata->'vulnerabilityIdentityAudit'->>'state'='covered'
+          AND EXISTS (
+            SELECT 1
+              FROM rmm_software_vulnerability_identities vi
+             WHERE vi.catalogue_id=c.id AND vi.enabled=true
+          )
+          AND EXISTS (
+            SELECT 1
+              FROM rmm_software_qualification_queue qi
+             WHERE qi.catalogue_id=c.id
+               AND qi.test_type='clean_install'
+               AND qi.state='passed'
+          )
+          AND EXISTS (
+            SELECT 1
+              FROM rmm_software_qualification_queue qu
+             WHERE qu.catalogue_id=c.id
+               AND qu.test_type='upgrade'
+               AND qu.state='passed'
+          )
+          AND EXISTS (
+            SELECT 1
+              FROM rmm_patch_deployments d
+              JOIN rmm_agent_devices a
+                ON a.inventory_id=d.inventory_id AND a.disabled_at IS NULL
+              JOIN rmm_software_vendor_qualification_runners qr
+                ON qr.agent_device_id=a.id AND qr.enabled=true
+             WHERE d.catalogue_id=c.id
+               AND d.status='succeeded'
+               AND d.target_version=c.target_version
+               AND lower(COALESCE(d.result->>'verificationPassed',d.result->'verification'->>'meetsTarget','false'))='true'
+               AND COALESCE(
+                 NULLIF(d.result->>'intent',''),
+                 CASE WHEN COALESCE(d.installed_version,'')='' THEN 'install' ELSE 'update' END
+               )='update'
+          )
+        ORDER BY lower(c.canonical_name)
+        LIMIT $1
+     )
+     UPDATE rmm_software_catalogue c
+        SET qualification_state='qualified',
+            qualification_notes=CASE
+              WHEN COALESCE(c.qualification_notes,'')='' THEN 'Automatically admitted after trusted source, artifact, clean-install, uninstall, upgrade and vulnerability-identity qualification.'
+              ELSE c.qualification_notes
+            END,
+            qualification_evidence=c.qualification_evidence || jsonb_build_object(
+              'automaticAdmissionVerified',true,
+              'automaticAdmissionVersion',c.target_version,
+              'automaticAdmissionVerifiedAt',now()
+            ),
+            updated_at=now()
+       FROM ready
+      WHERE c.id=ready.id
+      RETURNING c.id,c.canonical_name,c.target_version`,
+    [safeLimit],
+  )
+  return result.rows
+}
+
 export async function runSoftwareQualificationQueue({ dispatchLimit = 1 } = {}) {
   const runner = await liveQualificationRunner()
   const active = await pool.query(

@@ -16,7 +16,7 @@ import {
 import { recalculateAllTenantVulnerabilityExposures } from './rmmVulnerabilityExposure.js'
 import { syncAutomaticWingetFallbacks } from './rmmWingetFallback.js'
 import { syncEvergreenCorroboration } from './rmmEvergreenIntel.js'
-import { runSoftwareQualificationQueue } from './rmmSoftwareQualification.js'
+import { promoteAutomaticAdmissionReady, runSoftwareQualificationQueue } from './rmmSoftwareQualification.js'
 import {
   classifyGithubReleaseBacklog,
   discoverGithubWindowsInstaller,
@@ -1410,11 +1410,18 @@ export function startSoftwareVendorSyncScheduler() {
   if (schedulerStarted) return
   schedulerStarted = true
   const run = () => syncDueSoftwareVendorSources().catch((error) => console.error('RMM software vendor scheduler failed', error))
-  const qualify = () => Promise.all([
-    runVendorArtifactQualification({ inspectLimit: 2 }),
-    classifyGithubReleaseBacklog(8),
-    runSoftwareQualificationQueue({ dispatchLimit: 1 }),
-  ]).catch((error) => console.error('RMM vendor/software qualification scheduler failed', error))
+  const qualify = async () => {
+    try {
+      await Promise.all([
+        runVendorArtifactQualification({ inspectLimit: 2 }),
+        classifyGithubReleaseBacklog(8),
+        runSoftwareQualificationQueue({ dispatchLimit: 1 }),
+      ])
+      await promoteAutomaticAdmissionReady({ limit: 12 })
+    } catch (error) {
+      console.error('RMM vendor/software qualification scheduler failed', error)
+    }
+  }
   setTimeout(run, 10_000).unref?.()
   setInterval(run, 5 * 60 * 1000).unref?.()
   setTimeout(qualify, 30_000).unref?.()
