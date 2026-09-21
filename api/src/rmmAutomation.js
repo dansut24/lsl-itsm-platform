@@ -3,6 +3,7 @@ import { hasPermission } from './access.js'
 import { originMatchesTenant } from './deploymentConfig.js'
 import { pool, withTransaction } from './db.js'
 import { recordRmmActivity } from './rmmActivity.js'
+import { ensureBuiltinAutomations } from './rmmBuiltinAutomations.js'
 import { agentSocketForDevice } from './rmmAgent.js'
 import { resolveSession } from './session.js'
 
@@ -97,6 +98,7 @@ export function registerRmmAutomationRoutes(app) {
   app.get('/api/v1/rmm/automations', async (c) => {
     const auth = await requireAccess(c, ['rmm.automation.view', 'rmm.automation.run', 'rmm.automation.manage'])
     if (auth.error) return auth.error
+    await ensureBuiltinAutomations(auth.session.tenant_id)
     return c.json({ automations: await automationRows(auth.session.tenant_id) })
   })
 
