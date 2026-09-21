@@ -513,28 +513,69 @@ export async function queueVendorArtifactInspections(limit = 2) {
   if (!availableSlots) return []
 
   const candidates = await pool.query(
-    `SELECT DISTINCT ON (r.source_key,r.provider_package_id)
-            r.id,r.source_key,r.provider_package_id,r.canonical_name,r.version,
-            r.installer_url,r.installer_sha256,r.installer_type
-       FROM rmm_software_vendor_releases r
-      WHERE r.trust_state='asset_candidate'
-        AND r.installer_url<>''
-        AND r.installer_type IN ('msi','exe')
-
-        AND NOT EXISTS (
-          SELECT 1 FROM rmm_agent_jobs j
-           WHERE j.job_type='patch.vendor_artifact.inspect'
-             AND j.request_metadata->>'vendor_release_id'=r.id::text
-             AND j.status IN ('queued','claimed')
-        )
-        AND NOT EXISTS (
-          SELECT 1 FROM rmm_agent_jobs j
-           WHERE j.job_type='patch.vendor_artifact.inspect'
-             AND j.request_metadata->>'vendor_release_id'=r.id::text
-             AND j.status IN ('completed','failed')
-             AND j.created_at>now()-interval '24 hours'
-        )
-      ORDER BY r.source_key,r.provider_package_id,r.last_seen_at DESC
+    `WITH ranked AS (
+       SELECT r.id,r.source_key,r.provider_package_id,r.canonical_name,r.version,
+              r.installer_url,r.installer_sha256,r.installer_type,r.last_seen_at,
+              CASE
+                WHEN COALESCE(r.source_payload->>'historicalReleaseCandidate','false')='true'
+                  AND EXISTS (
+                    SELECT 1
+                      FROM rmm_software_catalogue c
+                      JOIN rmm_software_qualification_queue q
+                        ON q.catalogue_id=c.id
+                       AND q.test_type='clean_install'
+                       AND q.state='passed'
+                     WHERE c.tenant_id IS NULL
+                       AND c.status='active'
+                       AND c.external_key=r.provider_package_id
+                       AND c.source_metadata->>'latestSource'=r.source_key
+                  )
+                THEN 0 ELSE 1
+              END AS priority_group,
+              row_number() OVER (
+                PARTITION BY r.source_key,r.provider_package_id
+                ORDER BY
+                  CASE
+                    WHEN COALESCE(r.source_payload->>'historicalReleaseCandidate','false')='true'
+                      AND EXISTS (
+                        SELECT 1
+                          FROM rmm_software_catalogue c
+                          JOIN rmm_software_qualification_queue q
+                            ON q.catalogue_id=c.id
+                           AND q.test_type='clean_install'
+                           AND q.state='passed'
+                         WHERE c.tenant_id IS NULL
+                           AND c.status='active'
+                           AND c.external_key=r.provider_package_id
+                           AND c.source_metadata->>'latestSource'=r.source_key
+                      )
+                    THEN 0 ELSE 1
+                  END,
+                  r.last_seen_at DESC
+              ) AS rn
+         FROM rmm_software_vendor_releases r
+        WHERE r.trust_state='asset_candidate'
+          AND r.installer_url<>''
+          AND r.installer_type IN ('msi','exe')
+          AND NOT EXISTS (
+            SELECT 1 FROM rmm_agent_jobs j
+             WHERE j.job_type='patch.vendor_artifact.inspect'
+               AND j.request_metadata->>'vendor_release_id'=r.id::text
+               AND j.status IN ('queued','claimed')
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM rmm_agent_jobs j
+             WHERE j.job_type='patch.vendor_artifact.inspect'
+               AND j.request_metadata->>'vendor_release_id'=r.id::text
+               AND j.status IN ('completed','failed')
+               AND j.created_at>now()-interval '24 hours'
+          )
+     )
+     SELECT id,source_key,provider_package_id,canonical_name,version,
+            installer_url,installer_sha256,installer_type
+       FROM ranked
+      WHERE rn=1
+      ORDER BY priority_group,last_seen_at DESC
       LIMIT $1`,
     [availableSlots],
   )
