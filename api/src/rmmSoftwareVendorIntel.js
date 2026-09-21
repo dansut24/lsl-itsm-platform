@@ -1182,10 +1182,15 @@ async function syncGenericConfigured(sourceKey, state) {
 async function syncChrome() {
   const b = await binding('google_chrome')
   if (!b) return null
-  const response = await fetchJson(b.source_url + '?page_size=10')
-  const versions = Array.isArray(response?.versions) ? response.versions : []
-  const latest = clean(versions[0]?.version)
-  if (!latest) throw new Error('Chrome VersionHistory returned no stable Windows versions')
+  const releasesUrl = b.source_url.replace(/\/versions\/?$/i, '/versions/all/releases')
+    + '?filter=fraction%3D1&order_by=version%20desc&page_size=20'
+  const response = await fetchJson(releasesUrl)
+  const releases = Array.isArray(response?.releases) ? response.releases : []
+  const latestRelease = releases.find((item) =>
+    Number(item?.fraction) === 1 && !clean(item?.serving?.endTime)
+  ) || releases.find((item) => Number(item?.fraction) === 1)
+  const latest = clean(latestRelease?.version)
+  if (!latest) throw new Error('Chrome VersionHistory returned no fully rolled-out Stable Windows release')
 
   const config = { ...object(b.source_metadata), ...object(b.binding_metadata) }
   const installerUrl = (await publicHttpsUrl(
@@ -1213,9 +1218,12 @@ async function syncChrome() {
   const evidence = {
     ...trust.evidence,
     sourceKey: b.source_key,
-    releaseUrl: b.source_url,
+    releaseUrl: releasesUrl,
     selectedAsset: 'googlechromestandaloneenterprise64.msi',
     selectedAssetReason: 'official_vendor_channel_installer',
+    releasePolicy: 'stable_full_rollout',
+    rolloutFraction: Number(latestRelease?.fraction || 0),
+    rolloutStartTime: clean(latestRelease?.serving?.startTime),
   }
   return upsertRelease({
     sourceKey: b.source_key,
@@ -1228,7 +1236,7 @@ async function syncChrome() {
     version: latest,
     installerUrl,
     installerType: 'msi',
-    releaseUrl: b.source_url,
+    releaseUrl: releasesUrl,
     assetName: 'googlechromestandaloneenterprise64.msi',
     trustState: trust.trustState,
     trustEvidence: evidence,
@@ -1236,8 +1244,10 @@ async function syncChrome() {
     qualificationEvidence: evidence,
     sourcePriority: b.priority,
     payload: {
-      versions: versions.slice(0, 10),
-      releaseUrl: b.source_url,
+      releases: releases.slice(0, 20),
+      releasePolicy: 'stable_full_rollout',
+      rolloutFraction: Number(latestRelease?.fraction || 0),
+      releaseUrl: releasesUrl,
       trustState: trust.trustState,
       trustEvidence: evidence,
       expectedSigner: '',
@@ -1256,9 +1266,11 @@ async function syncChrome() {
       deploymentMode: trust.deploymentMode,
       trustState: trust.trustState,
       trustEvidence: evidence,
-      releaseUrl: b.source_url,
+      releaseUrl: releasesUrl,
       selectedAsset: 'googlechromestandaloneenterprise64.msi',
       selectedAssetReason: 'official_vendor_channel_installer',
+      releasePolicy: 'stable_full_rollout',
+      rolloutFraction: Number(latestRelease?.fraction || 0),
       automaticVendorRelease: true,
       hasWingetFallback: Boolean(wingetPackageId),
       wingetPackageId,
