@@ -379,7 +379,7 @@ async function matchingGithubRelease(repository, pattern) {
 }
 
 async function retainPreviousGithubReleaseCandidate({ sourceKey, binding: b, config, repository, currentVersion }) {
-  if (!repository || !currentVersion || clean(b.platform) !== 'windows') return null
+  if (!repository || !currentVersion || !['windows','cross_platform'].includes(clean(b.platform))) return null
 
   const eligible = await pool.query(
     `SELECT c.id
