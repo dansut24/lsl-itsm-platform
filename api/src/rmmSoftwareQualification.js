@@ -87,9 +87,7 @@ async function qualificationRow(queueId) {
 
 async function dispatchUninstall(queue, runner, item) {
   const liveSocket = agentSocketForDevice(runner.agent_device_id)
-  if (!liveSocket || liveSocket.readyState !== 1) {
-    return { dispatched: false, offline: true }
-  }
+  const canPush = Boolean(liveSocket && liveSocket.readyState === 1)
 
   const payload = {
     name: clean(item?.name),
@@ -119,36 +117,32 @@ async function dispatchUninstall(queue, runner, item) {
     ],
   )
   const job = inserted.rows[0]
-  const claimed = await pool.query(
-    `UPDATE rmm_agent_jobs SET status='claimed',claimed_at=now(),updated_at=now()
-      WHERE id=$1 AND status='queued' RETURNING id`,
-    [job.id],
-  )
-  if (!claimed.rowCount) {
-    await markReview(queue.id, 'qualification_cleanup_claim_failed')
-    return { dispatched: false }
-  }
+  let delivery = 'queued_agent_channel'
 
-  const pushed = sendAgentMessage(runner.agent_device_id, {
-    type: 'job_execute',
-    job: { id: job.id, job_type: 'software.uninstall', payload, created_at: job.created_at },
-  })
-  if (!pushed) {
-    await pool.query(
-      `UPDATE rmm_agent_jobs SET status='cancelled',claimed_at=NULL,completed_at=now(),
-          error_message='Qualification runner went offline before cleanup dispatch.',updated_at=now()
-        WHERE id=$1`,
+  if (canPush) {
+    const claimed = await pool.query(
+      `UPDATE rmm_agent_jobs SET status='claimed',claimed_at=now(),updated_at=now()
+        WHERE id=$1 AND status='queued' RETURNING id`,
       [job.id],
     )
-    await pool.query(
-      `UPDATE rmm_software_qualification_queue
-          SET state='cleanup_pending',cleanup_job_id=NULL,last_error='runner_offline_before_cleanup_dispatch',
-              updated_at=now()
-        WHERE id=$1`,
-      [queue.id],
-    )
-    return { dispatched: false, offline: true }
+    if (claimed.rowCount) {
+      const pushed = sendAgentMessage(runner.agent_device_id, {
+        type: 'job_execute',
+        job: { id: job.id, job_type: 'software.uninstall', payload, created_at: job.created_at },
+      })
+      if (pushed) {
+        delivery = 'websocket'
+      } else {
+        await pool.query(
+          `UPDATE rmm_agent_jobs
+              SET status='queued',claimed_at=NULL,error_message='',updated_at=now()
+            WHERE id=$1 AND status='claimed'`,
+          [job.id],
+        )
+      }
+    }
   }
+
   await pool.query(
     `UPDATE rmm_software_qualification_queue
         SET state='cleanup_running',cleanup_job_id=$2,last_error='',
@@ -156,11 +150,12 @@ async function dispatchUninstall(queue, runner, item) {
       WHERE id=$1`,
     [queue.id, job.id, JSON.stringify({
       cleanupDispatchedAt: new Date().toISOString(),
+      cleanupDelivery: delivery,
       uninstallName: payload.name,
       uninstallRegistryKey: payload.registry_key,
     })],
   )
-  return { dispatched: true, jobId: job.id }
+  return { dispatched: true, queued: delivery !== 'websocket', jobId: job.id }
 }
 
 async function directReleaseForCatalogue(catalogueId) {
