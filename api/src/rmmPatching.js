@@ -308,16 +308,145 @@ async function patchDeviceRows(tenantId) {
 
 async function catalogueRows(tenantId) {
   const result = await pool.query(
-    `SELECT id,tenant_id,canonical_name,publisher,name_pattern,publisher_pattern,platform,provider,
-            provider_package_id,target_version,release_channel,installer_type,detection,execution,verification,status,
-            catalogue_source,external_key,source_metadata,qualification_state,qualification_version,
-            qualification_evidence,qualification_notes,qualified_at,created_at,updated_at
-       FROM rmm_software_catalogue
-      WHERE status<>'archived' AND (tenant_id=$1 OR tenant_id IS NULL)
-      ORDER BY tenant_id NULLS FIRST,lower(canonical_name)`,
+    `SELECT c.id,c.tenant_id,c.canonical_name,c.publisher,c.name_pattern,c.publisher_pattern,c.platform,c.provider,
+            c.provider_package_id,c.target_version,c.release_channel,c.installer_type,c.detection,c.execution,c.verification,c.status,
+            c.catalogue_source,c.external_key,c.source_metadata,c.qualification_state,c.qualification_version,
+            c.qualification_evidence,c.qualification_notes,c.qualified_at,c.created_at,c.updated_at,
+            COALESCE(qt.install_test_passed,false) AS install_test_passed,
+            qt.install_tested_at,qt.install_test_version,
+            COALESCE(qt.upgrade_test_passed,false) AS upgrade_test_passed,
+            qt.upgrade_tested_at,qt.upgrade_test_version,
+            COALESCE(vi.identity_count,0)::int AS vulnerability_identity_count,
+            s.last_success_at AS qualification_source_last_success_at,
+            s.last_error AS qualification_source_error
+       FROM rmm_software_catalogue c
+       LEFT JOIN LATERAL (
+         SELECT
+           bool_or(
+             d.status='succeeded'
+             AND lower(COALESCE(d.result->>'verificationPassed',d.result->'verification'->>'meetsTarget','false'))='true'
+             AND COALESCE(NULLIF(d.result->>'intent',''),CASE WHEN COALESCE(d.installed_version,'')='' THEN 'install' ELSE 'update' END)='install'
+           ) AS install_test_passed,
+           max(d.completed_at) FILTER (
+             WHERE d.status='succeeded'
+               AND lower(COALESCE(d.result->>'verificationPassed',d.result->'verification'->>'meetsTarget','false'))='true'
+               AND COALESCE(NULLIF(d.result->>'intent',''),CASE WHEN COALESCE(d.installed_version,'')='' THEN 'install' ELSE 'update' END)='install'
+           ) AS install_tested_at,
+           max(d.target_version) FILTER (
+             WHERE d.status='succeeded'
+               AND lower(COALESCE(d.result->>'verificationPassed',d.result->'verification'->>'meetsTarget','false'))='true'
+               AND COALESCE(NULLIF(d.result->>'intent',''),CASE WHEN COALESCE(d.installed_version,'')='' THEN 'install' ELSE 'update' END)='install'
+           ) AS install_test_version,
+           bool_or(
+             d.status='succeeded'
+             AND lower(COALESCE(d.result->>'verificationPassed',d.result->'verification'->>'meetsTarget','false'))='true'
+             AND COALESCE(NULLIF(d.result->>'intent',''),CASE WHEN COALESCE(d.installed_version,'')='' THEN 'install' ELSE 'update' END)='update'
+           ) AS upgrade_test_passed,
+           max(d.completed_at) FILTER (
+             WHERE d.status='succeeded'
+               AND lower(COALESCE(d.result->>'verificationPassed',d.result->'verification'->>'meetsTarget','false'))='true'
+               AND COALESCE(NULLIF(d.result->>'intent',''),CASE WHEN COALESCE(d.installed_version,'')='' THEN 'install' ELSE 'update' END)='update'
+           ) AS upgrade_tested_at,
+           max(d.target_version) FILTER (
+             WHERE d.status='succeeded'
+               AND lower(COALESCE(d.result->>'verificationPassed',d.result->'verification'->>'meetsTarget','false'))='true'
+               AND COALESCE(NULLIF(d.result->>'intent',''),CASE WHEN COALESCE(d.installed_version,'')='' THEN 'install' ELSE 'update' END)='update'
+           ) AS upgrade_test_version
+         FROM rmm_patch_deployments d
+         JOIN rmm_agent_devices a ON a.inventory_id=d.inventory_id AND a.disabled_at IS NULL
+         JOIN rmm_software_vendor_qualification_runners qr ON qr.agent_device_id=a.id AND qr.enabled=true
+        WHERE d.catalogue_id=c.id
+       ) qt ON true
+       LEFT JOIN LATERAL (
+         SELECT count(*)::int AS identity_count
+           FROM rmm_software_vulnerability_identities vi
+          WHERE vi.catalogue_id=c.id AND vi.enabled=true
+       ) vi ON true
+       LEFT JOIN rmm_software_vendor_sources s
+         ON s.source_key=c.source_metadata->>'latestSource'
+      WHERE c.status<>'archived' AND (c.tenant_id=$1 OR c.tenant_id IS NULL)
+      ORDER BY c.tenant_id NULLS FIRST,lower(c.canonical_name)`,
     [tenantId],
   )
-  return result.rows
+
+  return result.rows.map((row) => {
+    const sourceMetadata = object(row.source_metadata)
+    const qualificationEvidence = object(row.qualification_evidence)
+    const identityAudit = object(sourceMetadata.vulnerabilityIdentityAudit)
+    const deploymentMode = clean(sourceMetadata.deploymentMode)
+    const trustState = clean(sourceMetadata.trustState)
+    const installerType = lower(row.installer_type)
+    const officialWinget = clean(sourceMetadata.wingetPackageSource) === 'https://cdn.winget.microsoft.com/cache/source2.msix'
+      || trustState === 'winget_ready'
+      || (row.provider === 'winget' && clean(row.provider_package_id))
+    const artifactVerified = Boolean(
+      (deploymentMode === 'vendor_direct'
+        && trustState === 'direct_ready'
+        && ['msi','exe'].includes(installerType)
+        && qualificationEvidence.sha256Verified === true
+        && qualificationEvidence.authenticodeVerified === true)
+      || officialWinget,
+    )
+    const latestSource = clean(sourceMetadata.latestSource)
+    const sourceHealthy = latestSource
+      ? Boolean(row.qualification_source_last_success_at) && !clean(row.qualification_source_error)
+      : officialWinget
+    const vulnerabilityCovered = clean(identityAudit.state) === 'covered'
+      && Number(row.vulnerability_identity_count || 0) > 0
+    const installTestPassed = row.install_test_passed === true
+    const upgradeTestPassed = row.upgrade_test_passed === true
+    const automaticAdmissionReady = Boolean(
+      sourceHealthy
+      && artifactVerified
+      && installTestPassed
+      && upgradeTestPassed
+      && vulnerabilityCovered,
+    )
+    const blockers = []
+    if (!sourceHealthy) blockers.push('source_health')
+    if (!artifactVerified) blockers.push('artifact_verification')
+    if (!installTestPassed) blockers.push('clean_install_test')
+    if (!upgradeTestPassed) blockers.push('upgrade_test')
+    if (!vulnerabilityCovered) blockers.push('vulnerability_identity')
+
+    return {
+      ...row,
+      qualification_readiness: {
+        state: automaticAdmissionReady ? 'ready' : 'pending',
+        automaticAdmissionReady,
+        blockers,
+        source: {
+          state: sourceHealthy ? 'healthy' : 'attention',
+          lastSuccessAt: row.qualification_source_last_success_at || null,
+          error: clean(row.qualification_source_error),
+        },
+        artifact: {
+          state: artifactVerified ? 'verified' : 'pending',
+          deploymentMode,
+          trustState,
+          sha256Verified: qualificationEvidence.sha256Verified === true,
+          authenticodeVerified: qualificationEvidence.authenticodeVerified === true,
+        },
+        installTest: {
+          state: installTestPassed ? 'passed' : 'not_tested',
+          testedAt: row.install_tested_at || null,
+          version: clean(row.install_test_version),
+        },
+        upgradeTest: {
+          state: upgradeTestPassed ? 'passed' : 'not_tested',
+          testedAt: row.upgrade_tested_at || null,
+          version: clean(row.upgrade_test_version),
+        },
+        vulnerability: {
+          state: vulnerabilityCovered ? 'covered' : (clean(identityAudit.state) || 'needs_review'),
+          identityCount: Number(row.vulnerability_identity_count || 0),
+          checkedAt: clean(identityAudit.checkedAt),
+          method: clean(identityAudit.method),
+          resolvedSource: clean(identityAudit.resolvedSource),
+        },
+      },
+    }
+  })
 }
 async function patchDiscoveryRows(tenantId) {
   const [observations, candidates] = await Promise.all([
@@ -475,6 +604,7 @@ function publicCatalogue(entry) {
     qualificationState: clean(entry.qualification_state || 'intelligence_only'),
     qualificationVersion: clean(entry.qualification_version),
     qualificationEvidence: object(entry.qualification_evidence),
+    qualificationReadiness: object(entry.qualification_readiness),
     qualificationNotes: clean(entry.qualification_notes),
     qualifiedAt: entry.qualified_at || null,
     versionNormalization: object(sourceMetadata.versionNormalization),
@@ -1011,6 +1141,7 @@ async function patchBundle(tenantId) {
       autoDiscoveredPackages: discovery.candidates.length,
       autoDiscoveredUpdates: discovery.observations.filter((item) => item.patch_status === 'update_available').length,
       qualifiedCatalogue: catalogue.filter((item) => item.qualification_state === 'qualified').length,
+      automaticAdmissionReadyCatalogue: catalogue.filter((item) => object(item.qualification_readiness).automaticAdmissionReady === true).length,
       candidateCatalogue: catalogue.filter((item) => item.qualification_state === 'deployment_candidate').length,
       blockedCatalogue: catalogue.filter((item) => item.qualification_state === 'blocked').length,
       intelligenceOnlyCatalogue: catalogue.filter((item) => item.qualification_state === 'intelligence_only').length,

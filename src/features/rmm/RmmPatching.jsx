@@ -88,6 +88,14 @@ function qualificationTone(state) {
   if (state === 'blocked') return 'critical'
   return 'neutral'
 }
+function readinessTone(state) {
+  if (['ready', 'healthy', 'verified', 'passed', 'covered'].includes(state)) return 'healthy'
+  if (['attention', 'blocked', 'failed'].includes(state)) return 'critical'
+  return 'running'
+}
+function readinessLabel(state) {
+  return String(state || 'pending').replaceAll('_', ' ')
+}
 
 function PageHeading({ action }) {
   return (
@@ -544,6 +552,7 @@ export function RmmPatching({ devices = [] }) {
     .filter((item) => item.installable && !selectedDeviceInstalledCatalogueIds.has(item.id))
     .sort((a, b) => String(a.canonicalName || '').localeCompare(String(b.canonicalName || '')))
   const selectedCatalogueInstall = installableCatalogue.find((item) => item.id === catalogueInstallId) || null
+  const selectedCatalogueReadiness = selectedCatalogueInstall?.qualificationReadiness || {}
   const selectedInstallPatchHost = selectedInstallDevice?.patchCapabilities?.patchHostVersion
     || selectedInstallDevice?.patchCapabilities?.version
     || ''
@@ -942,7 +951,7 @@ export function RmmPatching({ devices = [] }) {
     </nav>
 
     {tab === 'software' && <section className="rmm-patch-panel">
-      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Software patch catalogue</span><h2>Patchability by application</h2><p>{mappedApps.length} mapped application{mappedApps.length === 1 ? '' : 's'} · {applications.length - mappedApps.length} awaiting mapping · {catalogueCandidates.length} automatically discovered package{catalogueCandidates.length === 1 ? '' : 's'} · {overview.qualifiedCatalogue || 0} qualified · {overview.candidateCatalogue || 0} deployment candidates.</p></div></div>
+      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Software patch catalogue</span><h2>Patchability by application</h2><p>{mappedApps.length} mapped application{mappedApps.length === 1 ? '' : 's'} · {applications.length - mappedApps.length} awaiting mapping · {catalogueCandidates.length} automatically discovered package{catalogueCandidates.length === 1 ? '' : 's'} · {overview.qualifiedCatalogue || 0} qualified · {overview.automaticAdmissionReadyCatalogue || 0} automatic-admission ready · {overview.candidateCatalogue || 0} deployment candidates.</p></div></div>
       <div className="rmm-vulnerability-coverage"><div><ShieldCheck size={17} /><span><strong>Catalogue vulnerability identity validation</strong><small>{vulnerabilityCatalogue.covered ?? 0} of {vulnerabilityCatalogue.total ?? catalogue.length} catalogue applications have completed source validation. NVD CPE and exact OSV identities are checked independently; endpoint exposures are still created only when that software/version is actually installed.</small></span></div><div className="stats"><span><small>NVD mapped</small><strong>{vulnerabilityCatalogue.nvd ?? 0}</strong></span><span><small>OSV mapped</small><strong>{vulnerabilityCatalogue.osv ?? 0}</strong></span><span><small>Validated</small><strong>{vulnerabilityCatalogue.covered ?? 0}</strong></span><span><small>Unchecked</small><strong>{vulnerabilityCatalogue.unchecked ?? 0}</strong></span><span><small>Mapping to validate</small><strong>{vulnerabilityCatalogue.validationPending ?? 0}</strong></span><span><small>Needs identity</small><strong>{vulnerabilityCatalogue.needsIdentity ?? 0}</strong></span><span><small>Source pending</small><strong>{vulnerabilityCatalogue.sourcePending ?? 0}</strong></span></div></div>
       <div className="rmm-catalogue-install-card">
         <div className="intro"><PackageCheck size={18} /><div><strong>Install from catalogue</strong><span>Install approved catalogue software on an online managed device. Existing installations stay in the normal Patch workflow.</span></div></div>
@@ -959,8 +968,16 @@ export function RmmPatching({ devices = [] }) {
             <span><small>Target</small><strong>{selectedCatalogueInstall?.targetVersion || '—'}</strong></span>
             <span><small>Provider</small><strong>{selectedCatalogueInstall?.executionPackageId ? 'WinGet' : selectedCatalogueInstall?.deploymentMode?.replaceAll('_', ' ') || '—'}</strong></span>
             <span><small>Qualification</small><strong>{qualificationLabel(selectedCatalogueInstall?.qualificationState)}</strong></span>
+            <span><small>Admission</small><strong>{readinessLabel(selectedCatalogueReadiness.state)}</strong></span>
             <span><small>PatchHost</small><strong>{selectedInstallPatchHost || 'Not reported'}</strong></span>
           </div>
+          {selectedCatalogueInstall && <div className="install-meta">
+            <span><small>Source</small><StatusPill tone={readinessTone(selectedCatalogueReadiness.source?.state)}>{readinessLabel(selectedCatalogueReadiness.source?.state)}</StatusPill></span>
+            <span><small>Artifact</small><StatusPill tone={readinessTone(selectedCatalogueReadiness.artifact?.state)}>{readinessLabel(selectedCatalogueReadiness.artifact?.state)}</StatusPill></span>
+            <span><small>Clean install</small><StatusPill tone={readinessTone(selectedCatalogueReadiness.installTest?.state)}>{readinessLabel(selectedCatalogueReadiness.installTest?.state)}</StatusPill></span>
+            <span><small>Upgrade</small><StatusPill tone={readinessTone(selectedCatalogueReadiness.upgradeTest?.state)}>{readinessLabel(selectedCatalogueReadiness.upgradeTest?.state)}</StatusPill></span>
+            <span><small>Vulnerability</small><StatusPill tone={readinessTone(selectedCatalogueReadiness.vulnerability?.state)}>{readinessLabel(selectedCatalogueReadiness.vulnerability?.state)}</StatusPill></span>
+          </div>}
           <button className="rmm-primary" disabled={saving || !selectedCatalogueInstall || !selectedInstallCapabilityReady} onClick={runCatalogueInstall} type="button"><Plus size={14} /> Install</button>
         </div>
         {selectedInstallDevice && !selectedInstallCapabilityReady && <small className="capability-note">Catalogue installation requires PatchHost 0.2.5 or newer. {selectedInstallPatchHost ? 'This device currently reports ' + selectedInstallPatchHost + '.' : 'This device has not reported a compatible PatchHost version yet.'}</small>}
