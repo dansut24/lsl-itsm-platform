@@ -17,6 +17,7 @@ import { recalculateAllTenantVulnerabilityExposures } from './rmmVulnerabilityEx
 import { syncAutomaticWingetFallbacks } from './rmmWingetFallback.js'
 import { syncEvergreenCorroboration } from './rmmEvergreenIntel.js'
 import {
+  classifyGithubReleaseBacklog,
   discoverGithubWindowsInstaller,
   runVendorArtifactQualification,
   selectChecksumAsset,
