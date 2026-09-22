@@ -190,7 +190,40 @@ function PageHeading({ activeView, action }) {
   return <div className="rmm-page-heading"><div><span className="rmm-eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{action}</div>
 }
 
-function RmmDashboard({ devices = [], navigate, openDevice }) {
+function dashboardWhen(value) {
+  if (!value) return 'Not reported'
+  try {
+    return new Date(value).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+  } catch {
+    return String(value)
+  }
+}
+
+function operationTone(value = '') {
+  const normalized = String(value).toLowerCase()
+  if (['completed', 'success', 'healthy'].includes(normalized)) return 'healthy'
+  if (['failed', 'critical', 'cancelled'].includes(normalized)) return 'critical'
+  if (['claimed', 'running'].includes(normalized)) return 'running'
+  if (['queued', 'requested', 'warning'].includes(normalized)) return 'warning'
+  return 'neutral'
+}
+
+function operationLabel(job = {}) {
+  if (job.automation_name) return job.automation_name
+  return String(job.job_type || 'Device job').replaceAll('.', ' ')
+}
+
+function dashboardActivityIcon(category = '') {
+  if (category === 'terminal') return TerminalSquare
+  if (category === 'remote') return Monitor
+  if (category === 'software') return Package
+  if (category === 'service') return Server
+  if (category === 'security') return ShieldCheck
+  if (category === 'job') return ListChecks
+  return Activity
+}
+
+function RmmDashboard({ canAudit = false, devices = [], navigate, openDevice }) {
   const online = devices.filter((device) => device.status === 'Online').length
   const offline = devices.filter((device) => device.status === 'Offline').length
   const healthy = devices.filter((device) => device.health === 'Healthy').length
@@ -203,15 +236,58 @@ function RmmDashboard({ devices = [], navigate, openDevice }) {
   const compliance = patchReported.length ? Math.round(patchReported.reduce((sum, device) => sum + Number(device.patchCompliance), 0) / patchReported.length) : null
   const pendingPatches = devices.reduce((sum, device) => sum + (Number.isFinite(Number(device.pendingPatches)) ? Number(device.pendingPatches) : 0), 0)
   const healthPercent = devices.length ? Math.round((healthy / devices.length) * 100) : null
+  const apiBase = window.__HI5_API_BASE__ || deploymentConfig().apiUrl
+  const [recentJobs, setRecentJobs] = useState([])
+  const [recentActivity, setRecentActivity] = useState([])
+  const [operationsLoading, setOperationsLoading] = useState(true)
+  const [operationsError, setOperationsError] = useState('')
+
+  useEffect(() => {
+    let active = true
+    let initial = true
+
+    async function loadOperations() {
+      try {
+        const [jobsResponse, activityResponse] = await Promise.all([
+          fetch(apiBase + '/api/v1/rmm/jobs?limit=50', { credentials: 'include' }),
+          fetch(apiBase + '/api/v1/rmm/activity?limit=12', { credentials: 'include' }),
+        ])
+        const [jobsPayload, activityPayload] = await Promise.all([
+          jobsResponse.json().catch(() => ({})),
+          activityResponse.json().catch(() => ({})),
+        ])
+        if (!jobsResponse.ok) throw new Error(jobsPayload.error || 'Unable to load recent jobs.')
+        if (!activityResponse.ok) throw new Error(activityPayload.error || 'Unable to load recent activity.')
+        if (!active) return
+        setRecentJobs(jobsPayload.jobs || [])
+        setRecentActivity(activityPayload.events || [])
+        setOperationsError('')
+      } catch (error) {
+        if (active && initial) setOperationsError(error?.message || 'Unable to load live operations.')
+      } finally {
+        if (active && initial) setOperationsLoading(false)
+        initial = false
+      }
+    }
+
+    loadOperations()
+    const timer = window.setInterval(loadOperations, 10000)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [apiBase])
+
+  const activeJobs = recentJobs.filter((job) => ['queued', 'claimed', 'running'].includes(String(job.status || '').toLowerCase())).length
 
   return (
     <>
-      <PageHeading activeView="dashboard" action={<button className="rmm-primary compact" onClick={() => navigate('devices')} type="button"><Monitor size={16} /> View devices</button>} />
+      <PageHeading activeView="dashboard" action={<div className="rmm-dashboard-heading-actions"><span className="rmm-dashboard-live-state"><i /> Live estate</span><button className="rmm-primary compact" onClick={() => navigate('devices')} type="button"><Monitor size={16} /> View devices</button></div>} />
       <div className="rmm-metric-grid">
         <button onClick={() => navigate('devices')} type="button"><span className="rmm-metric-icon blue"><Monitor size={19} /></span><div><span>Managed devices</span><strong>{devices.length}</strong><small>{devices.length ? `${online} online · ${offline} offline` : 'No devices enrolled'}</small></div><ChevronRight size={16} /></button>
         <button onClick={() => navigate('alerts')} type="button"><span className="rmm-metric-icon red"><AlertTriangle size={19} /></span><div><span>Critical alerts</span><strong>{criticalAlerts}</strong><small>{openAlerts ? `${openAlerts} open alert${openAlerts === 1 ? '' : 's'}` : 'No real alerts reported'}</small></div><ChevronRight size={16} /></button>
         <button onClick={() => navigate('patching')} type="button"><span className="rmm-metric-icon green"><ShieldCheck size={19} /></span><div><span>Patch compliance</span><strong>{compliance == null ? '—' : `${compliance}%`}</strong><small>{patchReported.length ? `${pendingPatches} pending update${pendingPatches === 1 ? '' : 's'}` : 'Not reported by enrolled devices'}</small></div><ChevronRight size={16} /></button>
-        <button onClick={() => navigate('devices')} type="button"><span className="rmm-metric-icon violet"><Zap size={19} /></span><div><span>Device jobs</span><strong>Per device</strong><small>Open a managed device to view execution history</small></div><ChevronRight size={16} /></button>
+        <button onClick={() => navigate('devices')} type="button"><span className="rmm-metric-icon violet"><Zap size={19} /></span><div><span>Active jobs</span><strong>{operationsLoading ? '—' : activeJobs}</strong><small>{operationsLoading ? 'Loading live execution state…' : recentJobs.length ? `${recentJobs.length} recent execution${recentJobs.length === 1 ? '' : 's'} loaded` : 'No queued or running device work'}</small></div><ChevronRight size={16} /></button>
       </div>
 
       <div className="rmm-dashboard-grid">
@@ -233,8 +309,14 @@ function RmmDashboard({ devices = [], navigate, openDevice }) {
       </div>
 
       <div className="rmm-dashboard-lower">
-        <section className="rmm-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">Execution</span><h2>Device jobs</h2></div><button onClick={() => navigate('devices')} type="button">Open devices <ChevronRight size={14} /></button></div><div className="rmm-empty compact"><ListChecks size={22} /><strong>Jobs live with each device</strong><span>Open a managed device and use its Jobs tab for queued, running, successful and failed work.</span></div></section>
-        <section className="rmm-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">Audit</span><h2>Operational activity</h2></div></div><div className="rmm-empty compact"><History size={22} /><strong>Activity is captured centrally</strong><span>Device Activity tabs show endpoint history; administrators can search the tenant-wide Activity audit.</span></div></section>
+        <section className="rmm-card rmm-dashboard-operations-card">
+          <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Execution</span><h2>Recent device jobs</h2></div><div className="rmm-dashboard-feed-status"><span>{activeJobs} active</span><button onClick={() => navigate('devices')} type="button">Device history <ChevronRight size={14} /></button></div></div>
+          {operationsLoading ? <div className="rmm-dashboard-feed-loading">{Array.from({ length: 4 }).map((_, index) => <span key={index} />)}</div> : operationsError && !recentJobs.length ? <div className="rmm-empty compact"><AlertTriangle size={22} /><strong>Execution feed unavailable</strong><span>{operationsError}</span></div> : recentJobs.length ? <div className="rmm-dashboard-job-feed">{recentJobs.slice(0, 5).map((job) => <article key={job.id}><span className={'rmm-dashboard-job-icon ' + operationTone(job.status)}><ListChecks size={15} /></span><div><strong>{operationLabel(job)}</strong><small>{job.device_name || job.device_reference || 'Managed device'} · {job.initiated_by_label || job.queued_by_name || job.initiated_by || 'SYSTEM'}</small></div><StatusPill tone={operationTone(job.status)}>{job.status || 'unknown'}</StatusPill><time>{dashboardWhen(job.completed_at || job.claimed_at || job.created_at)}</time></article>)}</div> : <div className="rmm-empty compact"><CheckCircle2 size={22} /><strong>No recent device jobs</strong><span>New technician, automation and maintenance work will appear here automatically.</span></div>}
+        </section>
+        <section className="rmm-card rmm-dashboard-operations-card">
+          <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Audit</span><h2>Operational activity</h2></div>{canAudit ? <button onClick={() => navigate('activity-audit')} type="button">Open audit <ChevronRight size={14} /></button> : <span className="rmm-dashboard-feed-status-text">Latest estate events</span>}</div>
+          {operationsLoading ? <div className="rmm-dashboard-feed-loading">{Array.from({ length: 4 }).map((_, index) => <span key={index} />)}</div> : operationsError && !recentActivity.length ? <div className="rmm-empty compact"><AlertTriangle size={22} /><strong>Activity feed unavailable</strong><span>{operationsError}</span></div> : recentActivity.length ? <div className="rmm-dashboard-activity-feed">{recentActivity.slice(0, 5).map((event) => { const Icon = dashboardActivityIcon(event.category); return <article key={event.id}><span className={'rmm-dashboard-activity-icon ' + operationTone(event.outcome)}><Icon size={15} /></span><div><strong>{event.summary}</strong><small>{event.device_name || 'Managed device'} · {event.actor_label || 'SYSTEM'}</small></div><StatusPill tone={operationTone(event.outcome)}>{event.outcome || 'info'}</StatusPill><time>{dashboardWhen(event.created_at)}</time></article> })}</div> : <div className="rmm-empty compact"><History size={22} /><strong>No operational activity yet</strong><span>Remote sessions, terminal work, jobs and Agent-detected changes will appear here.</span></div>}
+        </section>
       </div>
     </>
   )
@@ -980,10 +1062,10 @@ export function RmmPlatformApp({ accent, canAudit = false, canBackstageRemote = 
     if (activeView === 'automation') return <RmmAutomation />
     if (activeView === 'policies') return <RmmMonitoringPolicies devices={devices} openDevice={openDevice} sites={sites} />
     if (activeView === 'reports') return <RmmReports devices={devices} />
-    if (activeView === 'activity-audit') return canAudit ? <RmmAuditActivity devices={devices} /> : <RmmDashboard devices={devices} navigate={navigate} openDevice={openDevice} />
+    if (activeView === 'activity-audit') return canAudit ? <RmmAuditActivity devices={devices} /> : <RmmDashboard canAudit={canAudit} devices={devices} navigate={navigate} openDevice={openDevice} />
     if (activeView === 'agent-deployment') return <RmmAgentDeployment />
     if (activeView === 'settings') return <RmmSettings navigate={navigate} />
-    return <RmmDashboard devices={devices} navigate={navigate} openDevice={openDevice} />
+    return <RmmDashboard canAudit={canAudit} devices={devices} navigate={navigate} openDevice={openDevice} />
   }
 
   return (
