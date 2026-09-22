@@ -2,6 +2,13 @@ import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
 import { pool, withTransaction } from './db.js'
 import { recalculateAllTenantVulnerabilityExposures } from './rmmVulnerabilityExposure.js'
+import {
+  htmlHostAllowed,
+  normalizeVendorHtmlAutomationPolicy,
+  normalizeVendorHtmlRecipe,
+  parseVendorHtmlReleases,
+  robotsPathAllowed,
+} from './vendorHtmlRecipe.js'
 
 function clean(value = '') { return String(value ?? '').trim() }
 
@@ -99,6 +106,104 @@ export async function publicHttpsUrl(value) {
     }
   }
   return url
+}
+
+export async function resolveAllowedPublicDownload(value, allowedHosts = [], redirects = 0) {
+  if (redirects > 4) throw new Error('Vendor download redirected too many times.')
+  const url = await publicHttpsUrl(value)
+  if (!htmlHostAllowed(url.toString(), allowedHosts)) {
+    throw new Error('Vendor download host is not present in the HTML recipe allowedHosts list.')
+  }
+
+  const headers = { 'User-Agent': 'Hi5Central-Software-Catalogue/1.0' }
+  let response = await fetch(url, {
+    method: 'HEAD',
+    headers,
+    redirect: 'manual',
+    signal: AbortSignal.timeout(30_000),
+  })
+  if ([405, 501].includes(response.status)) {
+    response = await fetch(url, {
+      method: 'GET',
+      headers: { ...headers, Range: 'bytes=0-0' },
+      redirect: 'manual',
+      signal: AbortSignal.timeout(30_000),
+    })
+    await response.body?.cancel().catch(() => {})
+  }
+
+  if ([301,302,303,307,308].includes(response.status)) {
+    const location = clean(response.headers.get('location'))
+    if (!location) throw new Error('Vendor download returned a redirect without a location.')
+    return resolveAllowedPublicDownload(new URL(location,url).toString(), allowedHosts, redirects + 1)
+  }
+  if (!response.ok && response.status !== 206) {
+    throw new Error('Vendor download probe HTTP ' + response.status)
+  }
+  return {
+    url: url.toString(),
+    status: response.status,
+    contentType: clean(response.headers.get('content-type')),
+    contentLength: Number(response.headers.get('content-length') || 0) || null,
+  }
+}
+
+export async function evaluateVendorHtmlAutomation(sourceUrl, rawPolicy = {}, pollMinutes = 60) {
+  const policy = normalizeVendorHtmlAutomationPolicy(rawPolicy)
+  if (policy.termsDecision === 'prohibited') throw new Error('vendor_html_automation_prohibited_by_terms')
+  if (policy.termsDecision !== 'allowed' || !policy.automatedRetrievalAllowed) {
+    throw new Error('vendor_html_terms_review_required')
+  }
+
+  const reviewedAt = Date.parse(policy.termsReviewedAt)
+  const expiresAt = reviewedAt + policy.reviewExpiresDays * 24 * 60 * 60 * 1000
+  if (!Number.isFinite(reviewedAt) || Date.now() > expiresAt) {
+    throw new Error('vendor_html_terms_review_expired')
+  }
+  if (Number(pollMinutes || 0) < Number(policy.minimumPollMinutes || 60)) {
+    throw new Error('vendor_html_poll_interval_below_compliance_minimum')
+  }
+
+  const source = await publicHttpsUrl(sourceUrl)
+  const robotsUrl = new URL('/robots.txt', source.origin)
+  let current = robotsUrl
+  let response = null
+
+  for (let redirects = 0; redirects <= 3; redirects += 1) {
+    response = await fetch(current, {
+      headers: { Accept: 'text/plain,*/*;q=0.1', 'User-Agent': policy.robotsUserAgent + '/1.0' },
+      redirect: 'manual',
+      signal: AbortSignal.timeout(30_000),
+    })
+    if (![301,302,303,307,308].includes(response.status)) break
+    const location = clean(response.headers.get('location'))
+    if (!location) throw new Error('vendor_html_robots_redirect_without_location')
+    const next = await publicHttpsUrl(new URL(location,current).toString())
+    if (next.origin !== source.origin) throw new Error('vendor_html_robots_cross_origin_redirect_blocked')
+    current = next
+  }
+
+  const status = Number(response?.status || 0)
+  if ([404,410].includes(status)) {
+    return {
+      allowed: true,
+      policy,
+      robots: { url: current.toString(), status, allowed: true, reason: 'robots_not_published' },
+    }
+  }
+  if ([401,403,429].includes(status) || status >= 500 || !response?.ok) {
+    throw new Error('vendor_html_robots_unavailable_or_blocked_http_' + status)
+  }
+
+  const bytes = await limitedResponseBytes(response, 1024 * 1024)
+  const body = new TextDecoder('utf-8').decode(bytes)
+  const decision = robotsPathAllowed(body, source.pathname + source.search, policy.robotsUserAgent)
+  if (!decision.allowed) throw new Error('vendor_html_robots_disallowed:' + decision.matchedRule)
+  return {
+    allowed: true,
+    policy,
+    robots: { url: current.toString(), status, ...decision },
+  }
 }
 
 export async function fetchPublicText(value, { accept = '*/*', maxBytes = 5 * 1024 * 1024, redirects = 0 } = {}) {
@@ -200,7 +305,7 @@ function deploymentMode(value = '') {
 }
 
 function sourceType(value = '') {
-  return ['github_releases', 'vendor_json', 'static_release'].includes(clean(value)) ? clean(value) : 'github_releases'
+  return ['github_releases', 'vendor_json', 'vendor_html', 'static_release'].includes(clean(value)) ? clean(value) : 'github_releases'
 }
 
 function safeJsonPath(value = '', required = false) {
@@ -253,6 +358,10 @@ function normalizeInput(body = {}) {
     staticInstallerUrl: clean(body.staticInstallerUrl ?? parser.staticInstallerUrl).slice(0, 2000),
     staticSha256: normalizedSha256(body.staticSha256 ?? parser.staticSha256),
     staticReleaseUrl: clean(body.staticReleaseUrl ?? parser.staticReleaseUrl ?? body.sourceUrl).slice(0, 2000),
+    htmlRecipe: type === 'vendor_html' ? normalizeVendorHtmlRecipe(body.htmlRecipe ?? parser.htmlRecipe ?? {}) : {},
+    automationPolicy: type === 'vendor_html'
+      ? normalizeVendorHtmlAutomationPolicy(body.automationPolicy ?? parser.automationPolicy ?? {})
+      : {},
   }
   const verificationSource = body.verificationConfig && typeof body.verificationConfig === 'object' && !Array.isArray(body.verificationConfig)
     ? body.verificationConfig
@@ -283,7 +392,7 @@ function normalizeInput(body = {}) {
     displayName: clean(body.displayName).slice(0, 160),
     sourceType: type,
     repository: type === 'github_releases' ? repositoryName(body.repository) : '',
-    sourceUrl: ['vendor_json', 'static_release'].includes(type) ? clean(body.sourceUrl).slice(0, 2000) : '',
+    sourceUrl: ['vendor_json', 'vendor_html', 'static_release'].includes(type) ? clean(body.sourceUrl).slice(0, 2000) : '',
     parserConfig,
     verificationConfig,
     canonicalName: clean(body.canonicalName).slice(0, 200),
@@ -299,18 +408,23 @@ function normalizeInput(body = {}) {
     checksumAssetPattern: type === 'github_releases' ? clean(body.checksumAssetPattern).slice(0, 240) : '',
     installerType: clean(body.installerType).toLowerCase().slice(0, 20),
     installArguments,
-    pollMinutes: Math.max(15, Math.min(10080, Number(body.pollMinutes) || 60)),
+    pollMinutes: type === 'vendor_html'
+      ? Math.max(
+          Math.max(15, Math.min(10080, Number(body.pollMinutes) || 60)),
+          Number(parserConfig.automationPolicy?.minimumPollMinutes || 60),
+        )
+      : Math.max(15, Math.min(10080, Number(body.pollMinutes) || 60)),
   }
   if (input.displayName.length < 2 || input.canonicalName.length < 2 || input.namePattern.length < 2) {
     throw new Error('Display name, application name and detection name are required.')
   }
   if (type === 'github_releases' && !input.repository) throw new Error('A valid public GitHub repository is required.')
-  if (type === 'vendor_json') {
+  if (type === 'vendor_json' || type === 'vendor_html') {
     try {
       const url = new URL(input.sourceUrl)
       if (url.protocol !== 'https:') throw new Error()
     } catch {
-      throw new Error('A valid HTTPS vendor JSON URL is required.')
+      throw new Error(type === 'vendor_html' ? 'A valid HTTPS vendor HTML URL is required.' : 'A valid HTTPS vendor JSON URL is required.')
     }
   }
   if (type === 'static_release') {
@@ -350,6 +464,9 @@ function normalizeInput(body = {}) {
   if (mode === 'vendor_direct' && type === 'vendor_json'
     && (!parserConfig.installerUrlPath || !parserConfig.sha256Path || !input.expectedSigner)) {
     throw new Error('JSON vendor-direct sources require installer URL path, SHA-256 path and expected signer.')
+  }
+  if (mode === 'vendor_direct' && type === 'vendor_html' && !input.expectedSigner) {
+    throw new Error('HTML vendor-direct sources require an expected signer.')
   }
   if (mode === 'vendor_direct' && type === 'static_release' && !input.expectedSigner) {
     throw new Error('Static vendor-direct sources require an expected signer.')
@@ -516,8 +633,60 @@ async function resolveStaticSource(source) {
   }
 }
 
+async function resolveHtmlSource(source) {
+  const recipe = normalizeVendorHtmlRecipe(source.parser_config?.htmlRecipe || {})
+  if (!htmlHostAllowed(source.source_url, recipe.allowedHosts)) {
+    throw new Error('HTML vendor source page host is not in allowedHosts.')
+  }
+  const compliance = await evaluateVendorHtmlAutomation(
+    source.source_url,
+    source.parser_config?.automationPolicy || {},
+    source.poll_minutes,
+  )
+  const body = await fetchPublicText(source.source_url, {
+    accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+    maxBytes: 8 * 1024 * 1024,
+  })
+  const candidates = parseVendorHtmlReleases(body, source.source_url, recipe)
+  if (!candidates.length) throw new Error('HTML vendor source returned no stable installer candidates.')
+  const selected = candidates.at(-1)
+  if (!htmlHostAllowed(selected.installerUrl, recipe.allowedHosts)) {
+    throw new Error('HTML vendor installer host is not in allowedHosts.')
+  }
+  const downloadProbe = await resolveAllowedPublicDownload(selected.installerUrl, recipe.allowedHosts)
+  const installerUrl = downloadProbe.url
+  const release = {
+    version: releaseVersion(selected.version),
+    releaseDate: releaseDate(selected.releaseDate),
+    releaseUrl: selected.releaseUrl || source.source_url,
+    installerUrl,
+    installerSha256: normalizedSha256(selected.installerSha256),
+    installerType: installerType(selected.assetName || new URL(installerUrl).pathname, source.installer_type),
+    installerName: selected.assetName,
+    checksumName: selected.installerSha256 ? 'HTML-published SHA-256' : '',
+    verificationProductCode: '',
+  }
+  release.trustState = trustState(source, release)
+  return {
+    release,
+    sourcePayload: {
+      html: {
+        recipeVersion: 1,
+        compliance,
+        selected,
+        finalDownloadUrl: downloadProbe.url,
+        downloadContentType: downloadProbe.contentType,
+        downloadContentLength: downloadProbe.contentLength,
+        allowedHosts: recipe.allowedHosts,
+        candidatesSeen: candidates.slice(-Math.max(2, Number(recipe.previousStableCount || 1) + 1)),
+      },
+    },
+  }
+}
+
 async function resolveSource(source) {
   if (source.source_type === 'vendor_json') return resolveJsonSource(source)
+  if (source.source_type === 'vendor_html') return resolveHtmlSource(source)
   if (source.source_type === 'static_release') return resolveStaticSource(source)
   return resolveGithubSource(source)
 }

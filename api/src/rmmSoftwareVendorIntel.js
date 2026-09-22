@@ -1,5 +1,6 @@
 import { pool, withTransaction } from './db.js'
 import {
+  evaluateVendorHtmlAutomation,
   fetchPublicJson,
   fetchPublicText,
   globMatcher,
@@ -8,6 +9,7 @@ import {
   latestGithubRelease,
   normalizedSha256,
   publicHttpsUrl,
+  resolveAllowedPublicDownload,
   publishedChecksum,
   releaseDate as normalizedReleaseDate,
   releaseVersion,
@@ -19,6 +21,7 @@ import { importCuratedSoftwareCatalogue } from './rmmCuratedSoftwareCatalogue.js
 import { syncEvergreenCorroboration } from './rmmEvergreenIntel.js'
 import { promoteAutomaticAdmissionReady, queueAutomaticCleanInstallQualifications, queueAutomaticUpgradeQualifications, queueCommonSoftwareQualifications, runSoftwareQualificationQueue } from './rmmSoftwareQualification.js'
 import { COMMON_WINDOWS_SOFTWARE_LOWER } from './rmmCommonSoftware.js'
+import { htmlHostAllowed, parseVendorHtmlReleases } from './vendorHtmlRecipe.js'
 import {
   classifyGithubReleaseBacklog,
   discoverGithubWindowsInstaller,
@@ -331,7 +334,7 @@ async function upsertRelease({
 async function binding(sourceKey) {
   const result = await pool.query(
     `SELECT b.source_key,b.provider_package_id,b.canonical_name,b.publisher,b.channel,b.platform,b.architecture,
-            b.metadata AS binding_metadata,s.priority,s.source_url,s.source_type,s.metadata AS source_metadata
+            b.metadata AS binding_metadata,s.priority,s.poll_minutes,s.source_url,s.source_type,s.metadata AS source_metadata
        FROM rmm_software_vendor_bindings b
        JOIN rmm_software_vendor_sources s ON s.source_key=b.source_key
       WHERE b.source_key=$1 AND b.enabled=true AND s.enabled=true
@@ -508,7 +511,7 @@ async function retainPreviousGithubReleaseCandidate({ sourceKey, binding: b, con
       (source_key,provider_package_id,canonical_name,publisher,channel,platform,architecture,
        version,release_date,installer_url,installer_sha256,installer_type,release_url,asset_name,
        trust_state,trust_evidence,source_priority,source_payload,last_seen_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'asset_candidate',$15::jsonb,$16,$17::jsonb,now())
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,$17,$18::jsonb,now())
      ON CONFLICT (source_key,provider_package_id,channel,platform,architecture,version)
      DO UPDATE SET release_date=COALESCE(EXCLUDED.release_date,rmm_software_vendor_releases.release_date),
        asset_health_state=CASE WHEN rmm_software_vendor_releases.installer_url IS DISTINCT FROM EXCLUDED.installer_url THEN 'unknown' ELSE rmm_software_vendor_releases.asset_health_state END,
@@ -673,6 +676,67 @@ async function syncGenericConfigured(sourceKey, state) {
     releaseDate = normalizedReleaseDate(release.released_at || release.created_at)
     releaseUrl = clean(release?._links?.self || release?._links?.tag || '')
     payload = { gitlab: { name: release.name, tag_name: release.tag_name, released_at: release.released_at } }
+  } else if (state.source_type === 'vendor_html') {
+    const recipe = object(config.htmlRecipe)
+    const compliance = await evaluateVendorHtmlAutomation(
+      state.source_url,
+      object(config.automationPolicy),
+      state.poll_minutes,
+    )
+    await pool.query(
+      `UPDATE rmm_software_vendor_sources
+          SET metadata=metadata || $2::jsonb,updated_at=now()
+        WHERE source_key=$1`,
+      [sourceKey, JSON.stringify({ automationCompliance: compliance })],
+    )
+    const body = await fetchPublicText(state.source_url, {
+      accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+      maxBytes: 8 * 1024 * 1024,
+    })
+    const candidates = parseVendorHtmlReleases(body, state.source_url, recipe)
+    if (!candidates.length) throw new Error(sourceKey + ' HTML recipe returned no stable Windows installer candidates')
+    const latest = candidates.at(-1)
+    if (!htmlHostAllowed(state.source_url, recipe.allowedHosts)) {
+      throw new Error(sourceKey + ' source page host is not allowed by htmlRecipe.allowedHosts')
+    }
+    if (!htmlHostAllowed(latest.installerUrl, recipe.allowedHosts)) {
+      throw new Error(sourceKey + ' installer host is not allowed by htmlRecipe.allowedHosts')
+    }
+    const downloadProbe = await resolveAllowedPublicDownload(latest.installerUrl, recipe.allowedHosts)
+    version = clean(latest.version)
+    installerUrl = downloadProbe.url
+    installerSha256 = normalizedSha256(latest.installerSha256)
+    resolvedInstallerType = detectInstallerType(latest.assetName || new URL(installerUrl).pathname, resolvedInstallerType)
+    releaseDate = normalizedReleaseDate(latest.releaseDate)
+    releaseUrl = latest.releaseUrl ? (await publicHttpsUrl(latest.releaseUrl)).toString() : state.source_url
+    selectedAssetReason = 'vendor_html_recipe'
+    payload = {
+      html: {
+        recipeVersion: 1,
+        compliance,
+        sourceUrl: state.source_url,
+        selected: {
+          version,
+          installerUrl,
+          installerSha256,
+          installerType: resolvedInstallerType,
+          assetName: latest.assetName,
+          releaseDate,
+          releaseUrl,
+          finalDownloadUrl: downloadProbe.url,
+          downloadContentType: downloadProbe.contentType,
+          downloadContentLength: downloadProbe.contentLength,
+        },
+        candidatesSeen: candidates.slice(-Math.max(2, Number(recipe.previousStableCount || 1) + 1)).map((item) => ({
+          version: item.version,
+          installerUrl: item.installerUrl,
+          assetName: item.assetName,
+          releaseDate: item.releaseDate,
+          sha256Present: Boolean(item.installerSha256),
+        })),
+        allowedHosts: recipe.allowedHosts,
+      },
+    }
   } else if (state.source_type === 'vendor_json') {
     const response = await fetchPublicJson(state.source_url)
     if (sourceKey === 'go_golang') {
@@ -1119,15 +1183,24 @@ async function syncGenericConfigured(sourceKey, state) {
     selectedAssetReason,
   }
 
-  if (state.source_type === 'github_releases') {
+  if (state.source_type === 'github_releases' || state.source_type === 'vendor_html') {
     try {
-      await retainPreviousGithubReleaseCandidate({
-        sourceKey,
-        binding: b,
-        config,
-        repository: repositoryName(config.repository || state.source_url),
-        currentVersion: version,
-      })
+      if (state.source_type === 'vendor_html') {
+        await retainPreviousHtmlReleaseCandidate({
+          sourceKey,
+          binding: b,
+          config,
+          currentVersion: version,
+        })
+      } else {
+        await retainPreviousGithubReleaseCandidate({
+          sourceKey,
+          binding: b,
+          config,
+          repository: repositoryName(config.repository || state.source_url),
+          currentVersion: version,
+        })
+      }
       await pool.query(
         `UPDATE rmm_software_vendor_sources
             SET metadata=metadata - 'previousReleaseRetentionError',updated_at=now()
@@ -1556,7 +1629,7 @@ export async function syncSoftwareVendorSource(sourceKey) {
   const state = await sourceState(sourceKey)
   if (!state?.enabled) return { sourceKey, skipped: true }
   const adapter = adapters[sourceKey]
-    || (['github_releases','gitlab_releases','vendor_json','vendor_text','hashicorp_releases','python_releases','adoptium','static_release','package_registry','winget_manifest'].includes(state.source_type)
+    || (['github_releases','gitlab_releases','vendor_json','vendor_text','vendor_html','hashicorp_releases','python_releases','adoptium','static_release','package_registry','winget_manifest'].includes(state.source_type)
       ? () => syncGenericConfigured(sourceKey, state)
       : null)
   if (!adapter) throw new Error('No software vendor adapter registered for ' + sourceKey + ' (' + state.source_type + ')')
@@ -1806,6 +1879,75 @@ async function runQualificationRunnerTick() {
   }
 }
 
+async function retainPreviousHtmlReleaseCandidate({ sourceKey, binding: b, config, currentVersion }) {
+  const retained = await pool.query(
+    `SELECT version FROM rmm_software_vendor_releases
+      WHERE source_key=$1 AND provider_package_id=$2 AND channel=$3 AND platform=$4 AND architecture=$5
+        AND trust_state IN ('asset_candidate','direct_ready') AND asset_health_state IS DISTINCT FROM 'dead'
+        AND installer_type IN ('msi','exe')`,
+    [sourceKey,b.provider_package_id,b.channel,b.platform,b.architecture],
+  )
+  if (retained.rows.some((row) => compareVersionValues(row.version,currentVersion)<0
+    && !/(alpha|beta|preview|nightly|canary|rc|eap|dev)/i.test(row.version))) return null
+
+  const recipe = object(config.htmlRecipe)
+  const compliance = await evaluateVendorHtmlAutomation(
+    b.source_url,
+    object(config.automationPolicy),
+    b.poll_minutes,
+  )
+  const body = await fetchPublicText(b.source_url, {
+    accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+    maxBytes: 8 * 1024 * 1024,
+  })
+  const candidates = parseVendorHtmlReleases(body,b.source_url,recipe)
+    .filter((item) => compareVersionValues(item.version,currentVersion)<0)
+  const previous = candidates.at(-1)
+  if (!previous) return null
+  if (!htmlHostAllowed(previous.installerUrl,recipe.allowedHosts)) {
+    throw new Error(sourceKey + ' previous installer host is not allowed by htmlRecipe.allowedHosts')
+  }
+  const downloadProbe=await resolveAllowedPublicDownload(previous.installerUrl,recipe.allowedHosts)
+  const installerUrl=downloadProbe.url
+  const installerType=detectInstallerType(previous.assetName || new URL(installerUrl).pathname,clean(config.installerType).toLowerCase())
+  if(!['msi','exe'].includes(installerType)) return null
+  const expectedSigner=clean(config.autoExpectedSigner || config.expectedSigner || config.signerBaseline)
+  const historicalTrustState=expectedSigner ? 'asset_candidate' : 'version_only'
+  const payload={
+    historicalReleaseCandidate:true,
+    historicalRole:'upgrade_baseline',
+    expectedSigner,
+    deploymentMode:'intelligence_only',
+    verification:object(config.verificationConfig),
+    installArguments:clean(config.installArguments),
+    html:{
+      recipeVersion:1,
+      compliance,
+      sourceUrl:b.source_url,
+      selected:{version:previous.version,installerUrl,assetName:previous.assetName,releaseDate:previous.releaseDate},
+      allowedHosts:recipe.allowedHosts,
+      historical:true,
+    },
+  }
+  const result=await pool.query(
+    `INSERT INTO rmm_software_vendor_releases
+      (source_key,provider_package_id,canonical_name,publisher,channel,platform,architecture,version,
+       release_date,installer_url,installer_sha256,installer_type,release_url,asset_name,trust_state,trust_evidence,
+       source_priority,source_payload,last_seen_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,$17,$18::jsonb,now())
+     ON CONFLICT (source_key,provider_package_id,channel,platform,architecture,version)
+     DO NOTHING
+     RETURNING id,version,trust_state`,
+    [sourceKey,b.provider_package_id,b.canonical_name,b.publisher,b.channel,b.platform,b.architecture,
+      previous.version,normalizedReleaseDate(previous.releaseDate),installerUrl,normalizedSha256(previous.installerSha256),
+      installerType,previous.releaseUrl || b.source_url,previous.assetName,historicalTrustState,
+      JSON.stringify({source:'vendor_html_history',historicalReleaseCandidate:true,sha256Present:Boolean(previous.installerSha256),
+        finalDownloadUrl:downloadProbe.url,downloadContentType:downloadProbe.contentType}),
+      b.priority,JSON.stringify(payload)],
+  )
+  return result.rows[0] || null
+}
+
 async function retainPreviousWingetReleaseCandidate({ sourceKey, binding: b, config, currentVersion }) {
   const retained=await pool.query(
     `SELECT version FROM rmm_software_vendor_releases
@@ -1860,7 +2002,7 @@ export async function prepareQualificationBaselines({ limit = 4 } = {}) {
          FROM rmm_software_catalogue c
          JOIN rmm_software_vendor_sources s
            ON s.source_key=c.source_metadata->>'latestSource'
-          AND s.enabled=true AND s.source_type IN ('github_releases','winget_manifest')
+          AND s.enabled=true AND s.source_type IN ('github_releases','winget_manifest','vendor_html')
          LEFT JOIN rmm_software_qualification_queue q
            ON q.catalogue_id=c.id AND q.test_type='clean_install'
         WHERE c.tenant_id IS NULL AND c.status='active'
@@ -1888,7 +2030,11 @@ export async function prepareQualificationBaselines({ limit = 4 } = {}) {
         const b = await binding(row.source_key)
         if (!b) throw new Error('vendor_binding_missing')
         const config = {...object(b.source_metadata),...object(b.binding_metadata)}
-        const retain = row.source_type === 'winget_manifest' ? retainPreviousWingetReleaseCandidate : retainPreviousGithubReleaseCandidate
+        const retain = row.source_type === 'winget_manifest'
+          ? retainPreviousWingetReleaseCandidate
+          : row.source_type === 'vendor_html'
+            ? retainPreviousHtmlReleaseCandidate
+            : retainPreviousGithubReleaseCandidate
         const retained = await retain({
           sourceKey:row.source_key,binding:b,config,
           repository:repositoryName(config.repository || row.source_url),currentVersion:row.target_version,

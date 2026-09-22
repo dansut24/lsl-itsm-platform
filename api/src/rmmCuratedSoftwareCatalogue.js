@@ -3,6 +3,7 @@ import {
   normalizedSha256,
   repositoryName,
 } from './rmmTenantVendorSources.js'
+import { normalizeVendorHtmlAutomationPolicy, normalizeVendorHtmlRecipe } from './vendorHtmlRecipe.js'
 
 function clean(value = '') { return String(value ?? '').trim() }
 function object(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {} }
@@ -65,7 +66,7 @@ async function normalizeEntry(raw = {}) {
   if (!displayName || !canonicalName) throw new Error(key + ': displayName and canonicalName are required.')
   const publisher = clean(raw.publisher).slice(0, 200)
   const sourceType = clean(raw.sourceType)
-  if (!['github_releases', 'gitlab_releases', 'vendor_json', 'vendor_text', 'hashicorp_releases', 'python_releases', 'adoptium', 'static_release', 'package_registry', 'winget_manifest'].includes(sourceType)) {
+  if (!['github_releases', 'gitlab_releases', 'vendor_json', 'vendor_text', 'vendor_html', 'hashicorp_releases', 'python_releases', 'adoptium', 'static_release', 'package_registry', 'winget_manifest'].includes(sourceType)) {
     throw new Error(key + ': unsupported curated sourceType.')
   }
   const deploymentMode = ['vendor_direct', 'winget_preferred', 'intelligence_only'].includes(clean(raw.deploymentMode))
@@ -100,6 +101,12 @@ async function normalizeEntry(raw = {}) {
     productCodePath: jsonPath(raw.productCodePath ?? parserInput.productCodePath),
   }
   if (sourceType === 'vendor_json' && !parserConfig.versionPath) throw new Error(key + ': vendor_json requires versionPath.')
+  const htmlRecipe = sourceType === 'vendor_html'
+    ? normalizeVendorHtmlRecipe(raw.htmlRecipe || raw.htmlConfig || {})
+    : {}
+  const automationPolicy = sourceType === 'vendor_html'
+    ? normalizeVendorHtmlAutomationPolicy(raw.automationPolicy || {})
+    : {}
 
   const staticVersion = clean(raw.staticVersion || raw.version).slice(0, 120)
   const staticInstallerUrl = clean(raw.staticInstallerUrl || raw.installerUrl)
@@ -126,7 +133,10 @@ async function normalizeEntry(raw = {}) {
   const namePattern = clean(raw.namePattern || canonicalName).slice(0, 200)
   const publisherPattern = clean(raw.publisherPattern || publisher).slice(0, 200)
   const priority = Math.max(1, Math.min(1000, Number(raw.priority || 700) || 700))
-  const pollMinutes = Math.max(5, Math.min(10080, Number(raw.pollMinutes || 60) || 60))
+  const requestedPollMinutes = Math.max(5, Math.min(10080, Number(raw.pollMinutes || 60) || 60))
+  const pollMinutes = sourceType === 'vendor_html'
+    ? Math.max(requestedPollMinutes, Number(automationPolicy.minimumPollMinutes || 60))
+    : requestedPollMinutes
   const channel = clean(raw.channel || 'stable').slice(0, 80)
   const requestedPlatform = clean(raw.platform || 'windows').toLowerCase().slice(0, 40)
   const platform = requestedPlatform === 'any' ? 'cross_platform' : requestedPlatform
@@ -181,6 +191,8 @@ async function normalizeEntry(raw = {}) {
     repository,
     adapter,
     parserConfig,
+    htmlRecipe,
+    automationPolicy,
     releaseTagPattern: clean(raw.releaseTagPattern).slice(0, 240),
     assetPattern: clean(raw.assetPattern).slice(0, 240),
     checksumAssetPattern: clean(raw.checksumAssetPattern).slice(0, 240),
@@ -215,6 +227,8 @@ async function normalizeEntry(raw = {}) {
     repository,
     adapter,
     parserConfig,
+    htmlRecipe,
+    automationPolicy,
     releaseTagPattern: sourceMetadata.releaseTagPattern,
     assetPattern: sourceMetadata.assetPattern,
     checksumAssetPattern: sourceMetadata.checksumAssetPattern,
@@ -238,7 +252,10 @@ async function normalizeEntry(raw = {}) {
     displayName,
     sourceType,
     sourceUrl,
-    enabled: raw.enabled !== false,
+    enabled: raw.enabled !== false && (
+      sourceType !== 'vendor_html'
+      || (automationPolicy.termsDecision === 'allowed' && automationPolicy.automatedRetrievalAllowed)
+    ),
     priority,
     pollMinutes,
     catalogueKey,

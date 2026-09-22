@@ -6,10 +6,12 @@
   "scripts": {
     "migrate": "node src/migrate.js",
     "reset:service-requests": "node scripts/reset-service-request-defaults.mjs",
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "check:vendor-html": "node scripts/check-vendor-html.mjs"
   },
   "dependencies": {
     "@hono/node-server": "2.1.1",
+    "cheerio": "^1.1.2",
     "fast-xml-parser": "^5.11.1",
     "hono": "4.13.7",
     "jose": "^6.2.12",
