@@ -4,6 +4,9 @@ import {
   HardDrive, ListTree, Play, Power, RefreshCw, RotateCw, Search,
   Server, Settings2, SquareTerminal, Trash2, Upload, Users, WifiOff, X,
 } from 'lucide-react'
+import { Terminal } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
+import '@xterm/xterm/css/xterm.css'
 import { deploymentConfig } from '../../lib/deploymentConfig.js'
 import './RmmDeviceTools.css'
 
@@ -55,13 +58,13 @@ async function runAction(device, type, payload = {}, timeoutMs) {
   return waitForJob(result.job?.id, timeoutMs)
 }
 
-async function createToolSession(device, tool, shell) {
+async function createToolSession(device, tool, shell, runAs = 'system') {
   if (String(device?.status || '').toLowerCase() !== 'online') throw new Error('This device is offline. Live tools are unavailable.')
   const response = await fetch(apiBase() + '/api/v1/rmm/devices/' + encodeURIComponent(device.agentDeviceId) + '/tool-sessions', {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tool, shell }),
+    body: JSON.stringify({ tool, shell, runAs }),
   })
   const payload = await response.json().catch(() => ({}))
   if (!response.ok) throw new Error(payload.error || 'Unable to start the live device tool.')
@@ -93,41 +96,89 @@ function rememberToolValue(key, value) {
   liveToolCache.set(key, { value, savedAt: Date.now() })
 }
 
-function TerminalTool({ device, shell }) {
+function TerminalTool({ device, shell, runAs = 'system' }) {
   const [state, setState] = useState('Connecting…')
-  const [output, setOutput] = useState('')
   const [command, setCommand] = useState('')
   const socketRef = useRef(null)
-  const outputRef = useRef(null)
+  const terminalHostRef = useRef(null)
+  const terminalRef = useRef(null)
 
   useEffect(() => {
     let closed = false
     let socket
-    createToolSession(device, 'terminal', shell).then((payload) => {
+    let resizeObserver
+    let resizeTimer
+    const host = terminalHostRef.current
+    if (!host) return undefined
+
+    const terminal = new Terminal({
+      convertEol: false,
+      cursorBlink: true,
+      cursorStyle: 'block',
+      disableStdin: true,
+      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+      fontSize: 12,
+      lineHeight: 1.25,
+      scrollback: 6000,
+      theme: {
+        background: '#0c1118',
+        foreground: '#e8edf4',
+        cursor: '#e8edf4',
+        selectionBackground: '#35506d',
+      },
+    })
+    const fit = new FitAddon()
+    terminal.loadAddon(fit)
+    terminal.open(host)
+    terminalRef.current = terminal
+
+    const fitAndResize = () => {
+      try { fit.fit() } catch {}
+      const current = socketRef.current
+      if (current?.readyState === WebSocket.OPEN) {
+        current.send(JSON.stringify({ type: 'terminal_resize', cols: terminal.cols, rows: terminal.rows }))
+      }
+    }
+    window.requestAnimationFrame(fitAndResize)
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => {
+        window.clearTimeout(resizeTimer)
+        resizeTimer = window.setTimeout(fitAndResize, 40)
+      })
+      resizeObserver.observe(host)
+    }
+
+    createToolSession(device, 'terminal', shell, runAs).then((payload) => {
       if (closed) return
       socket = new WebSocket(websocketUrl(payload.websocketPath, { session_id: payload.session.id, token: payload.token }))
       socketRef.current = socket
-      socket.onopen = () => setState(shell === 'cmd' ? 'Command Prompt · connected' : 'PowerShell · connected')
+      socket.onopen = () => {
+        const label = shell === 'cmd' ? 'Command Prompt' : 'PowerShell'
+        setState(label + ' · ' + (runAs === 'user' ? 'User' : 'SYSTEM') + ' · connected')
+        fitAndResize()
+      }
       socket.onmessage = (event) => {
         let message
         try { message = JSON.parse(event.data) } catch { return }
-        if (message.type === 'terminal_output') setOutput((current) => (current + String(message.data || '')).slice(-250000))
+        if (message.type === 'terminal_output') terminal.write(String(message.data || ''))
         if (message.type === 'terminal_error') setState(message.error || 'Terminal error')
         if (message.type === 'terminal_closed') setState('Terminal closed')
       }
       socket.onerror = () => setState('Terminal connection failed')
       socket.onclose = () => { if (!closed) setState('Terminal disconnected') }
     }).catch((error) => setState(error.message))
+
     return () => {
       closed = true
+      window.clearTimeout(resizeTimer)
+      resizeObserver?.disconnect()
       try { socketRef.current?.send(JSON.stringify({ type: 'terminal_stop' })) } catch {}
       try { socketRef.current?.close() } catch {}
+      socketRef.current = null
+      terminalRef.current = null
+      terminal.dispose()
     }
-  }, [device.agentDeviceId, shell])
-
-  useEffect(() => {
-    if (outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight
-  }, [output])
+  }, [device.agentDeviceId, shell, runAs])
 
   function send(event) {
     event.preventDefault()
@@ -138,9 +189,9 @@ function TerminalTool({ device, shell }) {
   }
 
   return <div className="rmm-terminal-tool">
-    <div className="rmm-tool-inline-status"><SquareTerminal size={15} /><span>{state}</span><button onClick={() => setOutput('')} type="button">Clear</button></div>
-    <pre ref={outputRef}>{output || 'Waiting for native ConPTY output…'}</pre>
-    <form onSubmit={send}><span>{shell === 'cmd' ? '>' : 'PS>'}</span><input autoFocus value={command} onChange={(event) => setCommand(event.target.value)} placeholder="Enter a command…" /><button type="submit">Send</button></form>
+    <div className="rmm-tool-inline-status"><SquareTerminal size={15} /><span>{state}</span><button onClick={() => terminalRef.current?.clear()} type="button">Clear</button></div>
+    <div className="rmm-xterm-host" ref={terminalHostRef} />
+    <form onSubmit={send}><span>{shell === 'cmd' ? '>' : 'PS>'}</span><input autoCapitalize="none" autoComplete="off" autoCorrect="off" spellCheck={false} value={command} onChange={(event) => setCommand(event.target.value)} placeholder="Enter a command…" /><button type="submit">Send</button></form>
   </div>
 }
 
@@ -566,11 +617,12 @@ function ToolLauncher({ onSelect }) {
 
 export function RmmDeviceToolWorkspace({ device, embedded = false, initialTool = '', onClose }) {
   const [tool, setTool] = useState(initialTool)
+  const [runAs, setRunAs] = useState('system')
   const selected = TOOLS.find((item) => item[0] === tool) || null
   const online = Boolean(device?.agentDeviceId) && String(device?.status || '').toLowerCase() === 'online'
 
   let content = null
-  if (tool === 'powershell' || tool === 'cmd') content = <TerminalTool device={device} shell={tool} />
+  if (tool === 'powershell' || tool === 'cmd') content = <TerminalTool device={device} key={tool + ':' + runAs} runAs={runAs} shell={tool} />
   else if (tool === 'files') content = <FilesTool device={device} />
   else if (tool === 'processes') content = <ProcessesTool device={device} />
   else if (tool === 'services') content = <ServicesTool device={device} />
@@ -587,7 +639,10 @@ export function RmmDeviceToolWorkspace({ device, embedded = false, initialTool =
             <button className={!tool ? 'active' : ''} onClick={() => setTool('')} type="button"><Settings2 size={16} /><span>All tools</span><ChevronRight size={13} /></button>
             {TOOLS.map(([id, label, Icon]) => <button className={tool === id ? 'active' : ''} key={id} onClick={() => setTool(id)} type="button"><Icon size={16} /><span>{label}</span><ChevronRight size={13} /></button>)}
           </nav>
-          <main>{tool ? content : <ToolLauncher onSelect={setTool} />}</main>
+          <main className={tool === 'powershell' || tool === 'cmd' ? 'is-terminal' : ''}>
+            {(tool === 'powershell' || tool === 'cmd') && <div className="rmm-terminal-context"><span><strong>Run as</strong><small>Changing context starts a new terminal session.</small></span><div role="group" aria-label="Terminal execution context"><button className={runAs === 'user' ? 'active' : ''} onClick={() => setRunAs('user')} type="button">User</button><button className={runAs === 'system' ? 'active' : ''} onClick={() => setRunAs('system')} type="button">SYSTEM</button></div></div>}
+            {tool ? content : <ToolLauncher onSelect={setTool} />}
+          </main>
         </div>
       : <div className="rmm-device-tool-offline"><WifiOff size={28} /><strong>Live tools are unavailable while this device is offline</strong><span>No Agent job or tool session will be queued. Use Overview, Activity or Jobs while you wait for the endpoint to reconnect.</span></div>}
   </section>

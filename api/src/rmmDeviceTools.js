@@ -267,8 +267,10 @@ export function registerRmmDeviceToolRoutes(app) {
     const body = await c.req.json().catch(() => ({}))
     const tool = clean(body.tool || 'terminal').toLowerCase()
     const shell = clean(body.shell || 'powershell').toLowerCase()
+    const runAs = clean(body.runAs || body.run_as || 'system').toLowerCase()
     if (!['terminal', 'files'].includes(tool)) return c.json({ error: 'Unsupported live tool session.' }, 400)
     if (tool === 'terminal' && !['cmd', 'powershell'].includes(shell)) return c.json({ error: 'Terminal shell must be cmd or powershell.' }, 400)
+    if (tool === 'terminal' && !['system', 'user'].includes(runAs)) return c.json({ error: 'Terminal execution context must be user or system.' }, 400)
 
     const id = randomUUID()
     const token = 'h5t_' + randomBytes(32).toString('base64url')
@@ -288,6 +290,7 @@ export function registerRmmDeviceToolRoutes(app) {
       deviceName: device.name,
       tool,
       shell,
+      runAs: tool === 'terminal' ? runAs : '',
       tokenHash: sha256(token),
       expiresAt,
       transcript: '',
@@ -298,7 +301,7 @@ export function registerRmmDeviceToolRoutes(app) {
     const cleanup = setTimeout(() => toolSessions.delete(id), TOOL_SESSION_TTL_MS + 5000)
     cleanup.unref?.()
     return c.json({
-      session: { id, tool, shell, deviceName: device.name, expiresAt: new Date(expiresAt).toISOString() },
+      session: { id, tool, shell, runAs: tool === 'terminal' ? runAs : '', deviceName: device.name, expiresAt: new Date(expiresAt).toISOString() },
       token,
       websocketPath: '/rmm-tools/ws',
     }, 201)
@@ -370,6 +373,7 @@ export function attachRmmDeviceToolWebSocket(server) {
       [sessionId, session.tenantId],
     ).catch(() => {})
     const toolLabel = isTerminal ? (session.shell === 'cmd' ? 'Command Prompt' : 'PowerShell') : 'File Browser'
+    const terminalContextLabel = session.runAs === 'user' ? 'signed-in user' : 'SYSTEM'
     recordRmmActivity({
       tenantId: session.tenantId,
       agentDeviceId: session.agentDeviceId,
@@ -379,11 +383,11 @@ export function attachRmmDeviceToolWebSocket(server) {
       actorLabel: session.actorLabel,
       eventType: isTerminal ? 'terminal.started' : 'files.session_started',
       category: isTerminal ? 'terminal' : 'files',
-      summary: session.actorLabel + ' started a ' + toolLabel + ' session',
-      detail: 'Live device tool session started.',
+      summary: session.actorLabel + ' started a ' + toolLabel + (isTerminal ? ' session as ' + terminalContextLabel : ' session'),
+      detail: isTerminal ? 'Live terminal started in the ' + terminalContextLabel + ' execution context.' : 'Live device tool session started.',
       outcome: 'success',
       toolSessionId: sessionId,
-      metadata: { tool: session.tool, shell: session.shell },
+      metadata: { tool: session.tool, shell: session.shell, runAs: session.runAs || '' },
     }).catch(() => {})
 
     const unsubscribe = subscribeAgentMessages(session.agentDeviceId, (payload) => {
@@ -463,7 +467,7 @@ export function attachRmmDeviceToolWebSocket(server) {
         type: 'terminal_start',
         session_id: sessionId,
         shell: session.shell,
-        run_as: 'admin',
+        run_as: session.runAs || 'system',
         arch: 'x64',
         cols: 120,
         rows: 32,

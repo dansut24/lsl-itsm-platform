@@ -660,3 +660,76 @@
   }
   .rmm-device-subnav::-webkit-scrollbar { display: none; }
 }
+
+/* Native VT terminal rendering + execution context */
+.rmm-device-tool-body > main.is-terminal {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.rmm-terminal-context {
+  min-height: 50px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--rmm-border);
+  padding: 7px 12px;
+  background: var(--rmm-soft);
+}
+.rmm-terminal-context > span {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+.rmm-terminal-context strong { font-size: 10px; }
+.rmm-terminal-context small { color: var(--rmm-muted); font-size: 8px; }
+.rmm-terminal-context > div {
+  display: inline-flex;
+  gap: 3px;
+  border: 1px solid var(--rmm-border);
+  border-radius: 9px;
+  padding: 3px;
+  background: var(--rmm-surface);
+}
+.rmm-terminal-context button {
+  min-height: 32px;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 12px;
+  background: transparent;
+  color: var(--rmm-muted);
+  font: inherit;
+  font-size: 9px;
+  font-weight: 850;
+  cursor: pointer;
+}
+.rmm-terminal-context button.active {
+  background: var(--rmm-accent-soft);
+  color: var(--rmm-accent);
+}
+.rmm-xterm-host {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #0c1118;
+}
+.rmm-xterm-host .xterm {
+  height: 100%;
+  padding: 10px 12px;
+}
+.rmm-xterm-host .xterm-viewport { overflow-y: auto !important; }
+
+@media (max-width: 560px) {
+  .rmm-terminal-context {
+    min-height: 58px;
+    padding: 7px 9px;
+  }
+  .rmm-terminal-context small { display: none; }
+  .rmm-terminal-context button {
+    min-height: 36px;
+    padding-inline: 13px;
+    font-size: 10px;
+  }
+  .rmm-xterm-host .xterm { padding: 8px 9px; }
+}
