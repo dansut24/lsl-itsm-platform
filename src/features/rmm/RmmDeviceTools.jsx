@@ -546,21 +546,29 @@ function EventsTool({ device }) {
 }
 
 const TOOLS = [
-  ['powershell', 'PowerShell', SquareTerminal],
-  ['cmd', 'Command Prompt', Command],
-  ['files', 'File browser', Folder],
-  ['processes', 'Task Manager', ListTree],
-  ['services', 'Services', Server],
-  ['registry', 'Registry Editor', Settings2],
-  ['disks', 'Disk Management', HardDrive],
-  ['sessions', 'Users & Sessions', Users],
-  ['events', 'Event Logs', ListTree],
+  ['powershell', 'PowerShell', SquareTerminal, 'Native ConPTY terminal for administrative PowerShell work.'],
+  ['cmd', 'Command Prompt', Command, 'Native Command Prompt session for interactive Windows commands.'],
+  ['files', 'File browser', Folder, 'Browse, upload, download and manage endpoint files.'],
+  ['processes', 'Task Manager', ListTree, 'Inspect running processes and terminate or restart them.'],
+  ['services', 'Services', Server, 'Review service state, startup configuration and control services.'],
+  ['registry', 'Registry Editor', Settings2, 'Browse and edit the Windows registry remotely.'],
+  ['disks', 'Disk Management', HardDrive, 'Inspect volumes, capacity and BitLocker state.'],
+  ['sessions', 'Users & Sessions', Users, 'Review interactive, console and Remote Desktop sessions.'],
+  ['events', 'Event Logs', ListTree, 'Search Windows event logs for diagnostics and health events.'],
 ]
 
-export function RmmDeviceToolWorkspace({ device, initialTool = 'powershell', onClose }) {
+function ToolLauncher({ onSelect }) {
+  return <div className="rmm-tool-launcher">
+    <div className="rmm-tool-launcher-heading"><span className="rmm-eyebrow">Live management</span><h3>Choose a device tool</h3><p>Tools start only when selected. Leaving the Tools tab closes the active live session or workspace.</p></div>
+    <div className="rmm-tool-launcher-grid">{TOOLS.map(([id, label, Icon, description]) => <button key={id} onClick={() => onSelect(id)} type="button"><span><Icon size={18} /></span><strong>{label}</strong><small>{description}</small><ChevronRight size={15} /></button>)}</div>
+  </div>
+}
+
+export function RmmDeviceToolWorkspace({ device, embedded = false, initialTool = '', onClose }) {
   const [tool, setTool] = useState(initialTool)
-  const selected = TOOLS.find((item) => item[0] === tool) || TOOLS[0]
+  const selected = TOOLS.find((item) => item[0] === tool) || null
   const online = Boolean(device?.agentDeviceId) && String(device?.status || '').toLowerCase() === 'online'
+
   let content = null
   if (tool === 'powershell' || tool === 'cmd') content = <TerminalTool device={device} shell={tool} />
   else if (tool === 'files') content = <FilesTool device={device} />
@@ -571,13 +579,18 @@ export function RmmDeviceToolWorkspace({ device, initialTool = 'powershell', onC
   else if (tool === 'sessions') content = <SessionsTool device={device} />
   else if (tool === 'events') content = <EventsTool device={device} />
 
-  return <div className="rmm-tool-backdrop" role="presentation">
-    <section className="rmm-device-tool-workspace" role="dialog" aria-modal="true" aria-label={selected[1]}>
-      <header><div><span className="rmm-eyebrow">{device.name}</span><h2>{selected[1]}</h2><p>{online ? 'Live management from the device details page' : 'Device is offline'}</p></div><button aria-label="Close device tool" onClick={onClose} type="button"><X size={19} /></button></header>
-      {online
-        ? <div className="rmm-device-tool-body"><nav>{TOOLS.map(([id, label, Icon]) => <button className={tool === id ? 'active' : ''} key={id} onClick={() => setTool(id)} type="button"><Icon size={16} /><span>{label}</span><ChevronRight size={13} /></button>)}</nav><main>{content}</main></div>
-        : <div className="rmm-device-tool-offline"><WifiOff size={28} /><strong>Live tools are unavailable while this device is offline</strong><span>No Agent job or tool session will be queued. Close this window and retry after the device reconnects.</span></div>}
-    </section>
-  </div>
-}
+  const workspace = <section className={'rmm-device-tool-workspace ' + (embedded ? 'is-embedded' : '')} role={embedded ? 'region' : 'dialog'} aria-modal={embedded ? undefined : 'true'} aria-label={selected?.[1] || 'Device tools'}>
+    <header><div><span className="rmm-eyebrow">{device.name}</span><h2>{selected?.[1] || 'Device tools'}</h2><p>{online ? selected ? 'Live management from the device Tools tab' : 'Select a live management workspace for this endpoint' : 'Device is offline'}</p></div>{!embedded && <button aria-label="Close device tool" onClick={onClose} type="button"><X size={19} /></button>}</header>
+    {online
+      ? <div className="rmm-device-tool-body">
+          <nav aria-label="Device tools">
+            <button className={!tool ? 'active' : ''} onClick={() => setTool('')} type="button"><Settings2 size={16} /><span>All tools</span><ChevronRight size={13} /></button>
+            {TOOLS.map(([id, label, Icon]) => <button className={tool === id ? 'active' : ''} key={id} onClick={() => setTool(id)} type="button"><Icon size={16} /><span>{label}</span><ChevronRight size={13} /></button>)}
+          </nav>
+          <main>{tool ? content : <ToolLauncher onSelect={setTool} />}</main>
+        </div>
+      : <div className="rmm-device-tool-offline"><WifiOff size={28} /><strong>Live tools are unavailable while this device is offline</strong><span>No Agent job or tool session will be queued. Use Overview, Activity or Jobs while you wait for the endpoint to reconnect.</span></div>}
+  </section>
 
+  return embedded ? workspace : <div className="rmm-tool-backdrop" role="presentation">{workspace}</div>
+}

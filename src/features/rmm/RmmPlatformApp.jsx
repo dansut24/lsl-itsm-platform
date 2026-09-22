@@ -750,6 +750,7 @@ function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device
     ['software', 'Software', Package],
     ['patching', 'Patching', ShieldCheck],
     ['security', 'Security', ShieldCheck],
+    ['tools', 'Tools', TerminalSquare],
     ['activity', 'Activity', History],
     ['jobs', 'Jobs', ListChecks],
     ['itsm', 'ITSM', Database],
@@ -810,6 +811,14 @@ function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device
       return
     }
     setTool(nextTool)
+    setSection('tools')
+  }
+
+  function selectSection(nextSection) {
+    setToolsOpen(false)
+    if (nextSection !== 'tools') setTool('')
+    else if (section !== 'tools') setTool('')
+    setSection(nextSection)
   }
 
   let content
@@ -817,6 +826,7 @@ function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device
   else if (section === 'software') content = <DeviceSoftware device={device} />
   else if (section === 'patching') content = <DevicePatching device={device} />
   else if (section === 'security') content = <DeviceSecurity device={device} />
+  else if (section === 'tools') content = <RmmDeviceToolWorkspace device={device} embedded initialTool={tool} key={tool || 'tool-launcher'} />
   else if (section === 'activity') content = <DeviceActivityTimeline device={device} />
   else if (section === 'jobs') content = <DeviceJobsPanel device={device} />
   else if (section === 'itsm') content = <DeviceItsm device={device} onCreateIncident={createIncident} relatedTickets={relatedTickets} />
@@ -866,11 +876,10 @@ function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device
       </div>
 
       <nav className="rmm-device-subnav" aria-label="Device detail sections">
-        {sections.map(([id, label, Icon]) => <button className={section === id ? 'active' : ''} key={id} onClick={() => setSection(id)} type="button"><Icon size={14} />{label}{id === 'itsm' && relatedTickets.length > 0 && <b>{relatedTickets.length}</b>}</button>)}
+        {sections.map(([id, label, Icon]) => <button aria-current={section === id ? 'page' : undefined} className={section === id ? 'active' : ''} key={id} onClick={() => selectSection(id)} type="button"><Icon size={14} />{label}{id === 'itsm' && relatedTickets.length > 0 && <b>{relatedTickets.length}</b>}</button>)}
       </nav>
 
-      <div className="rmm-device-section">{content}</div>
-      {tool && <RmmDeviceToolWorkspace device={device} initialTool={tool} onClose={() => setTool('')} />}
+      <div className={'rmm-device-section ' + (section === 'tools' ? 'is-tools' : '')}>{content}</div>
     </div>
   )
 }
