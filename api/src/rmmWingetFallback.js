@@ -640,3 +640,24 @@ export async function wingetEnterpriseSeedMatches({ limit = 1200 } = {}) {
 export function automaticWingetFallbackSummary() {
   return lastSummary
 }
+
+export async function resolvePreviousWingetVendorInstaller(packageId, currentVersion) {
+  const parts=clean(packageId).split('.')
+  if(parts.length<2 || parts.some(p=>!/^[a-z0-9_-]+$/i.test(p))) throw new Error('invalid_winget_package_id')
+  const path=['manifests',parts[0][0].toLowerCase(),...parts].map(encodeURIComponent).join('/')
+  const response=await fetch('https://api.github.com/repos/microsoft/winget-pkgs/contents/'+path,{
+    headers:{Accept:'application/vnd.github+json','User-Agent':'Hi5Central-Software-Catalogue/1.0'},
+    signal:AbortSignal.timeout(20_000),
+  })
+  if(!response.ok) throw new Error('WinGet version history HTTP '+response.status)
+  const payload=await response.json()
+  const versions=(Array.isArray(payload)?payload:[]).filter(r=>r.type==='dir')
+    .map(r=>clean(r.name)).filter(v=>/^\d+(?:[.\-]\d+)*$/.test(v) && compareVersions(v,currentVersion)<0)
+    .sort((a,b)=>compareVersions(b,a)).slice(0,3)
+  for(const version of versions) {
+    const resolved=await resolveWingetVendorInstaller(packageId,version)
+    if(resolved.ok && resolved.scope!=='user' && ['x64','amd64','neutral','any'].includes(resolved.architecture)
+      && /^[a-f0-9]{64}$/i.test(resolved.installerSha256)) return resolved
+  }
+  return null
+}

@@ -1927,7 +1927,8 @@ export async function qualificationQueueSummary(tenantId) {
     `SELECT q.id,q.catalogue_id,q.test_type,q.state,q.priority,q.attempt_count,
             q.runner_agent_device_id,q.agent_job_id,q.deployment_id,q.cleanup_job_id,
             q.last_error,q.evidence,q.started_at,q.completed_at,q.created_at,q.updated_at,
-            c.canonical_name,c.target_version,c.qualification_state,
+            c.canonical_name,c.target_version,c.qualification_state,c.installer_type,
+            c.source_metadata->>'installerTechnology' AS installer_technology,
             i.name AS runner_device_name
        FROM rmm_software_qualification_queue q
        JOIN rmm_software_catalogue c ON c.id=q.catalogue_id

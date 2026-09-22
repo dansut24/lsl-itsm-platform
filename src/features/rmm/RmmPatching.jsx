@@ -635,6 +635,8 @@ export function RmmPatching({ devices = [] }) {
     [item.state]: (counts[item.state] || 0) + 1,
   }), {})
   const qualificationReview = qualificationQueue.filter((item) => item.state === 'review_required')
+  const qualificationProgress = bundle?.qualificationProgress || {}
+  const qualificationFailureGroups = qualificationProgress.failureGroups || []
   const exposureSummary = bundle?.vulnerabilityExposures || {}
   const overview = bundle?.overview || {}
   const exposedApps = applications.filter((item) => item.updateAvailable > 0)
@@ -1104,6 +1106,22 @@ export function RmmPatching({ devices = [] }) {
       <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Software patch catalogue</span><h2>Patchability by application</h2><p>{mappedApps.length} mapped application{mappedApps.length === 1 ? '' : 's'} · {applications.length - mappedApps.length} awaiting mapping · {catalogueCandidates.length} automatically discovered package{catalogueCandidates.length === 1 ? '' : 's'} · {overview.qualifiedCatalogue || 0} qualified · {overview.automaticAdmissionReadyCatalogue || 0} automatic-admission ready · {overview.candidateCatalogue || 0} deployment candidates.</p></div></div>
       <div className="rmm-vulnerability-coverage"><div><ShieldCheck size={17} /><span><strong>Catalogue vulnerability identity validation</strong><small>{vulnerabilityCatalogue.covered ?? 0} of {vulnerabilityCatalogue.total ?? catalogue.length} catalogue applications have completed source validation. NVD CPE and exact OSV identities are checked independently; endpoint exposures are still created only when that software/version is actually installed.</small></span></div><div className="stats"><span><small>NVD mapped</small><strong>{vulnerabilityCatalogue.nvd ?? 0}</strong></span><span><small>OSV mapped</small><strong>{vulnerabilityCatalogue.osv ?? 0}</strong></span><span><small>Validated</small><strong>{vulnerabilityCatalogue.covered ?? 0}</strong></span><span><small>Unchecked</small><strong>{vulnerabilityCatalogue.unchecked ?? 0}</strong></span><span><small>Mapping to validate</small><strong>{vulnerabilityCatalogue.validationPending ?? 0}</strong></span><span><small>Needs identity</small><strong>{vulnerabilityCatalogue.needsIdentity ?? 0}</strong></span><span><small>Source pending</small><strong>{vulnerabilityCatalogue.sourcePending ?? 0}</strong></span></div></div>
       {!!qualificationQueue.length && <div className="rmm-vulnerability-coverage"><div><PackageCheck size={17} /><span><strong>Automatic catalogue qualification</strong><small>One candidate at a time is clean-installed on the designated qualification runner, verified by PatchHost, uninstalled, then confirmed absent from inventory. Failures stop for review instead of retrying blindly.</small></span></div><div className="stats"><span><small>Queued</small><strong>{qualificationQueueCounts.queued || 0}</strong></span><span><small>Installing</small><strong>{qualificationQueueCounts.running || 0}</strong></span><span><small>Cleanup</small><strong>{(qualificationQueueCounts.cleanup_pending || 0) + (qualificationQueueCounts.cleanup_running || 0)}</strong></span><span><small>Passed</small><strong>{qualificationQueueCounts.passed || 0}</strong></span><span><small>Review</small><strong>{qualificationQueueCounts.review_required || 0}</strong></span></div>{!!qualificationReview.length && <div className="rmm-patch-candidate-footnote">{qualificationReview.slice(0, 5).map((item) => <span key={item.id}><strong>{item.canonical_name}</strong> · {item.target_version} · {readinessLabel(item.last_error || 'review required')}</span>)}</div>}</div>}
+      {!!qualificationQueue.length && <div className="rmm-vulnerability-coverage">
+        <div><PackageCheck size={17} /><span><strong>Progress toward full qualification</strong><small>Install and removal, upgrade, and full admission are tracked separately. Review groups identify fixes that can help several applications.</small></span></div>
+        <div className="stats">
+          <span><small>Install / removal passed</small><strong>{qualificationProgress.cleanInstallPassed || 0}</strong></span>
+          <span><small>Upgrade passed</small><strong>{qualificationProgress.upgradePassed || 0}</strong></span>
+          <span><small>Fully qualified</small><strong>{qualificationProgress.fullyQualified || 0}</strong></span>
+        </div>
+        {!!qualificationFailureGroups.length && <div style={{width: '100%', display: 'grid', gap: '8px'}}>
+          {qualificationFailureGroups.map(group => <details key={group.key}>
+            <summary>{group.label} · {group.count}</summary>
+            <p>{group.nextAction}</p>
+            <ul>{group.applications.map(item => <li key={item.id}><strong>{item.name}</strong> · {item.installerTechnology} · {readinessLabel(item.error || 'review required')}</li>)}</ul>
+          </details>)}
+        </div>}
+      </div>}
+
       <div className="rmm-catalogue-install-card">
         <div className="intro"><Wrench size={18} /><div><strong>Catalogue validation</strong><span>Edit, validate or retry one specific catalogue application without touching any other software.</span></div></div>
         <div className="controls">

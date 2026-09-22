@@ -1,3 +1,4 @@
+import { qualificationFailureGroups } from './rmmQualificationFailureGroups.js'
 import { hasPermission } from './access.js'
 import { originMatchesTenant } from './deploymentConfig.js'
 import { pool, withTransaction } from './db.js'
@@ -1207,6 +1208,12 @@ async function patchBundle(tenantId) {
     vulnerabilityCatalogue,
     devicePatchRejections,
     qualificationQueue,
+    qualificationProgress: {
+      cleanInstallPassed: new Set(qualificationQueue.filter(q => q.test_type === 'clean_install' && q.state === 'passed').map(q => q.catalogue_id)).size,
+      upgradePassed: new Set(qualificationQueue.filter(q => q.test_type === 'upgrade' && q.state === 'passed').map(q => q.catalogue_id)).size,
+      fullyQualified: catalogue.filter(c => c.qualification_state === 'qualified').length,
+      failureGroups: qualificationFailureGroups(qualificationQueue),
+    },
     vendorIntel: { ...vendorIntel, tenantSources: tenantVendorSources },
     devices: devices.map((device) => ({
       id: device.reference,

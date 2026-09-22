@@ -14,7 +14,7 @@ import {
   repositoryName,
 } from './rmmTenantVendorSources.js'
 import { recalculateAllTenantVulnerabilityExposures } from './rmmVulnerabilityExposure.js'
-import { resolveWingetVendorInstaller, syncAutomaticWingetFallbacks, wingetEnterpriseSeedMatches } from './rmmWingetFallback.js'
+import { resolvePreviousWingetVendorInstaller, resolveWingetVendorInstaller, syncAutomaticWingetFallbacks, wingetEnterpriseSeedMatches } from './rmmWingetFallback.js'
 import { importCuratedSoftwareCatalogue } from './rmmCuratedSoftwareCatalogue.js'
 import { syncEvergreenCorroboration } from './rmmEvergreenIntel.js'
 import { promoteAutomaticAdmissionReady, queueAutomaticCleanInstallQualifications, queueAutomaticUpgradeQualifications, queueCommonSoftwareQualifications, runSoftwareQualificationQueue } from './rmmSoftwareQualification.js'
@@ -407,27 +407,27 @@ async function retainPreviousGithubReleaseCandidate({ sourceKey, binding: b, con
   if (!repository || !currentVersion || !['windows','cross_platform'].includes(clean(b.platform))) return null
 
   const eligible = await pool.query(
-    `SELECT c.id
-       FROM rmm_software_catalogue c
-       JOIN rmm_software_qualification_queue q
-         ON q.catalogue_id=c.id AND q.test_type='clean_install' AND q.state='passed'
-      WHERE c.tenant_id IS NULL
-        AND c.status='active'
+    `SELECT c.id FROM rmm_software_catalogue c
+      WHERE c.tenant_id IS NULL AND c.status='active'
         AND c.qualification_state='deployment_candidate'
-        AND c.external_key=$1
-        AND c.target_version=$2
-        AND NOT EXISTS (
-          SELECT 1
-            FROM rmm_software_vendor_releases r
-           WHERE r.provider_package_id=c.external_key
-             AND r.source_key=c.source_metadata->>'latestSource'
-             AND r.version<>c.target_version
-             AND r.trust_state IN ('asset_candidate','direct_ready')
-        )
+        AND c.external_key=$1 AND c.target_version=$2
+        AND c.source_metadata->>'latestSource'=$3
+        AND c.source_metadata->>'trustState'='direct_ready'
       LIMIT 1`,
-    [b.provider_package_id, currentVersion],
+    [b.provider_package_id, currentVersion, sourceKey],
   )
   if (!eligible.rowCount) return null
+  const retained = await pool.query(
+    `SELECT version FROM rmm_software_vendor_releases
+      WHERE provider_package_id=$1 AND source_key=$2
+        AND channel=$3 AND platform=$4 AND architecture=$5
+        AND trust_state IN ('asset_candidate','direct_ready')
+        AND asset_health_state IS DISTINCT FROM 'dead'
+        AND installer_type IN ('msi','exe')`,
+    [b.provider_package_id, sourceKey, b.channel, b.platform, b.architecture],
+  )
+  if (retained.rows.some((r) => !/(alpha|beta|preview|nightly|canary|rc)/i.test(r.version)
+    && compareVersionValues(r.version, currentVersion) < 0)) return null
 
   const response = await fetch('https://api.github.com/repos/' + repository + '/releases?per_page=30', {
     headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Hi5Central-Software-Catalogue/1.0' },
@@ -442,7 +442,13 @@ async function retainPreviousGithubReleaseCandidate({ sourceKey, binding: b, con
     .filter((item) => !item?.draft && !item?.prerelease)
     .filter((item) => !matcher || matcher.test(clean(item?.tag_name)))
     .map((item) => ({ item, version: normalizedGithubVersion(item?.tag_name || item?.name) }))
-    .filter((item) => item.version && compareVersionValues(item.version, currentVersion) < 0)
+    .filter((item) => item.version && !/(alpha|beta|preview|nightly|canary|rc)/i.test(item.version) && compareVersionValues(item.version, currentVersion) < 0)
+    .filter(({ item }) => {
+      const assets = Array.isArray(item?.assets) ? item.assets : []
+      const pattern = globMatcher(config.assetPattern)
+      const asset = pattern ? assets.find(a => pattern.test(clean(a?.name))) : selectWindowsInstallerAsset(assets, b.canonical_name)
+      return asset?.browser_download_url && ['msi','exe'].includes(detectInstallerType(asset.name, clean(config.installerType).toLowerCase()))
+    })
     .sort((a, bValue) => compareVersionValues(bValue.version, a.version))[0]
   if (!previous) return null
 
@@ -1774,6 +1780,123 @@ async function runQualificationRunnerTick() {
   }
 }
 
+async function retainPreviousWingetReleaseCandidate({ sourceKey, binding: b, config, currentVersion }) {
+  const retained=await pool.query(
+    `SELECT version FROM rmm_software_vendor_releases
+      WHERE source_key=$1 AND provider_package_id=$2 AND channel=$3 AND platform=$4 AND architecture=$5
+        AND trust_state IN ('asset_candidate','direct_ready') AND asset_health_state IS DISTINCT FROM 'dead'
+        AND installer_type IN ('msi','exe')`,
+    [sourceKey,b.provider_package_id,b.channel,b.platform,b.architecture],
+  )
+  if(retained.rows.some(r=>compareVersionValues(r.version,currentVersion)<0 && !/(alpha|beta|preview|nightly|canary|rc)/i.test(r.version))) return null
+  const packageId=clean(config.wingetPackageId || config.packageId)
+  if(!packageId) throw new Error('winget_package_identity_missing')
+  const resolved=await resolvePreviousWingetVendorInstaller(packageId,currentVersion)
+  if(!resolved) return null
+  const url=(await publicHttpsUrl(resolved.installerUrl)).toString()
+  const payload={
+    historicalReleaseCandidate:true,historicalRole:'upgrade_baseline',
+    expectedSigner:clean(config.autoExpectedSigner || config.expectedSigner || config.signerBaseline),
+    deploymentMode:'intelligence_only',verification:object(config.verificationConfig),
+    installArguments:resolved.installArguments || clean(config.installArguments),
+    installerTechnology:resolved.installerTechnology,
+    wingetManifest:{packageId:resolved.packageId,version:resolved.version,manifestUrl:resolved.manifestUrl,
+      upstreamHost:resolved.upstreamHost,architecture:resolved.architecture,scope:resolved.scope,
+      installerTechnology:resolved.installerTechnology},
+  }
+  const result=await pool.query(
+    `INSERT INTO rmm_software_vendor_releases
+      (source_key,provider_package_id,canonical_name,publisher,channel,platform,architecture,version,
+       installer_url,installer_sha256,installer_type,release_url,asset_name,trust_state,trust_evidence,
+       source_priority,source_payload,last_seen_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'asset_candidate',$14::jsonb,$15,$16::jsonb,now())
+     ON CONFLICT (source_key,provider_package_id,channel,platform,architecture,version) DO NOTHING
+     RETURNING id,version,trust_state`,
+    [sourceKey,b.provider_package_id,b.canonical_name,b.publisher,b.channel,b.platform,b.architecture,
+      resolved.version,url,resolved.installerSha256,resolved.installerType,resolved.manifestUrl,
+      decodeURIComponent(new URL(url).pathname.split('/').at(-1)||''),
+      JSON.stringify({source:'winget_manifest_history',historicalReleaseCandidate:true,vendorChecksumPresent:true}),
+      b.priority,JSON.stringify(payload)],
+  )
+  return result.rows[0] || null
+}
+
+let baselinePreparationActive = false
+
+export async function prepareQualificationBaselines({ limit = 4 } = {}) {
+  if (baselinePreparationActive) return []
+  baselinePreparationActive = true
+  const results = []
+  try {
+    const candidates = await pool.query(
+      `SELECT c.id,c.canonical_name,c.target_version,s.source_key,s.source_url,s.source_type,
+              s.metadata,q.state AS clean_install_state
+         FROM rmm_software_catalogue c
+         JOIN rmm_software_vendor_sources s
+           ON s.source_key=c.source_metadata->>'latestSource'
+          AND s.enabled=true AND s.source_type IN ('github_releases','winget_manifest')
+         LEFT JOIN rmm_software_qualification_queue q
+           ON q.catalogue_id=c.id AND q.test_type='clean_install'
+        WHERE c.tenant_id IS NULL AND c.status='active'
+          AND c.qualification_state='deployment_candidate'
+          AND c.source_metadata->>'trustState'='direct_ready'
+          AND COALESCE(c.target_version,'')<>''
+          AND c.target_version !~* '(alpha|beta|preview|nightly|canary|rc)'
+          AND (
+            NOT (s.metadata ? 'baselinePreparationAttemptedAt')
+            OR (s.metadata->>'baselinePreparationAttemptedAt')::timestamptz < now()-interval '6 hours'
+            OR (q.state='passed' AND COALESCE(s.metadata->>'baselinePreparationCleanInstallState','')<>'passed')
+          )
+        ORDER BY CASE WHEN q.state='passed' THEN 0 ELSE 1 END,
+                 COALESCE(s.metadata->>'baselinePreparationAttemptedAt',''),c.canonical_name
+        LIMIT $1`,
+      [Math.max(1,Math.min(10,Number(limit)||4))],
+    )
+    for (const row of candidates.rows) {
+      await pool.query(
+        `UPDATE rmm_software_vendor_sources SET metadata=metadata || $2::jsonb WHERE source_key=$1`,
+        [row.source_key,JSON.stringify({baselinePreparationAttemptedAt:new Date().toISOString(),
+          baselinePreparationCleanInstallState:row.clean_install_state || ''})],
+      )
+      try {
+        const b = await binding(row.source_key)
+        if (!b) throw new Error('vendor_binding_missing')
+        const config = {...object(b.source_metadata),...object(b.binding_metadata)}
+        const retain = row.source_type === 'winget_manifest' ? retainPreviousWingetReleaseCandidate : retainPreviousGithubReleaseCandidate
+        const retained = await retain({
+          sourceKey:row.source_key,binding:b,config,
+          repository:repositoryName(config.repository || row.source_url),currentVersion:row.target_version,
+        })
+        const releases = await pool.query(
+          `SELECT version,trust_state FROM rmm_software_vendor_releases
+            WHERE source_key=$1 AND provider_package_id=$2
+              AND channel=$3 AND platform=$4 AND architecture=$5
+              AND trust_state IN ('asset_candidate','direct_ready')
+              AND asset_health_state IS DISTINCT FROM 'dead' AND installer_type IN ('msi','exe')`,
+          [row.source_key,b.provider_package_id,b.channel,b.platform,b.architecture],
+        )
+        const older = releases.rows.filter(r=>!/(alpha|beta|preview|nightly|canary|rc)/i.test(r.version)
+          && compareVersionValues(r.version,row.target_version)<0)
+        const state = older.some(r=>r.trust_state==='direct_ready') ? 'trusted_baseline_available'
+          : older.length ? 'awaiting_artifact_verification' : 'previous_stable_installer_unavailable'
+        await pool.query(
+          `UPDATE rmm_software_vendor_sources SET metadata=(metadata - 'baselinePreparationError') || $2::jsonb WHERE source_key=$1`,
+          [row.source_key,JSON.stringify({baselinePreparationState:state,baselinePreparationCompletedAt:new Date().toISOString()})],
+        )
+        results.push({application:row.canonical_name,state,release:retained})
+      } catch (error) {
+        const message=clean(error?.message || error).slice(0,1000)
+        await pool.query(
+          `UPDATE rmm_software_vendor_sources SET metadata=metadata || $2::jsonb WHERE source_key=$1`,
+          [row.source_key,JSON.stringify({baselinePreparationState:'discovery_failed',baselinePreparationError:message})],
+        )
+        results.push({application:row.canonical_name,state:'discovery_failed',error:message})
+      }
+    }
+    return results
+  } finally { baselinePreparationActive = false }
+}
+
 export function startSoftwareVendorSyncScheduler() {
   if (schedulerStarted) return
   schedulerStarted = true
@@ -1791,6 +1914,9 @@ export function startSoftwareVendorSyncScheduler() {
       console.error('RMM vendor/software qualification scheduler failed', error)
     }
   }
+  const prepareBaselines = () => prepareQualificationBaselines({ limit: 4 }).catch(error => console.error('Qualification baseline preparation failed', error))
+  setTimeout(prepareBaselines, 15_000).unref?.()
+  setInterval(prepareBaselines, 5 * 60_000).unref?.()
   setTimeout(run, 10_000).unref?.()
   setInterval(run, 5 * 60 * 1000).unref?.()
   setTimeout(qualify, 30_000).unref?.()
