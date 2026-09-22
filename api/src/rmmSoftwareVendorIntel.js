@@ -1203,6 +1203,10 @@ async function syncGenericConfigured(sourceKey, state) {
       wingetPackageId: clean(config.wingetPackageId),
       autoWingetPackageId: clean(config.autoWingetPackageId),
       autoWingetConfidence: clean(config.autoWingetConfidence),
+      nvdVendor: clean(config.nvdVendor),
+      nvdProduct: clean(config.nvdProduct),
+      osvEcosystem: clean(config.osvEcosystem),
+      osvPackage: clean(config.osvPackage),
     },
   })
 }
