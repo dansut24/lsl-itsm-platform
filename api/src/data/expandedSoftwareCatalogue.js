@@ -500,6 +500,14 @@ export const expandedSoftwareCatalogue = [
     "sourceKey": "gh_git_for_windows_git",
     "displayName": "Git for Windows",
     "canonicalName": "Git for Windows",
+    "namePattern": "Git",
+    "publisherPattern": "The Git Development Community",
+    "verificationConfig": {
+      "method": "uninstall_registry",
+      "displayNameContains": "Git",
+      "publisherContains": "The Git Development Community",
+      "versionTransform": "git_windows_registry"
+    },
     "sourceType": "github_releases",
     "repository": "git-for-windows/git",
     "deploymentMode": "intelligence_only",
