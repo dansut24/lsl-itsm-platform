@@ -32,6 +32,7 @@ import {
   installSoftwareFromCatalogue,
   loadRmmPatching,
   loadRmmVulnerabilities,
+  loadSoftwareQualificationLab,
   planSoftwarePatches,
   remediateVulnerabilityExposure,
   searchWingetRepository,
@@ -40,6 +41,7 @@ import {
   updateSoftwareValidation,
   revalidateSoftwareCatalogueEntry,
   retrySoftwareQualification,
+  runSoftwareQualificationAction,
 } from '../../lib/rmmPatchingApi.js'
 import { loadRmmScope } from '../../lib/rmmScopeApi.js'
 import './RmmPatching.css'
@@ -94,7 +96,8 @@ function qualificationTone(state) {
 function readinessTone(state) {
   if (['ready', 'healthy', 'verified', 'passed', 'covered'].includes(state)) return 'healthy'
   if (['attention', 'blocked', 'failed', 'review_required'].includes(state)) return 'critical'
-  if (['queued', 'not_tested', 'pending'].includes(state)) return 'neutral'
+  if (['missing', 'legacy_pass'].includes(state)) return 'warning'
+  if (['queued', 'not_tested', 'pending', 'cancelled', 'not_implemented'].includes(state)) return 'neutral'
   return 'running'
 }
 function readinessLabel(state) {
@@ -504,6 +507,151 @@ function AssignmentModal({ devices, groups, onClose, onSave, policy }) {
     </form>
   </div>
 }
+function labDate(value) {
+  if (!value) return 'Not yet'
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString()
+}
+
+function QualificationWorkspace({
+  item,
+  lab,
+  loading,
+  busyAction,
+  onAction,
+  onEdit,
+  onRevalidate,
+  onRefresh,
+}) {
+  if (!item) return <div className="rmm-qualification-empty"><PackageCheck size={20} /><strong>Select an application</strong><span>Open one catalogue application to inspect and run its qualification layers.</span></div>
+  if (loading && !lab) return <div className="rmm-qualification-empty"><Clock3 size={20} /><strong>Loading qualification workspace…</strong><span>Reading release, trust and runner evidence.</span></div>
+  if (!lab) return <div className="rmm-qualification-empty"><AlertTriangle size={20} /><strong>Qualification details unavailable</strong><span>Refresh this application to retry.</span></div>
+
+  const current = lab.releases?.current
+  const previous = lab.releases?.previous
+  const clean = lab.tests?.cleanInstall || {}
+  const verification = lab.tests?.verification || {}
+  const uninstall = lab.tests?.uninstall || {}
+  const upgrade = lab.tests?.upgrade || {}
+  const actions = lab.actions || {}
+  const runnerOnline = lab.runner?.online
+  const layerIcon = {
+    source: Box,
+    vulnerability: ShieldCheck,
+    clean: PackageCheck,
+    history: GitBranch,
+    upgrade: RefreshCw,
+    rollback: Clock3,
+  }
+
+  function actionButton(action, enabled, label, Icon, title = '') {
+    return <button
+      disabled={Boolean(busyAction) || !enabled}
+      onClick={() => onAction(action)}
+      title={!enabled && title ? title : undefined}
+      type="button"
+    ><Icon size={14} />{busyAction === action ? 'Working…' : label}</button>
+  }
+
+  return <div className="rmm-qualification-workspace">
+    <header className="rmm-qualification-workspace-head">
+      <div>
+        <span className="rmm-eyebrow">Qualification workspace</span>
+        <h3>{lab.application?.name || item.canonicalName}</h3>
+        <p>{lab.application?.publisher || item.publisher || 'Publisher not reported'} · target {lab.application?.targetVersion || item.targetVersion || '—'} · {readinessLabel(lab.application?.deploymentMode || 'pending')}</p>
+      </div>
+      <div className="rmm-qualification-runner">
+        <small>Qualification runner</small>
+        <strong>{lab.runner?.deviceName || 'Not configured'}</strong>
+        <StatusPill tone={runnerOnline ? 'healthy' : 'critical'}>{runnerOnline ? 'Online' : 'Offline'}</StatusPill>
+      </div>
+    </header>
+
+    <div className="rmm-qualification-actions">
+      <button disabled={Boolean(busyAction)} onClick={onEdit} type="button"><Wrench size={14} /> Edit validation</button>
+      <button disabled={Boolean(busyAction) || !actions.canRevalidate} onClick={onRevalidate} type="button"><RefreshCw size={14} /> Revalidate source</button>
+      {actionButton('prepare_previous', actions.canPreparePrevious, 'Prepare previous release', GitBranch, lab.releases?.previousReady ? 'A trusted previous release is already retained.' : 'Automatic history discovery is not available for this source.')}
+      {actionButton('clean_cycle', actions.canRunClean, 'Run clean cycle', PackageCheck, 'Current source and artifact trust must be ready first.')}
+      {actionButton('upgrade', actions.canRunUpgrade, 'Run upgrade test', RefreshCw, 'Clean install/uninstall and a trusted previous release must pass first.')}
+      {actionButton('full', actions.canRunFull, 'Run full qualification', ShieldCheck, 'Current source and artifact trust must be ready first.')}
+      <button disabled={Boolean(busyAction) || loading} onClick={onRefresh} type="button"><RefreshCw size={14} /> Refresh</button>
+    </div>
+
+    <div className="rmm-qualification-layers">
+      {(lab.layers || []).map((layer) => {
+        const Icon = layerIcon[layer.id] || PackageCheck
+        return <article className={'rmm-qualification-layer ' + (layer.state || '')} key={layer.id}>
+          <header>
+            <span className="icon"><Icon size={16} /></span>
+            <div><strong>{layer.label}</strong><small>{layer.id === 'clean' ? 'Install → verify → uninstall' : layer.id === 'upgrade' ? 'Detect outdated → patch → verify' : layer.id === 'rollback' ? 'Controlled previous-version restore' : 'Qualification evidence'}</small></div>
+            <StatusPill tone={readinessTone(layer.state)}>{readinessLabel(layer.state)}</StatusPill>
+          </header>
+
+          {layer.id === 'source' && <div className="rmm-qualification-facts">
+            <span><small>Source</small><strong>{lab.source?.sourceType?.replaceAll('_', ' ') || '—'}</strong></span>
+            <span><small>Host</small><strong>{lab.source?.sourceHost || '—'}</strong></span>
+            <span><small>Current artifact</small><strong>{current?.version || lab.application?.targetVersion || '—'}</strong></span>
+            <span><small>Signer</small><strong>{current?.signer || 'Not verified'}</strong></span>
+            <span><small>SHA-256</small><strong>{current?.sha256Verified ? 'Verified' : 'Pending'}</strong></span>
+            <span><small>Last source sync</small><strong>{labDate(lab.source?.lastSuccessAt)}</strong></span>
+            {lab.source?.error && <span className="wide"><small>Source error</small><strong>{readinessLabel(lab.source.error)}</strong></span>}
+          </div>}
+
+          {layer.id === 'vulnerability' && <div className="rmm-qualification-facts">
+            <span><small>Identity state</small><strong>{readinessLabel(lab.vulnerability?.state)}</strong></span>
+            <span><small>Validated identities</small><strong>{lab.vulnerability?.identities?.length || 0}</strong></span>
+            <span><small>Method</small><strong>{readinessLabel(lab.vulnerability?.method || 'not checked')}</strong></span>
+            <span><small>Source</small><strong>{lab.vulnerability?.resolvedSource || '—'}</strong></span>
+            {(lab.vulnerability?.identities || []).slice(0, 3).map((identity) => <span className="wide" key={identity.id}><small>{identity.sourceType || 'identity'}</small><strong>{[identity.vendor, identity.product, identity.packageName].filter(Boolean).join(' / ') || 'Validated mapping'}</strong></span>)}
+          </div>}
+
+          {layer.id === 'clean' && <div className="rmm-qualification-step-grid">
+            <span><small>Install</small><StatusPill tone={readinessTone(clean.state)}>{readinessLabel(clean.state)}</StatusPill><em>{clean.version || lab.application?.targetVersion || '—'}</em></span>
+            <span><small>Verify</small><StatusPill tone={readinessTone(verification.state)}>{readinessLabel(verification.state)}</StatusPill><em>{verification.version || 'Inventory target'}</em></span>
+            <span><small>Uninstall</small><StatusPill tone={readinessTone(uninstall.state)}>{readinessLabel(uninstall.state)}</StatusPill><em>{uninstall.residueCleanupVerified ? 'Residue cleanup verified' : 'Cleanup required'}</em></span>
+            {(clean.error || uninstall.error) && <p>{clean.error || uninstall.error}</p>}
+          </div>}
+
+          {layer.id === 'history' && <div className="rmm-release-pair">
+            <div><small>Previous stable</small><strong>{previous?.version || 'Not retained'}</strong><span>{previous ? readinessLabel(previous.trustState) + ' · ' + (previous.installerType || 'installer') : 'Prepare a trusted previous release before upgrade testing.'}</span></div>
+            <ChevronRight size={17} />
+            <div><small>Current stable</small><strong>{current?.version || lab.application?.targetVersion || '—'}</strong><span>{current ? readinessLabel(current.trustState) + ' · ' + (current.installerType || 'installer') : 'Current release evidence unavailable.'}</span></div>
+          </div>}
+
+          {layer.id === 'upgrade' && <div className="rmm-qualification-facts">
+            <span><small>Upgrade state</small><strong>{readinessLabel(upgrade.state)}</strong></span>
+            <span><small>From</small><strong>{upgrade.fromVersion || previous?.version || '—'}</strong></span>
+            <span><small>Target</small><strong>{upgrade.targetVersion || lab.application?.targetVersion || '—'}</strong></span>
+            <span><small>Patch detection</small><strong>{upgrade.patchDetectionVerified ? 'update_available verified' : 'Not yet verified'}</strong></span>
+            <span><small>Detected installed</small><strong>{upgrade.patchDetectionInstalledVersion || '—'}</strong></span>
+            <span><small>Verified at</small><strong>{labDate(upgrade.verifiedAt)}</strong></span>
+            {upgrade.state === 'legacy_pass' && <p>Upgrade passed before the newer patch-detection gate existed. Re-run to prove update_available detection.</p>}
+            {upgrade.error && <p>{upgrade.error}</p>}
+          </div>}
+
+          {layer.id === 'rollback' && <div className="rmm-qualification-coming-soon">
+            <Clock3 size={18} />
+            <div><strong>Rollback qualification is the next lifecycle gate</strong><span>It will prove current → uninstall → previous stable → verify → restore current. Normal patch policies will never downgrade automatically.</span></div>
+            <button disabled type="button">Not available yet</button>
+          </div>}
+        </article>
+      })}
+    </div>
+
+    <details className="rmm-qualification-history">
+      <summary>Recent qualification activity · {lab.recentJobs?.length || 0}</summary>
+      <div>
+        {(lab.recentJobs || []).slice(0, 10).map((job) => <span key={job.id}>
+          <strong>{job.jobType?.replaceAll('.', ' ') || 'Qualification job'}</strong>
+          <small>{readinessLabel(job.status)}{job.stage ? ' · ' + readinessLabel(job.stage) : ''}{job.verifiedVersion ? ' · verified ' + job.verifiedVersion : ''}</small>
+          {job.error && <em>{job.error}</em>}
+        </span>)}
+        {!lab.recentJobs?.length && <span><strong>No qualification jobs yet</strong><small>Run a clean cycle or full qualification to begin.</small></span>}
+      </div>
+    </details>
+  </div>
+}
+
 export function RmmPatching({ devices = [] }) {
   const [tab, setTab] = useState('software')
   const [bundle, setBundle] = useState(null)
@@ -519,6 +667,9 @@ export function RmmPatching({ devices = [] }) {
   const [catalogueInstallDeviceId, setCatalogueInstallDeviceId] = useState('')
   const [catalogueInstallId, setCatalogueInstallId] = useState('')
   const [catalogueMaintenanceId, setCatalogueMaintenanceId] = useState('')
+  const [qualificationLab, setQualificationLab] = useState(null)
+  const [qualificationLabLoading, setQualificationLabLoading] = useState(false)
+  const [qualificationAction, setQualificationAction] = useState('')
   const [bulkPatchDeviceId, setBulkPatchDeviceId] = useState('')
   const [bulkPatchMode, setBulkPatchMode] = useState('selected_catalogue')
   const [bulkPatchSelected, setBulkPatchSelected] = useState([])
@@ -582,6 +733,32 @@ export function RmmPatching({ devices = [] }) {
   useEffect(() => {
     setWingetPage(1)
   }, [wingetQuery, wingetPageSize])
+
+  useEffect(() => {
+    if (!catalogueMaintenanceId) return undefined
+    let active = true
+    let first = true
+    const load = async () => {
+      try {
+        const result = await loadSoftwareQualificationLab(catalogueMaintenanceId)
+        if (active) setQualificationLab(result.lab || null)
+      } catch (requestError) {
+        if (active) {
+          setQualificationLab(null)
+          setError(requestError?.message || 'Unable to load catalogue qualification workspace.')
+        }
+      } finally {
+        if (active && first) setQualificationLabLoading(false)
+        first = false
+      }
+    }
+    void load()
+    const timer = window.setInterval(() => void load(), 5000)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [catalogueMaintenanceId])
 
   useEffect(() => {
     if (tab !== 'winget') return undefined
@@ -869,6 +1046,44 @@ export function RmmPatching({ devices = [] }) {
     }
   }
 
+  function selectCatalogueMaintenance(value) {
+    setCatalogueMaintenanceId(value)
+    setQualificationLab(null)
+    setQualificationLabLoading(Boolean(value))
+    setQualificationAction('')
+  }
+
+  async function runQualificationWorkspaceAction(action) {
+    if (!catalogueMaintenanceId || qualificationAction) return
+    setQualificationAction(action)
+    setError('')
+    try {
+      const result = await runSoftwareQualificationAction(catalogueMaintenanceId, action)
+      if (result.bundle) setBundle(result.bundle)
+      if (result.lab) setQualificationLab(result.lab)
+    } catch (requestError) {
+      if (requestError?.data?.bundle) setBundle(requestError.data.bundle)
+      if (requestError?.data?.lab) setQualificationLab(requestError.data.lab)
+      setError(requestError?.message || 'Unable to run catalogue qualification action.')
+    } finally {
+      setQualificationAction('')
+    }
+  }
+
+  async function refreshQualificationWorkspace() {
+    if (!catalogueMaintenanceId || qualificationLabLoading) return
+    setQualificationLabLoading(true)
+    setError('')
+    try {
+      const result = await loadSoftwareQualificationLab(catalogueMaintenanceId)
+      setQualificationLab(result.lab || null)
+    } catch (requestError) {
+      setError(requestError?.message || 'Unable to refresh catalogue qualification workspace.')
+    } finally {
+      setQualificationLabLoading(false)
+    }
+  }
+
   async function revalidateApplication(application) {
     if (!application?.catalogue?.id || !application.catalogue.sourceKey) return
     setSaving(true)
@@ -876,6 +1091,10 @@ export function RmmPatching({ devices = [] }) {
     try {
       const result = await revalidateSoftwareCatalogueEntry(application.catalogue.id)
       setBundle(result.bundle)
+      if (application.catalogue.id === catalogueMaintenanceId) {
+        const lab = await loadSoftwareQualificationLab(application.catalogue.id)
+        setQualificationLab(lab.lab || null)
+      }
     } catch (requestError) {
       if (requestError?.data?.bundle) setBundle(requestError.data.bundle)
       setError(requestError?.message || 'Software validation failed.')
@@ -1122,31 +1341,31 @@ export function RmmPatching({ devices = [] }) {
         </div>}
       </div>}
 
-      <div className="rmm-catalogue-install-card">
-        <div className="intro"><Wrench size={18} /><div><strong>Catalogue validation</strong><span>Edit, validate or retry one specific catalogue application without touching any other software.</span></div></div>
-        <div className="controls">
-          <label>Application<select value={catalogueMaintenanceId} onChange={(event) => setCatalogueMaintenanceId(event.target.value)}>
+      <section className="rmm-qualification-shell">
+        <div className="rmm-qualification-selector">
+          <div><Wrench size={18} /><span><strong>Catalogue qualification lab</strong><small>Inspect every admission layer and run controlled install, verify, uninstall and upgrade tests from Hi5Central.</small></span></div>
+          <label>Application<select value={catalogueMaintenanceId} onChange={(event) => selectCatalogueMaintenance(event.target.value)}>
             <option value="">Select catalogue application</option>
             {catalogueMaintenanceItems.map((item) => <option key={item.id} value={item.id}>{item.canonicalName} · {item.targetVersion || 'No target'} · {qualificationLabel(item.qualificationState)}</option>)}
           </select></label>
-          <div className="install-meta">
-            <span><small>Target</small><strong>{selectedCatalogueMaintenance?.targetVersion || '—'}</strong></span>
-            <span><small>Provider</small><strong>{selectedCatalogueMaintenance?.deploymentMode?.replaceAll('_', ' ') || selectedCatalogueMaintenance?.provider || '—'}</strong></span>
-            <span><small>Trust</small><strong>{readinessLabel(selectedCatalogueMaintenance?.trustState || 'pending')}</strong></span>
-            <span><small>Qualification</small><strong>{qualificationLabel(selectedCatalogueMaintenance?.qualificationState)}</strong></span>
-          </div>
-          <button disabled={saving || !selectedCatalogueMaintenanceApp} onClick={() => setValidationApp(selectedCatalogueMaintenanceApp)} type="button"><Wrench size={14} /> Edit</button>
-          <button disabled={saving || !selectedCatalogueMaintenanceApp?.catalogue?.sourceKey} onClick={() => revalidateApplication(selectedCatalogueMaintenanceApp)} type="button"><RefreshCw size={14} /> Validate</button>
-          <button disabled={saving || !selectedCatalogueMaintenanceApp || selectedCatalogueMaintenance?.deploymentMode !== 'vendor_direct'} onClick={() => retryApplicationQualification(selectedCatalogueMaintenanceApp)} type="button"><ShieldCheck size={14} /> Retry qualification</button>
+          {selectedCatalogueMaintenance && <div className="rmm-qualification-selector-meta">
+            <span><small>Target</small><strong>{selectedCatalogueMaintenance.targetVersion || '—'}</strong></span>
+            <span><small>Provider</small><strong>{selectedCatalogueMaintenance.deploymentMode?.replaceAll('_', ' ') || selectedCatalogueMaintenance.provider || '—'}</strong></span>
+            <span><small>Trust</small><StatusPill tone={readinessTone(selectedCatalogueMaintenance.trustState)}>{readinessLabel(selectedCatalogueMaintenance.trustState || 'pending')}</StatusPill></span>
+            <span><small>Qualification</small><StatusPill tone={qualificationTone(selectedCatalogueMaintenance.qualificationState)}>{qualificationLabel(selectedCatalogueMaintenance.qualificationState)}</StatusPill></span>
+          </div>}
         </div>
-        {selectedCatalogueMaintenance?.qualificationReadiness && <div className="install-meta">
-          <span><small>Source</small><StatusPill tone={readinessTone(selectedCatalogueMaintenance.qualificationReadiness.source?.state)}>{readinessLabel(selectedCatalogueMaintenance.qualificationReadiness.source?.state)}</StatusPill></span>
-          <span><small>Artifact</small><StatusPill tone={readinessTone(selectedCatalogueMaintenance.qualificationReadiness.artifact?.state)}>{readinessLabel(selectedCatalogueMaintenance.qualificationReadiness.artifact?.state)}</StatusPill></span>
-          <span><small>Clean install</small><StatusPill tone={readinessTone(selectedCatalogueMaintenance.qualificationReadiness.installTest?.state)}>{readinessLabel(selectedCatalogueMaintenance.qualificationReadiness.installTest?.state)}</StatusPill></span>
-          <span><small>Uninstall</small><StatusPill tone={readinessTone(selectedCatalogueMaintenance.qualificationReadiness.uninstallTest?.state)}>{readinessLabel(selectedCatalogueMaintenance.qualificationReadiness.uninstallTest?.state)}</StatusPill></span>
-          <span><small>Upgrade</small><StatusPill tone={readinessTone(selectedCatalogueMaintenance.qualificationReadiness.upgradeTest?.state)}>{readinessLabel(selectedCatalogueMaintenance.qualificationReadiness.upgradeTest?.state)}</StatusPill></span>
-        </div>}
-      </div>
+        <QualificationWorkspace
+          item={selectedCatalogueMaintenance}
+          lab={qualificationLab}
+          loading={qualificationLabLoading}
+          busyAction={qualificationAction}
+          onAction={runQualificationWorkspaceAction}
+          onEdit={() => selectedCatalogueMaintenanceApp && setValidationApp(selectedCatalogueMaintenanceApp)}
+          onRevalidate={() => selectedCatalogueMaintenanceApp && revalidateApplication(selectedCatalogueMaintenanceApp)}
+          onRefresh={refreshQualificationWorkspace}
+        />
+      </section>
       <div className="rmm-catalogue-install-card">
         <div className="intro"><PackageCheck size={18} /><div><strong>Install from catalogue</strong><span>Install approved catalogue software on an online managed device. Existing installations stay in the normal Patch workflow.</span></div></div>
         <div className="controls">

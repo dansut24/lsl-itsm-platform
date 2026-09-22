@@ -1672,6 +1672,7 @@ export async function queueAutomaticUpgradeQualifications({ limit = 12 } = {}) {
           AND c.qualification_state='deployment_candidate'
           AND c.source_metadata->>'deploymentMode'='vendor_direct'
           AND c.source_metadata->>'trustState'='direct_ready'
+          AND COALESCE(q.evidence->>'manualQualificationMode','')<>'clean_only'
           AND EXISTS (
             SELECT 1
               FROM rmm_software_vendor_releases current_release
@@ -2000,7 +2001,8 @@ export async function runSoftwareQualificationQueue({ dispatchLimit = 1 } = {}) 
   return { runner: runner.device_name, reconciled, dispatched, emergencyDispatched }
 }
 
-export async function retrySoftwareQualification(catalogueId) {
+export async function retrySoftwareQualification(catalogueId, { mode = 'full' } = {}) {
+  const qualificationMode = mode === 'clean_only' ? 'clean_only' : 'full'
   const ready = await pool.query(
     `SELECT c.id,c.canonical_name,c.target_version,c.installer_type,
             c.source_metadata->>'latestSource' AS source_key,
@@ -2077,7 +2079,11 @@ export async function retrySoftwareQualification(catalogueId) {
         (catalogue_id,test_type,state,priority,attempt_count,last_error,evidence,created_at,updated_at)
        VALUES ($1,'clean_install','queued',
                CASE WHEN lower(COALESCE($2,''))='msi' THEN 120 ELSE 110 END,
-               0,'',jsonb_build_object('manualRequalification',true,'queuedAt',now()),now(),now())
+               0,'',jsonb_build_object(
+                 'manualRequalification',true,
+                 'manualQualificationMode',$3,
+                 'queuedAt',now()
+               ),now(),now())
        ON CONFLICT (catalogue_id,test_type)
        DO UPDATE SET state='queued',
          priority=EXCLUDED.priority,
@@ -2092,11 +2098,114 @@ export async function retrySoftwareQualification(catalogueId) {
          completed_at=NULL,
          updated_at=now()
        RETURNING id,state,priority`,
+      [catalogueId, row.installer_type, qualificationMode],
+    )
+    return result.rows[0]
+  })
+  return { queued: true, catalogueId, applicationName: row.canonical_name, targetVersion: row.target_version, mode: qualificationMode, queue }
+}
+
+export async function queueUpgradeQualification(catalogueId) {
+  const ready = await pool.query(
+    `SELECT c.id,c.canonical_name,c.target_version,c.installer_type,
+            c.source_metadata->>'latestSource' AS source_key,
+            c.qualification_evidence,
+            qi.state AS clean_state
+       FROM rmm_software_catalogue c
+       LEFT JOIN rmm_software_qualification_queue qi
+         ON qi.catalogue_id=c.id AND qi.test_type='clean_install'
+      WHERE c.id=$1
+        AND c.tenant_id IS NULL
+        AND c.status='active'
+        AND c.source_metadata->>'deploymentMode'='vendor_direct'
+        AND c.source_metadata->>'trustState'='direct_ready'
+      LIMIT 1`,
+    [catalogueId],
+  )
+  const row = ready.rows[0]
+  if (!row) return { queued: false, reason: 'catalogue_vendor_release_not_ready' }
+  if (clean(row.clean_state) !== 'passed') return { queued: false, reason: 'clean_install_not_passed' }
+
+  const active = await pool.query(
+    `SELECT id,test_type,state
+       FROM rmm_software_qualification_queue
+      WHERE catalogue_id=$1
+        AND state IN ('running','cleanup_pending','cleanup_running')
+      LIMIT 1`,
+    [catalogueId],
+  )
+  if (active.rowCount) return { queued: false, active: true, state: active.rows[0].state }
+
+  const pair = await upgradeReleasePair(catalogueId)
+  if (!pair.target) return { queued: false, reason: 'qualification_current_trusted_release_not_available' }
+  if (!pair.previous) return { queued: false, reason: 'previous_trusted_release_not_available' }
+
+  const queue = await withTransaction(async (client) => {
+    await client.query(
+      `UPDATE rmm_software_catalogue
+          SET qualification_state='deployment_candidate',
+              qualification_version='',
+              qualified_at=NULL,
+              qualification_evidence=qualification_evidence
+                - 'upgradeVerified'
+                - 'upgradeFromVersion'
+                - 'upgradeVersion'
+                - 'upgradeVerifiedAt'
+                - 'upgradePatchDetectionVerified'
+                - 'upgradePatchDetectionInstalledVersion'
+                - 'upgradePatchDetectionTargetVersion'
+                - 'upgradePatchDetectionVerifiedAt'
+                || jsonb_build_object('manualUpgradeQualificationRequestedAt',now()),
+              updated_at=now()
+        WHERE id=$1`,
+      [catalogueId],
+    )
+    const result = await client.query(
+      `INSERT INTO rmm_software_qualification_queue
+        (catalogue_id,test_type,state,priority,attempt_count,last_error,evidence,created_at,updated_at)
+       VALUES ($1,'upgrade',
+               'queued',
+               CASE WHEN lower(COALESCE($2,''))='msi' THEN 120 ELSE 110 END,
+               0,'',jsonb_build_object(
+                 'manualUpgradeQualification',true,
+                 'manualQualificationMode','upgrade_only',
+                 'queuedAt',now()
+               ),now(),now())
+       ON CONFLICT (catalogue_id,test_type)
+       DO UPDATE SET
+         state='queued',
+         priority=EXCLUDED.priority,
+         attempt_count=0,
+         runner_agent_device_id=NULL,
+         agent_job_id=NULL,
+         deployment_id=NULL,
+         cleanup_job_id=NULL,
+         last_error='',
+         evidence=(rmm_software_qualification_queue.evidence
+           - 'stage'
+           - 'baselineInstallCompletedAt'
+           - 'upgradePatchDetectionVerified'
+           - 'upgradePatchDetectionStatus'
+           - 'upgradePatchDetectionInstalledVersion'
+           - 'upgradePatchDetectionTargetVersion'
+           - 'upgradePatchDetectionVerifiedAt'
+           - 'upgradePatchDetectionIdentity') || EXCLUDED.evidence,
+         started_at=NULL,
+         completed_at=NULL,
+         updated_at=now()
+       RETURNING id,state,priority`,
       [catalogueId, row.installer_type],
     )
     return result.rows[0]
   })
-  return { queued: true, catalogueId, applicationName: row.canonical_name, targetVersion: row.target_version, queue }
+  return {
+    queued: true,
+    catalogueId,
+    applicationName: row.canonical_name,
+    targetVersion: row.target_version,
+    previousVersion: clean(pair.previous.release_version),
+    queue,
+  }
 }
 
 export async function qualificationQueueSummary(tenantId) {

@@ -5,8 +5,16 @@ import { pool, withTransaction } from './db.js'
 import { agentSocketForDevice, authenticateAgent, sendAgentMessage } from './rmmAgent.js'
 import { recordRmmActivity } from './rmmActivity.js'
 import { recentVulnerabilities, vulnerabilitySummary } from './rmmVulnerabilityIntel.js'
-import { softwareVendorSummary, syncSoftwareVendorSource } from './rmmSoftwareVendorIntel.js'
-import { qualificationQueueSummary, retrySoftwareQualification } from './rmmSoftwareQualification.js'
+import {
+  prepareQualificationBaselineForCatalogue,
+  softwareVendorSummary,
+  syncSoftwareVendorSource,
+} from './rmmSoftwareVendorIntel.js'
+import {
+  qualificationQueueSummary,
+  queueUpgradeQualification,
+  retrySoftwareQualification,
+} from './rmmSoftwareQualification.js'
 import { queueVendorArtifactInspectionForCatalogue } from './rmmVendorReleaseEnrichment.js'
 import { wingetRepositorySearch } from './rmmWingetFallback.js'
 import { normalizeCatalogueVersion, verificationVersionForRelease } from './rmmSoftwareVersioning.js'
@@ -490,6 +498,278 @@ async function catalogueRows(tenantId) {
     }
   })
 }
+async function qualificationLabPayload(tenantId, catalogueId) {
+  const appResult = await pool.query(
+    `SELECT c.id,c.tenant_id,c.canonical_name,c.publisher,c.target_version,c.installer_type,
+            c.qualification_state,c.qualification_version,c.qualification_evidence,c.qualification_notes,
+            c.qualified_at,c.external_key,c.catalogue_source,c.source_metadata,c.verification,c.execution,
+            s.source_key,s.source_type,s.source_url,s.enabled AS source_enabled,s.last_success_at,
+            s.last_attempt_at,s.last_error,s.metadata AS source_metadata_live,s.poll_minutes
+       FROM rmm_software_catalogue c
+       LEFT JOIN rmm_software_vendor_sources s
+         ON s.source_key=c.source_metadata->>'latestSource'
+      WHERE c.id=$1 AND c.status<>'archived'
+        AND (c.tenant_id=$2 OR c.tenant_id IS NULL)
+      LIMIT 1`,
+    [catalogueId,tenantId],
+  )
+  const app=appResult.rows[0]
+  if(!app) return null
+
+  const globalVendor=!app.tenant_id && clean(app.catalogue_source)==='vendor' && clean(app.source_key)
+  const [releaseResult,queueResult,jobResult,identityResult,runnerResult]=await Promise.all([
+    globalVendor
+      ? pool.query(
+          `SELECT id,version,release_date,installer_url,installer_sha256,installer_type,release_url,asset_name,
+                  trust_state,trust_evidence,source_payload,asset_health_state,asset_last_checked_at,
+                  asset_http_status,asset_content_type,asset_content_length,last_seen_at
+             FROM rmm_software_vendor_releases
+            WHERE source_key=$1 AND provider_package_id=$2
+            ORDER BY COALESCE(release_date,last_seen_at) DESC,last_seen_at DESC`,
+          [app.source_key,app.external_key],
+        )
+      : Promise.resolve({rows:[]}),
+    pool.query(
+      `SELECT id,test_type,state,priority,attempt_count,runner_agent_device_id,agent_job_id,deployment_id,
+              cleanup_job_id,last_error,evidence,started_at,completed_at,created_at,updated_at
+         FROM rmm_software_qualification_queue
+        WHERE catalogue_id=$1
+        ORDER BY CASE test_type WHEN 'clean_install' THEN 0 WHEN 'upgrade' THEN 1 ELSE 2 END,updated_at DESC`,
+      [catalogueId],
+    ),
+    pool.query(
+      `SELECT j.id,j.job_type,j.status,j.error_message,j.request_metadata,j.created_at,j.claimed_at,j.completed_at,
+              COALESCE(j.result->>'provider','') AS result_provider,
+              COALESCE(j.result->>'error','') AS result_error,
+              COALESCE(j.result->>'verifiedVersion',j.result->'verification'->>'installedVersion','') AS verified_version,
+              COALESCE(j.result->>'verificationPassed',j.result->'verification'->>'meetsTarget','') AS verification_passed
+         FROM rmm_agent_jobs j
+         JOIN rmm_software_qualification_queue q
+           ON q.id::text=j.request_metadata->>'qualification_queue_id'
+        WHERE q.catalogue_id=$1
+        ORDER BY j.created_at DESC
+        LIMIT 30`,
+      [catalogueId],
+    ),
+    pool.query(
+      `SELECT id,source AS source_type,vendor,product,ecosystem,package_name,enabled,confidence,metadata AS evidence,created_at,updated_at
+         FROM rmm_software_vulnerability_identities
+        WHERE catalogue_id=$1 AND enabled=true
+        ORDER BY confidence DESC,source_type,vendor,product`,
+      [catalogueId],
+    ),
+    pool.query(
+      `SELECT a.id AS agent_device_id,i.name AS device_name,a.agent_version,a.websocket_status,
+              a.last_telemetry_at,a.patch_capabilities
+         FROM rmm_software_vendor_qualification_runners q
+         JOIN rmm_agent_devices a ON a.id=q.agent_device_id AND a.disabled_at IS NULL
+         JOIN rmm_device_inventory i ON i.id=a.inventory_id AND i.active=true
+        WHERE q.enabled=true AND a.tenant_id=$1
+        ORDER BY a.last_telemetry_at DESC
+        LIMIT 1`,
+      [tenantId],
+    ),
+  ])
+
+  const evidence=object(app.qualification_evidence)
+  const catalogueSource=object(app.source_metadata)
+  const sourceLive=object(app.source_metadata_live)
+  const identityAudit=object(catalogueSource.vulnerabilityIdentityAudit)
+  const releases=releaseResult.rows.map((release)=>({
+    id:release.id,
+    version:clean(release.version),
+    releaseDate:release.release_date || null,
+    installerType:clean(release.installer_type),
+    assetName:clean(release.asset_name),
+    installerHost:(()=>{try{return new URL(clean(release.installer_url)).hostname}catch{return ''}})(),
+    releaseHost:(()=>{try{return new URL(clean(release.release_url)).hostname}catch{return ''}})(),
+    trustState:clean(release.trust_state),
+    assetHealthState:clean(release.asset_health_state || 'unknown'),
+    assetLastCheckedAt:release.asset_last_checked_at || null,
+    assetHttpStatus:release.asset_http_status || null,
+    contentType:clean(release.asset_content_type),
+    contentLength:Number(release.asset_content_length || 0) || null,
+    sha256Verified:/^[a-f0-9]{64}$/i.test(clean(release.installer_sha256)),
+    signatureVerified:object(release.trust_evidence).signatureVerified === true,
+    signer:clean(object(release.trust_evidence).signer || object(release.source_payload).expectedSigner),
+    historical:object(release.source_payload).historicalReleaseCandidate === true,
+    historicalRole:clean(object(release.source_payload).historicalRole),
+    lastSeenAt:release.last_seen_at || null,
+  }))
+
+  const stableOlder=releases
+    .filter((release)=>!/(alpha|beta|preview|nightly|canary|rc|eap|dev)/i.test(release.version)
+      && compareVersions(release.version,app.target_version)===-1)
+    .sort((left,right)=>compareVersions(right.version,left.version) || 0)
+  const previousReady=stableOlder.find((release)=>release.trustState==='direct_ready') || null
+  const previousPending=stableOlder.find((release)=>['asset_candidate','winget_ready'].includes(release.trustState)) || null
+  const currentRelease=releases.find((release)=>release.version===clean(app.target_version)) || null
+  const queues=Object.fromEntries(queueResult.rows.map((queue)=>[queue.test_type,{
+    id:queue.id,
+    testType:clean(queue.test_type),
+    state:clean(queue.state),
+    priority:Number(queue.priority || 0),
+    attemptCount:Number(queue.attempt_count || 0),
+    runnerAgentDeviceId:queue.runner_agent_device_id || '',
+    agentJobId:queue.agent_job_id || '',
+    deploymentId:queue.deployment_id || '',
+    cleanupJobId:queue.cleanup_job_id || '',
+    lastError:clean(queue.last_error),
+    evidence:object(queue.evidence),
+    startedAt:queue.started_at || null,
+    completedAt:queue.completed_at || null,
+    updatedAt:queue.updated_at || null,
+  }]))
+
+  const cleanQueue=queues.clean_install || null
+  const upgradeQueue=queues.upgrade || null
+  const sourceHealthy=Boolean(app.source_enabled && app.last_success_at && !clean(app.last_error))
+  const currentArtifactReady=Boolean(currentRelease?.trustState==='direct_ready'
+    && currentRelease?.sha256Verified
+    && currentRelease?.signatureVerified)
+  const vulnerabilityCovered=clean(identityAudit.state)==='covered' && identityResult.rows.length>0
+  const cleanPassed=evidence.cleanInstallVerified===true
+    && clean(evidence.cleanInstallVersion)===clean(app.target_version)
+  const uninstallPassed=evidence.uninstallVerified===true && cleanPassed
+  const upgradePassed=evidence.upgradeVerified===true
+    && clean(evidence.upgradeVersion)===clean(app.target_version)
+  const detectionPassed=evidence.upgradePatchDetectionVerified===true
+    && clean(evidence.upgradePatchDetectionTargetVersion)===clean(app.target_version)
+
+  const queueLayerState=(queue,fallback='not_tested')=>{
+    const state=clean(queue?.state)
+    return ['queued','running','cleanup_pending','cleanup_running','review_required','passed','cancelled'].includes(state)
+      ? state : fallback
+  }
+
+  return {
+    application:{
+      id:app.id,
+      name:clean(app.canonical_name),
+      publisher:clean(app.publisher),
+      targetVersion:clean(app.target_version),
+      installerType:clean(app.installer_type),
+      qualificationState:clean(app.qualification_state),
+      qualificationVersion:clean(app.qualification_version),
+      qualificationNotes:clean(app.qualification_notes),
+      qualifiedAt:app.qualified_at || null,
+      deploymentMode:clean(catalogueSource.deploymentMode),
+      trustState:clean(catalogueSource.trustState),
+      sourceKey:clean(app.source_key),
+      sourceType:clean(app.source_type),
+      sourceHost:(()=>{try{return new URL(clean(app.source_url)).hostname}catch{return ''}})(),
+    },
+    runner:runnerResult.rows[0] ? {
+      agentDeviceId:runnerResult.rows[0].agent_device_id,
+      deviceName:runnerResult.rows[0].device_name,
+      agentVersion:runnerResult.rows[0].agent_version,
+      websocketStatus:runnerResult.rows[0].websocket_status,
+      lastTelemetryAt:runnerResult.rows[0].last_telemetry_at,
+      online:clean(runnerResult.rows[0].websocket_status)==='Connected',
+    } : null,
+    source:{
+      state:sourceHealthy?'healthy':app.source_enabled?'attention':'disabled',
+      enabled:Boolean(app.source_enabled),
+      sourceKey:clean(app.source_key),
+      sourceType:clean(app.source_type),
+      sourceHost:(()=>{try{return new URL(clean(app.source_url)).hostname}catch{return ''}})(),
+      lastSuccessAt:app.last_success_at || null,
+      lastAttemptAt:app.last_attempt_at || null,
+      error:clean(app.last_error),
+      pollMinutes:Number(app.poll_minutes || 0) || null,
+      automationPolicy:object(sourceLive.automationPolicy),
+    },
+    vulnerability:{
+      state:vulnerabilityCovered?'covered':clean(identityAudit.state || 'needs_review'),
+      checkedAt:clean(identityAudit.checkedAt),
+      method:clean(identityAudit.method),
+      resolvedSource:clean(identityAudit.resolvedSource),
+      identities:identityResult.rows.map((identity)=>({
+        id:identity.id,
+        sourceType:clean(identity.source_type),
+        vendor:clean(identity.vendor),
+        product:clean(identity.product),
+        ecosystem:clean(identity.ecosystem),
+        packageName:clean(identity.package_name),
+        confidence:Number(identity.confidence || 0),
+      })),
+    },
+    releases:{
+      current:currentRelease,
+      previous:previousReady || previousPending,
+      previousReady:Boolean(previousReady),
+      previousPending:Boolean(!previousReady && previousPending),
+      all:releases.slice(0,20),
+    },
+    tests:{
+      cleanInstall:{
+        state:cleanPassed?'passed':queueLayerState(cleanQueue),
+        version:clean(evidence.cleanInstallVersion),
+        verifiedAt:clean(evidence.cleanInstallVerifiedAt),
+        error:clean(cleanQueue?.lastError),
+        queue:cleanQueue,
+      },
+      verification:{
+        state:cleanPassed?'passed':cleanPassed===false && clean(cleanQueue?.state)==='review_required'?'review_required':'pending',
+        version:clean(evidence.cleanInstallVersion),
+      },
+      uninstall:{
+        state:uninstallPassed?'passed':queueLayerState(cleanQueue,'not_tested'),
+        verifiedAt:clean(evidence.uninstallVerifiedAt),
+        residueCleanupVerified:evidence.residueCleanupVerified===true,
+        error:clean(cleanQueue?.lastError),
+      },
+      upgrade:{
+        state:upgradePassed && detectionPassed?'passed'
+          :upgradePassed?'legacy_pass'
+          :queueLayerState(upgradeQueue),
+        fromVersion:clean(evidence.upgradeFromVersion),
+        targetVersion:clean(evidence.upgradeVersion || app.target_version),
+        verifiedAt:clean(evidence.upgradeVerifiedAt),
+        patchDetectionVerified:detectionPassed,
+        patchDetectionInstalledVersion:clean(evidence.upgradePatchDetectionInstalledVersion),
+        patchDetectionTargetVersion:clean(evidence.upgradePatchDetectionTargetVersion),
+        error:clean(upgradeQueue?.lastError),
+        queue:upgradeQueue,
+      },
+      rollback:{
+        state:'not_implemented',
+        supported:false,
+      },
+    },
+    layers:[
+      {id:'source',label:'Source & trust',state:sourceHealthy && currentArtifactReady?'passed':sourceHealthy?'pending':'attention'},
+      {id:'vulnerability',label:'Vulnerability identity',state:vulnerabilityCovered?'passed':'attention'},
+      {id:'clean',label:'Install / verify / uninstall',state:cleanPassed && uninstallPassed?'passed':queueLayerState(cleanQueue)},
+      {id:'history',label:'Previous stable',state:previousReady?'passed':previousPending?'pending':'missing'},
+      {id:'upgrade',label:'Patch upgrade',state:upgradePassed && detectionPassed?'passed':upgradePassed?'legacy_pass':queueLayerState(upgradeQueue)},
+      {id:'rollback',label:'Rollback',state:'not_implemented'},
+    ],
+    actions:{
+      canRevalidate:Boolean(globalVendor && app.source_key),
+      canPreparePrevious:Boolean(globalVendor && ['github_releases','winget_manifest','vendor_html'].includes(clean(app.source_type)) && !previousReady),
+      canRunClean:Boolean(globalVendor && sourceHealthy && currentArtifactReady),
+      canRunUpgrade:Boolean(globalVendor && cleanPassed && uninstallPassed && currentArtifactReady && previousReady),
+      canRunFull:Boolean(globalVendor && sourceHealthy && currentArtifactReady),
+      rollbackAvailable:false,
+    },
+    recentJobs:jobResult.rows.map((job)=>({
+      id:job.id,
+      jobType:clean(job.job_type),
+      status:clean(job.status),
+      error:clean(job.error_message || job.result_error),
+      source:clean(object(job.request_metadata).source),
+      stage:clean(object(job.request_metadata).stage),
+      resultProvider:clean(job.result_provider),
+      verifiedVersion:clean(job.verified_version),
+      verificationPassed:clean(job.verification_passed),
+      createdAt:job.created_at,
+      claimedAt:job.claimed_at,
+      completedAt:job.completed_at,
+    })),
+  }
+}
+
 async function patchDiscoveryRows(tenantId) {
   const [observations, candidates] = await Promise.all([
     pool.query(
@@ -2621,6 +2901,72 @@ export function registerRmmPatchingRoutes(app) {
       provider: plan.provider,
       bundle: await patchBundle(auth.session.tenant_id),
     }, 202)
+  })
+
+  app.get('/api/v1/rmm/software-catalogue/:catalogueId/qualification-lab', async (c) => {
+    const auth = await requirePatchAccess(c, 'software')
+    if (auth.error) return auth.error
+    const catalogueId=clean(c.req.param('catalogueId'))
+    const lab=await qualificationLabPayload(auth.session.tenant_id,catalogueId)
+    if(!lab) return c.json({error:'Software catalogue entry not found.'},404)
+    return c.json({lab})
+  })
+
+  app.post('/api/v1/rmm/software-catalogue/:catalogueId/qualification-lab/action', async (c) => {
+    const auth = await requirePatchAccess(c, 'software')
+    if (auth.error) return auth.error
+    const catalogueId=clean(c.req.param('catalogueId'))
+    const body=await c.req.json().catch(()=>({}))
+    const action=clean(body.action)
+    const before=await qualificationLabPayload(auth.session.tenant_id,catalogueId)
+    if(!before) return c.json({error:'Software catalogue entry not found.'},404)
+
+    let result=null
+    if(action==='clean_cycle') {
+      result=await retrySoftwareQualification(catalogueId,{mode:'clean_only'})
+    } else if(action==='full') {
+      result=await retrySoftwareQualification(catalogueId,{mode:'full'})
+    } else if(action==='upgrade') {
+      result=await queueUpgradeQualification(catalogueId)
+    } else if(action==='prepare_previous') {
+      result=await prepareQualificationBaselineForCatalogue(catalogueId)
+    } else {
+      return c.json({error:'Unsupported qualification action.'},400)
+    }
+
+    const accepted = action==='prepare_previous' ? result?.prepared===true : result?.queued===true
+    const lab=await qualificationLabPayload(auth.session.tenant_id,catalogueId)
+    if(!accepted) {
+      return c.json({
+        error:'Qualification action cannot run yet: '+clean(result?.reason || result?.state || 'not ready').replaceAll('_',' '),
+        action,result,lab,
+      },409)
+    }
+
+    const labels={
+      clean_cycle:'Started clean install / verify / uninstall qualification',
+      full:'Started full catalogue qualification',
+      upgrade:'Started versioned upgrade qualification',
+      prepare_previous:'Prepared previous stable release for qualification',
+    }
+    await audit(
+      auth.session,
+      'software_catalogue.qualification_action',
+      (labels[action] || 'Ran catalogue qualification action')+' for “'+before.application.name+'”',
+      [
+        result?.previousVersion ? 'Previous '+result.previousVersion : '',
+        before.application.targetVersion ? 'Target '+before.application.targetVersion : '',
+        result?.state ? clean(result.state).replaceAll('_',' ') : '',
+      ].filter(Boolean).join(' · '),
+      {catalogueId,action,result},
+    )
+    return c.json({
+      success:true,
+      action,
+      result,
+      lab,
+      bundle:await patchBundle(auth.session.tenant_id),
+    },202)
   })
 
   app.put('/api/v1/rmm/software-catalogue/:catalogueId/validation', async (c) => {

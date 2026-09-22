@@ -67,6 +67,17 @@ export function retrySoftwareQualification(catalogueId) {
   })
 }
 
+export function loadSoftwareQualificationLab(catalogueId) {
+  return request('/api/v1/rmm/software-catalogue/' + encodeURIComponent(catalogueId) + '/qualification-lab')
+}
+
+export function runSoftwareQualificationAction(catalogueId, action) {
+  return request('/api/v1/rmm/software-catalogue/' + encodeURIComponent(catalogueId) + '/qualification-lab/action', {
+    method: 'POST',
+    body: JSON.stringify({ action }),
+  })
+}
+
 export function createVendorSource(source) {
   return request('/api/v1/rmm/vendor-sources', {
     method: 'POST',

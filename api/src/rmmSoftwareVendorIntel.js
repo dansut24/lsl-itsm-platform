@@ -1989,6 +1989,99 @@ async function retainPreviousWingetReleaseCandidate({ sourceKey, binding: b, con
   return result.rows[0] || null
 }
 
+export async function prepareQualificationBaselineForCatalogue(catalogueId) {
+  const candidate = await pool.query(
+    `SELECT c.id,c.canonical_name,c.target_version,s.source_key,s.source_url,s.source_type,s.metadata
+       FROM rmm_software_catalogue c
+       JOIN rmm_software_vendor_sources s
+         ON s.source_key=c.source_metadata->>'latestSource'
+        AND s.enabled=true
+      WHERE c.id=$1
+        AND c.tenant_id IS NULL
+        AND c.status='active'
+        AND c.source_metadata->>'trustState'='direct_ready'
+        AND COALESCE(c.target_version,'')<>''
+      LIMIT 1`,
+    [catalogueId],
+  )
+  const row = candidate.rows[0]
+  if (!row) return { prepared: false, reason: 'catalogue_vendor_source_not_ready' }
+
+  const b = await binding(row.source_key)
+  if (!b) return { prepared: false, reason: 'vendor_binding_missing' }
+
+  const releases = await pool.query(
+    `SELECT id,version,trust_state,asset_health_state,installer_type,installer_url
+       FROM rmm_software_vendor_releases
+      WHERE source_key=$1
+        AND provider_package_id=$2
+        AND channel=$3
+        AND platform=$4
+        AND architecture=$5
+        AND version<>$6
+        AND installer_type IN ('msi','exe')
+        AND asset_health_state IS DISTINCT FROM 'dead'
+      ORDER BY last_seen_at DESC`,
+    [row.source_key,b.provider_package_id,b.channel,b.platform,b.architecture,row.target_version],
+  )
+  const stableOlder = releases.rows.filter((release) =>
+    !/(alpha|beta|preview|nightly|canary|rc|eap|dev)/i.test(clean(release.version))
+    && compareVersionValues(release.version,row.target_version)<0
+  )
+  const ready = stableOlder.find((release) => clean(release.trust_state)==='direct_ready')
+  if (ready) return { prepared: true, ready: true, state: 'trusted_baseline_available', release: ready }
+  const pending = stableOlder.find((release) => ['asset_candidate','winget_ready'].includes(clean(release.trust_state)))
+  if (pending) return { prepared: true, ready: false, state: 'awaiting_artifact_verification', release: pending }
+
+  const config={...object(b.source_metadata),...object(b.binding_metadata)}
+  let retained=null
+  if (row.source_type==='github_releases') {
+    retained=await retainPreviousGithubReleaseCandidate({
+      sourceKey:row.source_key,
+      binding:b,
+      config,
+      repository:repositoryName(config.repository || row.source_url),
+      currentVersion:row.target_version,
+    })
+  } else if (row.source_type==='winget_manifest') {
+    retained=await retainPreviousWingetReleaseCandidate({
+      sourceKey:row.source_key,
+      binding:b,
+      config,
+      currentVersion:row.target_version,
+    })
+  } else if (row.source_type==='vendor_html') {
+    retained=await retainPreviousHtmlReleaseCandidate({
+      sourceKey:row.source_key,
+      binding:b,
+      config,
+      currentVersion:row.target_version,
+    })
+  } else {
+    return { prepared:false, reason:'historical_discovery_not_supported_for_source', sourceType:row.source_type }
+  }
+
+  if (!retained) return { prepared:false, reason:'previous_stable_installer_unavailable', sourceType:row.source_type }
+
+  await pool.query(
+    `UPDATE rmm_software_vendor_sources
+        SET metadata=(metadata - 'baselinePreparationError') || $2::jsonb,updated_at=now()
+      WHERE source_key=$1`,
+    [row.source_key,JSON.stringify({
+      baselinePreparationState:'awaiting_artifact_verification',
+      baselinePreparationCompletedAt:new Date().toISOString(),
+      baselinePreparationRequestedForCatalogueId:catalogueId,
+    })],
+  )
+  return {
+    prepared:true,
+    ready:false,
+    state:'awaiting_artifact_verification',
+    release:retained,
+    sourceType:row.source_type,
+  }
+}
+
 let baselinePreparationActive = false
 
 export async function prepareQualificationBaselines({ limit = 4 } = {}) {
