@@ -652,7 +652,7 @@ function QualificationWorkspace({
   </div>
 }
 
-export function RmmPatching({ devices = [] }) {
+export function RmmPatching({ devices = [], softwareOnly = false }) {
   const [tab, setTab] = useState('software')
   const [bundle, setBundle] = useState(null)
   const [scope, setScope] = useState({ groups: [] })
@@ -1295,22 +1295,22 @@ export function RmmPatching({ devices = [] }) {
   }
 
   return <>
-    <PageHeading action={<div className="rmm-patch-heading-actions"><button disabled={loading} onClick={refresh} type="button"><RefreshCw size={15} /> Refresh</button><button className="rmm-primary compact" onClick={() => setShowPolicy(true)} type="button"><Plus size={15} /> New policy</button></div>} />
+    {!softwareOnly && <PageHeading action={<div className="rmm-patch-heading-actions"><button disabled={loading} onClick={refresh} type="button"><RefreshCw size={15} /> Refresh</button><button className="rmm-primary compact" onClick={() => setShowPolicy(true)} type="button"><Plus size={15} /> New policy</button></div>} />}
     {error && <div className="rmm-patch-error"><AlertTriangle size={16} /><span>{error}</span></div>}
 
-    <div className="rmm-patch-metrics">
+    {!softwareOnly && <div className="rmm-patch-metrics">
       <Metric icon={PackageCheck} label="Software installations" value={loading ? '…' : overview.softwareInstallations ?? 0} />
       <Metric icon={AlertTriangle} label="Software updates available" value={loading ? '…' : overview.updateAvailable ?? 0} tone="warning" />
       <Metric icon={ShieldCheck} label="Open CVE exposures" value={loading ? '…' : exposureSummary.open ?? 0} tone={Number(exposureSummary.open || 0) > 0 ? 'critical' : ''} />
       <Metric icon={Monitor} label="Windows updates pending" value={windowsPending} />
-    </div>
-    <section className="rmm-patch-security-banner">
+    </div>}
+    {!softwareOnly && <section className="rmm-patch-security-banner">
       <ShieldCheck size={20} />
       <div><strong>Server-authoritative patch intelligence</strong><span>The full software/CVE catalogue stays in Hi5Central. PatchHost receives only short-lived per-job manifests and never receives the estate-wide catalogue.</span></div>
       <StatusPill tone="healthy">Protected design</StatusPill>
-    </section>
+    </section>}
 
-    <nav className="rmm-patch-tabs">
+    {!softwareOnly && <nav className="rmm-patch-tabs">
       {[
         ['software', 'Software', exposedApps.length],
         ['winget', 'WinGet Repository', wingetRepository.total || 0],
@@ -1319,7 +1319,7 @@ export function RmmPatching({ devices = [] }) {
         ['windows', 'Windows Update', windowsPending],
         ['policies', 'Policies', policies.length],
       ].map(([id, label, count]) => <button className={tab === id ? 'active' : ''} key={id} onClick={() => setTab(id)} type="button">{label}<b>{count}</b></button>)}
-    </nav>
+    </nav>}
 
     {tab === 'software' && <section className="rmm-patch-panel">
       <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Software patch catalogue</span><h2>Patchability by application</h2><p>{mappedApps.length} mapped application{mappedApps.length === 1 ? '' : 's'} · {applications.length - mappedApps.length} awaiting mapping · {catalogueCandidates.length} automatically discovered package{catalogueCandidates.length === 1 ? '' : 's'} · {overview.qualifiedCatalogue || 0} qualified · {overview.automaticAdmissionReadyCatalogue || 0} automatic-admission ready · {overview.candidateCatalogue || 0} deployment candidates.</p></div></div>
