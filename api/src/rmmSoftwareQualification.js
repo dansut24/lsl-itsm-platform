@@ -2661,7 +2661,7 @@ export async function retrySoftwareQualification(catalogueId, { mode = 'full' } 
                CASE WHEN lower(COALESCE($2,''))='msi' THEN 120 ELSE 110 END,
                0,'',jsonb_build_object(
                  'manualRequalification',true,
-                 'manualQualificationMode',$3,
+                 'manualQualificationMode',$3::text,
                  'queuedAt',now()
                ),now(),now())
        ON CONFLICT (catalogue_id,test_type)
