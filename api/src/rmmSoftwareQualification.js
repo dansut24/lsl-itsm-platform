@@ -1751,7 +1751,7 @@ async function stopOverlongQualificationJobs() {
       WHERE q.state='running'
         AND j.job_type='patch.software'
         AND j.status='claimed'
-        AND q.started_at<now()-interval '10 minutes'
+        AND COALESCE(j.claimed_at,j.created_at)<now()-interval '10 minutes'
       ORDER BY q.started_at LIMIT 3`,
   )
   for (const row of rows.rows) {
