@@ -549,6 +549,21 @@ async function retainPreviousGithubReleaseCandidate({ sourceKey, binding: b, con
   return inserted.rows[0] || null
 }
 
+export function jetbrainsVendorBuild(sourceKey, version, installerUrl) {
+  if (!/^jetbrains_[a-z]+$/.test(sourceKey)) return ''
+  if (!/^20\d{2}\.\d+(?:\.\d+)?$/.test(version)) return ''
+  let url
+  try { url=new URL(installerUrl) } catch { return '' }
+  if (url.protocol !== 'https:' || url.hostname !== 'download.jetbrains.com') return ''
+  const product=sourceKey.slice('jetbrains_'.length)
+  const file=decodeURIComponent(url.pathname.split('/').at(-1) || '')
+  const match=/^([a-z]+)-(\d{2})(\d)\.(\d+)\.(\d+)\.exe$/i.exec(file)
+  if (!match || match[1].toLowerCase() !== product) return ''
+  const major='20'+match[2]+'.'+Number(match[3])
+  if (version !== major && !version.startsWith(major+'.')) return ''
+  return match[2]+match[3]+'.'+match[4]+'.'+match[5]
+}
+
 async function syncGenericConfigured(sourceKey, state) {
   const b = await binding(sourceKey)
   if (!b) return null
@@ -1070,6 +1085,13 @@ async function syncGenericConfigured(sourceKey, state) {
   }
   const verification = { ...object(config.verificationConfig) }
   if (verificationProductCode) verification.productCode = verificationProductCode
+  const jetbrainsBuild = jetbrainsVendorBuild(sourceKey,version,installerUrl)
+  if (jetbrainsBuild && resolvedInstallerType === 'exe') {
+    verification.versionTransform = 'jetbrains_vendor_build'
+    verification.releaseVersion = version
+    verification.vendorBuild = jetbrainsBuild
+    config.installArguments = '/S'
+  }
   const wingetPackageId = clean(config.wingetPackageId || config.autoWingetPackageId)
   const configuredExpectedSigner = clean(config.autoExpectedSigner || config.expectedSigner)
   const configuredDeploymentMode = clean(config.autoDeploymentMode || config.deploymentMode)

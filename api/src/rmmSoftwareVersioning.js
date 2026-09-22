@@ -34,6 +34,16 @@ export function verificationVersionForRelease(value, verification = {}) {
   const raw = clean(value)
   if (!raw) return ''
 
+  if (clean(object(verification).versionTransform) === 'jetbrains_vendor_build') {
+    const release = clean(object(verification).releaseVersion)
+    const build = clean(object(verification).vendorBuild)
+    const match = /^(\d{2})(\d)\.\d+\.\d+$/.exec(build)
+    if (raw === release && /^20\d{2}\.\d+(?:\.\d+)?$/.test(raw) && match) {
+      const major = '20' + match[1] + '.' + Number(match[2])
+      if (raw === major || raw.startsWith(major + '.')) return build
+    }
+  }
+
   if (clean(object(verification).versionTransform) === 'git_windows_registry') {
     const match = /^(\d+\.\d+\.\d+)\.windows\.(\d+)$/.exec(raw)
     if (match) return `${match[1]}.${match[2]}`

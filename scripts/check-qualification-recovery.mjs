@@ -15,6 +15,8 @@ assert.equal(grouped[0].count, 2)
 process.env.DATABASE_URL ||= 'postgresql://unused:unused@127.0.0.1/unused'
 const { resolvePreviousWingetVendorInstaller: resolve } = await import('../api/src/rmmWingetFallback.js')
 const { pool } = await import('../api/src/db.js')
+const { jetbrainsVendorBuild } = await import('../api/src/rmmSoftwareVendorIntel.js')
+const { verificationVersionForRelease } = await import('../api/src/rmmSoftwareVersioning.js')
 const originalFetch = globalThis.fetch
 try {
   await assert.rejects(() => resolve('../bad', '2.0'), /invalid_winget/)
@@ -29,4 +31,12 @@ try {
   globalThis.fetch = originalFetch
   await pool.end()
 }
-console.log('Qualification grouping and baseline discovery boundary checks passed')
+const jetbrainsUrl='https://download.jetbrains.com/webstorm/WebStorm-263.5153.41.exe'
+assert.equal(jetbrainsVendorBuild('jetbrains_webstorm','2026.3',jetbrainsUrl),'263.5153.41')
+assert.equal(jetbrainsVendorBuild('jetbrains_webstorm','2026.2',jetbrainsUrl),'')
+assert.equal(jetbrainsVendorBuild('jetbrains_clion','2026.3',jetbrainsUrl),'')
+assert.equal(jetbrainsVendorBuild('jetbrains_webstorm','2026.3','https://evil.test/WebStorm-263.5153.41.exe'),'')
+assert.equal(jetbrainsVendorBuild('jetbrains_webstorm','2026.3','https://download.jetbrains.com/webstorm/WebStorm-264.5153.41.exe'),'')
+assert.equal(verificationVersionForRelease('2026.3',{versionTransform:'jetbrains_vendor_build',releaseVersion:'2026.3',vendorBuild:'263.5153.41'}),'263.5153.41')
+assert.equal(verificationVersionForRelease('2026.2',{versionTransform:'jetbrains_vendor_build',releaseVersion:'2026.3',vendorBuild:'263.5153.41'}),'2026.2')
+console.log('Qualification grouping, baseline and exact JetBrains build checks passed')
