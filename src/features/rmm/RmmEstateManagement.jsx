@@ -175,6 +175,7 @@ export function RmmDeviceInventory({ openDevice, query, preset, onPresetApplied,
   const [activeViewId, setActiveViewId] = useState('')
   const [showSaveModal, setShowSaveModal] = useState(false)
   const [showColumns, setShowColumns] = useState(false)
+  const [showMobileFilters, setShowMobileFilters] = useState(false)
   const [scopeError, setScopeError] = useState('')
   const normalized = query.trim().toLowerCase()
 
@@ -223,6 +224,7 @@ export function RmmDeviceInventory({ openDevice, query, preset, onPresetApplied,
     setVisibleColumns(Array.isArray(view.columns) && view.columns.length ? view.columns : DEFAULT_COLUMNS)
     setActiveViewId(view.id)
     setShowColumns(false)
+    setShowMobileFilters(false)
   }
 
   function resetView() {
@@ -230,6 +232,7 @@ export function RmmDeviceInventory({ openDevice, query, preset, onPresetApplied,
     setSort({ field: 'name', direction: 'asc' })
     setVisibleColumns(DEFAULT_COLUMNS)
     setActiveViewId('')
+    setShowMobileFilters(false)
   }
 
   async function saveCurrentView({ name, visibility, favourite = false, default: makeDefault = false }) {
@@ -300,7 +303,12 @@ export function RmmDeviceInventory({ openDevice, query, preset, onPresetApplied,
   const patchRisk = devices.filter((device) => device.patchCompliance != null && Number(device.patchCompliance) < 90).length
   const quickViews = [['all', 'All devices'], ['attention', 'Needs attention'], ['online', 'Online'], ['offline', 'Offline'], ['servers', 'Servers'], ['laptops', 'Laptops']]
   const activeFilters = Object.values(filters).filter((value) => value && value !== 'All' && value !== 'all').length
+  const advancedFilterCount = Object.entries(filters).filter(([key, value]) => key !== 'quickView' && value && value !== 'All' && value !== 'all').length
   const gridTemplateColumns = buildGridTemplate(visibleColumns)
+  const emptyTitle = devices.length ? 'No devices match this view' : 'No managed devices yet'
+  const emptyCopy = devices.length
+    ? 'Change the search, scope or saved view filters.'
+    : 'Deploy the Hi5Central agent or connect a supported source tenant to populate this estate.'
 
   return (
     <>
@@ -322,17 +330,22 @@ export function RmmDeviceInventory({ openDevice, query, preset, onPresetApplied,
       </section>
 
       <div className="rmm-list-toolbar rmm-device-toolbar rmm-device-toolbar-v2">
-        <div className="rmm-filter-pills">{quickViews.map(([id, label]) => <button className={filters.quickView === id ? 'active' : ''} key={id} onClick={() => setFilter('quickView', id)} type="button">{label}</button>)}</div>
-        <label>Site<select value={filters.siteId} onChange={(event) => setFilter('siteId', event.target.value)}><option value="All">All</option>{allSites.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-        <label>Source tenant<select value={filters.sourceTenant} onChange={(event) => setFilter('sourceTenant', event.target.value)}><option value="All">All</option>{[...new Set(devices.map((device) => device.sourceTenant).filter(Boolean))].map((item) => <option key={item}>{item}</option>)}</select></label>
-        <label>Group<select value={filters.groupId} onChange={(event) => setFilter('groupId', event.target.value)}><option value="All">All</option>{allGroups.map((item) => <option key={item.id} value={item.id}>{item.name}{item.mode === 'Dynamic' ? ' · dynamic' : ''}</option>)}</select></label>
-        <label>Platform<select value={filters.platform} onChange={(event) => setFilter('platform', event.target.value)}><option>All</option>{[...new Set(devices.map((device) => device.platform))].map((item) => <option key={item}>{item}</option>)}</select></label>
-        <label>Health<select value={filters.health} onChange={(event) => setFilter('health', event.target.value)}><option>All</option>{['Healthy', 'Warning', 'Critical', 'Offline'].map((item) => <option key={item}>{item}</option>)}</select></label>
-        <label>Patch<select value={filters.patchState} onChange={(event) => setFilter('patchState', event.target.value)}><option>All</option><option>At risk</option><option>Compliant</option></select></label>
-        <label>Sort<select value={`${sort.field}:${sort.direction}`} onChange={(event) => { const [field, direction] = event.target.value.split(':'); setSort({ field, direction }); setActiveViewId('') }}><option value="name:asc">Device A–Z</option><option value="health:desc">Health priority</option><option value="patch:asc">Patch lowest first</option><option value="site:asc">Site A–Z</option></select></label>
-        <div className="rmm-column-control"><button className="rmm-toolbar-button" onClick={() => setShowColumns((value) => !value)} type="button"><Columns3 size={14} /> Columns</button>{showColumns && <ColumnChooser columns={visibleColumns} onChange={(value) => { setVisibleColumns(value); setActiveViewId('') }} onClose={() => setShowColumns(false)} />}</div>
-        {activeFilters > 0 && <button className="rmm-toolbar-button" onClick={resetView} type="button"><FilterX size={14} /> Reset</button>}
-        <span>{visible.length} shown</span>
+        <div className="rmm-device-toolbar-top">
+          <div className="rmm-filter-pills" aria-label="Device quick views">{quickViews.map(([id, label]) => <button className={filters.quickView === id ? 'active' : ''} key={id} onClick={() => setFilter('quickView', id)} type="button">{label}</button>)}</div>
+          <button aria-controls="rmm-device-filter-controls" aria-expanded={showMobileFilters} className={'rmm-mobile-filter-toggle ' + (showMobileFilters ? 'active' : '')} onClick={() => setShowMobileFilters((value) => !value)} type="button"><SlidersHorizontal size={15} /> Filters{advancedFilterCount > 0 && <b>{advancedFilterCount}</b>}</button>
+        </div>
+        <div className={'rmm-device-filter-controls ' + (showMobileFilters ? 'is-open' : '')} id="rmm-device-filter-controls">
+          <label>Site<select value={filters.siteId} onChange={(event) => setFilter('siteId', event.target.value)}><option value="All">All</option>{allSites.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+          <label>Source tenant<select value={filters.sourceTenant} onChange={(event) => setFilter('sourceTenant', event.target.value)}><option value="All">All</option>{[...new Set(devices.map((device) => device.sourceTenant).filter(Boolean))].map((item) => <option key={item}>{item}</option>)}</select></label>
+          <label>Group<select value={filters.groupId} onChange={(event) => setFilter('groupId', event.target.value)}><option value="All">All</option>{allGroups.map((item) => <option key={item.id} value={item.id}>{item.name}{item.mode === 'Dynamic' ? ' · dynamic' : ''}</option>)}</select></label>
+          <label>Platform<select value={filters.platform} onChange={(event) => setFilter('platform', event.target.value)}><option>All</option>{[...new Set(devices.map((device) => device.platform))].map((item) => <option key={item}>{item}</option>)}</select></label>
+          <label>Health<select value={filters.health} onChange={(event) => setFilter('health', event.target.value)}><option>All</option>{['Healthy', 'Warning', 'Critical', 'Offline'].map((item) => <option key={item}>{item}</option>)}</select></label>
+          <label>Patch<select value={filters.patchState} onChange={(event) => setFilter('patchState', event.target.value)}><option>All</option><option>At risk</option><option>Compliant</option></select></label>
+          <label>Sort<select value={sort.field + ':' + sort.direction} onChange={(event) => { const [field, direction] = event.target.value.split(':'); setSort({ field, direction }); setActiveViewId('') }}><option value="name:asc">Device A–Z</option><option value="health:desc">Health priority</option><option value="patch:asc">Patch lowest first</option><option value="site:asc">Site A–Z</option></select></label>
+          <div className="rmm-column-control"><button className="rmm-toolbar-button" onClick={() => setShowColumns((value) => !value)} type="button"><Columns3 size={14} /> Columns</button>{showColumns && <ColumnChooser columns={visibleColumns} onChange={(value) => { setVisibleColumns(value); setActiveViewId('') }} onClose={() => setShowColumns(false)} />}</div>
+          {activeFilters > 0 && <button className="rmm-toolbar-button" onClick={resetView} type="button"><FilterX size={14} /> Reset</button>}
+          <span className="rmm-device-result-count">{visible.length} shown</span>
+        </div>
       </div>
 
       <section className="rmm-table-card rmm-inventory-table-card">
@@ -350,8 +363,23 @@ export function RmmDeviceInventory({ openDevice, query, preset, onPresetApplied,
             <span><ChevronRight size={16} /></span>
           </button>)}
         </div>
-        {!visible.length && <div className="rmm-empty"><AlertTriangle size={24} /><strong>No devices match this view</strong><span>Change the search, scope or saved view filters.</span></div>}
+        {!visible.length && <div className="rmm-empty"><AlertTriangle size={24} /><strong>{emptyTitle}</strong><span>{emptyCopy}</span></div>}
       </section>
+      <section className="rmm-mobile-device-list" aria-label="Device inventory">
+        {visible.map((device) => <button className="rmm-mobile-device-card" key={device.id} onClick={() => openDevice(device)} type="button">
+          <span className={'rmm-device-icon ' + healthClass(device.health)}><DeviceIcon device={device} /></span>
+          <span className="rmm-mobile-device-copy"><strong>{device.name}</strong><small>{device.user || 'No assigned user'} · {device.site || 'No site'}</small><small>{device.os || device.platform || 'Platform not reported'}</small></span>
+          <StatusPill>{device.health || device.status || 'Unknown'}</StatusPill>
+          <span className="rmm-mobile-device-facts">
+            <span><small>Status</small><strong>{device.status || 'Unknown'}</strong></span>
+            <span><small>Patch</small><strong>{device.patchCompliance == null ? '—' : device.patchCompliance + '%'}</strong></span>
+            <span><small>Last seen</small><strong>{device.lastSeen || 'Not reported'}</strong></span>
+          </span>
+          <ChevronRight className="rmm-mobile-device-chevron" size={17} />
+        </button>)}
+        {!visible.length && <div className="rmm-card rmm-empty rmm-mobile-device-empty"><AlertTriangle size={24} /><strong>{emptyTitle}</strong><span>{emptyCopy}</span></div>}
+      </section>
+
       {showSaveModal && <SavedViewModal filters={filters} onClose={() => setShowSaveModal(false)} onSave={saveCurrentView} sort={sort} visibleColumns={visibleColumns} />}
     </>
   )
