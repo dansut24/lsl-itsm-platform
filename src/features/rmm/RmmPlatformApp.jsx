@@ -248,19 +248,20 @@ function RmmDashboard({ canAudit = false, devices = [], navigate, openDevice }) 
 
     async function loadOperations() {
       try {
-        const [jobsResponse, activityResponse] = await Promise.all([
-          fetch(apiBase + '/api/v1/rmm/jobs?limit=50', { credentials: 'include' }),
-          fetch(apiBase + '/api/v1/rmm/activity?limit=12', { credentials: 'include' }),
-        ])
-        const [jobsPayload, activityPayload] = await Promise.all([
-          jobsResponse.json().catch(() => ({})),
-          activityResponse.json().catch(() => ({})),
-        ])
+        const jobsResponse = await fetch(apiBase + '/api/v1/rmm/jobs?limit=50', { credentials: 'include' })
+        const jobsPayload = await jobsResponse.json().catch(() => ({}))
         if (!jobsResponse.ok) throw new Error(jobsPayload.error || 'Unable to load recent jobs.')
-        if (!activityResponse.ok) throw new Error(activityPayload.error || 'Unable to load recent activity.')
+
+        let activityPayload = { events: [] }
+        if (canAudit) {
+          const activityResponse = await fetch(apiBase + '/api/v1/rmm/activity?limit=12', { credentials: 'include' })
+          activityPayload = await activityResponse.json().catch(() => ({}))
+          if (!activityResponse.ok) throw new Error(activityPayload.error || 'Unable to load recent activity.')
+        }
+
         if (!active) return
         setRecentJobs(jobsPayload.jobs || [])
-        setRecentActivity(activityPayload.events || [])
+        setRecentActivity(canAudit ? activityPayload.events || [] : [])
         setOperationsError('')
       } catch (error) {
         if (active && initial) setOperationsError(error?.message || 'Unable to load live operations.')
@@ -276,7 +277,7 @@ function RmmDashboard({ canAudit = false, devices = [], navigate, openDevice }) 
       active = false
       window.clearInterval(timer)
     }
-  }, [apiBase])
+  }, [apiBase, canAudit])
 
   const activeJobs = recentJobs.filter((job) => ['queued', 'claimed', 'running'].includes(String(job.status || '').toLowerCase())).length
 
@@ -315,7 +316,7 @@ function RmmDashboard({ canAudit = false, devices = [], navigate, openDevice }) 
         </section>
         <section className="rmm-card rmm-dashboard-operations-card">
           <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Audit</span><h2>Operational activity</h2></div>{canAudit ? <button onClick={() => navigate('activity-audit')} type="button">Open audit <ChevronRight size={14} /></button> : <span className="rmm-dashboard-feed-status-text">Latest estate events</span>}</div>
-          {operationsLoading ? <div className="rmm-dashboard-feed-loading">{Array.from({ length: 4 }).map((_, index) => <span key={index} />)}</div> : operationsError && !recentActivity.length ? <div className="rmm-empty compact"><AlertTriangle size={22} /><strong>Activity feed unavailable</strong><span>{operationsError}</span></div> : recentActivity.length ? <div className="rmm-dashboard-activity-feed">{recentActivity.slice(0, 5).map((event) => { const Icon = dashboardActivityIcon(event.category); return <article key={event.id}><span className={'rmm-dashboard-activity-icon ' + operationTone(event.outcome)}><Icon size={15} /></span><div><strong>{event.summary}</strong><small>{event.device_name || 'Managed device'} · {event.actor_label || 'SYSTEM'}</small></div><StatusPill tone={operationTone(event.outcome)}>{event.outcome || 'info'}</StatusPill><time>{dashboardWhen(event.created_at)}</time></article> })}</div> : <div className="rmm-empty compact"><History size={22} /><strong>No operational activity yet</strong><span>Remote sessions, terminal work, jobs and Agent-detected changes will appear here.</span></div>}
+          {!canAudit ? <div className="rmm-empty compact"><History size={22} /><strong>Activity stays with each device</strong><span>Open a managed device to view its technician actions, remote sessions, jobs and Agent-detected changes.</span></div> : operationsLoading ? <div className="rmm-dashboard-feed-loading">{Array.from({ length: 4 }).map((_, index) => <span key={index} />)}</div> : operationsError && !recentActivity.length ? <div className="rmm-empty compact"><AlertTriangle size={22} /><strong>Activity feed unavailable</strong><span>{operationsError}</span></div> : recentActivity.length ? <div className="rmm-dashboard-activity-feed">{recentActivity.slice(0, 5).map((event) => { const Icon = dashboardActivityIcon(event.category); return <article key={event.id}><span className={'rmm-dashboard-activity-icon ' + operationTone(event.outcome)}><Icon size={15} /></span><div><strong>{event.summary}</strong><small>{event.device_name || 'Managed device'} · {event.actor_label || 'SYSTEM'}</small></div><StatusPill tone={operationTone(event.outcome)}>{event.outcome || 'info'}</StatusPill><time>{dashboardWhen(event.created_at)}</time></article> })}</div> : <div className="rmm-empty compact"><History size={22} /><strong>No operational activity yet</strong><span>Remote sessions, terminal work, jobs and Agent-detected changes will appear here.</span></div>}
         </section>
       </div>
     </>
