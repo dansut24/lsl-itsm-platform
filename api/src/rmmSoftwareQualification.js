@@ -572,6 +572,10 @@ async function finalizeResidueCleanup(current, cleanup, { upgrade = false } = {}
         upgradeFromVersion: clean(evidence.previousVersion),
         upgradeVersion: current.target_version,
         upgradeVerifiedAt: now,
+        upgradePatchDetectionVerified: evidence.upgradePatchDetectionVerified === true,
+        upgradePatchDetectionInstalledVersion: clean(evidence.upgradePatchDetectionInstalledVersion),
+        upgradePatchDetectionTargetVersion: clean(evidence.upgradePatchDetectionTargetVersion),
+        upgradePatchDetectionVerifiedAt: clean(evidence.upgradePatchDetectionVerifiedAt),
         upgradeQualificationQueueId: current.id,
         qualificationRunnerAgentDeviceId: current.runner_agent_device_id,
         residueCleanupVerified: true,
@@ -1107,17 +1111,85 @@ async function reconcileUpgradeQueueRow(queue, runner) {
     }
 
     if (clean(evidence.stage) === 'upgrade_baseline_running') {
+      const pair = await upgradeReleasePair(current.catalogue_id)
+      if (!pair.target || !pair.previous) {
+        await markReview(current.id, 'qualification_upgrade_release_pair_lost', { stage: 'upgrade_detection_pending' })
+        return { id: current.id, state: 'review_required' }
+      }
+      await pool.query(
+        `UPDATE rmm_software_qualification_queue
+            SET evidence=evidence || $2::jsonb,updated_at=now()
+          WHERE id=$1`,
+        [current.id, JSON.stringify({
+          stage: 'upgrade_detection_pending',
+          baselineInstallCompletedAt: job.completed_at || new Date().toISOString(),
+          previousVersion: clean(pair.previous.release_version),
+          targetVersion: clean(pair.target.release_version),
+        })],
+      )
+      return { id: current.id, state: 'running' }
+    }
+
+    if (clean(evidence.stage) === 'upgrade_detection_pending') {
       if (!runner || clean(current.runner_agent_device_id) !== clean(runner.agent_device_id)) {
         return { id: current.id, state: current.state }
       }
       const pair = await upgradeReleasePair(current.catalogue_id)
       if (!pair.target || !pair.previous) {
-        await markReview(current.id, 'qualification_upgrade_release_pair_lost', { stage: 'upgrade_target_dispatch' })
+        await markReview(current.id, 'qualification_upgrade_release_pair_lost', { stage: 'upgrade_detection_pending' })
         return { id: current.id, state: 'review_required' }
       }
+
+      const targetVersion = clean(pair.target.release_version)
+      const installed = installedMatches(runner.source_payload, current)
+      const outdated = installed
+        .map((item) => ({ item, comparison: compareVersionish(clean(item?.version), targetVersion) }))
+        .filter((entry) => entry.comparison < 0)
+        .sort((a, b) => compareVersionish(clean(b.item?.version), clean(a.item?.version)))
+
+      if (!outdated.length) {
+        const baselineAt = Date.parse(clean(evidence.baselineInstallCompletedAt || job.completed_at))
+        if (Number.isFinite(baselineAt) && Date.now() - baselineAt > 10 * 60 * 1000) {
+          await markReview(current.id, 'qualification_upgrade_patch_detection_failed', {
+            stage: 'upgrade_detection_pending',
+            expectedPreviousVersion: clean(pair.previous.release_version),
+            targetVersion,
+            observedMatches: installed.map((item) => ({
+              name: clean(item?.name),
+              publisher: clean(item?.publisher),
+              version: clean(item?.version),
+              registryKey: clean(item?.registry_key),
+            })),
+          })
+          return { id: current.id, state: 'review_required' }
+        }
+        return { id: current.id, state: current.state }
+      }
+
+      const detected = outdated[0].item
+      const detectedVersion = clean(detected?.version)
+      await pool.query(
+        `UPDATE rmm_software_qualification_queue
+            SET evidence=evidence || $2::jsonb,updated_at=now()
+          WHERE id=$1`,
+        [current.id, JSON.stringify({
+          upgradePatchDetectionVerified: true,
+          upgradePatchDetectionStatus: 'update_available',
+          upgradePatchDetectionInstalledVersion: detectedVersion,
+          upgradePatchDetectionTargetVersion: targetVersion,
+          upgradePatchDetectionVerifiedAt: new Date().toISOString(),
+          upgradePatchDetectionIdentity: {
+            name: clean(detected?.name),
+            publisher: clean(detected?.publisher),
+            registryKey: clean(detected?.registry_key),
+            scope: clean(detected?.scope),
+          },
+        })],
+      )
+
       const result = await dispatchUpgradeInstall(current, runner, pair.target, {
         intent: 'update',
-        installedVersion: clean(pair.previous.release_version),
+        installedVersion: detectedVersion || clean(pair.previous.release_version),
         stage: 'upgrade_target_running',
       })
       return { id: current.id, state: result.dispatched ? 'running' : 'review_required' }
@@ -1645,15 +1717,28 @@ export async function queueAutomaticUpgradeQualifications({ limit = 12 } = {}) {
        deployment_id=NULL,
        cleanup_job_id=NULL,
        last_error='',
-       evidence=rmm_software_qualification_queue.evidence || EXCLUDED.evidence,
+       evidence=(rmm_software_qualification_queue.evidence
+         - 'stage'
+         - 'baselineInstallCompletedAt'
+         - 'upgradePatchDetectionVerified'
+         - 'upgradePatchDetectionStatus'
+         - 'upgradePatchDetectionInstalledVersion'
+         - 'upgradePatchDetectionTargetVersion'
+         - 'upgradePatchDetectionVerifiedAt'
+         - 'upgradePatchDetectionIdentity') || EXCLUDED.evidence,
        started_at=NULL,
        completed_at=NULL,
        updated_at=now()
-     WHERE rmm_software_qualification_queue.state='review_required'
+     WHERE (
+       rmm_software_qualification_queue.state='review_required'
        AND rmm_software_qualification_queue.last_error IN (
          'previous_trusted_release_not_available',
          'qualification_current_trusted_release_not_available'
        )
+     ) OR (
+       rmm_software_qualification_queue.state='cancelled'
+       AND rmm_software_qualification_queue.last_error='manual_revalidation_reset'
+     )
      RETURNING id,catalogue_id,test_type,state,priority`,
     [safeLimit],
   )
@@ -1970,6 +2055,10 @@ export async function retrySoftwareQualification(catalogueId) {
                 - 'upgradeFromVersion'
                 - 'upgradeVersion'
                 - 'upgradeVerifiedAt'
+                - 'upgradePatchDetectionVerified'
+                - 'upgradePatchDetectionInstalledVersion'
+                - 'upgradePatchDetectionTargetVersion'
+                - 'upgradePatchDetectionVerifiedAt'
                 || jsonb_build_object('manualRequalificationRequestedAt',now()),
               updated_at=now()
         WHERE id=$1`,
