@@ -11,6 +11,7 @@ import {
   PackageCheck,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   ShieldCheck,
   Trash2,
@@ -533,6 +534,7 @@ function QualificationWorkspace({
   const verification = lab.tests?.verification || {}
   const uninstall = lab.tests?.uninstall || {}
   const upgrade = lab.tests?.upgrade || {}
+  const rollback = lab.tests?.rollback || {}
   const actions = lab.actions || {}
   const runnerOnline = lab.runner?.online
   const layerIcon = {
@@ -541,7 +543,7 @@ function QualificationWorkspace({
     clean: PackageCheck,
     history: GitBranch,
     upgrade: RefreshCw,
-    rollback: Clock3,
+    rollback: RotateCcw,
   }
 
   function actionButton(action, enabled, label, Icon, title = '') {
@@ -573,6 +575,7 @@ function QualificationWorkspace({
       {actionButton('prepare_previous', actions.canPreparePrevious, 'Prepare previous release', GitBranch, lab.releases?.previousReady ? 'A trusted previous release is already retained.' : 'Automatic history discovery is not available for this source.')}
       {actionButton('clean_cycle', actions.canRunClean, 'Run clean cycle', PackageCheck, 'Current source and artifact trust must be ready first.')}
       {actionButton('upgrade', actions.canRunUpgrade, 'Run upgrade test', RefreshCw, 'Clean install/uninstall and a trusted previous release must pass first.')}
+      {actionButton('rollback', actions.canRunRollback, 'Run rollback test', RotateCcw, 'A clean cycle, current upgrade proof, update_available detection and a trusted previous release must pass first.')}
       {actionButton('full', actions.canRunFull, 'Run full qualification', ShieldCheck, 'Current source and artifact trust must be ready first.')}
       <button disabled={Boolean(busyAction) || loading} onClick={onRefresh} type="button"><RefreshCw size={14} /> Refresh</button>
     </div>
@@ -629,10 +632,19 @@ function QualificationWorkspace({
             {upgrade.error && <p>{upgrade.error}</p>}
           </div>}
 
-          {layer.id === 'rollback' && <div className="rmm-qualification-coming-soon">
-            <Clock3 size={18} />
-            <div><strong>Rollback qualification is the next lifecycle gate</strong><span>It will prove current → uninstall → previous stable → verify → restore current. Normal patch policies will never downgrade automatically.</span></div>
-            <button disabled type="button">Not available yet</button>
+          {layer.id === 'rollback' && <div className="rmm-qualification-facts">
+            <span><small>Rollback state</small><strong>{readinessLabel(rollback.state)}</strong></span>
+            <span><small>Version path</small><strong>{rollback.fromVersion || lab.application?.targetVersion || '—'} → {rollback.previousVersion || previous?.version || '—'} → {rollback.restoredVersion || lab.application?.targetVersion || '—'}</strong></span>
+            <span><small>Current install</small><strong>{rollback.currentInstallVerified ? 'Verified' : 'Pending'}</strong></span>
+            <span><small>Current uninstall</small><strong>{rollback.currentUninstallVerified ? 'Verified' : 'Pending'}</strong></span>
+            <span><small>Previous install</small><strong>{rollback.previousInstallVerified ? 'Verified' : 'Pending'}</strong></span>
+            <span><small>Previous inventory</small><strong>{rollback.previousInventoryVerified ? 'Verified' : 'Pending'}</strong></span>
+            <span><small>Restore detection</small><strong>{rollback.restorePatchDetectionVerified ? 'update_available verified' : 'Pending'}</strong></span>
+            <span><small>Restore target</small><strong>{rollback.restoreVerified ? 'Verified' : 'Pending'}</strong></span>
+            <span><small>Final uninstall</small><strong>{rollback.finalUninstallVerified ? 'Verified' : 'Pending'}</strong></span>
+            <span><small>Residue cleanup</small><strong>{rollback.residueCleanupVerified ? 'Verified' : 'Pending'}</strong></span>
+            <span className="wide"><small>Safety boundary</small><strong>Rollback runs only on the qualification runner. Normal patch policies never downgrade managed endpoints.</strong></span>
+            {rollback.error && <p>{rollback.error}</p>}
           </div>}
         </article>
       })}
@@ -1330,6 +1342,7 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
         <div className="stats">
           <span><small>Install / removal passed</small><strong>{qualificationProgress.cleanInstallPassed || 0}</strong></span>
           <span><small>Upgrade passed</small><strong>{qualificationProgress.upgradePassed || 0}</strong></span>
+          <span><small>Rollback passed</small><strong>{qualificationProgress.rollbackPassed || 0}</strong></span>
           <span><small>Fully qualified</small><strong>{qualificationProgress.fullyQualified || 0}</strong></span>
         </div>
         {!!qualificationFailureGroups.length && <div style={{width: '100%', display: 'grid', gap: '8px'}}>

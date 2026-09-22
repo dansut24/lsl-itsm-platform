@@ -382,6 +382,86 @@ async function dispatchUninstall(queue, runner, item) {
   return { dispatched: true, queued: delivery !== 'websocket', jobId: job.id }
 }
 
+async function dispatchRollbackUninstall(queue, runner, item, stage) {
+  const liveSocket = agentSocketForDevice(runner.agent_device_id)
+  const canPush = Boolean(liveSocket && liveSocket.readyState === 1)
+  const payload = {
+    name: clean(item?.name),
+    registry_key: clean(item?.registry_key),
+    scope: clean(item?.scope),
+    user_profile: clean(item?.user_profile),
+  }
+  if (!payload.name && !payload.registry_key) {
+    await markReview(queue.id, 'qualification_rollback_uninstall_identity_missing', { stage })
+    return { dispatched: false }
+  }
+
+  const inserted = await pool.query(
+    `INSERT INTO rmm_agent_jobs
+      (tenant_id,agent_device_id,job_type,payload,initiated_by,initiated_by_label,request_metadata)
+     VALUES ($1,$2,'software.uninstall',$3::jsonb,'system','Catalogue rollback qualification',$4::jsonb)
+     RETURNING id,status,created_at`,
+    [
+      runner.tenant_id,
+      runner.agent_device_id,
+      JSON.stringify(payload),
+      JSON.stringify({
+        source: 'catalogue_qualification_rollback',
+        qualification_queue_id: queue.id,
+        catalogue_id: queue.catalogue_id,
+        stage,
+      }),
+    ],
+  )
+  const job = inserted.rows[0]
+  let delivery = 'queued_agent_channel'
+  if (canPush) {
+    const claimed = await pool.query(
+      `UPDATE rmm_agent_jobs SET status='claimed',claimed_at=now(),updated_at=now()
+        WHERE id=$1 AND status='queued' RETURNING id`,
+      [job.id],
+    )
+    if (claimed.rowCount) {
+      const pushed = sendAgentMessage(runner.agent_device_id, {
+        type: 'job_execute',
+        job: { id: job.id, job_type: 'software.uninstall', payload, created_at: job.created_at },
+      })
+      if (pushed) {
+        delivery = 'websocket'
+      } else {
+        await pool.query(
+          `UPDATE rmm_agent_jobs
+              SET status='queued',claimed_at=NULL,error_message='',updated_at=now()
+            WHERE id=$1 AND status='claimed'`,
+          [job.id],
+        )
+      }
+    }
+  }
+
+  await pool.query(
+    `UPDATE rmm_software_qualification_queue
+        SET state='running',agent_job_id=$2,cleanup_job_id=NULL,last_error='',
+            evidence=evidence || $3::jsonb,updated_at=now()
+      WHERE id=$1`,
+    [queue.id, job.id, JSON.stringify({
+      stage,
+      rollbackUninstallDispatchedAt: new Date().toISOString(),
+      rollbackUninstallDelivery: delivery,
+      uninstallName: payload.name,
+      uninstallRegistryKey: payload.registry_key,
+      installedDisplayName: clean(item?.name),
+      installedPublisher: clean(item?.publisher),
+      installLocation: clean(item?.install_location),
+      installedScope: clean(item?.scope),
+      installedUserProfile: clean(item?.user_profile),
+      uninstallString: clean(item?.uninstall_string),
+      quietUninstallString: clean(item?.quiet_uninstall_string),
+    })],
+  )
+  return { dispatched: true, queued: delivery !== 'websocket', jobId: job.id }
+}
+
 function safeQualificationProgramPath(value = '') {
   const path = clean(value).replace(/\//g, '\\').replace(/\\+$/g, '')
   if (/^C:\\Program Files(?: \(x86\))?\\[^\\]+/i.test(path)) return path
@@ -532,7 +612,7 @@ function residueCleanupSummary(job) {
   }
 }
 
-async function finalizeResidueCleanup(current, cleanup, { upgrade = false } = {}) {
+async function finalizeResidueCleanup(current, cleanup, { upgrade = false, rollback = false } = {}) {
   const failure = terminalJobFailure(cleanup)
   if (failure || clean(cleanup?.status) !== 'completed') {
     await markReview(current.id, failure || 'qualification_residue_cleanup_failed', { stage: 'residue_cleanup' })
@@ -567,7 +647,27 @@ async function finalizeResidueCleanup(current, cleanup, { upgrade = false } = {}
       `UPDATE rmm_software_catalogue
           SET qualification_evidence=qualification_evidence || $2::jsonb,updated_at=now()
         WHERE id=$1`,
-      [current.catalogue_id, JSON.stringify(upgrade ? {
+      [current.catalogue_id, JSON.stringify(rollback ? {
+        rollbackVerified: true,
+        rollbackFromVersion: current.target_version,
+        rollbackPreviousVersion: clean(evidence.previousVersion),
+        rollbackRestoredVersion: current.target_version,
+        rollbackVerifiedAt: now,
+        rollbackCurrentInstallVerified: evidence.rollbackCurrentInstallVerified === true,
+        rollbackCurrentUninstallVerified: evidence.rollbackCurrentUninstallVerified === true,
+        rollbackPreviousInstallVerified: evidence.rollbackPreviousInstallVerified === true,
+        rollbackPreviousInventoryVerified: evidence.rollbackPreviousInventoryVerified === true,
+        rollbackRestorePatchDetectionVerified: evidence.rollbackRestorePatchDetectionVerified === true,
+        rollbackRestorePatchDetectionInstalledVersion: clean(evidence.rollbackRestorePatchDetectionInstalledVersion),
+        rollbackRestorePatchDetectionTargetVersion: clean(evidence.rollbackRestorePatchDetectionTargetVersion),
+        rollbackRestoreVerified: evidence.rollbackRestoreVerified === true,
+        rollbackFinalUninstallVerified: evidence.rollbackFinalUninstallVerified === true,
+        rollbackQualificationQueueId: current.id,
+        qualificationRunnerAgentDeviceId: current.runner_agent_device_id,
+        rollbackResidueCleanupVerified: true,
+        rollbackResidueCleanupVerifiedAt: now,
+        rollbackResidueCleanupReclaimedMiB: summary.reclaimedMiB,
+      } : upgrade ? {
         upgradeVerified: true,
         upgradeFromVersion: clean(evidence.previousVersion),
         upgradeVersion: current.target_version,
@@ -859,7 +959,7 @@ async function upgradeReleasePair(catalogueId) {
         AND b.channel=r.channel AND b.platform=r.platform AND b.architecture=r.architecture
         AND b.enabled=true
       WHERE c.id=$1 AND c.tenant_id IS NULL AND c.status='active'
-        AND c.qualification_state='deployment_candidate'
+        AND c.qualification_state IN ('deployment_candidate','qualified')
         AND r.trust_state='direct_ready'
       ORDER BY r.last_seen_at DESC`,
     [catalogueId],
@@ -884,7 +984,14 @@ function strictDirectArtifactReady(release) {
   )
 }
 
-async function dispatchUpgradeInstall(queue, runner, release, { intent, installedVersion = '', stage }) {
+async function dispatchUpgradeInstall(queue, runner, release, {
+  intent,
+  installedVersion = '',
+  stage,
+  qualificationTest = 'upgrade',
+  requestSource = 'catalogue_qualification_upgrade',
+  actorLabel = 'Catalogue upgrade qualification',
+}) {
   const liveSocket = agentSocketForDevice(runner.agent_device_id)
   const canPush = Boolean(liveSocket && liveSocket.readyState === 1)
   if (!strictDirectArtifactReady(release)) {
@@ -934,14 +1041,14 @@ async function dispatchUpgradeInstall(queue, runner, release, { intent, installe
     const jobResult = await client.query(
       `INSERT INTO rmm_agent_jobs
         (tenant_id,agent_device_id,job_type,payload,initiated_by,initiated_by_label,request_metadata)
-       VALUES ($1,$2,'patch.software',$3::jsonb,'system','Catalogue upgrade qualification',$4::jsonb)
+       VALUES ($1,$2,'patch.software',$3::jsonb,'system',$5,$4::jsonb)
        RETURNING id,status,created_at`,
       [
         runner.tenant_id,
         runner.agent_device_id,
         JSON.stringify(manifest),
         JSON.stringify({
-          source: 'catalogue_qualification_upgrade',
+          source: requestSource,
           qualification_queue_id: queue.id,
           catalogue_id: release.id,
           vendor_release_id: release.vendor_release_id,
@@ -949,6 +1056,7 @@ async function dispatchUpgradeInstall(queue, runner, release, { intent, installe
           device_name: runner.device_name,
           device_reference: runner.device_reference,
         }),
+        actorLabel,
       ],
     )
     const job = jobResult.rows[0]
@@ -967,7 +1075,7 @@ async function dispatchUpgradeInstall(queue, runner, release, { intent, installe
         packageId,
         clean(installedVersion),
         targetVersion,
-        JSON.stringify({ qualificationTest: 'upgrade', stage, vendorSource: release.source_key, intent }),
+        JSON.stringify({ qualificationTest, stage, vendorSource: release.source_key, intent }),
       ],
     )
     const deployment = deploymentResult.rows[0]
@@ -975,7 +1083,7 @@ async function dispatchUpgradeInstall(queue, runner, release, { intent, installe
       `UPDATE rmm_software_qualification_queue
           SET state='running',runner_agent_device_id=$2,agent_job_id=$3,deployment_id=$4,
               cleanup_job_id=NULL,last_error='',started_at=COALESCE(started_at,now()),completed_at=NULL,
-              attempt_count=CASE WHEN $6='upgrade_baseline_running' THEN attempt_count+1 ELSE attempt_count END,
+              attempt_count=CASE WHEN $6 IN ('upgrade_baseline_running','rollback_current_install_running') THEN attempt_count+1 ELSE attempt_count END,
               evidence=evidence || $5::jsonb,updated_at=now()
         WHERE id=$1`,
       [queue.id, runner.agent_device_id, job.id, deployment.id, JSON.stringify({
@@ -1311,6 +1419,437 @@ async function reconcileUpgradeQueueRow(queue, runner) {
   }
 
   return { id: current.id, state: current.state }
+}
+
+async function rollbackFailureOrCleanup(current, runner, error, stage, details = {}) {
+  const reason = clean(error || 'qualification_rollback_failed')
+  if (runner && clean(current.runner_agent_device_id) === clean(runner.agent_device_id)) {
+    await pool.query(
+      `UPDATE rmm_software_qualification_queue
+          SET state='running',last_error=$2,
+              evidence=evidence || $3::jsonb,updated_at=now()
+        WHERE id=$1`,
+      [current.id, reason, JSON.stringify({
+        stage: 'rollback_failure_cleanup_pending',
+        rollbackFailureError: reason,
+        rollbackFailureStage: stage,
+        rollbackFailureAt: new Date().toISOString(),
+        ...details,
+      })],
+    )
+    return { id: current.id, state: 'running', cleanup: true }
+  }
+  await markReview(current.id, reason, { stage, ...details })
+  return { id: current.id, state: 'review_required' }
+}
+
+function rollbackJobTimedOut(job, startedAt = '') {
+  if (!job || !['queued','claimed'].includes(clean(job.status))) return false
+  const started = Date.parse(clean(startedAt || job.claimed_at || job.created_at))
+  return Number.isFinite(started) && Date.now() - started > 10 * 60 * 1000
+}
+
+async function dispatchRollbackQualification(queue, runner) {
+  const current = await qualificationRow(queue.id)
+  if (!current) return { dispatched: false }
+
+  const contaminants = await qualificationRunnerContaminants(runner, queue.id)
+  if (contaminants.length) {
+    await pool.query(
+      `UPDATE rmm_software_qualification_queue
+          SET last_error='runner_contaminated_by_prior_qualification',
+              evidence=evidence || $2::jsonb,updated_at=now()
+        WHERE id=$1 AND state='queued'`,
+      [queue.id, JSON.stringify({ runnerContaminants: contaminants })],
+    )
+    return { dispatched: false, blocked: true, reason: 'runner_contaminated_by_prior_qualification', contaminants }
+  }
+  if (installedMatches(runner.source_payload, current).length) {
+    await markReview(queue.id, 'qualification_runner_not_clean', { stage: 'rollback_pre_install' })
+    return { dispatched: false }
+  }
+
+  const pair = await upgradeReleasePair(queue.catalogue_id)
+  if (!pair.target) {
+    await markReview(queue.id, 'qualification_current_trusted_release_not_available', { stage: 'rollback_pre_install' })
+    return { dispatched: false }
+  }
+  if (!pair.previous) {
+    await markReview(queue.id, 'previous_trusted_release_not_available', { stage: 'rollback_pre_install' })
+    return { dispatched: false }
+  }
+  if (!strictDirectArtifactReady(pair.target) || !strictDirectArtifactReady(pair.previous)) {
+    await markReview(queue.id, 'qualification_rollback_artifact_gate_failed', {
+      stage: 'rollback_pre_install',
+      targetVersion: clean(pair.target.release_version),
+      previousVersion: clean(pair.previous.release_version),
+    })
+    return { dispatched: false }
+  }
+
+  await pool.query(
+    `UPDATE rmm_software_qualification_queue
+        SET evidence=evidence || $2::jsonb,updated_at=now()
+      WHERE id=$1`,
+    [queue.id, JSON.stringify({
+      rollbackStartedAt: new Date().toISOString(),
+      targetVersion: clean(pair.target.release_version),
+      previousVersion: clean(pair.previous.release_version),
+    })],
+  )
+
+  return dispatchUpgradeInstall(current, runner, pair.target, {
+    intent: 'install',
+    installedVersion: '',
+    stage: 'rollback_current_install_running',
+    qualificationTest: 'rollback',
+    requestSource: 'catalogue_qualification_rollback',
+    actorLabel: 'Catalogue rollback qualification',
+  })
+}
+
+async function reconcileRollbackQueueRow(queue, runner) {
+  const current = await qualificationRow(queue.id)
+  if (!current) return { id: queue.id, state: 'missing' }
+  const evidence = object(current.evidence)
+  const stage = clean(evidence.stage)
+
+  if (current.state === 'cleanup_running' && clean(evidence.cleanupPhase) === 'residue_cleanup') {
+    const cleanupResult = await pool.query(
+      `SELECT status,result,error_message,completed_at,created_at,claimed_at
+         FROM rmm_agent_jobs WHERE id=$1 LIMIT 1`,
+      [current.cleanup_job_id],
+    )
+    const cleanup = cleanupResult.rows[0]
+    if (!cleanup || ['queued','claimed'].includes(clean(cleanup.status))) {
+      if (rollbackJobTimedOut(cleanup, evidence.residueCleanupDispatchedAt)) {
+        await markReview(current.id, 'qualification_runtime_limit_exceeded', { stage: 'rollback_residue_cleanup' })
+        return { id: current.id, state: 'review_required' }
+      }
+      return { id: current.id, state: current.state }
+    }
+    return finalizeResidueCleanup(current, cleanup, { rollback: true })
+  }
+
+  if (stage === 'rollback_failure_cleanup_pending') {
+    if (!runner || clean(current.runner_agent_device_id) !== clean(runner.agent_device_id)) {
+      return { id: current.id, state: current.state }
+    }
+    const installed = installedMatches(runner.source_payload, current)
+    if (installed.length) {
+      const result = await dispatchRollbackUninstall(current, runner, installed[installed.length - 1], 'rollback_failure_uninstall_running')
+      return { id: current.id, state: result.dispatched ? 'running' : 'review_required' }
+    }
+    const result = await dispatchQualificationResidueCleanup(current, runner, {
+      finalState: 'review_required',
+      finalError: clean(evidence.rollbackFailureError || current.last_error || 'qualification_rollback_failed'),
+      uninstallCompletedAt: clean(evidence.rollbackFailureUninstallCompletedAt),
+    })
+    return { id: current.id, state: result.dispatched ? 'cleanup_running' : 'review_required' }
+  }
+
+  if (stage === 'rollback_failure_uninstall_running') {
+    const jobResult = await pool.query(
+      `SELECT status,result,error_message,completed_at,created_at,claimed_at
+         FROM rmm_agent_jobs WHERE id=$1 LIMIT 1`,
+      [current.agent_job_id],
+    )
+    const job = jobResult.rows[0]
+    if (!job || ['queued','claimed'].includes(clean(job.status))) {
+      if (rollbackJobTimedOut(job, evidence.rollbackUninstallDispatchedAt)) {
+        await markReview(current.id, 'qualification_runtime_limit_exceeded', { stage })
+        return { id: current.id, state: 'review_required' }
+      }
+      return { id: current.id, state: current.state }
+    }
+    const failure = terminalJobFailure(job) || (object(job.result).success === false ? clean(object(job.result).error || 'qualification_rollback_cleanup_uninstall_failed') : '')
+    if (failure || clean(job.status) !== 'completed') {
+      await markReview(current.id, failure || 'qualification_rollback_cleanup_uninstall_failed', { stage })
+      return { id: current.id, state: 'review_required' }
+    }
+    await pool.query(
+      `UPDATE rmm_software_qualification_queue
+          SET evidence=evidence || $2::jsonb,updated_at=now()
+        WHERE id=$1`,
+      [current.id, JSON.stringify({
+        stage: 'rollback_failure_cleanup_pending',
+        rollbackFailureUninstallCompletedAt: job.completed_at || new Date().toISOString(),
+      })],
+    )
+    return { id: current.id, state: 'running' }
+  }
+
+  const pair = await upgradeReleasePair(current.catalogue_id)
+  if (!pair.target || !pair.previous) {
+    return rollbackFailureOrCleanup(current, runner, 'qualification_rollback_release_pair_lost', stage || 'rollback')
+  }
+  const targetVersion = clean(pair.target.release_version)
+  const previousVersion = clean(pair.previous.release_version)
+
+  if (stage === 'rollback_current_install_running'
+    || stage === 'rollback_previous_install_running'
+    || stage === 'rollback_restore_target_running') {
+    const jobResult = await pool.query(
+      `SELECT status,result,error_message,completed_at,created_at,claimed_at
+         FROM rmm_agent_jobs WHERE id=$1 LIMIT 1`,
+      [current.agent_job_id],
+    )
+    const job = jobResult.rows[0]
+    if (!job || ['queued','claimed'].includes(clean(job.status))) {
+      if (rollbackJobTimedOut(job, evidence.dispatchedAt)) {
+        return rollbackFailureOrCleanup(current, runner, 'qualification_runtime_limit_exceeded', stage)
+      }
+      return { id: current.id, state: current.state }
+    }
+    const failure = terminalJobFailure(job)
+    const providerFailure = qualificationProviderFailure(job?.result)
+    if (failure || providerFailure || clean(job.status) !== 'completed' || !verifiedPatchResult(job.result)) {
+      if (current.deployment_id) {
+        await pool.query(
+          `UPDATE rmm_patch_deployments
+              SET status=$2,result=COALESCE($3::jsonb,'{}'::jsonb),
+                  completed_at=COALESCE(completed_at,now()),updated_at=now()
+            WHERE id=$1`,
+          [current.deployment_id, clean(job?.status) === 'cancelled' ? 'cancelled' : 'verification_failed', JSON.stringify(object(job?.result))],
+        )
+      }
+      return rollbackFailureOrCleanup(current, runner, failure || providerFailure || 'qualification_rollback_verification_failed', stage)
+    }
+
+    if (current.deployment_id) {
+      await pool.query(
+        `UPDATE rmm_patch_deployments
+            SET status='succeeded',result=$2::jsonb,
+                completed_at=COALESCE(completed_at,$3,now()),updated_at=now()
+          WHERE id=$1`,
+        [current.deployment_id, JSON.stringify(object(job.result)), job.completed_at || null],
+      )
+    }
+
+    if (stage === 'rollback_current_install_running') {
+      await pool.query(
+        `UPDATE rmm_software_qualification_queue
+            SET evidence=evidence || $2::jsonb,updated_at=now()
+          WHERE id=$1`,
+        [current.id, JSON.stringify({
+          stage: 'rollback_current_uninstall_pending',
+          installCompletedAt: job.completed_at || new Date().toISOString(),
+          rollbackCurrentInstallVerified: true,
+          rollbackCurrentInstallVerifiedAt: job.completed_at || new Date().toISOString(),
+          targetVersion,
+          previousVersion,
+        })],
+      )
+      return { id: current.id, state: 'running' }
+    }
+
+    if (stage === 'rollback_previous_install_running') {
+      await pool.query(
+        `UPDATE rmm_software_qualification_queue
+            SET evidence=evidence || $2::jsonb,updated_at=now()
+          WHERE id=$1`,
+        [current.id, JSON.stringify({
+          stage: 'rollback_restore_detection_pending',
+          rollbackPreviousInstallVerified: true,
+          rollbackPreviousInstallVerifiedAt: job.completed_at || new Date().toISOString(),
+          rollbackPreviousInstallCompletedAt: job.completed_at || new Date().toISOString(),
+          previousVersion,
+          targetVersion,
+        })],
+      )
+      return { id: current.id, state: 'running' }
+    }
+
+    await pool.query(
+      `UPDATE rmm_software_qualification_queue
+          SET evidence=evidence || $2::jsonb,updated_at=now()
+        WHERE id=$1`,
+      [current.id, JSON.stringify({
+        stage: 'rollback_final_cleanup_pending',
+        rollbackRestoreVerified: true,
+        rollbackRestoreVerifiedAt: job.completed_at || new Date().toISOString(),
+        rollbackRestoreCompletedAt: job.completed_at || new Date().toISOString(),
+        targetVersion,
+      })],
+    )
+    return { id: current.id, state: 'running' }
+  }
+
+  if (stage === 'rollback_current_uninstall_pending') {
+    if (!runner || clean(current.runner_agent_device_id) !== clean(runner.agent_device_id)) return { id: current.id, state: current.state }
+    const installed = installedMatches(runner.source_payload, current)
+    const target = installed.find((item) => compareVersionish(clean(item?.version), targetVersion) === 0)
+    if (target) {
+      const result = await dispatchRollbackUninstall(current, runner, target, 'rollback_current_uninstall_running')
+      return { id: current.id, state: result.dispatched ? 'running' : 'review_required' }
+    }
+    const completedAt = Date.parse(clean(evidence.rollbackCurrentInstallVerifiedAt || evidence.installCompletedAt))
+    if (Number.isFinite(completedAt) && Date.now() - completedAt > 10 * 60 * 1000) {
+      return rollbackFailureOrCleanup(current, runner, 'qualification_rollback_current_not_visible_in_inventory', stage)
+    }
+    return { id: current.id, state: current.state }
+  }
+
+  if (stage === 'rollback_current_uninstall_running' || stage === 'rollback_final_uninstall_running') {
+    const jobResult = await pool.query(
+      `SELECT status,result,error_message,completed_at,created_at,claimed_at
+         FROM rmm_agent_jobs WHERE id=$1 LIMIT 1`,
+      [current.agent_job_id],
+    )
+    const job = jobResult.rows[0]
+    if (!job || ['queued','claimed'].includes(clean(job.status))) {
+      if (rollbackJobTimedOut(job, evidence.rollbackUninstallDispatchedAt)) {
+        await markReview(current.id, 'qualification_runtime_limit_exceeded', { stage })
+        return { id: current.id, state: 'review_required' }
+      }
+      return { id: current.id, state: current.state }
+    }
+    const result = object(job.result)
+    const parsed = object(result.parsed)
+    const removedVersion = clean(result.version || parsed.version)
+    const removalReason = clean(result.reason || parsed.reason)
+    const failure = terminalJobFailure(job) || (result.success === false ? clean(result.error || 'qualification_rollback_uninstall_failed') : '')
+    if (failure || clean(job.status) !== 'completed') {
+      return rollbackFailureOrCleanup(current, runner, failure || 'qualification_rollback_uninstall_failed', stage)
+    }
+    if (removalReason !== 'verified_removed' || compareVersionish(removedVersion, targetVersion) !== 0) {
+      return rollbackFailureOrCleanup(current, runner, 'qualification_rollback_uninstall_version_not_verified', stage, {
+        expectedVersion: targetVersion,
+        removedVersion,
+        removalReason,
+      })
+    }
+    const nextStage = stage === 'rollback_current_uninstall_running'
+      ? 'rollback_current_removal_pending'
+      : 'rollback_final_removal_pending'
+    await pool.query(
+      `UPDATE rmm_software_qualification_queue
+          SET evidence=evidence || $2::jsonb,updated_at=now()
+        WHERE id=$1`,
+      [current.id, JSON.stringify({
+        stage: nextStage,
+        ...(stage === 'rollback_current_uninstall_running'
+          ? { rollbackCurrentUninstallVerified: true, rollbackCurrentUninstallVerifiedAt: job.completed_at || new Date().toISOString() }
+          : { rollbackFinalUninstallVerified: true, rollbackFinalUninstallVerifiedAt: job.completed_at || new Date().toISOString() }),
+        rollbackUninstallCompletedAt: job.completed_at || new Date().toISOString(),
+      })],
+    )
+    return { id: current.id, state: 'running' }
+  }
+
+  if (stage === 'rollback_current_removal_pending') {
+    if (!runner || clean(current.runner_agent_device_id) !== clean(runner.agent_device_id)) return { id: current.id, state: current.state }
+    const remaining = installedMatches(runner.source_payload, current)
+    if (remaining.length) {
+      const completedAt = Date.parse(clean(evidence.rollbackUninstallCompletedAt))
+      if (Number.isFinite(completedAt) && Date.now() - completedAt > 10 * 60 * 1000) {
+        return rollbackFailureOrCleanup(current, runner, 'qualification_rollback_current_uninstall_residue_detected', stage, {
+          remaining: remaining.map((item) => ({ name: clean(item?.name), version: clean(item?.version), registryKey: clean(item?.registry_key) })),
+        })
+      }
+      return { id: current.id, state: current.state }
+    }
+    const result = await dispatchUpgradeInstall(current, runner, pair.previous, {
+      intent: 'install',
+      installedVersion: '',
+      stage: 'rollback_previous_install_running',
+      qualificationTest: 'rollback',
+      requestSource: 'catalogue_qualification_rollback',
+      actorLabel: 'Catalogue rollback qualification',
+    })
+    return { id: current.id, state: result.dispatched ? 'running' : 'review_required' }
+  }
+
+  if (stage === 'rollback_restore_detection_pending') {
+    if (!runner || clean(current.runner_agent_device_id) !== clean(runner.agent_device_id)) return { id: current.id, state: current.state }
+    const installed = installedMatches(runner.source_payload, current)
+    const previous = installed.find((item) => compareVersionish(clean(item?.version), previousVersion) === 0)
+
+    if (!previous) {
+      const baselineAt = Date.parse(clean(evidence.rollbackPreviousInstallCompletedAt))
+      if (Number.isFinite(baselineAt) && Date.now() - baselineAt > 10 * 60 * 1000) {
+        return rollbackFailureOrCleanup(current, runner, 'qualification_rollback_previous_not_visible_in_inventory', stage, {
+          expectedPreviousVersion: previousVersion,
+          targetVersion,
+          observedMatches: installed.map((item) => ({ name: clean(item?.name), version: clean(item?.version), publisher: clean(item?.publisher) })),
+        })
+      }
+      return { id: current.id, state: current.state }
+    }
+
+    const detected = previous
+    const detectedVersion = clean(detected?.version)
+    await pool.query(
+      `UPDATE rmm_software_qualification_queue
+          SET evidence=evidence || $2::jsonb,updated_at=now()
+        WHERE id=$1`,
+      [current.id, JSON.stringify({
+        rollbackPreviousInventoryVerified: true,
+        rollbackPreviousInventoryVerifiedAt: new Date().toISOString(),
+        rollbackRestorePatchDetectionVerified: true,
+        rollbackRestorePatchDetectionStatus: 'update_available',
+        rollbackRestorePatchDetectionInstalledVersion: detectedVersion,
+        rollbackRestorePatchDetectionTargetVersion: targetVersion,
+        rollbackRestorePatchDetectionVerifiedAt: new Date().toISOString(),
+      })],
+    )
+
+    const result = await dispatchUpgradeInstall(current, runner, pair.target, {
+      intent: 'update',
+      installedVersion: detectedVersion || previousVersion,
+      stage: 'rollback_restore_target_running',
+      qualificationTest: 'rollback',
+      requestSource: 'catalogue_qualification_rollback',
+      actorLabel: 'Catalogue rollback qualification',
+    })
+    return { id: current.id, state: result.dispatched ? 'running' : 'review_required' }
+  }
+
+  if (stage === 'rollback_final_cleanup_pending') {
+    if (!runner || clean(current.runner_agent_device_id) !== clean(runner.agent_device_id)) return { id: current.id, state: current.state }
+    const installed = installedMatches(runner.source_payload, current)
+    const target = installed.find((item) => compareVersionish(clean(item?.version), targetVersion) === 0)
+    if (target) {
+      const result = await dispatchRollbackUninstall(current, runner, target, 'rollback_final_uninstall_running')
+      return { id: current.id, state: result.dispatched ? 'running' : 'review_required' }
+    }
+    const completedAt = Date.parse(clean(evidence.rollbackRestoreCompletedAt))
+    if (Number.isFinite(completedAt) && Date.now() - completedAt > 10 * 60 * 1000) {
+      return rollbackFailureOrCleanup(current, runner, 'qualification_rollback_restored_target_not_visible_in_inventory', stage)
+    }
+    return { id: current.id, state: current.state }
+  }
+
+  if (stage === 'rollback_final_removal_pending') {
+    if (!runner || clean(current.runner_agent_device_id) !== clean(runner.agent_device_id)) return { id: current.id, state: current.state }
+    const remaining = installedMatches(runner.source_payload, current)
+    if (remaining.length) {
+      const completedAt = Date.parse(clean(evidence.rollbackUninstallCompletedAt))
+      if (Number.isFinite(completedAt) && Date.now() - completedAt > 10 * 60 * 1000) {
+        return rollbackFailureOrCleanup(current, runner, 'qualification_rollback_final_uninstall_residue_detected', stage, {
+          remaining: remaining.map((item) => ({ name: clean(item?.name), version: clean(item?.version), registryKey: clean(item?.registry_key) })),
+        })
+      }
+      return { id: current.id, state: current.state }
+    }
+    const result = await dispatchQualificationResidueCleanup(current, runner, {
+      finalState: 'passed',
+      finalError: '',
+      uninstallCompletedAt: clean(evidence.rollbackUninstallCompletedAt),
+    })
+    if (result.dispatched) {
+      await pool.query(
+        `UPDATE rmm_software_qualification_queue
+            SET evidence=evidence || $2::jsonb,updated_at=now()
+          WHERE id=$1`,
+        [current.id, JSON.stringify({ stage: 'rollback_residue_cleanup' })],
+      )
+    }
+    return { id: current.id, state: result.dispatched ? 'cleanup_running' : 'review_required' }
+  }
+
+  await markReview(current.id, 'qualification_rollback_unknown_stage', { stage })
+  return { id: current.id, state: 'review_required' }
 }
 
 async function reconcileQueueRow(queue, runner) {
@@ -1953,7 +2492,9 @@ export async function runSoftwareQualificationQueue({ dispatchLimit = 1 } = {}) 
   for (const row of active.rows) {
     reconciled.push(row.test_type === 'upgrade'
       ? await reconcileUpgradeQueueRow(row, runner)
-      : await reconcileQueueRow(row, runner))
+      : row.test_type === 'rollback'
+        ? await reconcileRollbackQueueRow(row, runner)
+        : await reconcileQueueRow(row, runner))
   }
 
   if (!runner) return { runner: null, reconciled, dispatched: [], emergencyDispatched }
@@ -1972,7 +2513,11 @@ export async function runSoftwareQualificationQueue({ dispatchLimit = 1 } = {}) 
        FROM rmm_software_qualification_queue q
        JOIN rmm_software_catalogue c ON c.id=q.catalogue_id
       WHERE q.state='queued'
-        AND c.status='active' AND c.qualification_state='deployment_candidate'
+        AND c.status='active'
+        AND (
+          c.qualification_state='deployment_candidate'
+          OR (q.test_type='rollback' AND c.qualification_state='qualified')
+        )
         AND (
           q.test_type='clean_install'
           OR (
@@ -1984,8 +2529,23 @@ export async function runSoftwareQualificationQueue({ dispatchLimit = 1 } = {}) 
                  AND qi.state='passed'
             )
           )
+          OR (
+            q.test_type='rollback'
+            AND EXISTS (
+              SELECT 1 FROM rmm_software_qualification_queue qi
+               WHERE qi.catalogue_id=q.catalogue_id
+                 AND qi.test_type='clean_install'
+                 AND qi.state='passed'
+            )
+            AND EXISTS (
+              SELECT 1 FROM rmm_software_qualification_queue qu
+               WHERE qu.catalogue_id=q.catalogue_id
+                 AND qu.test_type='upgrade'
+                 AND qu.state='passed'
+            )
+          )
         )
-      ORDER BY CASE q.test_type WHEN 'clean_install' THEN 0 ELSE 1 END,
+      ORDER BY CASE q.test_type WHEN 'clean_install' THEN 0 WHEN 'upgrade' THEN 1 ELSE 2 END,
                q.priority DESC,q.created_at
       LIMIT $1`,
     [Math.max(1, Math.min(3, Number(dispatchLimit) || 1))],
@@ -1994,7 +2554,9 @@ export async function runSoftwareQualificationQueue({ dispatchLimit = 1 } = {}) 
   for (const queue of queued.rows) {
     const result = queue.test_type === 'upgrade'
       ? await dispatchUpgradeBaseline(queue, runner)
-      : await dispatchCleanInstall(queue, runner)
+      : queue.test_type === 'rollback'
+        ? await dispatchRollbackQualification(queue, runner)
+        : await dispatchCleanInstall(queue, runner)
     dispatched.push({ id: queue.id, applicationName: queue.canonical_name, testType: queue.test_type, ...result })
     if (result.dispatched) break
   }
@@ -2061,6 +2623,24 @@ export async function retrySoftwareQualification(catalogueId, { mode = 'full' } 
                 - 'upgradePatchDetectionInstalledVersion'
                 - 'upgradePatchDetectionTargetVersion'
                 - 'upgradePatchDetectionVerifiedAt'
+                - 'rollbackVerified'
+                - 'rollbackFromVersion'
+                - 'rollbackPreviousVersion'
+                - 'rollbackRestoredVersion'
+                - 'rollbackVerifiedAt'
+                - 'rollbackCurrentInstallVerified'
+                - 'rollbackCurrentUninstallVerified'
+                - 'rollbackPreviousInstallVerified'
+                - 'rollbackPreviousInventoryVerified'
+                - 'rollbackRestorePatchDetectionVerified'
+                - 'rollbackRestorePatchDetectionInstalledVersion'
+                - 'rollbackRestorePatchDetectionTargetVersion'
+                - 'rollbackRestoreVerified'
+                - 'rollbackFinalUninstallVerified'
+                - 'rollbackQualificationQueueId'
+                - 'rollbackResidueCleanupVerified'
+                - 'rollbackResidueCleanupVerifiedAt'
+                - 'rollbackResidueCleanupReclaimedMiB'
                 || jsonb_build_object('manualRequalificationRequestedAt',now()),
               updated_at=now()
         WHERE id=$1`,
@@ -2070,7 +2650,7 @@ export async function retrySoftwareQualification(catalogueId, { mode = 'full' } 
       `UPDATE rmm_software_qualification_queue
           SET state='cancelled',last_error='manual_revalidation_reset',
               completed_at=now(),updated_at=now()
-        WHERE catalogue_id=$1 AND test_type='upgrade'
+        WHERE catalogue_id=$1 AND test_type IN ('upgrade','rollback')
           AND state NOT IN ('running','cleanup_pending','cleanup_running')`,
       [catalogueId],
     )
@@ -2155,9 +2735,35 @@ export async function queueUpgradeQualification(catalogueId) {
                 - 'upgradePatchDetectionInstalledVersion'
                 - 'upgradePatchDetectionTargetVersion'
                 - 'upgradePatchDetectionVerifiedAt'
+                - 'rollbackVerified'
+                - 'rollbackFromVersion'
+                - 'rollbackPreviousVersion'
+                - 'rollbackRestoredVersion'
+                - 'rollbackVerifiedAt'
+                - 'rollbackCurrentInstallVerified'
+                - 'rollbackCurrentUninstallVerified'
+                - 'rollbackPreviousInstallVerified'
+                - 'rollbackPreviousInventoryVerified'
+                - 'rollbackRestorePatchDetectionVerified'
+                - 'rollbackRestorePatchDetectionInstalledVersion'
+                - 'rollbackRestorePatchDetectionTargetVersion'
+                - 'rollbackRestoreVerified'
+                - 'rollbackFinalUninstallVerified'
+                - 'rollbackQualificationQueueId'
+                - 'rollbackResidueCleanupVerified'
+                - 'rollbackResidueCleanupVerifiedAt'
+                - 'rollbackResidueCleanupReclaimedMiB'
                 || jsonb_build_object('manualUpgradeQualificationRequestedAt',now()),
               updated_at=now()
         WHERE id=$1`,
+      [catalogueId],
+    )
+    await client.query(
+      `UPDATE rmm_software_qualification_queue
+          SET state='cancelled',last_error='upgrade_revalidation_reset',
+              completed_at=now(),updated_at=now()
+        WHERE catalogue_id=$1 AND test_type='rollback'
+          AND state NOT IN ('running','cleanup_pending','cleanup_running')`,
       [catalogueId],
     )
     const result = await client.query(
@@ -2203,6 +2809,128 @@ export async function queueUpgradeQualification(catalogueId) {
     catalogueId,
     applicationName: row.canonical_name,
     targetVersion: row.target_version,
+    previousVersion: clean(pair.previous.release_version),
+    queue,
+  }
+}
+
+export async function queueRollbackQualification(catalogueId) {
+  const ready = await pool.query(
+    `SELECT c.id,c.canonical_name,c.target_version,c.installer_type,c.qualification_state,
+            c.qualification_evidence,
+            qi.state AS clean_state,
+            qu.state AS upgrade_state
+       FROM rmm_software_catalogue c
+       LEFT JOIN rmm_software_qualification_queue qi
+         ON qi.catalogue_id=c.id AND qi.test_type='clean_install'
+       LEFT JOIN rmm_software_qualification_queue qu
+         ON qu.catalogue_id=c.id AND qu.test_type='upgrade'
+      WHERE c.id=$1
+        AND c.tenant_id IS NULL
+        AND c.status='active'
+        AND c.source_metadata->>'deploymentMode'='vendor_direct'
+        AND c.source_metadata->>'trustState'='direct_ready'
+      LIMIT 1`,
+    [catalogueId],
+  )
+  const row = ready.rows[0]
+  if (!row) return { queued: false, reason: 'catalogue_vendor_release_not_ready' }
+
+  const evidence = object(row.qualification_evidence)
+  if (clean(row.clean_state) !== 'passed'
+    || evidence.cleanInstallVerified !== true
+    || evidence.uninstallVerified !== true) {
+    return { queued: false, reason: 'clean_install_not_passed' }
+  }
+  if (clean(row.upgrade_state) !== 'passed' || evidence.upgradeVerified !== true) {
+    return { queued: false, reason: 'upgrade_not_passed' }
+  }
+  if (evidence.upgradePatchDetectionVerified !== true) {
+    return { queued: false, reason: 'upgrade_patch_detection_not_verified' }
+  }
+
+  const active = await pool.query(
+    `SELECT id,test_type,state
+       FROM rmm_software_qualification_queue
+      WHERE catalogue_id=$1
+        AND state IN ('running','cleanup_pending','cleanup_running')
+      LIMIT 1`,
+    [catalogueId],
+  )
+  if (active.rowCount) return { queued: false, active: true, state: active.rows[0].state }
+
+  const pair = await upgradeReleasePair(catalogueId)
+  if (!pair.target) return { queued: false, reason: 'qualification_current_trusted_release_not_available' }
+  if (!pair.previous) return { queued: false, reason: 'previous_trusted_release_not_available' }
+  if (!strictDirectArtifactReady(pair.target) || !strictDirectArtifactReady(pair.previous)) {
+    return { queued: false, reason: 'qualification_rollback_artifact_gate_failed' }
+  }
+
+  const queue = await withTransaction(async (client) => {
+    await client.query(
+      `UPDATE rmm_software_catalogue
+          SET qualification_evidence=qualification_evidence
+                - 'rollbackVerified'
+                - 'rollbackFromVersion'
+                - 'rollbackPreviousVersion'
+                - 'rollbackRestoredVersion'
+                - 'rollbackVerifiedAt'
+                - 'rollbackCurrentInstallVerified'
+                - 'rollbackCurrentUninstallVerified'
+                - 'rollbackPreviousInstallVerified'
+                - 'rollbackPreviousInventoryVerified'
+                - 'rollbackRestorePatchDetectionVerified'
+                - 'rollbackRestorePatchDetectionInstalledVersion'
+                - 'rollbackRestorePatchDetectionTargetVersion'
+                - 'rollbackRestoreVerified'
+                - 'rollbackFinalUninstallVerified'
+                - 'rollbackQualificationQueueId'
+                - 'rollbackResidueCleanupVerified'
+                - 'rollbackResidueCleanupVerifiedAt'
+                - 'rollbackResidueCleanupReclaimedMiB'
+                || jsonb_build_object('manualRollbackQualificationRequestedAt',now()),
+              updated_at=now()
+        WHERE id=$1`,
+      [catalogueId],
+    )
+    const result = await client.query(
+      `INSERT INTO rmm_software_qualification_queue
+        (catalogue_id,test_type,state,priority,attempt_count,last_error,evidence,created_at,updated_at)
+       VALUES ($1,'rollback','queued',
+               CASE WHEN lower(COALESCE($2,''))='msi' THEN 105 ELSE 95 END,
+               0,'',jsonb_build_object(
+                 'manualRollbackQualification',true,
+                 'manualQualificationMode','rollback_only',
+                 'targetVersion',$3::text,
+                 'previousVersion',$4::text,
+                 'queuedAt',now()
+               ),now(),now())
+       ON CONFLICT (catalogue_id,test_type)
+       DO UPDATE SET
+         state='queued',
+         priority=EXCLUDED.priority,
+         attempt_count=0,
+         runner_agent_device_id=NULL,
+         agent_job_id=NULL,
+         deployment_id=NULL,
+         cleanup_job_id=NULL,
+         last_error='',
+         evidence=EXCLUDED.evidence,
+         started_at=NULL,
+         completed_at=NULL,
+         updated_at=now()
+       RETURNING id,state,priority`,
+      [catalogueId, row.installer_type, clean(pair.target.release_version), clean(pair.previous.release_version)],
+    )
+    return result.rows[0]
+  })
+
+  return {
+    queued: true,
+    catalogueId,
+    applicationName: row.canonical_name,
+    qualificationState: row.qualification_state,
+    targetVersion: clean(pair.target.release_version),
     previousVersion: clean(pair.previous.release_version),
     queue,
   }

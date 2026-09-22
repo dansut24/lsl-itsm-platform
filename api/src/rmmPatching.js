@@ -12,6 +12,7 @@ import {
 } from './rmmSoftwareVendorIntel.js'
 import {
   qualificationQueueSummary,
+  queueRollbackQualification,
   queueUpgradeQualification,
   retrySoftwareQualification,
 } from './rmmSoftwareQualification.js'
@@ -623,6 +624,7 @@ async function qualificationLabPayload(tenantId, catalogueId) {
 
   const cleanQueue=queues.clean_install || null
   const upgradeQueue=queues.upgrade || null
+  const rollbackQueue=queues.rollback || null
   const sourceHealthy=Boolean(app.source_enabled && app.last_success_at && !clean(app.last_error))
   const currentArtifactReady=Boolean(currentRelease?.trustState==='direct_ready'
     && currentRelease?.sha256Verified
@@ -635,6 +637,8 @@ async function qualificationLabPayload(tenantId, catalogueId) {
     && clean(evidence.upgradeVersion)===clean(app.target_version)
   const detectionPassed=evidence.upgradePatchDetectionVerified===true
     && clean(evidence.upgradePatchDetectionTargetVersion)===clean(app.target_version)
+  const rollbackPassed=evidence.rollbackVerified===true
+    && clean(evidence.rollbackRestoredVersion)===clean(app.target_version)
 
   const queueLayerState=(queue,fallback='not_tested')=>{
     const state=clean(queue?.state)
@@ -720,9 +724,11 @@ async function qualificationLabPayload(tenantId, catalogueId) {
         error:clean(cleanQueue?.lastError),
       },
       upgrade:{
-        state:upgradePassed && detectionPassed?'passed'
-          :upgradePassed?'legacy_pass'
-          :queueLayerState(upgradeQueue),
+        state:['queued','running','cleanup_pending','cleanup_running','review_required'].includes(clean(upgradeQueue?.state))
+          ? clean(upgradeQueue.state)
+          : upgradePassed && detectionPassed?'passed'
+            :upgradePassed?'legacy_pass'
+            :queueLayerState(upgradeQueue),
         fromVersion:clean(evidence.upgradeFromVersion),
         targetVersion:clean(evidence.upgradeVersion || app.target_version),
         verifiedAt:clean(evidence.upgradeVerifiedAt),
@@ -733,8 +739,26 @@ async function qualificationLabPayload(tenantId, catalogueId) {
         queue:upgradeQueue,
       },
       rollback:{
-        state:'not_implemented',
-        supported:false,
+        state:['queued','running','cleanup_pending','cleanup_running','review_required'].includes(clean(rollbackQueue?.state))
+          ? clean(rollbackQueue.state)
+          : rollbackPassed?'passed':queueLayerState(rollbackQueue),
+        supported:true,
+        fromVersion:clean(evidence.rollbackFromVersion || app.target_version),
+        previousVersion:clean(evidence.rollbackPreviousVersion || previousReady?.version || previousPending?.version),
+        restoredVersion:clean(evidence.rollbackRestoredVersion),
+        verifiedAt:clean(evidence.rollbackVerifiedAt),
+        currentInstallVerified:evidence.rollbackCurrentInstallVerified===true,
+        currentUninstallVerified:evidence.rollbackCurrentUninstallVerified===true,
+        previousInstallVerified:evidence.rollbackPreviousInstallVerified===true,
+        previousInventoryVerified:evidence.rollbackPreviousInventoryVerified===true,
+        restorePatchDetectionVerified:evidence.rollbackRestorePatchDetectionVerified===true,
+        restorePatchDetectionInstalledVersion:clean(evidence.rollbackRestorePatchDetectionInstalledVersion),
+        restorePatchDetectionTargetVersion:clean(evidence.rollbackRestorePatchDetectionTargetVersion),
+        restoreVerified:evidence.rollbackRestoreVerified===true,
+        finalUninstallVerified:evidence.rollbackFinalUninstallVerified===true,
+        residueCleanupVerified:evidence.rollbackResidueCleanupVerified===true,
+        error:clean(rollbackQueue?.lastError),
+        queue:rollbackQueue,
       },
     },
     layers:[
@@ -742,8 +766,12 @@ async function qualificationLabPayload(tenantId, catalogueId) {
       {id:'vulnerability',label:'Vulnerability identity',state:vulnerabilityCovered?'passed':'attention'},
       {id:'clean',label:'Install / verify / uninstall',state:cleanPassed && uninstallPassed?'passed':queueLayerState(cleanQueue)},
       {id:'history',label:'Previous stable',state:previousReady?'passed':previousPending?'pending':'missing'},
-      {id:'upgrade',label:'Patch upgrade',state:upgradePassed && detectionPassed?'passed':upgradePassed?'legacy_pass':queueLayerState(upgradeQueue)},
-      {id:'rollback',label:'Rollback',state:'not_implemented'},
+      {id:'upgrade',label:'Patch upgrade',state:['queued','running','cleanup_pending','cleanup_running','review_required'].includes(clean(upgradeQueue?.state))
+        ? clean(upgradeQueue.state)
+        : upgradePassed && detectionPassed?'passed':upgradePassed?'legacy_pass':queueLayerState(upgradeQueue)},
+      {id:'rollback',label:'Rollback',state:['queued','running','cleanup_pending','cleanup_running','review_required'].includes(clean(rollbackQueue?.state))
+        ? clean(rollbackQueue.state)
+        : rollbackPassed?'passed':queueLayerState(rollbackQueue)},
     ],
     actions:{
       canRevalidate:Boolean(globalVendor && app.source_key),
@@ -751,7 +779,8 @@ async function qualificationLabPayload(tenantId, catalogueId) {
       canRunClean:Boolean(globalVendor && sourceHealthy && currentArtifactReady),
       canRunUpgrade:Boolean(globalVendor && cleanPassed && uninstallPassed && currentArtifactReady && previousReady),
       canRunFull:Boolean(globalVendor && sourceHealthy && currentArtifactReady),
-      rollbackAvailable:false,
+      canRunRollback:Boolean(globalVendor && cleanPassed && uninstallPassed && upgradePassed && detectionPassed && currentArtifactReady && previousReady),
+      rollbackAvailable:Boolean(globalVendor && cleanPassed && uninstallPassed && upgradePassed && detectionPassed && currentArtifactReady && previousReady),
     },
     recentJobs:jobResult.rows.map((job)=>({
       id:job.id,
@@ -1491,6 +1520,7 @@ async function patchBundle(tenantId) {
     qualificationProgress: {
       cleanInstallPassed: new Set(qualificationQueue.filter(q => q.test_type === 'clean_install' && q.state === 'passed').map(q => q.catalogue_id)).size,
       upgradePassed: new Set(qualificationQueue.filter(q => q.test_type === 'upgrade' && q.state === 'passed').map(q => q.catalogue_id)).size,
+      rollbackPassed: new Set(qualificationQueue.filter(q => q.test_type === 'rollback' && q.state === 'passed').map(q => q.catalogue_id)).size,
       fullyQualified: catalogue.filter(c => c.qualification_state === 'qualified').length,
       failureGroups: qualificationFailureGroups(qualificationQueue),
     },
@@ -2928,6 +2958,8 @@ export function registerRmmPatchingRoutes(app) {
       result=await retrySoftwareQualification(catalogueId,{mode:'full'})
     } else if(action==='upgrade') {
       result=await queueUpgradeQualification(catalogueId)
+    } else if(action==='rollback') {
+      result=await queueRollbackQualification(catalogueId)
     } else if(action==='prepare_previous') {
       result=await prepareQualificationBaselineForCatalogue(catalogueId)
     } else {
@@ -2947,6 +2979,7 @@ export function registerRmmPatchingRoutes(app) {
       clean_cycle:'Started clean install / verify / uninstall qualification',
       full:'Started full catalogue qualification',
       upgrade:'Started versioned upgrade qualification',
+      rollback:'Started rollback qualification',
       prepare_previous:'Prepared previous stable release for qualification',
     }
     await audit(
