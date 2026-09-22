@@ -31,3 +31,18 @@ Reusable checks: node scripts/check-qualification-recovery.mjs (Node 24, API dep
 Observe the new upgrade tests and cleanup. Continue through review groups.
 Git still requires clean-endpoint requalification; VeraCrypt requires endpoint download diagnosis.
 Expand to isolated runners separately; this pass retains the single designated runner.
+
+
+## Qualification runtime cap
+A claimed PatchHost qualification install or upgrade that exceeds 10 minutes now triggers
+a targeted endpoint control job. It stops only the PatchHost process tree whose manifest
+contains the exact job UUID, then closes the claimed job as a review-required timeout.
+If the installer is already gone, the endpoint reports NO_MATCH. An installed baseline
+is uninstalled and residue checked before the runner advances. If endpoint control fails,
+the lane stays blocked for diagnosis. This keeps timeout attempts from being counted as
+successful qualification and prevents an unclean endpoint from contaminating the next test.
+
+Observed: Azure Connected Machine Agent upgrade baseline exceeded 25 minutes with its
+Agent job still claimed. Endpoint control reported NO_MATCH; the timeout watchdog
+closed the claimed job and dispatched Azure baseline uninstall. Wait for cleanup/inventory
+confirmation before the next queued app runs.

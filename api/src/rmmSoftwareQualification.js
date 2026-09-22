@@ -1080,6 +1080,20 @@ async function reconcileUpgradeQueueRow(queue, runner) {
           [current.deployment_id, clean(job.status) === 'cancelled' ? 'cancelled' : 'verification_failed', JSON.stringify(object(job?.result))],
         )
       }
+      if (failure === 'qualification_runtime_limit_exceeded' && runner
+        && clean(current.runner_agent_device_id) === clean(runner.agent_device_id)) {
+        const installed=installedMatches(runner.source_payload,current)
+        if (installed.length) {
+          await pool.query(
+            `UPDATE rmm_software_qualification_queue
+                SET evidence=evidence || $2::jsonb,updated_at=now() WHERE id=$1`,
+            [current.id,JSON.stringify({skipAfterTimeout:true,
+              timeoutFinalError:failure,installCompletedAt:new Date().toISOString()})],
+          )
+          const dispatched=await dispatchUninstall(current,runner,installed[installed.length-1])
+          return { id:current.id,state:dispatched.dispatched?'cleanup_running':'review_required' }
+        }
+      }
       await markReview(current.id, failure || providerFailure || 'qualification_upgrade_verification_failed', { stage: clean(evidence.stage) })
       return { id: current.id, state: 'review_required' }
     }
@@ -1215,9 +1229,10 @@ async function reconcileUpgradeQueueRow(queue, runner) {
     }
 
     const scopeMismatch = object(current.evidence).postInstallScopeMismatch === true
+    const timedOut = object(current.evidence).skipAfterTimeout === true
     const dispatched = await dispatchQualificationResidueCleanup(current, runner, {
-      finalState: scopeMismatch ? 'review_required' : 'passed',
-      finalError: scopeMismatch ? 'qualification_scope_mismatch' : '',
+      finalState: (scopeMismatch || timedOut) ? 'review_required' : 'passed',
+      finalError: timedOut ? 'qualification_runtime_limit_exceeded' : scopeMismatch ? 'qualification_scope_mismatch' : '',
       uninstallCompletedAt: cleanup.completed_at || '',
     })
     return { id: current.id, state: dispatched.dispatched ? 'cleanup_running' : current.state }
@@ -1246,6 +1261,20 @@ async function reconcileQueueRow(queue, runner) {
               completed_at=COALESCE(completed_at,now()),updated_at=now() WHERE id=$1`,
           [current.deployment_id, clean(job.status) === 'cancelled' ? 'cancelled' : 'verification_failed', JSON.stringify(object(job?.result))],
         )
+      }
+      if (failure === 'qualification_runtime_limit_exceeded' && runner
+        && clean(current.runner_agent_device_id) === clean(runner.agent_device_id)) {
+        const installed=installedMatches(runner.source_payload,current)
+        if (installed.length) {
+          await pool.query(
+            `UPDATE rmm_software_qualification_queue
+                SET evidence=evidence || $2::jsonb,updated_at=now() WHERE id=$1`,
+            [current.id,JSON.stringify({skipAfterTimeout:true,
+              timeoutFinalError:failure,installCompletedAt:new Date().toISOString()})],
+          )
+          const dispatched=await dispatchUninstall(current,runner,installed[installed.length-1])
+          return { id:current.id,state:dispatched.dispatched?'cleanup_running':'review_required' }
+        }
       }
       await markReview(current.id, failure || providerFailure || 'qualification_install_verification_failed', { stage: 'install' })
       return { id: current.id, state: 'review_required' }
@@ -1363,9 +1392,10 @@ async function reconcileQueueRow(queue, runner) {
     }
 
     const scopeMismatch = object(current.evidence).postInstallScopeMismatch === true
+    const timedOut = object(current.evidence).skipAfterTimeout === true
     const dispatched = await dispatchQualificationResidueCleanup(current, runner, {
-      finalState: scopeMismatch ? 'review_required' : 'passed',
-      finalError: scopeMismatch ? 'qualification_scope_mismatch' : '',
+      finalState: (scopeMismatch || timedOut) ? 'review_required' : 'passed',
+      finalError: timedOut ? 'qualification_runtime_limit_exceeded' : scopeMismatch ? 'qualification_scope_mismatch' : '',
       uninstallCompletedAt: cleanup.completed_at || '',
     })
     return { id: current.id, state: dispatched.dispatched ? 'cleanup_running' : current.state }
@@ -1710,6 +1740,73 @@ export async function promoteAutomaticAdmissionReady({ limit = 12 } = {}) {
   return result.rows
 }
 
+// Only release a qualification lane after endpoint control confirms its PatchHost
+// process tree has stopped. A database-only timeout can leave an installer running.
+async function stopOverlongQualificationJobs() {
+  const rows = await pool.query(
+    `SELECT q.id,q.runner_agent_device_id AS agent_device_id,q.agent_job_id,q.started_at,
+            j.tenant_id,j.status AS job_status
+       FROM rmm_software_qualification_queue q
+       JOIN rmm_agent_jobs j ON j.id=q.agent_job_id
+      WHERE q.state='running'
+        AND j.job_type='patch.software'
+        AND j.status='claimed'
+        AND q.started_at<now()-interval '10 minutes'
+      ORDER BY q.started_at LIMIT 3`,
+  )
+  for (const row of rows.rows) {
+    const controls = await pool.query(
+      `SELECT id,status,result,error_message FROM rmm_agent_jobs
+        WHERE agent_device_id=$1 AND job_type='custom.command'
+          AND request_metadata->>'source'='qualification_runtime_limit'
+          AND request_metadata->>'qualification_job_id'=$2
+        ORDER BY created_at DESC LIMIT 1`,
+      [row.agent_device_id,row.agent_job_id],
+    )
+    const control=controls.rows[0]
+    if (!control) {
+      const id=clean(row.agent_job_id)
+      if (!/^[a-f0-9-]{36}$/i.test(id)) continue
+      const command=[
+        "$ErrorActionPreference='Stop'",
+        "$needle='"+id+".manifest.dpapi'",
+        "$matches=@(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'Hi5CentralPatchHost.exe' -and $_.CommandLine -like ('*'+$needle+'*') })",
+        "foreach($process in $matches){& taskkill.exe /T /F /PID $process.ProcessId | Out-Null; if($LASTEXITCODE -ne 0){throw 'targeted_patchhost_stop_failed'}}",
+        "if($matches.Count -eq 0){'NO_MATCH'}else{'STOPPED '+$matches.Count}",
+      ].join('; ')
+      await pool.query(
+        `INSERT INTO rmm_agent_jobs
+          (tenant_id,agent_device_id,job_type,payload,initiated_by,initiated_by_label,request_metadata)
+         VALUES ($1,$2,'custom.command',$3::jsonb,'system','Qualification time limit',$4::jsonb)`,
+        [row.tenant_id,row.agent_device_id,
+          JSON.stringify({command,timeout_seconds:30}),
+          JSON.stringify({source:'qualification_runtime_limit',emergencyWebsocketDispatch:true,
+            qualification_job_id:id,qualification_queue_id:row.id})],
+      )
+      continue
+    }
+    if (control.status !== 'completed' || !/^(NO_MATCH|STOPPED)/.test(clean(object(control.result).output))) {
+      if (control.status === 'failed') {
+        await pool.query(
+          `UPDATE rmm_software_qualification_queue
+             SET last_error='qualification_timeout_control_failed',updated_at=now()
+            WHERE id=$1 AND state='running'`,[row.id],
+        )
+      }
+      continue
+    }
+    await pool.query(
+      `UPDATE rmm_agent_jobs
+          SET status='failed',error_message='qualification_runtime_limit_exceeded',
+              result=jsonb_build_object('success',false,'error','qualification_runtime_limit_exceeded',
+                'controlJobId',$2::text,'limitSeconds',600),
+              completed_at=now(),updated_at=now()
+        WHERE id=$1 AND status='claimed'`,
+      [row.agent_job_id,control.id],
+    )
+  }
+}
+
 async function dispatchEmergencyAgentControlJobs({ limit = 3 } = {}) {
   const pending = await pool.query(
     `SELECT id,agent_device_id,job_type,payload,created_at
@@ -1758,6 +1855,7 @@ async function dispatchEmergencyAgentControlJobs({ limit = 3 } = {}) {
 }
 
 export async function runSoftwareQualificationQueue({ dispatchLimit = 1 } = {}) {
+  await stopOverlongQualificationJobs()
   const emergencyDispatched = await dispatchEmergencyAgentControlJobs()
   const runner = await liveQualificationRunner()
   const active = await pool.query(
