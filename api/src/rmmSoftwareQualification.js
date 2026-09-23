@@ -174,6 +174,138 @@ async function markReview(queueId, error, evidence = {}) {
   )
 }
 
+async function classifyRotatedHistoricalArtifact(queue, job, stage) {
+  if (clean(stage) !== 'upgrade_baseline_running') return { classified: false }
+  const result = object(job?.result)
+  const failure = clean(result.error || job?.error_message)
+  const actualSha256 = lower(result.actualSha256)
+  const evidence = object(queue?.evidence)
+  const baselineReleaseId = clean(evidence.vendorReleaseId)
+  if (failure !== 'sha256_mismatch' || !actualSha256 || !baselineReleaseId) return { classified: false }
+
+  const releaseResult = await pool.query(
+    `SELECT b.id AS baseline_id,b.version AS baseline_version,b.source_key,b.provider_package_id,
+            b.channel,b.platform,b.architecture,b.installer_url AS baseline_url,
+            b.installer_sha256 AS baseline_sha256,c.target_version,
+            t.id AS target_id,t.installer_url AS target_url,t.installer_sha256 AS target_sha256
+       FROM rmm_software_vendor_releases b
+       JOIN rmm_software_catalogue c ON c.id=$1
+       JOIN rmm_software_vendor_releases t
+         ON t.source_key=b.source_key
+        AND t.provider_package_id=b.provider_package_id
+        AND t.channel=b.channel
+        AND t.platform=b.platform
+        AND t.architecture=b.architecture
+        AND t.version=c.target_version
+        AND t.trust_state='direct_ready'
+      WHERE b.id=$2
+        AND b.version<>c.target_version
+      LIMIT 1`,
+    [queue.catalogue_id, baselineReleaseId],
+  )
+  const release = releaseResult.rows[0]
+  if (!release) return { classified: false }
+
+  const baselineUrl = clean(release.baseline_url)
+  const targetUrl = clean(release.target_url)
+  const baselineSha256 = lower(release.baseline_sha256)
+  const targetSha256 = lower(release.target_sha256)
+  if (!baselineUrl || baselineUrl !== targetUrl
+    || !baselineSha256 || !targetSha256
+    || baselineSha256 === targetSha256
+    || actualSha256 !== targetSha256) {
+    return { classified: false }
+  }
+
+  const rejected = await pool.query(
+    `UPDATE rmm_software_vendor_releases
+        SET trust_state='rejected',
+            trust_evidence=COALESCE(trust_evidence,'{}'::jsonb) || $7::jsonb,
+            source_payload=COALESCE(source_payload,'{}'::jsonb) || $8::jsonb
+      WHERE source_key=$1
+        AND provider_package_id=$2
+        AND channel=$3
+        AND platform=$4
+        AND architecture=$5
+        AND installer_url=$6
+        AND id<>$9
+        AND trust_state='direct_ready'
+        AND lower(COALESCE(installer_sha256,''))<>$10
+      RETURNING id,version`,
+    [
+      release.source_key,
+      release.provider_package_id,
+      release.channel,
+      release.platform,
+      release.architecture,
+      baselineUrl,
+      JSON.stringify({
+        reason: 'sha256_mismatch',
+        historicalMutableUrl: true,
+        historicalMutableUrlDetectedAt: new Date().toISOString(),
+        historicalMutableUrlCurrentSha256: targetSha256.toUpperCase(),
+      }),
+      JSON.stringify({
+        historicalArtifactUnavailable: true,
+        historicalArtifactUnavailableReason: 'mutable_vendor_url_rotated_to_current_release',
+        historicalArtifactUnavailableAt: new Date().toISOString(),
+      }),
+      release.target_id,
+      targetSha256,
+    ],
+  )
+
+  await pool.query(
+    `UPDATE rmm_software_vendor_sources
+        SET metadata=(metadata - 'baselinePreparationError') || $2::jsonb,updated_at=now()
+      WHERE source_key=$1`,
+    [release.source_key, JSON.stringify({
+      baselinePreparationState: 'previous_stable_installer_unavailable',
+      baselinePreparationTargetVersion: clean(release.target_version),
+      baselinePreparationPreviousVersion: clean(release.baseline_version),
+      baselinePreparationReason: 'mutable_vendor_url_rotated_to_current_release',
+      baselinePreparationCompletedAt: new Date().toISOString(),
+      baselinePreparationRequestedForCatalogueId: queue.catalogue_id,
+      baselinePreparationEvidence: {
+        installerUrl: baselineUrl,
+        historicalExpectedSha256: baselineSha256.toUpperCase(),
+        observedSha256: actualSha256.toUpperCase(),
+        currentTrustedSha256: targetSha256.toUpperCase(),
+        rejectedHistoricalReleaseIds: rejected.rows.map((row) => row.id),
+      },
+    })],
+  )
+
+  await pool.query(
+    `UPDATE rmm_software_qualification_queue
+        SET state='cancelled',last_error='previous_stable_installer_unavailable',
+            evidence=evidence || $2::jsonb,completed_at=now(),updated_at=now()
+      WHERE id=$1`,
+    [queue.id, JSON.stringify({
+      stage: 'upgrade_unavailable',
+      upgradeUnavailable: true,
+      upgradeUnavailableReason: 'historical_installer_mutable_url_rotated',
+      historicalInstallerUrl: baselineUrl,
+      historicalExpectedSha256: baselineSha256.toUpperCase(),
+      observedSha256: actualSha256.toUpperCase(),
+      currentTrustedSha256: targetSha256.toUpperCase(),
+      rejectedHistoricalReleases: rejected.rows.map((row) => ({
+        id: row.id,
+        version: clean(row.version),
+      })),
+      unavailableAt: new Date().toISOString(),
+    })],
+  )
+
+  return {
+    classified: true,
+    reason: 'previous_stable_installer_unavailable',
+    baselineVersion: clean(release.baseline_version),
+    targetVersion: clean(release.target_version),
+    rejectedHistoricalReleases: rejected.rows,
+  }
+}
+
 async function qualificationRow(queueId) {
   const result = await pool.query(
     `SELECT q.*,c.canonical_name,c.publisher,c.name_pattern,c.publisher_pattern,c.provider,
@@ -1259,6 +1391,11 @@ async function reconcileUpgradeQueueRow(queue, runner) {
           [current.deployment_id, clean(job.status) === 'cancelled' ? 'cancelled' : 'verification_failed', JSON.stringify(object(job?.result))],
         )
       }
+      const historicalUnavailable = await classifyRotatedHistoricalArtifact(current, job, clean(evidence.stage))
+      if (historicalUnavailable.classified) {
+        return { id: current.id, state: 'cancelled', ...historicalUnavailable }
+      }
+
       if (failure === 'qualification_runtime_limit_exceeded' && runner
         && clean(current.runner_agent_device_id) === clean(runner.agent_device_id)) {
         const installed=installedMatches(runner.source_payload,current)
