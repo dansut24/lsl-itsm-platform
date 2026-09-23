@@ -41,9 +41,35 @@ function softwareIdentityKey(item) {
 }
 
 function observedQualificationIdentities(catalogue) {
-  return array(object(catalogue?.source_metadata).qualificationObservedIdentities)
+  const learned = array(object(catalogue?.source_metadata).qualificationObservedIdentities)
     .map((item) => object(item))
     .filter((item) => clean(item.name))
+  const expanded = []
+  for (const identity of learned) {
+    expanded.push(identity)
+    if (lower(identity.source) !== 'verified_vendor_qualification') continue
+    const name = clean(identity.name)
+    const learnedVersion = clean(identity.learnedVersion)
+    if (!name || !learnedVersion) continue
+    const nameLower = lower(name)
+    const versionLower = lower(learnedVersion)
+    const index = nameLower.indexOf(versionLower)
+    if (index < 0) continue
+    const before = index > 0 ? name[index - 1] : ''
+    const afterIndex = index + learnedVersion.length
+    const after = afterIndex < name.length ? name[afterIndex] : ''
+    if ((before && /[a-z0-9]/i.test(before)) || (after && /[a-z0-9]/i.test(after))) continue
+    const alias = clean((name.slice(0, index) + ' ' + name.slice(afterIndex))
+      .replace(/\s+/g, ' ')
+      .replace(/^[\s._-]+|[\s._-]+$/g, ''))
+    if (alias.length < 3 || !/[a-z]/i.test(alias) || lower(alias) === nameLower) continue
+    expanded.push({
+      ...identity,
+      name: alias,
+      derivedFromVersionedName: true,
+    })
+  }
+  return expanded
 }
 
 function qualificationScope(value = '') {
