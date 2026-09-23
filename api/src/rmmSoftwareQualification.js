@@ -2933,7 +2933,7 @@ export async function runSoftwareQualificationQueue({ dispatchLimit = 1 } = {}) 
             )
           )
         )
-      ORDER BY CASE q.test_type WHEN 'clean_install' THEN 0 WHEN 'upgrade' THEN 1 ELSE 2 END,
+      ORDER BY CASE q.test_type WHEN 'rollback' THEN 0 WHEN 'upgrade' THEN 1 ELSE 2 END,
                q.priority DESC,q.created_at
       LIMIT $1`,
     [Math.max(1, Math.min(3, Number(dispatchLimit) || 1))],
