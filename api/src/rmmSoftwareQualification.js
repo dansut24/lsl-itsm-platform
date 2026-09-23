@@ -2722,7 +2722,7 @@ export async function retrySoftwareQualification(catalogueId, { mode = 'full' } 
          deployment_id=NULL,
          cleanup_job_id=NULL,
          last_error='',
-         evidence=rmm_software_qualification_queue.evidence || EXCLUDED.evidence,
+         evidence=EXCLUDED.evidence,
          started_at=NULL,
          completed_at=NULL,
          updated_at=now()
@@ -2836,15 +2836,7 @@ export async function queueUpgradeQualification(catalogueId) {
          deployment_id=NULL,
          cleanup_job_id=NULL,
          last_error='',
-         evidence=(rmm_software_qualification_queue.evidence
-           - 'stage'
-           - 'baselineInstallCompletedAt'
-           - 'upgradePatchDetectionVerified'
-           - 'upgradePatchDetectionStatus'
-           - 'upgradePatchDetectionInstalledVersion'
-           - 'upgradePatchDetectionTargetVersion'
-           - 'upgradePatchDetectionVerifiedAt'
-           - 'upgradePatchDetectionIdentity') || EXCLUDED.evidence,
+         evidence=EXCLUDED.evidence,
          started_at=NULL,
          completed_at=NULL,
          updated_at=now()
