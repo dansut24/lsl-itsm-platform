@@ -2434,6 +2434,8 @@ export async function promoteAutomaticAdmissionReady({ limit = 12 } = {}) {
      )
      UPDATE rmm_software_catalogue c
         SET qualification_state='qualified',
+            qualification_version=c.target_version,
+            qualified_at=now(),
             qualification_notes=CASE
               WHEN COALESCE(c.qualification_notes,'')='' THEN 'Automatically admitted after trusted source, artifact, clean-install, uninstall, upgrade and vulnerability-identity qualification.'
               ELSE c.qualification_notes
