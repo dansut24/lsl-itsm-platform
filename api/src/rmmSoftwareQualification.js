@@ -2415,6 +2415,13 @@ export async function promoteAutomaticAdmissionReady({ limit = 12 } = {}) {
           )
           AND EXISTS (
             SELECT 1
+              FROM rmm_software_qualification_queue qrq
+             WHERE qrq.catalogue_id=c.id
+               AND qrq.test_type='rollback'
+               AND qrq.state='passed'
+          )
+          AND EXISTS (
+            SELECT 1
               FROM rmm_patch_deployments d
               JOIN rmm_agent_devices a
                 ON a.inventory_id=d.inventory_id AND a.disabled_at IS NULL
@@ -2437,7 +2444,7 @@ export async function promoteAutomaticAdmissionReady({ limit = 12 } = {}) {
             qualification_version=c.target_version,
             qualified_at=now(),
             qualification_notes=CASE
-              WHEN COALESCE(c.qualification_notes,'')='' THEN 'Automatically admitted after trusted source, artifact, clean-install, uninstall, upgrade and vulnerability-identity qualification.'
+              WHEN COALESCE(c.qualification_notes,'')='' THEN 'Automatically admitted after trusted source, artifact, clean-install, uninstall, upgrade, rollback and vulnerability-identity qualification.'
               ELSE c.qualification_notes
             END,
             qualification_evidence=c.qualification_evidence || jsonb_build_object(

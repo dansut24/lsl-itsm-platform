@@ -434,6 +434,8 @@ async function catalogueRows(tenantId) {
       && clean(row.install_test_version) === targetVersion
     const upgradeTestPassed = row.upgrade_test_passed === true
       && clean(row.upgrade_test_version) === targetVersion
+    const rollbackTestPassed = qualificationEvidence.rollbackVerified === true
+      && clean(qualificationEvidence.rollbackRestoredVersion) === targetVersion
     const queueState = clean(row.qualification_queue_state)
     const installTestState = installTestPassed
       ? 'passed'
@@ -455,6 +457,7 @@ async function catalogueRows(tenantId) {
       && installTestPassed
       && uninstallTestPassed
       && upgradeTestPassed
+      && rollbackTestPassed
       && vulnerabilityCovered,
     )
     const blockers = []
@@ -463,6 +466,7 @@ async function catalogueRows(tenantId) {
     if (!installTestPassed) blockers.push('clean_install_test')
     if (!uninstallTestPassed) blockers.push('uninstall_test')
     if (!upgradeTestPassed) blockers.push('upgrade_test')
+    if (!rollbackTestPassed) blockers.push('rollback_test')
     if (!vulnerabilityCovered) blockers.push('vulnerability_identity')
 
     return {
@@ -503,6 +507,11 @@ async function catalogueRows(tenantId) {
           state: upgradeTestPassed ? 'passed' : 'not_tested',
           testedAt: row.upgrade_tested_at || null,
           version: clean(row.upgrade_test_version),
+        },
+        rollbackTest: {
+          state: rollbackTestPassed ? 'passed' : 'not_tested',
+          testedAt: clean(qualificationEvidence.rollbackVerifiedAt) || null,
+          version: clean(qualificationEvidence.rollbackRestoredVersion),
         },
         vulnerability: {
           state: vulnerabilityCovered ? 'covered' : (clean(identityAudit.state) || 'needs_review'),
