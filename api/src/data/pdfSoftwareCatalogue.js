@@ -33,7 +33,8 @@ export const pdfSoftwareCatalogue = [
     "deploymentMode": "intelligence_only",
     "platform": "windows",
     "priority": 760,
-    "pollMinutes": 60
+    "pollMinutes": 60,
+    "enabled": false
   },
   {
     "sourceKey": "jetbrains_rustrover",
@@ -4015,19 +4016,19 @@ export const pdfSoftwareCatalogue = [
     "displayName": "Liquibase",
     "canonicalName": "Liquibase",
     "publisher": "",
-    "sourceType": "package_registry",
-    "sourceUrl": "https://search.maven.org/solrsearch/select?q=g%3Aorg.liquibase%20AND%20a%3Aliquibase-core&rows=5&wt=json",
-    "registry": "maven",
-    "registryPackage": "org.liquibase:liquibase-core",
-    "registryGroup": "org.liquibase",
-    "registryArtifact": "liquibase-core",
+    "sourceType": "github_releases",
+    "sourceUrl": "https://github.com/liquibase/liquibase",
+    "repository": "liquibase/liquibase",
+    "releaseTagPattern": "v*",
+    "assetPattern": "liquibase-windows-x64-installer-*.exe",
+    "wingetPackageId": "Liquibase.Liquibase",
     "osvEcosystem": "Maven",
     "osvPackage": "org.liquibase:liquibase-core",
-    "deploymentMode": "intelligence_only",
-    "platform": "any",
-    "architecture": "any",
+    "deploymentMode": "winget_preferred",
+    "platform": "windows",
+    "architecture": "x64",
     "priority": 520,
-    "pollMinutes": 360
+    "pollMinutes": 60
   },
   {
     "sourceKey": "registry_maven_org_flywaydb_flyway_core",
