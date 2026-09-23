@@ -346,6 +346,7 @@ async function catalogueRows(tenantId) {
             COALESCE(vi.identity_count,0)::int AS vulnerability_identity_count,
             s.last_success_at AS qualification_source_last_success_at,
             s.last_error AS qualification_source_error,
+            s.metadata AS qualification_source_metadata,
             qq.state AS qualification_queue_state,
             qq.last_error AS qualification_queue_error,
             qq.updated_at AS qualification_queue_updated_at
@@ -401,6 +402,7 @@ async function catalogueRows(tenantId) {
 
   return result.rows.map((row) => {
     const sourceMetadata = object(row.source_metadata)
+    const sourceLiveMetadata = object(row.qualification_source_metadata)
     const qualificationEvidence = object(row.qualification_evidence)
     const identityAudit = object(sourceMetadata.vulnerabilityIdentityAudit)
     const deploymentMode = clean(sourceMetadata.deploymentMode)
@@ -423,6 +425,8 @@ async function catalogueRows(tenantId) {
       : officialWinget
     const vulnerabilityCovered = clean(identityAudit.state) === 'covered'
       && Number(row.vulnerability_identity_count || 0) > 0
+    const vulnerabilityLimited = clean(identityAudit.state) === 'no_published_identity'
+    const historyLimited = clean(sourceLiveMetadata.baselinePreparationState) === 'previous_stable_installer_unavailable'
     const targetVersion = clean(row.target_version)
     const cleanInstallVersion = clean(qualificationEvidence.cleanInstallVersion)
     const installTestPassed = qualificationEvidence.cleanInstallVerified === true
@@ -460,21 +464,45 @@ async function catalogueRows(tenantId) {
       && rollbackTestPassed
       && vulnerabilityCovered,
     )
+    const limitedAdmissionReady = Boolean(
+      sourceHealthy
+      && artifactVerified
+      && installTestPassed
+      && uninstallTestPassed
+      && (historyLimited || upgradeTestPassed)
+      && (historyLimited || rollbackTestPassed)
+      && (vulnerabilityCovered || vulnerabilityLimited)
+      && (historyLimited || vulnerabilityLimited),
+    )
+    const capabilityAdmissionReady = automaticAdmissionReady || limitedAdmissionReady
     const blockers = []
     if (!sourceHealthy) blockers.push('source_health')
     if (!artifactVerified) blockers.push('artifact_verification')
     if (!installTestPassed) blockers.push('clean_install_test')
     if (!uninstallTestPassed) blockers.push('uninstall_test')
-    if (!upgradeTestPassed) blockers.push('upgrade_test')
-    if (!rollbackTestPassed) blockers.push('rollback_test')
-    if (!vulnerabilityCovered) blockers.push('vulnerability_identity')
+    if (!historyLimited && !upgradeTestPassed) blockers.push('upgrade_test')
+    if (!historyLimited && !rollbackTestPassed) blockers.push('rollback_test')
+    if (!vulnerabilityCovered && !vulnerabilityLimited) blockers.push('vulnerability_identity')
 
     return {
       ...row,
       qualification_readiness: {
-        state: automaticAdmissionReady ? 'ready' : 'pending',
+        state: automaticAdmissionReady ? 'ready' : limitedAdmissionReady ? 'limited' : 'pending',
         automaticAdmissionReady,
+        limitedAdmissionReady,
+        capabilityAdmissionReady,
         blockers,
+        limitations: {
+          historicalInstaller: historyLimited ? {
+            state: 'unavailable_upstream',
+            reason: clean(sourceLiveMetadata.baselinePreparationReason),
+            previousVersion: clean(sourceLiveMetadata.baselinePreparationPreviousVersion),
+          } : null,
+          vulnerabilityIdentity: vulnerabilityLimited ? {
+            state: 'no_published_identity',
+            note: clean(sourceMetadata.vulnerabilityIdentityNote),
+          } : null,
+        },
         source: {
           state: sourceHealthy ? 'healthy' : 'attention',
           lastSuccessAt: row.qualification_source_last_success_at || null,
@@ -504,12 +532,12 @@ async function catalogueRows(tenantId) {
           error: clean(row.qualification_queue_error),
         },
         upgradeTest: {
-          state: upgradeTestPassed ? 'passed' : 'not_tested',
+          state: upgradeTestPassed ? 'passed' : historyLimited ? 'unavailable' : 'not_tested',
           testedAt: row.upgrade_tested_at || null,
           version: clean(row.upgrade_test_version),
         },
         rollbackTest: {
-          state: rollbackTestPassed ? 'passed' : 'not_tested',
+          state: rollbackTestPassed ? 'passed' : historyLimited ? 'unavailable' : 'not_tested',
           testedAt: clean(qualificationEvidence.rollbackVerifiedAt) || null,
           version: clean(qualificationEvidence.rollbackRestoredVersion),
         },
@@ -692,6 +720,8 @@ async function qualificationLabPayload(tenantId, catalogueId) {
       qualificationVersion:clean(app.qualification_version),
       qualificationNotes:clean(app.qualification_notes),
       qualifiedAt:app.qualified_at || null,
+      qualificationCapabilities:object(evidence.qualificationCapabilities),
+      qualificationLimitations:object(evidence.qualificationLimitations),
       deploymentMode:clean(catalogueSource.deploymentMode),
       trustState:clean(catalogueSource.trustState),
       sourceKey:clean(app.source_key),
@@ -1547,8 +1577,11 @@ async function patchBundle(tenantId) {
       unmappedInstallations: software.deviceSoftware.length - mapped,
       autoDiscoveredPackages: discovery.candidates.length,
       autoDiscoveredUpdates: discovery.observations.filter((item) => item.patch_status === 'update_available').length,
-      qualifiedCatalogue: catalogue.filter((item) => item.qualification_state === 'qualified').length,
+      qualifiedCatalogue: catalogue.filter((item) => ['qualified','qualified_limited'].includes(item.qualification_state)).length,
+      fullyQualifiedCatalogue: catalogue.filter((item) => item.qualification_state === 'qualified').length,
+      limitedQualifiedCatalogue: catalogue.filter((item) => item.qualification_state === 'qualified_limited').length,
       automaticAdmissionReadyCatalogue: catalogue.filter((item) => object(item.qualification_readiness).automaticAdmissionReady === true).length,
+      capabilityAdmissionReadyCatalogue: catalogue.filter((item) => object(item.qualification_readiness).capabilityAdmissionReady === true).length,
       candidateCatalogue: catalogue.filter((item) => item.qualification_state === 'deployment_candidate').length,
       blockedCatalogue: catalogue.filter((item) => item.qualification_state === 'blocked').length,
       intelligenceOnlyCatalogue: catalogue.filter((item) => item.qualification_state === 'intelligence_only').length,
@@ -1574,6 +1607,7 @@ async function patchBundle(tenantId) {
       upgradePassed: new Set(qualificationQueue.filter(q => q.test_type === 'upgrade' && q.state === 'passed').map(q => q.catalogue_id)).size,
       rollbackPassed: new Set(qualificationQueue.filter(q => q.test_type === 'rollback' && q.state === 'passed').map(q => q.catalogue_id)).size,
       fullyQualified: catalogue.filter(c => c.qualification_state === 'qualified').length,
+      limitedQualified: catalogue.filter(c => c.qualification_state === 'qualified_limited').length,
       failureGroups: qualificationFailureGroups(qualificationQueue),
     },
     vendorIntel: { ...vendorIntel, tenantSources: tenantVendorSources },

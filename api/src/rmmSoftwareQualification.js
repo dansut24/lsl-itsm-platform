@@ -1004,7 +1004,7 @@ async function upgradeReleasePair(catalogueId) {
         AND b.channel=r.channel AND b.platform=r.platform AND b.architecture=r.architecture
         AND b.enabled=true
       WHERE c.id=$1 AND c.tenant_id IS NULL AND c.status='active'
-        AND c.qualification_state IN ('deployment_candidate','qualified')
+        AND c.qualification_state IN ('deployment_candidate','qualified','qualified_limited')
         AND r.trust_state='direct_ready'
       ORDER BY r.last_seen_at DESC`,
     [catalogueId],
@@ -2375,14 +2375,63 @@ export async function queueAutomaticUpgradeQualifications({ limit = 12 } = {}) {
 export async function promoteAutomaticAdmissionReady({ limit = 12 } = {}) {
   const safeLimit = Math.max(1, Math.min(50, Number(limit) || 12))
   const result = await pool.query(
-    `WITH ready AS (
-       SELECT c.id,c.canonical_name,c.target_version
+    `WITH candidates AS (
+       SELECT c.id,c.canonical_name,c.target_version,c.qualification_state,
+              c.source_metadata,c.qualification_evidence,
+              s.metadata AS source_live_metadata,
+              (
+                c.source_metadata->'vulnerabilityIdentityAudit'->>'state'='covered'
+                AND EXISTS (
+                  SELECT 1
+                    FROM rmm_software_vulnerability_identities vi
+                   WHERE vi.catalogue_id=c.id AND vi.enabled=true
+                )
+              ) AS vulnerability_covered,
+              (c.source_metadata->'vulnerabilityIdentityAudit'->>'state'='no_published_identity') AS vulnerability_limited,
+              (s.metadata->>'baselinePreparationState'='previous_stable_installer_unavailable') AS history_limited,
+              EXISTS (
+                SELECT 1
+                  FROM rmm_software_qualification_queue qi
+                 WHERE qi.catalogue_id=c.id
+                   AND qi.test_type='clean_install'
+                   AND qi.state='passed'
+              ) AS clean_queue_passed,
+              EXISTS (
+                SELECT 1
+                  FROM rmm_software_qualification_queue qu
+                 WHERE qu.catalogue_id=c.id
+                   AND qu.test_type='upgrade'
+                   AND qu.state='passed'
+              ) AS upgrade_passed,
+              EXISTS (
+                SELECT 1
+                  FROM rmm_software_qualification_queue qrq
+                 WHERE qrq.catalogue_id=c.id
+                   AND qrq.test_type='rollback'
+                   AND qrq.state='passed'
+              ) AS rollback_passed,
+              EXISTS (
+                SELECT 1
+                  FROM rmm_patch_deployments d
+                  JOIN rmm_agent_devices a
+                    ON a.inventory_id=d.inventory_id AND a.disabled_at IS NULL
+                  JOIN rmm_software_vendor_qualification_runners qr
+                    ON qr.agent_device_id=a.id AND qr.enabled=true
+                 WHERE d.catalogue_id=c.id
+                   AND d.status='succeeded'
+                   AND d.target_version=c.target_version
+                   AND lower(COALESCE(d.result->>'verificationPassed',d.result->'verification'->>'meetsTarget','false'))='true'
+                   AND COALESCE(
+                     NULLIF(d.result->>'intent',''),
+                     CASE WHEN COALESCE(d.installed_version,'')='' THEN 'install' ELSE 'update' END
+                   )='update'
+              ) AS verified_update_deployment
          FROM rmm_software_catalogue c
          JOIN rmm_software_vendor_sources s
            ON s.source_key=c.source_metadata->>'latestSource' AND s.enabled=true
         WHERE c.tenant_id IS NULL
           AND c.status='active'
-          AND c.qualification_state='deployment_candidate'
+          AND c.qualification_state IN ('deployment_candidate','qualified_limited')
           AND c.source_metadata->>'deploymentMode'='vendor_direct'
           AND c.source_metadata->>'trustState'='direct_ready'
           AND lower(COALESCE(c.installer_type,'')) IN ('msi','exe')
@@ -2393,74 +2442,93 @@ export async function promoteAutomaticAdmissionReady({ limit = 12 } = {}) {
           AND lower(COALESCE(c.qualification_evidence->>'cleanInstallVerified','false'))='true'
           AND c.qualification_evidence->>'cleanInstallVersion'=c.target_version
           AND lower(COALESCE(c.qualification_evidence->>'uninstallVerified','false'))='true'
-          AND c.source_metadata->'vulnerabilityIdentityAudit'->>'state'='covered'
-          AND EXISTS (
-            SELECT 1
-              FROM rmm_software_vulnerability_identities vi
-             WHERE vi.catalogue_id=c.id AND vi.enabled=true
-          )
-          AND EXISTS (
-            SELECT 1
-              FROM rmm_software_qualification_queue qi
-             WHERE qi.catalogue_id=c.id
-               AND qi.test_type='clean_install'
-               AND qi.state='passed'
-          )
-          AND EXISTS (
-            SELECT 1
-              FROM rmm_software_qualification_queue qu
-             WHERE qu.catalogue_id=c.id
-               AND qu.test_type='upgrade'
-               AND qu.state='passed'
-          )
-          AND EXISTS (
-            SELECT 1
-              FROM rmm_software_qualification_queue qrq
-             WHERE qrq.catalogue_id=c.id
-               AND qrq.test_type='rollback'
-               AND qrq.state='passed'
-          )
-          AND EXISTS (
-            SELECT 1
-              FROM rmm_patch_deployments d
-              JOIN rmm_agent_devices a
-                ON a.inventory_id=d.inventory_id AND a.disabled_at IS NULL
-              JOIN rmm_software_vendor_qualification_runners qr
-                ON qr.agent_device_id=a.id AND qr.enabled=true
-             WHERE d.catalogue_id=c.id
-               AND d.status='succeeded'
-               AND d.target_version=c.target_version
-               AND lower(COALESCE(d.result->>'verificationPassed',d.result->'verification'->>'meetsTarget','false'))='true'
-               AND COALESCE(
-                 NULLIF(d.result->>'intent',''),
-                 CASE WHEN COALESCE(d.installed_version,'')='' THEN 'install' ELSE 'update' END
-               )='update'
-          )
         ORDER BY lower(c.canonical_name)
         LIMIT $1
+     ),
+     ready AS (
+       SELECT *,
+              CASE
+                WHEN clean_queue_passed
+                 AND vulnerability_covered
+                 AND NOT history_limited
+                 AND upgrade_passed
+                 AND rollback_passed
+                 AND verified_update_deployment
+                  THEN 'qualified'
+                WHEN clean_queue_passed
+                 AND (vulnerability_covered OR vulnerability_limited)
+                 AND (
+                   history_limited
+                   OR (upgrade_passed AND rollback_passed AND verified_update_deployment)
+                 )
+                 AND (history_limited OR vulnerability_limited)
+                  THEN 'qualified_limited'
+                ELSE ''
+              END AS admission_state,
+              jsonb_build_object(
+                'cleanInstall','verified',
+                'uninstall','verified',
+                'upgrade',CASE
+                  WHEN history_limited THEN 'unavailable_upstream'
+                  WHEN upgrade_passed AND verified_update_deployment THEN 'verified'
+                  ELSE 'pending'
+                END,
+                'rollback',CASE
+                  WHEN history_limited THEN 'unavailable_upstream'
+                  WHEN rollback_passed THEN 'verified'
+                  ELSE 'pending'
+                END,
+                'vulnerabilityCoverage',CASE
+                  WHEN vulnerability_covered THEN 'covered'
+                  WHEN vulnerability_limited THEN 'no_published_identity'
+                  ELSE 'pending'
+                END
+              ) AS capabilities,
+              jsonb_strip_nulls(jsonb_build_object(
+                'historicalInstaller',CASE WHEN history_limited THEN jsonb_build_object(
+                  'state','unavailable_upstream',
+                  'reason',COALESCE(source_live_metadata->>'baselinePreparationReason','historical_artifact_not_retrievable'),
+                  'previousVersion',COALESCE(source_live_metadata->>'baselinePreparationPreviousVersion','')
+                ) ELSE NULL END,
+                'vulnerabilityIdentity',CASE WHEN vulnerability_limited THEN jsonb_build_object(
+                  'state','no_published_identity',
+                  'note',COALESCE(source_metadata->>'vulnerabilityIdentityNote','')
+                ) ELSE NULL END
+              )) AS limitations
+         FROM candidates
      )
      UPDATE rmm_software_catalogue c
-        SET qualification_state='qualified',
+        SET qualification_state=ready.admission_state,
             qualification_version=c.target_version,
             qualified_at=now(),
             qualification_notes=CASE
-              WHEN COALESCE(c.qualification_notes,'')='' THEN 'Automatically admitted after trusted source, artifact, clean-install, uninstall, upgrade, rollback and vulnerability-identity qualification.'
-              ELSE c.qualification_notes
+              WHEN ready.admission_state='qualified'
+                THEN CASE
+                  WHEN COALESCE(c.qualification_notes,'')='' OR c.qualification_state='qualified_limited'
+                    THEN 'Automatically admitted after trusted source, artifact, clean-install, uninstall, upgrade, rollback and vulnerability-identity qualification.'
+                  ELSE c.qualification_notes
+                END
+              ELSE 'Qualified with limited capabilities. Available safety checks passed; upstream limitations are retained in qualification evidence.'
             END,
             qualification_evidence=c.qualification_evidence || jsonb_build_object(
               'automaticAdmissionVerified',true,
+              'automaticAdmissionState',ready.admission_state,
               'automaticAdmissionVersion',c.target_version,
-              'automaticAdmissionVerifiedAt',now()
+              'automaticAdmissionVerifiedAt',now(),
+              'qualificationCapabilities',ready.capabilities,
+              'qualificationLimitations',ready.limitations
             ),
             updated_at=now()
        FROM ready
       WHERE c.id=ready.id
-      RETURNING c.id,c.canonical_name,c.target_version`,
+        AND ready.admission_state<>''
+      RETURNING c.id,c.canonical_name,c.target_version,c.qualification_state,
+                c.qualification_evidence->'qualificationCapabilities' AS capabilities,
+                c.qualification_evidence->'qualificationLimitations' AS limitations`,
     [safeLimit],
   )
   return result.rows
 }
-
 // Only release a qualification lane after endpoint control confirms its PatchHost
 // process tree has stopped. A database-only timeout can leave an installer running.
 async function stopOverlongQualificationJobs() {
@@ -2612,7 +2680,7 @@ export async function runSoftwareQualificationQueue({ dispatchLimit = 1 } = {}) 
         AND c.status='active'
         AND (
           c.qualification_state='deployment_candidate'
-          OR (q.test_type='rollback' AND c.qualification_state='qualified')
+          OR (q.test_type='rollback' AND c.qualification_state IN ('qualified','qualified_limited'))
         )
         AND (
           q.test_type='clean_install'

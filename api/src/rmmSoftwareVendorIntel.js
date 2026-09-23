@@ -268,7 +268,7 @@ async function upsertRelease({
                     END
                   ),
                 qualification_state=CASE
-                  WHEN qualification_state IN ('qualified','blocked') THEN qualification_state
+                  WHEN qualification_state IN ('qualified','qualified_limited','blocked') THEN qualification_state
                   WHEN source_revision=$4 AND source_metadata->>'trustState'='direct_ready' THEN 'deployment_candidate'
                   WHEN source_revision=$4
                     AND source_metadata->>'trustState' IN ('rejected','signer_review_required','installer_review_required') THEN 'intelligence_only'
@@ -595,6 +595,7 @@ async function syncGenericConfigured(sourceKey, state) {
     installerSha256 = normalizedSha256(resolved.installerSha256)
     resolvedInstallerType = clean(resolved.installerType)
     releaseUrl = clean(resolved.manifestUrl)
+    verificationProductCode = clean(resolved.productCode)
     selectedAssetReason = 'winget_manifest_upstream_installer'
     payload = {
       wingetManifest: {
@@ -605,6 +606,7 @@ async function syncGenericConfigured(sourceKey, state) {
         upstreamHost: resolved.upstreamHost,
         architecture: resolved.architecture,
         installerTechnology: resolved.installerTechnology,
+        productCode: clean(resolved.productCode),
         scope: resolved.scope,
       },
     }
@@ -1189,7 +1191,13 @@ async function syncGenericConfigured(sourceKey, state) {
     installerSha256 = normalizedSha256(config.trustedReleaseSha256)
   }
   const verification = { ...object(config.verificationConfig) }
-  if (verificationProductCode) verification.productCode = verificationProductCode
+  if (verificationProductCode) {
+    verification.productCode = verificationProductCode
+    if (clean(verification.method || verification.provider || 'winget') === 'winget') {
+      verification.method = 'uninstall_registry'
+      verification.packageId = ''
+    }
+  }
   const jetbrainsBuild = verificationVendorBuild || jetbrainsVendorBuild(sourceKey,version,installerUrl)
   if (jetbrainsBuild && resolvedInstallerType === 'exe') {
     verification.versionTransform = 'jetbrains_vendor_build'
@@ -1635,7 +1643,9 @@ export async function seedEnterpriseWingetVendorCatalogue({ targetTotal = 500, s
         namePattern: clean(resolved.name || canonicalName),
         publisherPattern: publisher,
         verificationConfig: {
-          method: 'winget',
+          method: resolved.productCode ? 'uninstall_registry' : 'winget',
+          packageId: resolved.productCode ? '' : resolved.packageId,
+          productCode: clean(resolved.productCode),
           displayNameContains: clean(resolved.name || canonicalName),
           publisherContains: publisher,
         },
@@ -1795,14 +1805,14 @@ async function fastTrackLatestVersionSources() {
               CASE
                 WHEN bool_or(c.qualification_state='deployment_candidate') THEN
                   CASE WHEN s.source_type='github_releases' THEN $1::int ELSE $2::int END
-                WHEN bool_or(c.qualification_state='qualified') THEN
+                WHEN bool_or(c.qualification_state IN ('qualified','qualified_limited')) THEN
                   CASE WHEN s.source_type='github_releases' THEN GREATEST($1::int,$3::int) ELSE $3::int END
                 ELSE
                   CASE WHEN s.source_type='github_releases' THEN GREATEST($1::int,$4::int) ELSE $4::int END
               END::int AS desired_poll_minutes,
               CASE
                 WHEN bool_or(c.qualification_state='deployment_candidate') THEN 'deployment_candidate'
-                WHEN bool_or(c.qualification_state='qualified') THEN 'qualified'
+                WHEN bool_or(c.qualification_state IN ('qualified','qualified_limited')) THEN 'qualified'
                 ELSE 'intelligence_only'
               END AS cadence_lane
          FROM rmm_software_vendor_sources s
@@ -1813,7 +1823,7 @@ async function fastTrackLatestVersionSources() {
           AND c.status='active'
           AND c.catalogue_source='vendor'
           AND c.external_key=b.provider_package_id
-          AND c.qualification_state IN ('qualified','deployment_candidate','intelligence_only')
+          AND c.qualification_state IN ('qualified','qualified_limited','deployment_candidate','intelligence_only')
         WHERE s.enabled=true
           AND s.source_type IN (
             'github_releases','gitlab_releases','vendor_json','vendor_text','vendor_html',
@@ -1849,9 +1859,9 @@ export async function syncDueSoftwareVendorSources() {
   const due = await pool.query(
     `WITH ranked_due AS (
        SELECT s.source_key,s.source_type,
-              min(CASE WHEN c.qualification_state IN ('qualified','deployment_candidate') THEN 0 ELSE 1 END) AS lane,
+              min(CASE WHEN c.qualification_state IN ('qualified','qualified_limited','deployment_candidate') THEN 0 ELSE 1 END) AS lane,
               max(s.priority) AS source_priority,
-              row_number() OVER (PARTITION BY s.source_type ORDER BY min(CASE WHEN c.qualification_state IN ('qualified','deployment_candidate') THEN 0 ELSE 1 END),max(s.priority) DESC,s.source_key) AS type_rank
+              row_number() OVER (PARTITION BY s.source_type ORDER BY min(CASE WHEN c.qualification_state IN ('qualified','qualified_limited','deployment_candidate') THEN 0 ELSE 1 END),max(s.priority) DESC,s.source_key) AS type_rank
          FROM rmm_software_vendor_sources s
          LEFT JOIN rmm_software_vendor_bindings b
            ON b.source_key=s.source_key AND b.enabled=true
@@ -2173,12 +2183,20 @@ async function retainPreviousWingetReleaseCandidate({ sourceKey, binding: b, con
   const payload={
     historicalReleaseCandidate:true,historicalRole:'upgrade_baseline',
     expectedSigner:clean(config.autoExpectedSigner || config.expectedSigner || config.signerBaseline),
-    deploymentMode:'intelligence_only',verification:object(config.verificationConfig),
+    deploymentMode:'intelligence_only',
+    verification:resolved.productCode ? {
+      ...object(config.verificationConfig),
+      method:'uninstall_registry',
+      packageId:'',
+      productCode:clean(resolved.productCode),
+      displayNameContains:clean(object(config.verificationConfig).displayNameContains || b.canonical_name),
+      publisherContains:clean(object(config.verificationConfig).publisherContains || b.publisher),
+    } : object(config.verificationConfig),
     installArguments:resolved.installArguments || clean(config.installArguments),
     installerTechnology:resolved.installerTechnology,
     wingetManifest:{packageId:resolved.packageId,version:resolved.version,manifestUrl:resolved.manifestUrl,
       upstreamHost:resolved.upstreamHost,architecture:resolved.architecture,scope:resolved.scope,
-      installerTechnology:resolved.installerTechnology},
+      productCode:clean(resolved.productCode),installerTechnology:resolved.installerTechnology},
   }
   const result=await pool.query(
     `INSERT INTO rmm_software_vendor_releases

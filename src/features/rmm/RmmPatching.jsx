@@ -106,6 +106,7 @@ function patchLabel(status) {
 function qualificationLabel(state) {
   return ({
     qualified: 'Qualified',
+    qualified_limited: 'Qualified — limited capabilities',
     deployment_candidate: 'Deployment candidate',
     intelligence_only: 'Intelligence only',
     blocked: 'Blocked',
@@ -113,6 +114,7 @@ function qualificationLabel(state) {
 }
 function qualificationTone(state) {
   if (state === 'qualified') return 'healthy'
+  if (state === 'qualified_limited') return 'warning'
   if (state === 'deployment_candidate') return 'running'
   if (state === 'blocked') return 'critical'
   return 'neutral'
@@ -647,6 +649,8 @@ function QualificationWorkspace({
   const upgrade = lab.tests?.upgrade || {}
   const rollback = lab.tests?.rollback || {}
   const actions = lab.actions || {}
+  const capabilities = lab.application?.qualificationCapabilities || {}
+  const limitations = lab.application?.qualificationLimitations || {}
   const runnerOnline = lab.runner?.online
   const layerIcon = {
     source: Box,
@@ -672,6 +676,7 @@ function QualificationWorkspace({
         <span className="rmm-eyebrow">Qualification workspace</span>
         <h3>{lab.application?.name || item.canonicalName}</h3>
         <p>{lab.application?.publisher || item.publisher || 'Publisher not reported'} · target {lab.application?.targetVersion || item.targetVersion || '—'} · {readinessLabel(lab.application?.deploymentMode || 'pending')}</p>
+        <StatusPill tone={qualificationTone(lab.application?.qualificationState)}>{qualificationLabel(lab.application?.qualificationState)}</StatusPill>
       </div>
       <div className="rmm-qualification-runner">
         <small>Qualification runner</small>
@@ -679,6 +684,23 @@ function QualificationWorkspace({
         <StatusPill tone={runnerOnline ? 'healthy' : 'critical'}>{runnerOnline ? 'Online' : 'Offline'}</StatusPill>
       </div>
     </header>
+
+    {lab.application?.qualificationState === 'qualified_limited' && <div className="rmm-qualification-limited">
+      <AlertTriangle size={17} />
+      <div>
+        <strong>Qualified — limited capabilities</strong>
+        <span>Every available qualification check passed. Upstream limitations remain explicit and are not treated as successful tests.</span>
+        <div className="rmm-qualification-capability-grid">
+          <span><small>Clean install</small><b>{readinessLabel(capabilities.cleanInstall || 'verified')}</b></span>
+          <span><small>Uninstall</small><b>{readinessLabel(capabilities.uninstall || 'verified')}</b></span>
+          <span><small>Upgrade</small><b>{readinessLabel(capabilities.upgrade || 'unavailable')}</b></span>
+          <span><small>Rollback</small><b>{readinessLabel(capabilities.rollback || 'unavailable')}</b></span>
+          <span><small>Vulnerability coverage</small><b>{readinessLabel(capabilities.vulnerabilityCoverage || 'limited')}</b></span>
+        </div>
+        {limitations.historicalInstaller && <p>Historical installer: {readinessLabel(limitations.historicalInstaller.state)}{limitations.historicalInstaller.previousVersion ? ' · ' + limitations.historicalInstaller.previousVersion : ''}{limitations.historicalInstaller.reason ? ' · ' + readinessLabel(limitations.historicalInstaller.reason) : ''}</p>}
+        {limitations.vulnerabilityIdentity && <p>Vulnerability identity: {readinessLabel(limitations.vulnerabilityIdentity.state)}{limitations.vulnerabilityIdentity.note ? ' · ' + limitations.vulnerabilityIdentity.note : ''}</p>}
+      </div>
+    </div>}
 
     <div className="rmm-qualification-actions">
       <button disabled={Boolean(busyAction)} onClick={onEdit} type="button"><Wrench size={14} /> Edit validation</button>
@@ -1518,6 +1540,7 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
           <span><small>Upgrade passed</small><strong>{qualificationProgress.upgradePassed || 0}</strong></span>
           <span><small>Rollback passed</small><strong>{qualificationProgress.rollbackPassed || 0}</strong></span>
           <span><small>Fully qualified</small><strong>{qualificationProgress.fullyQualified || 0}</strong></span>
+          <span><small>Qualified · limited</small><strong>{qualificationProgress.limitedQualified || 0}</strong></span>
         </div>
         {!!qualificationFailureGroups.length && <div style={{width: '100%', display: 'grid', gap: '8px'}}>
           {qualificationFailureGroups.map(group => <details key={group.key}>
@@ -1601,7 +1624,7 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
         <select aria-label="Software provider filter" value={softwareProviderFilter} onChange={(event) => setSoftwareProviderFilter(event.target.value)}><option value="all">All providers</option><option value="winget">WinGet</option><option value="managed">Hi5Central managed</option><option value="vendor">Vendor</option><option value="unmapped">Unmapped</option></select>
         <select aria-label="Software source filter" value={softwareSourceFilter} onChange={(event) => setSoftwareSourceFilter(event.target.value)}><option value="all">All sources</option>{softwareSourceOptions.map((source) => <option key={source} value={source}>{source.replaceAll('_', ' ')}</option>)}</select>
         <select aria-label="Software source health filter" value={softwareHealthFilter} onChange={(event) => setSoftwareHealthFilter(event.target.value)}><option value="all">All source health</option><option value="healthy">Healthy</option><option value="attention">Needs attention</option><option value="stale">Stale</option><option value="pending">Pending</option><option value="disabled">Disabled</option><option value="endpoint">Endpoint discovery</option><option value="unmonitored">Unmonitored</option></select>
-        <select aria-label="Software qualification filter" value={softwareQualificationFilter} onChange={(event) => setSoftwareQualificationFilter(event.target.value)}><option value="all">All qualification</option><option value="qualified">Qualified</option><option value="deployment_candidate">Deployment candidate</option><option value="intelligence_only">Intelligence only</option><option value="blocked">Blocked</option><option value="unmapped">Unmapped</option></select>
+        <select aria-label="Software qualification filter" value={softwareQualificationFilter} onChange={(event) => setSoftwareQualificationFilter(event.target.value)}><option value="all">All qualification</option><option value="qualified">Qualified</option><option value="qualified_limited">Qualified — limited</option><option value="deployment_candidate">Deployment candidate</option><option value="intelligence_only">Intelligence only</option><option value="blocked">Blocked</option><option value="unmapped">Unmapped</option></select>
         <select aria-label="Rows per page" value={softwarePageSize} onChange={(event) => setSoftwarePageSize(Number(event.target.value))}><option value={10}>10 / page</option><option value={25}>25 / page</option><option value={50}>50 / page</option><option value={100}>100 / page</option></select>
         <span className="summary">{filteredApplications.length} of {applications.length} applications</span>
       </div>
@@ -1645,7 +1668,7 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
               <button disabled={saving || application.updateAvailable < 1} onClick={() => setPatchApp(application)} type="button"><PackageCheck size={14} /> Patch</button>
               <button disabled={saving} onClick={() => setValidationApp(application)} type="button"><Wrench size={14} /> Edit</button>
               {application.catalogue.sourceKey && <button disabled={saving} onClick={() => revalidateApplication(application)} type="button"><RefreshCw size={14} /> Validate</button>}
-              {application.catalogue.deploymentMode === 'vendor_direct' && application.catalogue.qualificationState !== 'qualified' && <button disabled={saving} onClick={() => retryApplicationQualification(application)} type="button"><ShieldCheck size={14} /> Retry</button>}
+              {application.catalogue.deploymentMode === 'vendor_direct' && !['qualified','qualified_limited'].includes(application.catalogue.qualificationState) && <button disabled={saving} onClick={() => retryApplicationQualification(application)} type="button"><ShieldCheck size={14} /> Retry</button>}
               {!application.catalogue.builtIn && <button aria-label={'Archive ' + application.name} disabled={saving} onClick={() => removeMapping(application)} type="button"><Trash2 size={14} /></button>}
             </> : <button disabled={saving} onClick={() => setMappingApp(application)} type="button"><Plus size={14} /> Map</button>}</span>
           </div>

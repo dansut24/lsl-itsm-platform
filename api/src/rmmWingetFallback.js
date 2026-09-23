@@ -332,7 +332,7 @@ export async function syncAutomaticWingetFallbacks({ force = false, dryRun = fal
                 SET source_metadata=source_metadata || $2::jsonb,
                     qualification_evidence=qualification_evidence || $2::jsonb,
                     qualification_state=CASE
-                      WHEN qualification_state IN ('qualified','blocked') THEN qualification_state
+                      WHEN qualification_state IN ('qualified','qualified_limited','blocked') THEN qualification_state
                       WHEN $3 OR $4 THEN 'deployment_candidate'
                       ELSE 'intelligence_only'
                     END,
@@ -457,6 +457,11 @@ function parseWingetInstallers(text) {
   const section = source.slice(marker).replace(/^Installers:\s*\n?/i, '')
   const globalInstallerType = lower(manifestValue(header, 'InstallerType'))
   const globalScope = lower(manifestValue(header, 'Scope'))
+  const globalProductCode = yamlScalar(
+    header.match(/^ProductCode:\s*(.+?)\s*$/mi)?.[1]
+      || header.match(/^\s*-\s*ProductCode:\s*(.+?)\s*$/mi)?.[1]
+      || '',
+  )
   const globalSilent = yamlScalar(header.match(/^\s{2}Silent:\s*(.+?)\s*$/mi)?.[1] || '')
   const blocks = section.split(/\n(?=\s*-\s+(?:Architecture|InstallerUrl):)/g)
   const installers = []
@@ -468,10 +473,11 @@ function parseWingetInstallers(text) {
     const declaredType = lower(yamlScalar(raw.match(/^\s*InstallerType:\s*(.+?)\s*$/mi)?.[1] || globalInstallerType))
     const scope = lower(yamlScalar(raw.match(/^\s*Scope:\s*(.+?)\s*$/mi)?.[1] || globalScope))
     const silent = yamlScalar(raw.match(/^\s+Silent:\s*(.+?)\s*$/mi)?.[1] || globalSilent)
+    const productCode = yamlScalar(raw.match(/^\s*ProductCode:\s*(.+?)\s*$/mi)?.[1] || globalProductCode)
     let path = ''
     try { path = new URL(url).pathname.toLowerCase() } catch {}
     const installerType = path.endsWith('.msi') ? 'msi' : path.endsWith('.exe') ? 'exe' : ''
-    installers.push({ architecture, url, sha256, installerType, installerTechnology: declaredType, scope, silent })
+    installers.push({ architecture, url, sha256, installerType, installerTechnology: declaredType, scope, silent, productCode })
   }
   return installers
 }
@@ -567,6 +573,7 @@ export async function resolveWingetVendorInstaller(packageId, version = '') {
       architecture: selected.architecture || 'any',
       scope: selected.scope,
       installArguments: selected.silent,
+      productCode: /^\{[0-9A-Fa-f-]{36}\}$/.test(clean(selected.productCode)) ? clean(selected.productCode) : '',
       upstreamHost: new URL(selected.url).hostname,
     }
   } finally {

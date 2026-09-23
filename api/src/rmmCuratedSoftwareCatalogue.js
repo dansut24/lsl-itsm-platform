@@ -73,7 +73,7 @@ async function normalizeEntry(raw = {}) {
     ? clean(raw.deploymentMode)
     : clean(raw.wingetPackageId || raw.providerPackageId) ? 'winget_preferred' : 'intelligence_only'
   const requestedQualificationState = clean(raw.qualificationState)
-  const qualificationStatePinned = ['intelligence_only', 'deployment_candidate', 'qualified', 'blocked'].includes(requestedQualificationState)
+  const qualificationStatePinned = ['intelligence_only', 'deployment_candidate', 'qualified', 'qualified_limited', 'blocked'].includes(requestedQualificationState)
   const qualificationState = qualificationStatePinned
     ? requestedQualificationState
     : deploymentMode === 'intelligence_only' ? 'intelligence_only' : 'deployment_candidate'
@@ -367,7 +367,7 @@ export async function importCuratedSoftwareCatalogue(entries = [], { dryRun = fa
            target_version=CASE WHEN EXCLUDED.source_metadata->>'sourceEnabled'='false' THEN '' ELSE rmm_software_catalogue.target_version END,
            qualification_state=CASE
              WHEN EXCLUDED.source_metadata->>'qualificationStatePinned'='true' THEN EXCLUDED.qualification_state
-             WHEN rmm_software_catalogue.qualification_state IN ('qualified','blocked') THEN rmm_software_catalogue.qualification_state
+             WHEN rmm_software_catalogue.qualification_state IN ('qualified','qualified_limited','blocked') THEN rmm_software_catalogue.qualification_state
              ELSE EXCLUDED.qualification_state
            END,
            qualification_notes=CASE

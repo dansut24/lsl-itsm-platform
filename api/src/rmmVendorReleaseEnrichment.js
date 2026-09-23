@@ -416,7 +416,7 @@ export async function reconcileVendorArtifactInspections() {
           `UPDATE rmm_software_catalogue
               SET source_metadata=source_metadata || $2::jsonb,
                   qualification_state=CASE
-                    WHEN qualification_state IN ('qualified','blocked') THEN qualification_state
+                    WHEN qualification_state IN ('qualified','qualified_limited','blocked') THEN qualification_state
                     ELSE 'deployment_candidate'
                   END,
 
@@ -740,7 +740,7 @@ async function reconcileDirectReadyCatalogue() {
               'installerTechnology',COALESCE(NULLIF(b.metadata->>'installerTechnology',''),NULLIF(r.source_payload->>'installerTechnology',''),NULLIF(r.trust_evidence->>'installerTechnology',''),''),
               'artifactHashProvenance',COALESCE(NULLIF(r.source_payload->>'artifactHashProvenance',''),NULLIF(r.trust_evidence->>'hashProvenance',''),'endpoint_pinned_sha256')
             ),
-            qualification_state=CASE WHEN c.qualification_state IN ('qualified','blocked') THEN c.qualification_state ELSE 'deployment_candidate' END,
+            qualification_state=CASE WHEN c.qualification_state IN ('qualified','qualified_limited','blocked') THEN c.qualification_state ELSE 'deployment_candidate' END,
             qualification_evidence=c.qualification_evidence || jsonb_build_object(
               'source','vendor_release_trust_reconciliation',
               'vendorReleaseId',r.id,
