@@ -1781,36 +1781,60 @@ export async function probeDueSoftwareVendorAssets({ limit = 20 } = {}) {
 async function fastTrackLatestVersionSources() {
   const githubTokenConfigured = Boolean(githubApiToken())
   const githubPollFloor = githubTokenConfigured ? 5 : 60
-  const githubPollMinutes = Math.max(githubPollFloor, Math.min(1440, Number(process.env.RMM_GITHUB_RELEASE_POLL_MINUTES) || (githubTokenConfigured ? 15 : 240)))
+  const githubCandidatePollMinutes = Math.max(
+    githubPollFloor,
+    Math.min(1440, Number(process.env.RMM_GITHUB_RELEASE_POLL_MINUTES) || (githubTokenConfigured ? 15 : 240)),
+  )
+  const candidatePollMinutes = Math.max(5, Math.min(120, Number(process.env.RMM_CANDIDATE_SOURCE_POLL_MINUTES) || 15))
+  const qualifiedPollMinutes = Math.max(30, Math.min(360, Number(process.env.RMM_QUALIFIED_SOURCE_POLL_MINUTES) || 60))
+  const intelligencePollMinutes = Math.max(60, Math.min(1440, Number(process.env.RMM_INTELLIGENCE_SOURCE_POLL_MINUTES) || 360))
+
   const result = await pool.query(
-    `UPDATE rmm_software_vendor_sources s
-        SET poll_minutes=CASE WHEN s.source_type='github_releases' THEN $1 ELSE 5 END,
+    `WITH desired AS (
+       SELECT s.source_key,
+              CASE
+                WHEN bool_or(c.qualification_state='deployment_candidate') THEN
+                  CASE WHEN s.source_type='github_releases' THEN $1::int ELSE $2::int END
+                WHEN bool_or(c.qualification_state='qualified') THEN
+                  CASE WHEN s.source_type='github_releases' THEN GREATEST($1::int,$3::int) ELSE $3::int END
+                ELSE
+                  CASE WHEN s.source_type='github_releases' THEN GREATEST($1::int,$4::int) ELSE $4::int END
+              END::int AS desired_poll_minutes,
+              CASE
+                WHEN bool_or(c.qualification_state='deployment_candidate') THEN 'deployment_candidate'
+                WHEN bool_or(c.qualification_state='qualified') THEN 'qualified'
+                ELSE 'intelligence_only'
+              END AS cadence_lane
+         FROM rmm_software_vendor_sources s
+         JOIN rmm_software_vendor_bindings b
+           ON b.source_key=s.source_key AND b.enabled=true
+         JOIN rmm_software_catalogue c
+           ON c.tenant_id IS NULL
+          AND c.status='active'
+          AND c.catalogue_source='vendor'
+          AND c.external_key=b.provider_package_id
+          AND c.qualification_state IN ('qualified','deployment_candidate','intelligence_only')
+        WHERE s.enabled=true
+          AND s.source_type IN (
+            'github_releases','gitlab_releases','vendor_json','vendor_text','vendor_html',
+            'hashicorp_releases','python_releases','adoptium','static_release','package_registry','winget_manifest'
+          )
+        GROUP BY s.source_key,s.source_type
+     )
+     UPDATE rmm_software_vendor_sources s
+        SET poll_minutes=d.desired_poll_minutes,
             metadata=metadata || jsonb_build_object(
               'latestVersionFastTrack',true,
               'latestVersionFastTrackAt',now(),
-              'latestVersionFastTrackReason',CASE WHEN s.source_type='github_releases' THEN 'active_catalogue_github_rate_limited' ELSE 'active_catalogue_source' END
+              'latestVersionFastTrackReason','state_aware_catalogue_source',
+              'latestVersionCadenceLane',d.cadence_lane
             ),
             updated_at=now()
-      WHERE s.enabled=true
-        AND s.source_type IN (
-          'github_releases','gitlab_releases','vendor_json','vendor_text','vendor_html',
-          'hashicorp_releases','python_releases','adoptium','static_release','package_registry','winget_manifest'
-        )
-        AND s.poll_minutes IS DISTINCT FROM CASE WHEN s.source_type='github_releases' THEN $1 ELSE 5 END
-        AND EXISTS (
-          SELECT 1
-            FROM rmm_software_vendor_bindings b
-            JOIN rmm_software_catalogue c
-              ON c.tenant_id IS NULL
-             AND c.status='active'
-             AND c.catalogue_source='vendor'
-             AND c.external_key=b.provider_package_id
-           WHERE b.source_key=s.source_key
-             AND b.enabled=true
-             AND c.qualification_state IN ('qualified','deployment_candidate','intelligence_only')
-        )
-      RETURNING source_key`,
-    [githubPollMinutes],
+       FROM desired d
+      WHERE s.source_key=d.source_key
+        AND s.poll_minutes IS DISTINCT FROM d.desired_poll_minutes
+      RETURNING s.source_key`,
+    [githubCandidatePollMinutes, candidatePollMinutes, qualifiedPollMinutes, intelligencePollMinutes],
   )
   return result.rows.map((row) => row.source_key)
 }
