@@ -15,6 +15,12 @@ function lower(value = '') { return clean(value).toLowerCase() }
 function normalizedName(value = '') {
   return clean(value).toLowerCase().replace(/[^a-z0-9]+/g, '')
 }
+function githubApiHeaders(extra = {}) {
+  const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'Hi5Central-WinGet-Manifest/1.0', ...extra }
+  const token = clean(process.env.GITHUB_TOKEN)
+  if (token) headers.Authorization = 'Bearer ' + token
+  return headers
+}
 function normalizedPublisher(value = '') {
   return normalizedName(value)
     .replace(/(?:incorporated|corporation|company|limited|software|foundation|project|llc|ltd|inc|corp)$/g, '')
@@ -646,7 +652,7 @@ export async function resolvePreviousWingetVendorInstaller(packageId, currentVer
   if(parts.length<2 || parts.some(p=>!/^[a-z0-9_-]+$/i.test(p))) throw new Error('invalid_winget_package_id')
   const path=['manifests',parts[0][0].toLowerCase(),...parts].map(encodeURIComponent).join('/')
   const response=await fetch('https://api.github.com/repos/microsoft/winget-pkgs/contents/'+path,{
-    headers:{Accept:'application/vnd.github+json','User-Agent':'Hi5Central-Software-Catalogue/1.0'},
+    headers:githubApiHeaders(),
     signal:AbortSignal.timeout(20_000),
   })
   if(!response.ok) throw new Error('WinGet version history HTTP '+response.status)

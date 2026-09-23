@@ -4,6 +4,7 @@ import {
   fetchPublicJson,
   fetchPublicText,
   globMatcher,
+  githubApiHeaders,
   installerType as detectInstallerType,
   jsonPathValue,
   latestGithubRelease,
@@ -395,7 +396,7 @@ async function matchingGithubRelease(repository, pattern) {
   const matcher = globMatcher(pattern)
   if (!matcher) throw new Error(repository + ' has an invalid releaseTagPattern')
   const response = await fetch('https://api.github.com/repos/' + repository + '/releases?per_page=50', {
-    headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Hi5Central-Software-Catalogue/1.0' },
+    headers: githubApiHeaders(),
     signal: AbortSignal.timeout(30_000),
   })
   if (!response.ok) throw new Error('GitHub Releases HTTP ' + response.status)
@@ -433,7 +434,7 @@ async function retainPreviousGithubReleaseCandidate({ sourceKey, binding: b, con
     && compareVersionValues(r.version, currentVersion) < 0)) return null
 
   const response = await fetch('https://api.github.com/repos/' + repository + '/releases?per_page=30', {
-    headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Hi5Central-Software-Catalogue/1.0' },
+    headers: githubApiHeaders(),
     signal: AbortSignal.timeout(30_000),
   })
   if (!response.ok) throw new Error('GitHub release history HTTP ' + response.status)
@@ -1738,7 +1739,9 @@ export async function probeDueSoftwareVendorAssets({ limit = 20 } = {}) {
 }
 
 async function fastTrackLatestVersionSources() {
-  const githubPollMinutes = Math.max(60, Math.min(1440, Number(process.env.RMM_GITHUB_RELEASE_POLL_MINUTES) || (process.env.GITHUB_TOKEN ? 15 : 240)))
+  const githubTokenConfigured = Boolean(clean(process.env.GITHUB_TOKEN))
+  const githubPollFloor = githubTokenConfigured ? 5 : 60
+  const githubPollMinutes = Math.max(githubPollFloor, Math.min(1440, Number(process.env.RMM_GITHUB_RELEASE_POLL_MINUTES) || (githubTokenConfigured ? 15 : 240)))
   const result = await pool.query(
     `UPDATE rmm_software_vendor_sources s
         SET poll_minutes=CASE WHEN s.source_type='github_releases' THEN $1 ELSE 5 END,
@@ -1777,7 +1780,8 @@ export async function syncDueSoftwareVendorSources() {
     console.error('RMM latest-version fast-track setup failed', error.message)
   })
   const syncLimit = Math.max(40, Math.min(250, Number(process.env.RMM_VENDOR_SYNC_DUE_LIMIT) || 120))
-  const githubPerSweep = Math.max(1, Math.min(100, Number(process.env.RMM_GITHUB_SYNC_PER_SWEEP) || (process.env.GITHUB_TOKEN ? 60 : 1)))
+  const githubTokenConfigured = Boolean(clean(process.env.GITHUB_TOKEN))
+  const githubPerSweep = Math.max(1, Math.min(100, Number(process.env.RMM_GITHUB_SYNC_PER_SWEEP) || (githubTokenConfigured ? 60 : 1)))
   const due = await pool.query(
     `WITH ranked_due AS (
        SELECT s.source_key,s.source_type,

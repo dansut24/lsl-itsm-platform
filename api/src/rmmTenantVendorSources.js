@@ -12,6 +12,13 @@ import {
 
 function clean(value = '') { return String(value ?? '').trim() }
 
+export function githubApiHeaders(extra = {}) {
+  const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'Hi5Central-Software-Catalogue/1.0', ...extra }
+  const token = clean(process.env.GITHUB_TOKEN)
+  if (token) headers.Authorization = 'Bearer ' + token
+  return headers
+}
+
 function privateIpv4(address) {
   const parts = address.split('.').map(Number)
   if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return true
@@ -270,7 +277,7 @@ export function installerType(name = '', configured = '') {
 
 export async function latestGithubRelease(repository) {
   const response = await fetch('https://api.github.com/repos/' + repository + '/releases/latest', {
-    headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Hi5Central-Software-Catalogue/1.0' },
+    headers: githubApiHeaders(),
     signal: AbortSignal.timeout(60_000),
   })
   if (!response.ok) throw new Error('GitHub Releases HTTP ' + response.status)
