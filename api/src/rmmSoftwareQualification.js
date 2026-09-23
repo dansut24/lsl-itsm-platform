@@ -967,6 +967,11 @@ async function upgradeReleasePair(catalogueId) {
             r.installer_url,r.installer_sha256,r.installer_type AS release_installer_type,
             r.trust_state,r.asset_health_state,r.source_payload AS release_source_payload,
             r.trust_evidence AS release_trust_evidence,
+            COALESCE(r.source_payload->'verification',c.verification) AS release_verification,
+            jsonb_build_object(
+              'installArguments',
+              COALESCE(NULLIF(r.source_payload->>'installArguments',''),c.execution->>'installArguments','')
+            ) AS release_execution,
             s.last_success_at AS source_last_success_at,s.last_error AS source_last_error,
             COALESCE(NULLIF(b.metadata->>'expectedSigner',''),
                      NULLIF(r.trust_evidence->>'signer',''),
@@ -1025,8 +1030,8 @@ async function dispatchUpgradeInstall(queue, runner, release, {
     return { dispatched: false }
   }
 
-  const verification = object(release.verification)
-  const execution = object(release.execution)
+  const verification = object(release.release_verification || release.verification)
+  const execution = object(release.release_execution || release.execution)
   const targetVersion = clean(release.release_version)
   const packageId = clean(release.provider_package_id)
   const verificationMethod = clean(verification.method || verification.provider || 'uninstall_registry')
