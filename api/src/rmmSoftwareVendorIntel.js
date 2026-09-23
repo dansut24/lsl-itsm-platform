@@ -535,7 +535,7 @@ async function retainPreviousGithubReleaseCandidate({ sourceKey, binding: b, con
       sourceKey,b.provider_package_id,b.canonical_name,b.publisher,b.channel,b.platform,b.architecture,
       previous.version,normalizedReleaseDate(previous.item?.published_at || previous.item?.created_at),
       installerUrl,installerSha256,installerType,clean(previous.item?.html_url),clean(installer?.name),
-      JSON.stringify(sourcePayload.trustEvidence),b.priority,JSON.stringify(sourcePayload),
+      'asset_candidate',JSON.stringify(sourcePayload.trustEvidence),b.priority,JSON.stringify(sourcePayload),
     ],
   )
 
