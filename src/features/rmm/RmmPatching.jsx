@@ -7,6 +7,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock3,
+  FileCode2,
   GitBranch,
   Monitor,
   PackageCheck,
@@ -222,6 +223,8 @@ function SoftwareValidationModal({ application, source, onClose, onSave, saving 
     verificationPublisher: verification.publisherContains || catalogue.publisherPattern || '',
     versionTransform: verification.versionTransform || '',
     installArguments: execution.installArguments || '',
+    responseFileName: execution.responseFile?.fileName || '',
+    responseFileContent: execution.responseFile?.content || '',
     nvdVendor: vulnerabilityIdentity.nvdVendor || '',
     nvdProduct: vulnerabilityIdentity.nvdProduct || '',
     osvEcosystem: vulnerabilityIdentity.osvEcosystem || '',
@@ -263,7 +266,13 @@ function SoftwareValidationModal({ application, source, onClose, onSave, saving 
         publisherContains: form.verificationPublisher,
         versionTransform: form.versionTransform,
       },
-      execution: { ...execution, installArguments: form.installArguments },
+      execution: {
+        ...execution,
+        installArguments: form.installArguments,
+        responseFile: form.responseFileName || form.responseFileContent
+          ? { fileName: form.responseFileName, content: form.responseFileContent }
+          : null,
+      },
       vulnerabilityIdentity: {
         nvdVendor: form.nvdVendor,
         nvdProduct: form.nvdProduct,
@@ -323,6 +332,12 @@ function SoftwareValidationModal({ application, source, onClose, onSave, saving 
         <label>Verification publisher<input value={form.verificationPublisher} onChange={(event) => update('verificationPublisher', event.target.value)} /></label>
         <label>Version transform<input value={form.versionTransform} onChange={(event) => update('versionTransform', event.target.value)} placeholder="Normally blank" /></label>
         <label>Silent install arguments<input value={form.installArguments} onChange={(event) => update('installArguments', event.target.value)} /></label>
+        <label className="wide">Vendor response-file name<input value={form.responseFileName} onChange={(event) => update('responseFileName', event.target.value)} placeholder="Optional, e.g. setup.xml" /></label>
+        <label className="wide">Vendor response-file content<textarea rows={8} value={form.responseFileContent} onChange={(event) => update('responseFileContent', event.target.value)} placeholder="Optional. Use {HI5_TARGET_VERSION} for the release being tested. Silent arguments must reference {HI5_RESPONSE_FILE}." /></label>
+        {(form.responseFileName || form.responseFileContent) && <div className="rmm-validation-identity-state wide">
+          <FileCode2 size={15} />
+          <span><strong>Job-scoped response file:</strong> written only inside the PatchHost job directory, substituted into <code>{'{HI5_RESPONSE_FILE}'}</code>, then purged after the job.</span>
+        </div>}
 
         <div className="rmm-validation-section-title wide">
           <strong>Vulnerability identity</strong>

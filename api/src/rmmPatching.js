@@ -43,6 +43,18 @@ function stableJson(value) {
   }
   return JSON.stringify(value ?? null)
 }
+function normalizedVendorResponseFile(value) {
+  const response = object(value)
+  const fileName = clean(response.fileName)
+  const content = typeof response.content === 'string' ? response.content : ''
+  return fileName || content ? { fileName, content } : null
+}
+function safeVendorResponseFileName(value = '') {
+  const name = clean(value)
+  return /^[A-Za-z0-9._-]{1,128}$/.test(name)
+    && !['.', '..'].includes(name)
+    && /\.(xml|iss|ini|txt|json|config|rsp)$/i.test(name)
+}
 function normalizeGithubRepository(value = '') {
   const raw = clean(value).replace(/\.git$/i, '')
   if (!raw) return ''
@@ -2159,6 +2171,7 @@ export async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId, op
       installerType: vendorDirect ? clean(vendor.installer_type || row.installer_type) : '',
       installerTechnology: vendorDirect ? clean(vendor.installer_technology) : '',
       installArguments: clean(object(row.execution).installArguments),
+      responseFile: normalizedVendorResponseFile(object(row.execution).responseFile),
       expectedSigner: clean(vendor?.expected_signer || row.publisher),
       fallbackProvider: vendorDirect && fallbackPackageId ? 'winget' : '',
       verification: {
@@ -3138,6 +3151,20 @@ export function registerRmmPatchingRoutes(app) {
       ...(body.execution && typeof body.execution === 'object' ? object(body.execution) : {}),
     }
 
+    const responseFile = normalizedVendorResponseFile(execution.responseFile)
+    execution.responseFile = responseFile
+    if (responseFile) {
+      if (!safeVendorResponseFileName(responseFile.fileName)) {
+        return c.json({ error: 'Response-file name must be a safe basename ending in .xml, .iss, .ini, .txt, .json, .config, or .rsp.' }, 400)
+      }
+      if (!responseFile.content || Buffer.byteLength(responseFile.content, 'utf8') > 64 * 1024 || responseFile.content.includes('\0')) {
+        return c.json({ error: 'Response-file content must be between 1 byte and 64 KiB and cannot contain NUL characters.' }, 400)
+      }
+      if (!clean(execution.installArguments).includes('{HI5_RESPONSE_FILE}')) {
+        return c.json({ error: 'Silent install arguments must include {HI5_RESPONSE_FILE} when a response file is configured.' }, 400)
+      }
+    }
+
     const sourceUrl = clean(body.sourceUrl ?? current.vendor_source_url)
     const sourcePatch = {}
     for (const key of ['repository','assetPattern','checksumAssetPattern','releaseTagPattern','staticInstallerUrl','staticSha256','staticReleaseUrl']) {
@@ -3212,6 +3239,8 @@ export function registerRmmPatchingRoutes(app) {
       || clean(verification.versionTransform) !== clean(currentVerification.versionTransform)
     )
     const executionArgumentsChanged = clean(execution.installArguments) !== clean(currentExecution.installArguments)
+    const responseFileChanged = stableJson(responseFile) !== stableJson(normalizedVendorResponseFile(currentExecution.responseFile))
+    const executionChanged = executionArgumentsChanged || responseFileChanged
     if (verificationChanged) {
       const verificationMethod = lower(verification.method || verification.provider || 'winget')
       if (!['winget', 'uninstall_registry', 'file_version'].includes(verificationMethod)) {
@@ -3237,7 +3266,7 @@ export function registerRmmPatchingRoutes(app) {
       || sourceUrl !== clean(current.vendor_source_url)
       || expectedSigner !== clean(currentSourceMetadata.expectedSigner)
       || verificationChanged
-      || executionArgumentsChanged
+      || executionChanged
       || Object.entries(sourcePatch).some(([key, value]) => clean(currentVendorSourceMetadata[key]) !== clean(value))
     )
 
@@ -3260,8 +3289,9 @@ export function registerRmmPatchingRoutes(app) {
         namePattern,
         publisherPattern,
         installArguments: clean(execution.installArguments),
-        manualExecutionOverride: currentBindingMetadata.manualExecutionOverride === true || executionArgumentsChanged,
-        manualExecutionOverrideAt: executionArgumentsChanged
+        responseFile,
+        manualExecutionOverride: currentBindingMetadata.manualExecutionOverride === true || executionChanged,
+        manualExecutionOverrideAt: executionChanged
           ? new Date().toISOString()
           : currentBindingMetadata.manualExecutionOverrideAt,
         verificationConfig: verification,
@@ -3339,11 +3369,12 @@ export function registerRmmPatchingRoutes(app) {
                   source_payload=source_payload || jsonb_build_object(
                     'expectedSigner',$3::text,
                     'verification',$4::jsonb,
+                    'responseFile',$5::jsonb,
                     'manualValidationEditAt',now()
                   ),
                   last_seen_at=last_seen_at
-            WHERE source_key=$1 AND provider_package_id=$2 AND version=$5`,
-          [current.vendor_source_key, current.external_key, expectedSigner, JSON.stringify(verification), current.target_version],
+            WHERE source_key=$1 AND provider_package_id=$2 AND version=$6`,
+          [current.vendor_source_key, current.external_key, expectedSigner, JSON.stringify(verification), JSON.stringify(responseFile), current.target_version],
         )
         await client.query(
           `UPDATE rmm_software_catalogue

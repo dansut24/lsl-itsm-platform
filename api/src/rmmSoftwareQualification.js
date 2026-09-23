@@ -7,6 +7,12 @@ function clean(value = '') { return String(value ?? '').trim() }
 function lower(value = '') { return clean(value).toLowerCase() }
 function object(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {} }
 function array(value) { return Array.isArray(value) ? value : [] }
+function normalizedResponseFile(value) {
+  const response = object(value)
+  const fileName = clean(response.fileName)
+  const content = typeof response.content === 'string' ? response.content : ''
+  return fileName || content ? { fileName, content } : null
+}
 
 function identityPhraseMatches(value, pattern) {
   const haystack = lower(value)
@@ -847,6 +853,7 @@ async function dispatchCleanInstall(queue, runner) {
     installerType: lower(catalogue.release_installer_type),
     installerTechnology: clean(catalogue.installer_technology),
     installArguments: clean(execution.installArguments),
+    responseFile: normalizedResponseFile(execution.responseFile),
     expectedSigner: clean(catalogue.expected_signer),
     fallbackProvider: '',
     verification: {
@@ -984,6 +991,20 @@ async function upgradeReleasePair(catalogueId) {
                   c.execution->>'installArguments',
                   ''
                 )
+              END,
+              'responseFile',
+              CASE
+                WHEN lower(COALESCE(b.metadata->>'manualExecutionOverride','false'))='true'
+                  THEN COALESCE(
+                    b.metadata->'responseFile',
+                    r.source_payload->'responseFile',
+                    c.execution->'responseFile'
+                  )
+                ELSE COALESCE(
+                  r.source_payload->'responseFile',
+                  b.metadata->'responseFile',
+                  c.execution->'responseFile'
+                )
               END
             ) AS release_execution,
             s.last_success_at AS source_last_success_at,s.last_error AS source_last_error,
@@ -1072,6 +1093,7 @@ async function dispatchUpgradeInstall(queue, runner, release, {
     installerType: lower(release.release_installer_type),
     installerTechnology: clean(release.installer_technology),
     installArguments: clean(execution.installArguments),
+    responseFile: normalizedResponseFile(execution.responseFile),
     expectedSigner: clean(release.expected_signer),
     fallbackProvider: '',
     verification: {
