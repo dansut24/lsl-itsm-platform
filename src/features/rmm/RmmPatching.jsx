@@ -51,6 +51,28 @@ import './RmmPatching.css'
 function StatusPill({ children, tone = 'neutral' }) {
   return <span className={`rmm-status-pill ${tone}`}>{children}</span>
 }
+
+function rmmPortalThemeStyle() {
+  if (typeof document === 'undefined') return {}
+  const root = document.querySelector('.rmm-app')
+  if (!root) return {}
+  const computed = window.getComputedStyle(root)
+  const names = [
+    '--rmm-bg',
+    '--rmm-surface',
+    '--rmm-soft',
+    '--rmm-soft-strong',
+    '--rmm-text',
+    '--rmm-muted',
+    '--rmm-border',
+    '--rmm-sidebar',
+    '--rmm-sidebar-2',
+    '--rmm-accent',
+    '--rmm-accent-soft',
+    '--rmm-shadow',
+  ]
+  return Object.fromEntries(names.map((name) => [name, computed.getPropertyValue(name).trim()]))
+}
 function patchTone(status) {
   if (status === 'provider_blocked') return 'critical'
   if (status === 'update_available' || status === 'older_version_present') return 'warning'
@@ -1742,20 +1764,23 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
       </div>}
     </section>}
 
-    {typeof document !== 'undefined' && createPortal(<>
-      {mappingApp && <MappingModal application={mappingApp} onClose={() => setMappingApp(null)} onSave={saveMapping} />}
-      {validationApp && <SoftwareValidationModal application={validationApp} source={validationSource} saving={saving} onClose={() => setValidationApp(null)} onSave={saveSoftwareValidation} />}
-      {showVendorSource && <VendorSourceModal source={editingVendorSource} saving={saving} onClose={() => { setShowVendorSource(false); setEditingVendorSource(null) }} onSave={saveVendorSource} />}
-      {patchApp && <SoftwarePatchModal
-        application={patchApp}
-        devices={bundle?.devices || []}
-        installs={patchInstallsForApplication(patchApp)}
-        onClose={() => setPatchApp(null)}
-        onPatch={runSoftwarePatch}
-        saving={saving}
-      />}
-      {showPolicy && <PolicyModal onClose={() => setShowPolicy(false)} onSave={savePolicy} />}
-      {assignPolicy && <AssignmentModal devices={bundle?.devices || devices} groups={scope.groups || []} onClose={() => setAssignPolicy(null)} onSave={saveAssignment} policy={assignPolicy} />}
-    </>, document.body)}
+    {typeof document !== 'undefined' && createPortal(
+      <div className="rmm-patch-portal-theme" style={rmmPortalThemeStyle()}>
+        {mappingApp && <MappingModal application={mappingApp} onClose={() => setMappingApp(null)} onSave={saveMapping} />}
+        {validationApp && <SoftwareValidationModal application={validationApp} source={validationSource} saving={saving} onClose={() => setValidationApp(null)} onSave={saveSoftwareValidation} />}
+        {showVendorSource && <VendorSourceModal source={editingVendorSource} saving={saving} onClose={() => { setShowVendorSource(false); setEditingVendorSource(null) }} onSave={saveVendorSource} />}
+        {patchApp && <SoftwarePatchModal
+          application={patchApp}
+          devices={bundle?.devices || []}
+          installs={patchInstallsForApplication(patchApp)}
+          onClose={() => setPatchApp(null)}
+          onPatch={runSoftwarePatch}
+          saving={saving}
+        />}
+        {showPolicy && <PolicyModal onClose={() => setShowPolicy(false)} onSave={savePolicy} />}
+        {assignPolicy && <AssignmentModal devices={bundle?.devices || devices} groups={scope.groups || []} onClose={() => setAssignPolicy(null)} onSave={saveAssignment} policy={assignPolicy} />}
+      </div>,
+      document.body,
+    )}
   </>
 }

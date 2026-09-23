@@ -129,6 +129,7 @@
 .rmm-patch-policy-grid .meta strong { font-size:8px; }
 .rmm-patch-policy-grid footer { margin-top:10px; color:var(--rmm-muted); font-size:7px; }
 .rmm-patch-policy-grid footer button { min-height:32px; display:inline-flex; align-items:center; gap:5px; border:1px solid var(--rmm-border); border-radius:7px; padding:0 8px; background:var(--rmm-surface); color:var(--rmm-text); font:inherit; font-size:7px; font-weight:850; cursor:pointer; }
+.rmm-patch-portal-theme { color:var(--rmm-text); font-family:inherit; }
 .rmm-patch-modal-backdrop { position:fixed; inset:0; z-index:17000; display:grid; place-items:center; padding:max(18px,env(safe-area-inset-top)) 18px max(18px,env(safe-area-inset-bottom)); background:rgba(4,11,20,.56); backdrop-filter:blur(4px); }
 .rmm-patch-modal { width:min(760px,100%); max-height:calc(100dvh - max(36px,env(safe-area-inset-top) + env(safe-area-inset-bottom))); overflow-y:auto; overscroll-behavior:contain; border:1px solid var(--rmm-border); border-radius:12px; padding:14px; background:var(--rmm-surface); box-shadow:0 28px 80px rgba(0,0,0,.28); }
 .rmm-patch-modal.small { width:min(520px,100%); }
