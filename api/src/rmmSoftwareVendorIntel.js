@@ -1738,21 +1738,22 @@ export async function probeDueSoftwareVendorAssets({ limit = 20 } = {}) {
 }
 
 async function fastTrackLatestVersionSources() {
+  const githubPollMinutes = Math.max(60, Math.min(1440, Number(process.env.RMM_GITHUB_RELEASE_POLL_MINUTES) || (process.env.GITHUB_TOKEN ? 15 : 240)))
   const result = await pool.query(
     `UPDATE rmm_software_vendor_sources s
-        SET poll_minutes=5,
+        SET poll_minutes=CASE WHEN s.source_type='github_releases' THEN $1 ELSE 5 END,
             metadata=metadata || jsonb_build_object(
               'latestVersionFastTrack',true,
               'latestVersionFastTrackAt',now(),
-              'latestVersionFastTrackReason','active_catalogue_source'
+              'latestVersionFastTrackReason',CASE WHEN s.source_type='github_releases' THEN 'active_catalogue_github_rate_limited' ELSE 'active_catalogue_source' END
             ),
             updated_at=now()
       WHERE s.enabled=true
-        AND s.poll_minutes>5
         AND s.source_type IN (
           'github_releases','gitlab_releases','vendor_json','vendor_text','vendor_html',
           'hashicorp_releases','python_releases','adoptium','static_release','package_registry','winget_manifest'
         )
+        AND s.poll_minutes IS DISTINCT FROM CASE WHEN s.source_type='github_releases' THEN $1 ELSE 5 END
         AND EXISTS (
           SELECT 1
             FROM rmm_software_vendor_bindings b
@@ -1765,7 +1766,8 @@ async function fastTrackLatestVersionSources() {
              AND b.enabled=true
              AND c.qualification_state IN ('qualified','deployment_candidate','intelligence_only')
         )
-      RETURNING s.source_key`,
+      RETURNING source_key`,
+    [githubPollMinutes],
   )
   return result.rows.map((row) => row.source_key)
 }
@@ -1775,24 +1777,31 @@ export async function syncDueSoftwareVendorSources() {
     console.error('RMM latest-version fast-track setup failed', error.message)
   })
   const syncLimit = Math.max(40, Math.min(250, Number(process.env.RMM_VENDOR_SYNC_DUE_LIMIT) || 120))
+  const githubPerSweep = Math.max(1, Math.min(100, Number(process.env.RMM_GITHUB_SYNC_PER_SWEEP) || (process.env.GITHUB_TOKEN ? 60 : 1)))
   const due = await pool.query(
-    `SELECT s.source_key,
-            min(CASE WHEN c.qualification_state IN ('qualified','deployment_candidate') THEN 0 ELSE 1 END) AS lane,
-            max(s.priority) AS source_priority
-       FROM rmm_software_vendor_sources s
-       LEFT JOIN rmm_software_vendor_bindings b
-         ON b.source_key=s.source_key AND b.enabled=true
-       LEFT JOIN rmm_software_catalogue c
-         ON c.tenant_id IS NULL
-        AND c.status='active'
-        AND c.catalogue_source='vendor'
-        AND c.external_key=b.provider_package_id
-      WHERE s.enabled=true
-        AND (s.last_attempt_at IS NULL OR s.last_attempt_at + (s.poll_minutes || ' minutes')::interval <= now())
-      GROUP BY s.source_key
-      ORDER BY lane ASC,source_priority DESC,s.source_key
+    `WITH ranked_due AS (
+       SELECT s.source_key,s.source_type,
+              min(CASE WHEN c.qualification_state IN ('qualified','deployment_candidate') THEN 0 ELSE 1 END) AS lane,
+              max(s.priority) AS source_priority,
+              row_number() OVER (PARTITION BY s.source_type ORDER BY min(CASE WHEN c.qualification_state IN ('qualified','deployment_candidate') THEN 0 ELSE 1 END),max(s.priority) DESC,s.source_key) AS type_rank
+         FROM rmm_software_vendor_sources s
+         LEFT JOIN rmm_software_vendor_bindings b
+           ON b.source_key=s.source_key AND b.enabled=true
+         LEFT JOIN rmm_software_catalogue c
+           ON c.tenant_id IS NULL
+          AND c.status='active'
+          AND c.catalogue_source='vendor'
+          AND c.external_key=b.provider_package_id
+        WHERE s.enabled=true
+          AND (s.last_attempt_at IS NULL OR s.last_attempt_at + (s.poll_minutes || ' minutes')::interval <= now())
+        GROUP BY s.source_key,s.source_type
+     )
+     SELECT source_key
+       FROM ranked_due
+      WHERE source_type<>'github_releases' OR type_rank <= $2
+      ORDER BY lane ASC,source_priority DESC,source_key
       LIMIT $1`,
-    [syncLimit],
+    [syncLimit, githubPerSweep],
   )
   const results = []
   for (const row of due.rows) {
