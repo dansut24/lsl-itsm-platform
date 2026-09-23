@@ -2588,7 +2588,19 @@ export async function queueAutomaticRollbackQualifications({ limit = 8 } = {}) {
   const queued = []
   for (const row of result.rows) {
     const outcome = await queueRollbackQualification(row.catalogue_id)
-    if (outcome?.queued) queued.push(outcome)
+    if (outcome?.queued) {
+      await pool.query(
+        `UPDATE rmm_software_qualification_queue
+            SET evidence=evidence || jsonb_build_object(
+                  'automaticRollbackQualification',true,
+                  'pipelineQueuedAt',now()
+                ),
+                updated_at=now()
+          WHERE catalogue_id=$1 AND test_type='rollback'`,
+        [row.catalogue_id],
+      )
+      queued.push(outcome)
+    }
   }
   return queued
 }
