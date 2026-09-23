@@ -610,6 +610,7 @@ async function qualificationLabPayload(tenantId, catalogueId) {
     installerHost:(()=>{try{return new URL(clean(release.installer_url)).hostname}catch{return ''}})(),
     releaseHost:(()=>{try{return new URL(clean(release.release_url)).hostname}catch{return ''}})(),
     trustState:clean(release.trust_state),
+    trustReason:clean(object(release.trust_evidence).reason || object(release.source_payload).artifactInspectionError || object(release.source_payload).artifactTrustReason),
     assetHealthState:clean(release.asset_health_state || 'unknown'),
     assetLastCheckedAt:release.asset_last_checked_at || null,
     assetHttpStatus:release.asset_http_status || null,
@@ -628,7 +629,16 @@ async function qualificationLabPayload(tenantId, catalogueId) {
       && compareVersions(release.version,app.target_version)===-1)
     .sort((left,right)=>compareVersions(right.version,left.version) || 0)
   const previousReady=stableOlder.find((release)=>release.trustState==='direct_ready') || null
-  const previousPending=stableOlder.find((release)=>['asset_candidate','winget_ready'].includes(release.trustState)) || null
+  const terminalHistoricalReasons=new Set(['vendor_checksum_mismatch','sha256_mismatch','vendor_download_failed','artifact_download_failed'])
+  const previousPending=stableOlder.find((release)=>['asset_candidate','winget_ready'].includes(release.trustState)
+    && !terminalHistoricalReasons.has(release.trustReason)) || null
+  const baselinePreparationState=clean(sourceLive.baselinePreparationState)
+  const previousUnavailable=Boolean(!previousReady && !previousPending
+    && (baselinePreparationState==='previous_stable_installer_unavailable'
+      || stableOlder.some((release)=>release.trustState==='rejected' || terminalHistoricalReasons.has(release.trustReason))))
+  const previousUnavailableRelease=previousUnavailable
+    ? stableOlder.find((release)=>release.trustState==='rejected' || terminalHistoricalReasons.has(release.trustReason)) || stableOlder[0] || null
+    : null
   const currentRelease=releases.find((release)=>release.version===clean(app.target_version)) || null
   const queues=Object.fromEntries(queueResult.rows.map((queue)=>[queue.test_type,{
     id:queue.id,
@@ -713,6 +723,8 @@ async function qualificationLabPayload(tenantId, catalogueId) {
       checkedAt:clean(identityAudit.checkedAt),
       method:clean(identityAudit.method),
       resolvedSource:clean(identityAudit.resolvedSource),
+      disposition:clean(identityAudit.disposition || catalogueSource.vulnerabilityIdentityDisposition),
+      dispositionNote:clean(identityAudit.dispositionNote || catalogueSource.vulnerabilityIdentityNote),
       identities:identityResult.rows.map((identity)=>({
         id:identity.id,
         sourceType:clean(identity.source_type),
@@ -725,9 +737,11 @@ async function qualificationLabPayload(tenantId, catalogueId) {
     },
     releases:{
       current:currentRelease,
-      previous:previousReady || previousPending,
+      previous:previousReady || previousPending || previousUnavailableRelease,
       previousReady:Boolean(previousReady),
       previousPending:Boolean(!previousReady && previousPending),
+      previousUnavailable,
+      previousUnavailableReason:clean(sourceLive.baselinePreparationReason || previousUnavailableRelease?.trustReason || 'historical_artifact_not_retrievable'),
       all:releases.slice(0,20),
     },
     tests:{
@@ -753,6 +767,7 @@ async function qualificationLabPayload(tenantId, catalogueId) {
           ? clean(upgradeQueue.state)
           : upgradePassed && detectionPassed?'passed'
             :upgradePassed?'legacy_pass'
+            :previousUnavailable?'unavailable'
             :queueLayerState(upgradeQueue),
         fromVersion:clean(evidence.upgradeFromVersion),
         targetVersion:clean(evidence.upgradeVersion || app.target_version),
@@ -766,8 +781,10 @@ async function qualificationLabPayload(tenantId, catalogueId) {
       rollback:{
         state:['queued','running','cleanup_pending','cleanup_running','review_required'].includes(clean(rollbackQueue?.state))
           ? clean(rollbackQueue.state)
-          : rollbackPassed?'passed':queueLayerState(rollbackQueue),
-        supported:true,
+          : rollbackPassed?'passed'
+            :previousUnavailable?'unavailable'
+            :queueLayerState(rollbackQueue),
+        supported:!previousUnavailable,
         fromVersion:clean(evidence.rollbackFromVersion || app.target_version),
         previousVersion:clean(evidence.rollbackPreviousVersion || previousReady?.version || previousPending?.version),
         restoredVersion:clean(evidence.rollbackRestoredVersion),
@@ -788,15 +805,15 @@ async function qualificationLabPayload(tenantId, catalogueId) {
     },
     layers:[
       {id:'source',label:'Source & trust',state:sourceHealthy && currentArtifactReady?'passed':sourceHealthy?'pending':'attention'},
-      {id:'vulnerability',label:'Vulnerability identity',state:vulnerabilityCovered?'passed':'attention'},
+      {id:'vulnerability',label:'Vulnerability identity',state:vulnerabilityCovered?'passed':clean(identityAudit.state)==='no_published_identity'?'limited':'attention'},
       {id:'clean',label:'Install / verify / uninstall',state:cleanPassed && uninstallPassed?'passed':queueLayerState(cleanQueue)},
-      {id:'history',label:'Previous stable',state:previousReady?'passed':previousPending?'pending':'missing'},
+      {id:'history',label:'Previous stable',state:previousReady?'passed':previousPending?'pending':previousUnavailable?'unavailable':'missing'},
       {id:'upgrade',label:'Patch upgrade',state:['queued','running','cleanup_pending','cleanup_running','review_required'].includes(clean(upgradeQueue?.state))
         ? clean(upgradeQueue.state)
-        : upgradePassed && detectionPassed?'passed':upgradePassed?'legacy_pass':queueLayerState(upgradeQueue)},
+        : upgradePassed && detectionPassed?'passed':upgradePassed?'legacy_pass':previousUnavailable?'unavailable':queueLayerState(upgradeQueue)},
       {id:'rollback',label:'Rollback',state:['queued','running','cleanup_pending','cleanup_running','review_required'].includes(clean(rollbackQueue?.state))
         ? clean(rollbackQueue.state)
-        : rollbackPassed?'passed':queueLayerState(rollbackQueue)},
+        : rollbackPassed?'passed':previousUnavailable?'unavailable':queueLayerState(rollbackQueue)},
     ],
     actions:{
       canRevalidate:Boolean(globalVendor && app.source_key),
@@ -993,6 +1010,8 @@ function publicCatalogue(entry) {
       osvEcosystem: clean(sourceMetadata.osvEcosystem),
       osvPackage: clean(sourceMetadata.osvPackage),
       githubRepository: clean(sourceMetadata.githubRepository),
+      disposition: clean(sourceMetadata.vulnerabilityIdentityDisposition),
+      note: clean(sourceMetadata.vulnerabilityIdentityNote),
     },
     vulnerabilityIdentityAudit: object(sourceMetadata.vulnerabilityIdentityAudit),
     status: entry.status,
@@ -3106,14 +3125,32 @@ export function registerRmmPatchingRoutes(app) {
     const osvPackage = clean(vulnerabilityIdentity.osvPackage ?? currentSourceMetadata.osvPackage)
     const githubRepositoryInput = clean(vulnerabilityIdentity.githubRepository ?? currentSourceMetadata.githubRepository)
     const githubRepository = githubRepositoryInput ? normalizeGithubRepository(githubRepositoryInput) : ''
+    const vulnerabilityDisposition = clean(vulnerabilityIdentity.disposition ?? currentSourceMetadata.vulnerabilityIdentityDisposition)
+    const vulnerabilityIdentityNote = clean(vulnerabilityIdentity.note ?? currentSourceMetadata.vulnerabilityIdentityNote).slice(0, 1000)
+    if (!['', 'no_published_identity'].includes(vulnerabilityDisposition)) {
+      return c.json({ error: 'Vulnerability identity disposition is not supported.' }, 400)
+    }
+    if (vulnerabilityDisposition === 'no_published_identity' && (nvdVendor || nvdProduct || osvEcosystem || osvPackage || githubRepository)) {
+      return c.json({ error: 'Clear NVD, OSV and GitHub identity fields before marking this application as having no published identity.' }, 400)
+    }
     const currentVulnerabilityIdentity = {
       nvdVendor: clean(currentSourceMetadata.nvdVendor),
       nvdProduct: clean(currentSourceMetadata.nvdProduct),
       osvEcosystem: clean(currentSourceMetadata.osvEcosystem),
       osvPackage: clean(currentSourceMetadata.osvPackage),
       githubRepository: normalizeGithubRepository(currentSourceMetadata.githubRepository),
+      disposition: clean(currentSourceMetadata.vulnerabilityIdentityDisposition),
+      note: clean(currentSourceMetadata.vulnerabilityIdentityNote),
     }
-    const nextVulnerabilityIdentity = { nvdVendor, nvdProduct, osvEcosystem, osvPackage, githubRepository }
+    const nextVulnerabilityIdentity = {
+      nvdVendor,
+      nvdProduct,
+      osvEcosystem,
+      osvPackage,
+      githubRepository,
+      disposition: vulnerabilityDisposition,
+      note: vulnerabilityIdentityNote,
+    }
     const vulnerabilityIdentityEdited = vulnerabilityIdentityProvided
       && stableJson(nextVulnerabilityIdentity) !== stableJson(currentVulnerabilityIdentity)
 
@@ -3174,6 +3211,8 @@ export function registerRmmPatchingRoutes(app) {
       osvEcosystem,
       osvPackage,
       githubRepository,
+      vulnerabilityIdentityDisposition: vulnerabilityDisposition,
+      vulnerabilityIdentityNote,
       vulnerabilityIdentityManualEditAt: new Date().toISOString(),
     } : {}
 

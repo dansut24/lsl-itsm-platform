@@ -2219,7 +2219,7 @@ export async function prepareQualificationBaselineForCatalogue(catalogueId) {
   if (!b) return { prepared: false, reason: 'vendor_binding_missing' }
 
   const releases = await pool.query(
-    `SELECT id,version,trust_state,asset_health_state,installer_type,installer_url
+    `SELECT id,version,trust_state,trust_evidence,source_payload,asset_health_state,installer_type,installer_url
        FROM rmm_software_vendor_releases
       WHERE source_key=$1
         AND provider_package_id=$2
@@ -2236,11 +2236,26 @@ export async function prepareQualificationBaselineForCatalogue(catalogueId) {
     !/(alpha|beta|preview|nightly|canary|rc|eap|dev)/i.test(clean(release.version))
     && compareVersionValues(release.version,row.target_version)<0
   )
+  const historicalFailureReason = (release) => clean(
+    object(release.trust_evidence).reason
+      || object(release.source_payload).artifactInspectionError
+      || object(release.source_payload).artifactTrustReason,
+  )
+  const historicalArtifactUnavailable = (release) => {
+    const state = clean(release.trust_state)
+    const reason = historicalFailureReason(release)
+    return state === 'rejected'
+      || ['vendor_checksum_mismatch','sha256_mismatch','vendor_download_failed','artifact_download_failed'].includes(reason)
+  }
+
   const ready = stableOlder.find((release) => clean(release.trust_state)==='direct_ready')
   if (ready) return { prepared: true, ready: true, state: 'trusted_baseline_available', release: ready }
-  const pending = stableOlder.find((release) => ['asset_candidate','winget_ready'].includes(clean(release.trust_state)))
+  const pending = stableOlder.find((release) =>
+    ['asset_candidate','winget_ready'].includes(clean(release.trust_state))
+      && !historicalArtifactUnavailable(release))
   if (pending) return { prepared: true, ready: false, state: 'awaiting_artifact_verification', release: pending }
 
+  const unavailableRelease = stableOlder.find(historicalArtifactUnavailable) || stableOlder[0] || null
   const config={...object(b.source_metadata),...object(b.binding_metadata)}
   let retained=null
   if (row.source_type==='github_releases') {
@@ -2276,7 +2291,29 @@ export async function prepareQualificationBaselineForCatalogue(catalogueId) {
     return { prepared:false, reason:'historical_discovery_not_supported_for_source', sourceType:row.source_type }
   }
 
-  if (!retained) return { prepared:false, reason:'previous_stable_installer_unavailable', sourceType:row.source_type }
+  if (!retained) {
+    const reason = unavailableRelease ? historicalFailureReason(unavailableRelease) || clean(unavailableRelease.trust_state) : 'historical_artifact_not_retrievable'
+    await pool.query(
+      `UPDATE rmm_software_vendor_sources
+          SET metadata=(metadata - 'baselinePreparationError') || $2::jsonb,updated_at=now()
+        WHERE source_key=$1`,
+      [row.source_key,JSON.stringify({
+        baselinePreparationState:'previous_stable_installer_unavailable',
+        baselinePreparationReason:reason,
+        baselinePreparationPreviousVersion:clean(unavailableRelease?.version),
+        baselinePreparationCompletedAt:new Date().toISOString(),
+        baselinePreparationRequestedForCatalogueId:catalogueId,
+      })],
+    )
+    return {
+      prepared:false,
+      ready:false,
+      state:'previous_stable_installer_unavailable',
+      reason,
+      release:unavailableRelease,
+      sourceType:row.source_type,
+    }
+  }
 
   await pool.query(
     `UPDATE rmm_software_vendor_sources
@@ -2348,22 +2385,41 @@ export async function prepareQualificationBaselines({ limit = 4 } = {}) {
           repository:repositoryName(config.repository || row.source_url),currentVersion:row.target_version,
         })
         const releases = await pool.query(
-          `SELECT version,trust_state FROM rmm_software_vendor_releases
+          `SELECT version,trust_state,trust_evidence,source_payload FROM rmm_software_vendor_releases
             WHERE source_key=$1 AND provider_package_id=$2
               AND channel=$3 AND platform=$4 AND architecture=$5
-              AND trust_state IN ('asset_candidate','direct_ready')
+              AND trust_state IN ('asset_candidate','winget_ready','direct_ready','rejected')
               AND asset_health_state IS DISTINCT FROM 'dead' AND installer_type IN ('msi','exe')`,
           [row.source_key,b.provider_package_id,b.channel,b.platform,b.architecture],
         )
         const older = releases.rows.filter(r=>!/(alpha|beta|preview|nightly|canary|rc)/i.test(r.version)
           && compareVersionValues(r.version,row.target_version)<0)
-        const state = older.some(r=>r.trust_state==='direct_ready') ? 'trusted_baseline_available'
-          : older.length ? 'awaiting_artifact_verification' : 'previous_stable_installer_unavailable'
+        const failureReason = (release) => clean(
+          object(release.trust_evidence).reason
+            || object(release.source_payload).artifactInspectionError
+            || object(release.source_payload).artifactTrustReason,
+        )
+        const unavailable = (release) => clean(release.trust_state)==='rejected'
+          || ['vendor_checksum_mismatch','sha256_mismatch','vendor_download_failed','artifact_download_failed'].includes(failureReason(release))
+        const ready = older.find(r=>r.trust_state==='direct_ready')
+        const pending = older.find(r=>['asset_candidate','winget_ready'].includes(clean(r.trust_state)) && !unavailable(r))
+        const failed = older.find(unavailable) || older[0] || null
+        const state = ready ? 'trusted_baseline_available'
+          : pending ? 'awaiting_artifact_verification'
+            : 'previous_stable_installer_unavailable'
+        const baselinePatch = {
+          baselinePreparationState:state,
+          baselinePreparationCompletedAt:new Date().toISOString(),
+          ...(state==='previous_stable_installer_unavailable' ? {
+            baselinePreparationReason:failureReason(failed) || clean(failed?.trust_state) || 'historical_artifact_not_retrievable',
+            baselinePreparationPreviousVersion:clean(failed?.version),
+          } : {}),
+        }
         await pool.query(
           `UPDATE rmm_software_vendor_sources SET metadata=(metadata - 'baselinePreparationError') || $2::jsonb WHERE source_key=$1`,
-          [row.source_key,JSON.stringify({baselinePreparationState:state,baselinePreparationCompletedAt:new Date().toISOString()})],
+          [row.source_key,JSON.stringify(baselinePatch)],
         )
-        results.push({application:row.canonical_name,state,release:retained})
+        results.push({application:row.canonical_name,state,release:retained,reason:baselinePatch.baselinePreparationReason || ''})
       } catch (error) {
         const message=clean(error?.message || error).slice(0,1000)
         await pool.query(

@@ -120,7 +120,7 @@ function qualificationTone(state) {
 function readinessTone(state) {
   if (['ready', 'healthy', 'verified', 'passed', 'covered'].includes(state)) return 'healthy'
   if (['attention', 'blocked', 'failed', 'review_required'].includes(state)) return 'critical'
-  if (['missing', 'legacy_pass'].includes(state)) return 'warning'
+  if (['missing', 'legacy_pass', 'unavailable', 'limited', 'no_published_identity'].includes(state)) return 'warning'
   if (['queued', 'not_tested', 'pending', 'cancelled', 'not_implemented'].includes(state)) return 'neutral'
   return 'running'
 }
@@ -225,6 +225,8 @@ function SoftwareValidationModal({ application, source, onClose, onSave, saving 
     osvEcosystem: vulnerabilityIdentity.osvEcosystem || '',
     osvPackage: vulnerabilityIdentity.osvPackage || '',
     githubRepository: vulnerabilityIdentity.githubRepository || '',
+    vulnerabilityDisposition: vulnerabilityIdentity.disposition || '',
+    vulnerabilityIdentityNote: vulnerabilityIdentity.note || '',
   })
   const update = (key, value) => {
     setFeedback(null)
@@ -266,11 +268,13 @@ function SoftwareValidationModal({ application, source, onClose, onSave, saving 
         osvEcosystem: form.osvEcosystem,
         osvPackage: form.osvPackage,
         githubRepository: form.githubRepository,
+        disposition: form.vulnerabilityDisposition,
+        note: form.vulnerabilityIdentityNote,
       },
     })
     if (result?.success) {
       setFeedback({
-        tone: 'success',
+        tone: result.warning ? 'warning' : 'success',
         message: result.message || 'Saved successfully. Source revalidation has started.',
       })
       if (result.installArguments !== undefined) {
@@ -322,11 +326,22 @@ function SoftwareValidationModal({ application, source, onClose, onSave, saving 
           <strong>Vulnerability identity</strong>
           <span>Use the authoritative identity source that actually tracks this application. You can keep unused identity types blank.</span>
         </div>
+        <label className="wide">Identity disposition<select value={form.vulnerabilityDisposition} onChange={(event) => {
+          const value = event.target.value
+          setFeedback(null)
+          setForm((current) => value === 'no_published_identity'
+            ? { ...current, vulnerabilityDisposition: value, nvdVendor: '', nvdProduct: '', osvEcosystem: '', osvPackage: '', githubRepository: '' }
+            : { ...current, vulnerabilityDisposition: value })
+        }}><option value="">Authoritative identity required / still researching</option><option value="no_published_identity">No published authoritative identity found</option></select></label>
+        {form.vulnerabilityDisposition === 'no_published_identity'
+          ? <label className="wide">Review note<input value={form.vulnerabilityIdentityNote} onChange={(event) => update('vulnerabilityIdentityNote', event.target.value)} placeholder="What was checked / why no authoritative identity is available" /></label>
+          : <>
         <label className="wide">GitHub repository<input value={form.githubRepository} onChange={(event) => update('githubRepository', event.target.value)} placeholder="owner/repository — e.g. timokoessler/2FAGuard" /></label>
         <label>NVD vendor<input value={form.nvdVendor} onChange={(event) => update('nvdVendor', event.target.value)} placeholder="CPE vendor token" /></label>
         <label>NVD product<input value={form.nvdProduct} onChange={(event) => update('nvdProduct', event.target.value)} placeholder="CPE product token" /></label>
         <label>OSV ecosystem<input value={form.osvEcosystem} onChange={(event) => update('osvEcosystem', event.target.value)} placeholder="e.g. npm, PyPI, GIT" /></label>
         <label>OSV package<input value={form.osvPackage} onChange={(event) => update('osvPackage', event.target.value)} placeholder="Package name / repository URI" /></label>
+        </>}
         <div className="rmm-validation-identity-state wide">
           <ShieldCheck size={15} />
           <span><strong>Current identity:</strong> {readinessLabel(vulnerabilityAudit.state || 'needs_review')}{vulnerabilityAudit.resolvedSource ? ' · ' + vulnerabilityAudit.resolvedSource : ''}{vulnerabilityAudit.checkedAt ? ' · checked ' + labDate(vulnerabilityAudit.checkedAt) : ''}</span>
@@ -702,6 +717,8 @@ function QualificationWorkspace({
             <span><small>Method</small><strong>{readinessLabel(lab.vulnerability?.method || 'not checked')}</strong></span>
             <span><small>Source</small><strong>{lab.vulnerability?.resolvedSource || '—'}</strong></span>
             {(lab.vulnerability?.identities || []).slice(0, 3).map((identity) => <span className="wide" key={identity.id}><small>{identity.sourceType || 'identity'}</small><strong>{[identity.vendor, identity.product, identity.packageName].filter(Boolean).join(' / ') || 'Validated mapping'}</strong></span>)}
+            {lab.vulnerability?.state === 'no_published_identity' && <span className="wide"><small>Coverage limitation</small><strong>No authoritative NVD, OSV or GitHub identity is currently published. Hi5Central will keep rechecking.</strong></span>}
+            {lab.vulnerability?.dispositionNote && <span className="wide"><small>Review note</small><strong>{lab.vulnerability.dispositionNote}</strong></span>}
           </div>}
 
           {layer.id === 'clean' && <div className="rmm-qualification-step-grid">
@@ -712,7 +729,7 @@ function QualificationWorkspace({
           </div>}
 
           {layer.id === 'history' && <div className="rmm-release-pair">
-            <div><small>Previous stable</small><strong>{previous?.version || 'Not retained'}</strong><span>{previous ? readinessLabel(previous.trustState) + ' · ' + (previous.installerType || 'installer') : 'Prepare a trusted previous release before upgrade testing.'}</span></div>
+            <div><small>Previous stable</small><strong>{previous?.version || 'Not retained'}</strong><span>{lab.releases?.previousUnavailable ? 'Unavailable upstream · ' + readinessLabel(lab.releases?.previousUnavailableReason || previous?.trustReason || 'historical artifact not retrievable') : previous ? readinessLabel(previous.trustState) + ' · ' + (previous.installerType || 'installer') : 'Prepare a trusted previous release before upgrade testing.'}</span></div>
             <ChevronRight size={17} />
             <div><small>Current stable</small><strong>{current?.version || lab.application?.targetVersion || '—'}</strong><span>{current ? readinessLabel(current.trustState) + ' · ' + (current.installerType || 'installer') : 'Current release evidence unavailable.'}</span></div>
           </div>}
@@ -1167,12 +1184,14 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
       }
 
       const vulnerabilityValidation = updated.vulnerabilityValidation
-      if (vulnerabilityValidation && vulnerabilityValidation.state !== 'covered') {
+      const vulnerabilityResolved = vulnerabilityValidation
+        && ['covered', 'no_published_identity'].includes(vulnerabilityValidation.state)
+      if (vulnerabilityValidation && !vulnerabilityResolved) {
         const reason = vulnerabilityValidation.error
           || vulnerabilityValidation.method
           || vulnerabilityValidation.state
           || 'needs review'
-        const message = 'Validation settings were saved, but vulnerability identity validation did not pass: '
+        const message = 'Validation settings were saved, but vulnerability identity validation did not resolve: '
           + String(reason).replaceAll('_', ' ')
         setError(message)
         return { success: false, saved: true, error: message }
@@ -1185,16 +1204,20 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
       const advisorySuffix = Number.isFinite(advisoryCount)
         ? ' · ' + advisoryCount + ' published advisor' + (advisoryCount === 1 ? 'y' : 'ies') + ' checked'
         : ''
-      const message = updated.revalidateSource !== false
-        ? vulnerabilityValidation?.state === 'covered'
-          ? 'Saved successfully. Source revalidation started and vulnerability identity validated via ' + identitySource + advisorySuffix + '.'
-          : 'Saved successfully. Validation settings updated and source revalidation started.'
-        : vulnerabilityValidation?.state === 'covered'
-          ? 'Saved successfully. Vulnerability identity validated via ' + identitySource + advisorySuffix + '. Existing endpoint qualification evidence was preserved.'
-          : 'Saved successfully. Validation settings updated.'
+      const noPublishedIdentity = vulnerabilityValidation?.state === 'no_published_identity'
+      const message = noPublishedIdentity
+        ? 'Saved successfully. No published authoritative vulnerability identity was resolved. Hi5Central will keep rechecking this application periodically; vulnerability coverage remains limited.'
+        : updated.revalidateSource !== false
+          ? vulnerabilityValidation?.state === 'covered'
+            ? 'Saved successfully. Source revalidation started and vulnerability identity validated via ' + identitySource + advisorySuffix + '.'
+            : 'Saved successfully. Validation settings updated and source revalidation started.'
+          : vulnerabilityValidation?.state === 'covered'
+            ? 'Saved successfully. Vulnerability identity validated via ' + identitySource + advisorySuffix + '. Existing endpoint qualification evidence was preserved.'
+            : 'Saved successfully. Validation settings updated.'
 
       return {
         success: true,
+        warning: noPublishedIdentity,
         message,
         installArguments: persisted?.execution?.installArguments ?? form.execution?.installArguments ?? '',
         vulnerabilityValidation,
