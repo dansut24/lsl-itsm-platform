@@ -1431,6 +1431,16 @@ async function reconcileUpgradeQueueRow(queue, runner) {
     if (!runner || clean(current.runner_agent_device_id) !== clean(runner.agent_device_id)) return { id: current.id, state: current.state }
     const remaining = installedMatches(runner.source_payload, current)
     if (remaining.length) {
+      const cleanupReason = clean(object(cleanup.result).reason || object(object(cleanup.result).parsed).reason)
+      const requestedRegistryKey = lower(object(current.evidence).uninstallRegistryKey)
+      const liveIdentityChanged = remaining.some((item) => {
+        const registryKey = lower(item?.registry_key)
+        return registryKey && requestedRegistryKey && registryKey !== requestedRegistryKey
+      })
+      if (cleanupReason === 'already_not_present' && liveIdentityChanged) {
+        const dispatched = await dispatchUninstall(current, runner, remaining[remaining.length - 1])
+        return { id: current.id, state: dispatched.dispatched ? 'cleanup_running' : current.state }
+      }
       const completedAt = Date.parse(clean(cleanup.completed_at))
       if (Number.isFinite(completedAt) && Date.now() - completedAt > 10 * 60 * 1000) {
         await markReview(current.id, 'qualification_upgrade_uninstall_residue_detected', {
