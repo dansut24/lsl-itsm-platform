@@ -2234,9 +2234,13 @@ export function startSoftwareVendorSyncScheduler() {
         runVendorArtifactQualification({ inspectLimit: 2 }),
         classifyGithubReleaseBacklog(8),
       ])
-      await queueCommonSoftwareQualifications({ limit: 50 })
-      await queueAutomaticCleanInstallQualifications({ limit: 8, maxPending: 12 })
-      await queueAutomaticUpgradeQualifications({ limit: 12 })
+      const automaticQualificationSeedingEnabled = !['0', 'false', 'off', 'no']
+        .includes(clean(process.env.RMM_AUTOMATIC_QUALIFICATION_SEEDING_ENABLED || 'true').toLowerCase())
+      if (automaticQualificationSeedingEnabled) {
+        await queueCommonSoftwareQualifications({ limit: 50 })
+        await queueAutomaticCleanInstallQualifications({ limit: 8, maxPending: 12 })
+        await queueAutomaticUpgradeQualifications({ limit: 12 })
+      }
     } catch (error) {
       console.error('RMM vendor/software qualification scheduler failed', error)
     }
