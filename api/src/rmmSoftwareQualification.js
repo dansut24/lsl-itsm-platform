@@ -120,7 +120,7 @@ function terminalJobFailure(job) {
 async function liveQualificationRunner() {
   const result = await pool.query(
     `SELECT q.agent_device_id,a.tenant_id,a.inventory_id,a.agent_version,a.patch_capabilities,
-            a.websocket_status,a.last_telemetry_at,i.name AS device_name,i.reference AS device_reference,
+            a.websocket_status,a.last_telemetry_at,a.last_inventory_at,i.name AS device_name,i.reference AS device_reference,
             i.source_payload
        FROM rmm_software_vendor_qualification_runners q
        JOIN rmm_agent_devices a ON a.id=q.agent_device_id AND a.disabled_at IS NULL
@@ -1351,6 +1351,14 @@ async function reconcileUpgradeQueueRow(queue, runner) {
 
   if (current.state === 'cleanup_pending') {
     if (!runner || clean(current.runner_agent_device_id) !== clean(runner.agent_device_id)) return { id: current.id, state: current.state }
+    const upgradeCompletedAt = Date.parse(clean(object(current.evidence).upgradeCompletedAt))
+    const inventoryObservedAt = runner.last_inventory_at instanceof Date
+      ? runner.last_inventory_at.getTime()
+      : Date.parse(clean(runner.last_inventory_at))
+    if (Number.isFinite(upgradeCompletedAt)
+      && (!Number.isFinite(inventoryObservedAt) || inventoryObservedAt <= upgradeCompletedAt)) {
+      return { id: current.id, state: current.state }
+    }
     let installed = installedMatches(runner.source_payload, current)
     if (!installed.length) {
       const learned = await learnVerifiedObservedIdentity(current, runner)
