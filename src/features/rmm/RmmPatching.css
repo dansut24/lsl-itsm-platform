@@ -141,6 +141,12 @@
 .rmm-patch-form-grid label,.rmm-patch-modal > label { display:grid; gap:4px; color:var(--rmm-muted); font-size:7px; font-weight:850; }
 .rmm-patch-form-grid label.wide { grid-column:1/-1; }
 .rmm-patch-form-grid input,.rmm-patch-form-grid select,.rmm-patch-form-grid textarea,.rmm-patch-modal > label select { width:100%; min-height:38px; border:1px solid var(--rmm-border); border-radius:8px; padding:8px 9px; background:var(--rmm-soft); color:var(--rmm-text); font:inherit; font-size:8px; }
+.rmm-validation-section-title { display:grid; gap:3px; grid-column:1/-1; margin-top:4px; border-top:1px solid var(--rmm-border); padding-top:10px; }
+.rmm-validation-section-title strong { color:var(--rmm-text); font-size:9px; }
+.rmm-validation-section-title span { color:var(--rmm-muted); font-size:7px; line-height:1.45; }
+.rmm-validation-identity-state { display:flex; align-items:flex-start; gap:7px; grid-column:1/-1; border:1px solid var(--rmm-border); border-radius:8px; padding:9px; background:var(--rmm-soft); color:var(--rmm-muted); font-size:7px; line-height:1.45; }
+.rmm-validation-identity-state svg { flex:0 0 auto; color:var(--rmm-accent); }
+.rmm-validation-identity-state strong { color:var(--rmm-text); }
 .rmm-patch-security-note { display:flex; align-items:flex-start; gap:8px; margin-top:10px; border:1px solid rgba(35,158,99,.22); border-radius:8px; padding:9px; background:rgba(35,158,99,.06); color:var(--rmm-muted); font-size:7px; line-height:1.45; }
 .rmm-patch-security-note svg { flex:0 0 auto; color:#239e63; }
 .rmm-validation-feedback { display:flex; align-items:flex-start; gap:8px; margin-top:10px; border:1px solid var(--rmm-border); border-radius:8px; padding:10px; font-size:8px; font-weight:800; line-height:1.4; }

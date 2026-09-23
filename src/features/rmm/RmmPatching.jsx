@@ -195,6 +195,8 @@ function SoftwareValidationModal({ application, source, onClose, onSave, saving 
   const sourceMeta = source?.metadata || {}
   const verification = catalogue.verification || {}
   const execution = catalogue.execution || {}
+  const vulnerabilityIdentity = catalogue.vulnerabilityIdentity || {}
+  const vulnerabilityAudit = catalogue.vulnerabilityIdentityAudit || {}
   const [feedback, setFeedback] = useState(null)
   const [form, setForm] = useState({
     canonicalName: catalogue.canonicalName || application?.name || '',
@@ -210,10 +212,19 @@ function SoftwareValidationModal({ application, source, onClose, onSave, saving 
     staticSha256: sourceMeta.staticSha256 || '',
     staticReleaseUrl: sourceMeta.staticReleaseUrl || '',
     expectedSigner: catalogue.expectedSigner || '',
+    verificationMethod: verification.method || verification.provider || 'winget',
+    verificationPackageId: verification.packageId || catalogue.executionPackageId || catalogue.packageId || '',
+    productCode: verification.productCode || '',
+    filePath: verification.filePath || '',
     displayNameContains: verification.displayNameContains || catalogue.namePattern || '',
     verificationPublisher: verification.publisherContains || catalogue.publisherPattern || '',
     versionTransform: verification.versionTransform || '',
     installArguments: execution.installArguments || '',
+    nvdVendor: vulnerabilityIdentity.nvdVendor || '',
+    nvdProduct: vulnerabilityIdentity.nvdProduct || '',
+    osvEcosystem: vulnerabilityIdentity.osvEcosystem || '',
+    osvPackage: vulnerabilityIdentity.osvPackage || '',
+    githubRepository: vulnerabilityIdentity.githubRepository || '',
   })
   const update = (key, value) => {
     setFeedback(null)
@@ -223,7 +234,7 @@ function SoftwareValidationModal({ application, source, onClose, onSave, saving 
 
   async function submitValidation(event) {
     event.preventDefault()
-    setFeedback({ tone: 'running', message: 'Saving validation settings and starting revalidation…' })
+    setFeedback({ tone: 'running', message: 'Saving validation settings and running validation…' })
     const result = await onSave({
       canonicalName: form.canonicalName,
       publisher: form.publisher,
@@ -240,11 +251,22 @@ function SoftwareValidationModal({ application, source, onClose, onSave, saving 
       expectedSigner: form.expectedSigner,
       verification: {
         ...verification,
+        method: form.verificationMethod,
+        packageId: form.verificationPackageId,
+        productCode: form.productCode,
+        filePath: form.filePath,
         displayNameContains: form.displayNameContains,
         publisherContains: form.verificationPublisher,
         versionTransform: form.versionTransform,
       },
       execution: { ...execution, installArguments: form.installArguments },
+      vulnerabilityIdentity: {
+        nvdVendor: form.nvdVendor,
+        nvdProduct: form.nvdProduct,
+        osvEcosystem: form.osvEcosystem,
+        osvPackage: form.osvPackage,
+        githubRepository: form.githubRepository,
+      },
     })
     if (result?.success) {
       setFeedback({
@@ -283,10 +305,32 @@ function SoftwareValidationModal({ application, source, onClose, onSave, saving 
         <label>Static SHA-256<input value={form.staticSha256} onChange={(event) => update('staticSha256', event.target.value)} /></label>
         <label>Static release URL<input value={form.staticReleaseUrl} onChange={(event) => update('staticReleaseUrl', event.target.value)} /></label>
         <label>Expected Authenticode signer<input value={form.expectedSigner} onChange={(event) => update('expectedSigner', event.target.value)} /></label></>}
+        <div className="rmm-validation-section-title wide">
+          <strong>Install & verification</strong>
+          <span>These values are used by clean install, upgrade and rollback qualification. The installed result is verified independently from installer exit code.</span>
+        </div>
+        <label>Verification method<select value={form.verificationMethod} onChange={(event) => update('verificationMethod', event.target.value)}><option value="winget">WinGet package identity</option><option value="uninstall_registry">Uninstall registry / MSI identity</option><option value="file_version">Installed EXE/DLL file version</option></select></label>
+        {form.verificationMethod === 'winget' && <label>Verification package ID<input value={form.verificationPackageId} onChange={(event) => update('verificationPackageId', event.target.value)} placeholder="e.g. timokoessler.2FAGuard" /></label>}
+        {form.verificationMethod === 'uninstall_registry' && <label>MSI ProductCode<input value={form.productCode} onChange={(event) => update('productCode', event.target.value)} placeholder="Optional {GUID}" /></label>}
+        {form.verificationMethod === 'file_version' && <label className="wide">Installed EXE/DLL path<input value={form.filePath} onChange={(event) => update('filePath', event.target.value)} placeholder="%ProgramFiles%\\Vendor\\App\\app.exe" /></label>}
         <label>Verification display name<input value={form.displayNameContains} onChange={(event) => update('displayNameContains', event.target.value)} /></label>
         <label>Verification publisher<input value={form.verificationPublisher} onChange={(event) => update('verificationPublisher', event.target.value)} /></label>
         <label>Version transform<input value={form.versionTransform} onChange={(event) => update('versionTransform', event.target.value)} placeholder="Normally blank" /></label>
         <label>Silent install arguments<input value={form.installArguments} onChange={(event) => update('installArguments', event.target.value)} /></label>
+
+        <div className="rmm-validation-section-title wide">
+          <strong>Vulnerability identity</strong>
+          <span>Use the authoritative identity source that actually tracks this application. You can keep unused identity types blank.</span>
+        </div>
+        <label className="wide">GitHub repository<input value={form.githubRepository} onChange={(event) => update('githubRepository', event.target.value)} placeholder="owner/repository — e.g. timokoessler/2FAGuard" /></label>
+        <label>NVD vendor<input value={form.nvdVendor} onChange={(event) => update('nvdVendor', event.target.value)} placeholder="CPE vendor token" /></label>
+        <label>NVD product<input value={form.nvdProduct} onChange={(event) => update('nvdProduct', event.target.value)} placeholder="CPE product token" /></label>
+        <label>OSV ecosystem<input value={form.osvEcosystem} onChange={(event) => update('osvEcosystem', event.target.value)} placeholder="e.g. npm, PyPI, GIT" /></label>
+        <label>OSV package<input value={form.osvPackage} onChange={(event) => update('osvPackage', event.target.value)} placeholder="Package name / repository URI" /></label>
+        <div className="rmm-validation-identity-state wide">
+          <ShieldCheck size={15} />
+          <span><strong>Current identity:</strong> {readinessLabel(vulnerabilityAudit.state || 'needs_review')}{vulnerabilityAudit.resolvedSource ? ' · ' + vulnerabilityAudit.resolvedSource : ''}{vulnerabilityAudit.checkedAt ? ' · checked ' + labDate(vulnerabilityAudit.checkedAt) : ''}</span>
+        </div>
       </div>
       <div className="rmm-patch-security-note"><ShieldCheck size={16} /><span><strong>Fail closed:</strong> a changed source or signer is not deployable again until validation succeeds.</span></div>
       {feedback && <div className={'rmm-validation-feedback ' + feedback.tone} role={feedback.tone === 'error' ? 'alert' : 'status'} aria-live="polite">
@@ -1102,29 +1146,58 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
     try {
       const updated = await updateSoftwareValidation(validationApp.catalogue.id, form)
       settingsSaved = true
-      setBundle(updated.bundle)
+      if (updated.bundle) setBundle(updated.bundle)
 
-      let validated
-      try {
-        validated = await revalidateSoftwareCatalogueEntry(validationApp.catalogue.id)
-        setBundle(validated.bundle)
-      } catch (requestError) {
-        if (requestError?.data?.bundle) setBundle(requestError.data.bundle)
-        const message = requestError?.message || 'Source revalidation failed.'
-        setError(message)
-        return {
-          success: false,
-          saved: true,
-          error: 'Validation settings were saved, but revalidation failed: ' + message,
+      let finalPayload = updated
+      if (updated.revalidateSource !== false) {
+        try {
+          const validated = await revalidateSoftwareCatalogueEntry(validationApp.catalogue.id)
+          if (validated.bundle) setBundle(validated.bundle)
+          finalPayload = validated
+        } catch (requestError) {
+          if (requestError?.data?.bundle) setBundle(requestError.data.bundle)
+          const message = requestError?.message || 'Source revalidation failed.'
+          setError(message)
+          return {
+            success: false,
+            saved: true,
+            error: 'Validation settings were saved, but source revalidation failed: ' + message,
+          }
         }
       }
 
-      const persisted = (validated?.bundle?.catalogue || [])
+      const vulnerabilityValidation = updated.vulnerabilityValidation
+      if (vulnerabilityValidation && vulnerabilityValidation.state !== 'covered') {
+        const reason = vulnerabilityValidation.error
+          || vulnerabilityValidation.method
+          || vulnerabilityValidation.state
+          || 'needs review'
+        const message = 'Validation settings were saved, but vulnerability identity validation did not pass: '
+          + String(reason).replaceAll('_', ' ')
+        setError(message)
+        return { success: false, saved: true, error: message }
+      }
+
+      const persisted = (finalPayload?.bundle?.catalogue || updated?.bundle?.catalogue || [])
         .find((item) => item.id === validationApp.catalogue.id)
+      const identitySource = vulnerabilityValidation?.resolvedSource || ''
+      const advisoryCount = Number(vulnerabilityValidation?.advisoryValidation?.advisoriesSeen)
+      const advisorySuffix = Number.isFinite(advisoryCount)
+        ? ' · ' + advisoryCount + ' published advisor' + (advisoryCount === 1 ? 'y' : 'ies') + ' checked'
+        : ''
+      const message = updated.revalidateSource !== false
+        ? vulnerabilityValidation?.state === 'covered'
+          ? 'Saved successfully. Source revalidation started and vulnerability identity validated via ' + identitySource + advisorySuffix + '.'
+          : 'Saved successfully. Validation settings updated and source revalidation started.'
+        : vulnerabilityValidation?.state === 'covered'
+          ? 'Saved successfully. Vulnerability identity validated via ' + identitySource + advisorySuffix + '. Existing endpoint qualification evidence was preserved.'
+          : 'Saved successfully. Validation settings updated.'
+
       return {
         success: true,
-        message: 'Saved successfully. Validation settings updated and source revalidation started.',
+        message,
         installArguments: persisted?.execution?.installArguments ?? form.execution?.installArguments ?? '',
+        vulnerabilityValidation,
       }
     } catch (requestError) {
       if (requestError?.data?.bundle) setBundle(requestError.data.bundle)

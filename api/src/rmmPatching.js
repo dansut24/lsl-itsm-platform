@@ -4,7 +4,7 @@ import { originMatchesTenant } from './deploymentConfig.js'
 import { pool, withTransaction } from './db.js'
 import { agentSocketForDevice, authenticateAgent, sendAgentMessage } from './rmmAgent.js'
 import { recordRmmActivity } from './rmmActivity.js'
-import { recentVulnerabilities, vulnerabilitySummary } from './rmmVulnerabilityIntel.js'
+import { auditCatalogueVulnerabilityIdentities, recentVulnerabilities, vulnerabilitySummary } from './rmmVulnerabilityIntel.js'
 import {
   prepareQualificationBaselineForCatalogue,
   softwareVendorSummary,
@@ -12,6 +12,7 @@ import {
 } from './rmmSoftwareVendorIntel.js'
 import {
   qualificationQueueSummary,
+  promoteAutomaticAdmissionReady,
   queueRollbackQualification,
   queueUpgradeQualification,
   retrySoftwareQualification,
@@ -28,13 +29,28 @@ import {
   testTenantVendorSource,
   updateTenantVendorSource,
 } from './rmmTenantVendorSources.js'
-import { recalculateTenantVulnerabilityExposures, vulnerabilityExposureByInstallation, vulnerabilityExposureRows, vulnerabilityExposureSummary } from './rmmVulnerabilityExposure.js'
+import { recalculateTenantVulnerabilityExposures, syncGithubRepositoryAdvisoriesForCatalogue, vulnerabilityExposureByInstallation, vulnerabilityExposureRows, vulnerabilityExposureSummary } from './rmmVulnerabilityExposure.js'
 import { resolveSession } from './session.js'
 
 function clean(value = '') { return String(value ?? '').trim() }
 function lower(value = '') { return clean(value).toLowerCase() }
 function object(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {} }
 function array(value) { return Array.isArray(value) ? value : [] }
+function stableJson(value) {
+  if (Array.isArray(value)) return '[' + value.map(stableJson).join(',') + ']'
+  if (value && typeof value === 'object') {
+    return '{' + Object.keys(value).sort().map((key) => JSON.stringify(key) + ':' + stableJson(value[key])).join(',') + '}'
+  }
+  return JSON.stringify(value ?? null)
+}
+function normalizeGithubRepository(value = '') {
+  const raw = clean(value).replace(/\.git$/i, '')
+  if (!raw) return ''
+  const urlMatch = raw.match(/^https:\/\/github\.com\/([^/\s]+)\/([^/#?\s]+)(?:[/?#].*)?$/i)
+  if (urlMatch) return urlMatch[1] + '/' + urlMatch[2].replace(/\.git$/i, '')
+  const shortMatch = raw.match(/^([^/\s]+)\/([^/\s]+)$/)
+  return shortMatch ? shortMatch[1] + '/' + shortMatch[2] : ''
+}
 function identityPhraseMatches(value, pattern) {
   const haystack = lower(value)
   const needle = lower(pattern)
@@ -695,7 +711,7 @@ async function qualificationLabPayload(tenantId, catalogueId) {
         product:clean(identity.product),
         ecosystem:clean(identity.ecosystem),
         packageName:clean(identity.package_name),
-        confidence:Number(identity.confidence || 0),
+        confidence:clean(identity.confidence),
       })),
     },
     releases:{
@@ -962,6 +978,14 @@ function publicCatalogue(entry) {
     qualificationNotes: clean(entry.qualification_notes),
     qualifiedAt: entry.qualified_at || null,
     versionNormalization: object(sourceMetadata.versionNormalization),
+    vulnerabilityIdentity: {
+      nvdVendor: clean(sourceMetadata.nvdVendor),
+      nvdProduct: clean(sourceMetadata.nvdProduct),
+      osvEcosystem: clean(sourceMetadata.osvEcosystem),
+      osvPackage: clean(sourceMetadata.osvPackage),
+      githubRepository: clean(sourceMetadata.githubRepository),
+    },
+    vulnerabilityIdentityAudit: object(sourceMetadata.vulnerabilityIdentityAudit),
     status: entry.status,
     catalogueSource: clean(entry.catalogue_source),
     sourceKey: clean(sourceMetadata.latestSource),
@@ -3010,10 +3034,15 @@ export function registerRmmPatchingRoutes(app) {
 
     const currentResult = await pool.query(
       `SELECT c.*,s.source_key AS vendor_source_key,s.source_type AS vendor_source_type,
-              s.source_url AS vendor_source_url,s.metadata AS vendor_source_metadata
+              s.source_url AS vendor_source_url,s.metadata AS vendor_source_metadata,
+              b.metadata AS vendor_binding_metadata
          FROM rmm_software_catalogue c
          LEFT JOIN rmm_software_vendor_sources s
            ON s.source_key=c.source_metadata->>'latestSource'
+         LEFT JOIN rmm_software_vendor_bindings b
+           ON b.source_key=s.source_key
+          AND b.provider_package_id=c.external_key
+          AND b.enabled=true
         WHERE c.id=$1 AND c.status<>'archived'
           AND (c.tenant_id=$2 OR c.tenant_id IS NULL)
         LIMIT 1`,
@@ -3055,7 +3084,90 @@ export function registerRmmPatchingRoutes(app) {
       if (value && !/^https:\/\//i.test(value)) return c.json({ error: key + ' must use HTTPS.' }, 400)
     }
 
-    const expectedSigner = clean(body.expectedSigner ?? object(current.source_metadata).expectedSigner)
+    const currentSourceMetadata = object(current.source_metadata)
+    const currentVendorSourceMetadata = object(current.vendor_source_metadata)
+    const currentBindingMetadata = object(current.vendor_binding_metadata)
+    const expectedSigner = clean(body.expectedSigner ?? currentSourceMetadata.expectedSigner)
+
+    const vulnerabilityIdentityProvided = Boolean(body.vulnerabilityIdentity && typeof body.vulnerabilityIdentity === 'object')
+    const vulnerabilityIdentity = object(body.vulnerabilityIdentity)
+    const nvdVendor = clean(vulnerabilityIdentity.nvdVendor ?? currentSourceMetadata.nvdVendor)
+    const nvdProduct = clean(vulnerabilityIdentity.nvdProduct ?? currentSourceMetadata.nvdProduct)
+    const osvEcosystem = clean(vulnerabilityIdentity.osvEcosystem ?? currentSourceMetadata.osvEcosystem)
+    const osvPackage = clean(vulnerabilityIdentity.osvPackage ?? currentSourceMetadata.osvPackage)
+    const githubRepositoryInput = clean(vulnerabilityIdentity.githubRepository ?? currentSourceMetadata.githubRepository)
+    const githubRepository = githubRepositoryInput ? normalizeGithubRepository(githubRepositoryInput) : ''
+    const currentVulnerabilityIdentity = {
+      nvdVendor: clean(currentSourceMetadata.nvdVendor),
+      nvdProduct: clean(currentSourceMetadata.nvdProduct),
+      osvEcosystem: clean(currentSourceMetadata.osvEcosystem),
+      osvPackage: clean(currentSourceMetadata.osvPackage),
+      githubRepository: normalizeGithubRepository(currentSourceMetadata.githubRepository),
+    }
+    const nextVulnerabilityIdentity = { nvdVendor, nvdProduct, osvEcosystem, osvPackage, githubRepository }
+    const vulnerabilityIdentityEdited = vulnerabilityIdentityProvided
+      && stableJson(nextVulnerabilityIdentity) !== stableJson(currentVulnerabilityIdentity)
+
+    if (vulnerabilityIdentityEdited && Boolean(nvdVendor) !== Boolean(nvdProduct)) {
+      return c.json({ error: 'NVD vendor and product must be supplied together.' }, 400)
+    }
+    if (vulnerabilityIdentityEdited && Boolean(osvEcosystem) !== Boolean(osvPackage)) {
+      return c.json({ error: 'OSV ecosystem and package must be supplied together.' }, 400)
+    }
+    if (vulnerabilityIdentityEdited && githubRepositoryInput && !githubRepository) {
+      return c.json({ error: 'GitHub repository must be owner/repository or a github.com repository URL.' }, 400)
+    }
+
+    const currentVerification = object(current.verification)
+    const currentExecution = object(current.execution)
+    const verificationChanged = Boolean(
+      clean(verification.method || verification.provider || 'winget') !== clean(currentVerification.method || currentVerification.provider || 'winget')
+      || clean(verification.packageId) !== clean(currentVerification.packageId)
+      || clean(verification.productCode) !== clean(currentVerification.productCode)
+      || clean(verification.filePath) !== clean(currentVerification.filePath)
+      || clean(verification.displayNameContains) !== clean(currentVerification.displayNameContains)
+      || clean(verification.publisherContains) !== clean(currentVerification.publisherContains)
+      || clean(verification.versionTransform) !== clean(currentVerification.versionTransform)
+    )
+    const executionArgumentsChanged = clean(execution.installArguments) !== clean(currentExecution.installArguments)
+    if (verificationChanged) {
+      const verificationMethod = lower(verification.method || verification.provider || 'winget')
+      if (!['winget', 'uninstall_registry', 'file_version'].includes(verificationMethod)) {
+        return c.json({ error: 'Verification method must be WinGet, uninstall registry, or file version.' }, 400)
+      }
+      if (verificationMethod === 'winget' && !clean(verification.packageId)) {
+        return c.json({ error: 'WinGet verification requires a package ID.' }, 400)
+      }
+      if (verificationMethod === 'uninstall_registry'
+        && !clean(verification.productCode)
+        && !clean(verification.displayNameContains)) {
+        return c.json({ error: 'Uninstall-registry verification requires a ProductCode or display-name match.' }, 400)
+      }
+      if (verificationMethod === 'file_version' && !safeVerificationFilePath(verification.filePath)) {
+        return c.json({ error: 'File-version verification requires a safe installed EXE/DLL path.' }, 400)
+      }
+    }
+    const coreValidationChanged = Boolean(
+      canonicalName !== clean(current.canonical_name)
+      || publisher !== clean(current.publisher)
+      || namePattern !== clean(current.name_pattern)
+      || publisherPattern !== clean(current.publisher_pattern)
+      || sourceUrl !== clean(current.vendor_source_url)
+      || expectedSigner !== clean(currentSourceMetadata.expectedSigner)
+      || verificationChanged
+      || executionArgumentsChanged
+      || Object.entries(sourcePatch).some(([key, value]) => clean(currentVendorSourceMetadata[key]) !== clean(value))
+    )
+
+    const vulnerabilityMetadataPatch = vulnerabilityIdentityEdited ? {
+      nvdVendor,
+      nvdProduct,
+      osvEcosystem,
+      osvPackage,
+      githubRepository,
+      vulnerabilityIdentityManualEditAt: new Date().toISOString(),
+    } : {}
+
     if (!current.tenant_id && clean(current.catalogue_source) === 'vendor' && current.vendor_source_key) {
       const bindingPatch = {
         ...sourcePatch,
@@ -3064,10 +3176,10 @@ export function registerRmmPatchingRoutes(app) {
         namePattern,
         publisherPattern,
         installArguments: clean(execution.installArguments),
-        manualExecutionOverride: body.execution && Object.prototype.hasOwnProperty.call(body.execution, 'installArguments'),
-        manualExecutionOverrideAt: body.execution && Object.prototype.hasOwnProperty.call(body.execution, 'installArguments')
+        manualExecutionOverride: currentBindingMetadata.manualExecutionOverride === true || executionArgumentsChanged,
+        manualExecutionOverrideAt: executionArgumentsChanged
           ? new Date().toISOString()
-          : undefined,
+          : currentBindingMetadata.manualExecutionOverrideAt,
         verificationConfig: verification,
       }
       await withTransaction(async (client) => {
@@ -3086,7 +3198,58 @@ export function registerRmmPatchingRoutes(app) {
             WHERE source_key=$1 AND provider_package_id=$2 AND enabled=true`,
           [current.vendor_source_key, current.external_key, publisher, JSON.stringify(bindingPatch)],
         )
-        await client.query(
+
+        if (vulnerabilityIdentityEdited) {
+          await client.query(
+            `UPDATE rmm_software_vulnerability_identities
+                SET enabled=false,updated_at=now()
+              WHERE catalogue_id=$1 AND source IN ('nvd','osv','github')`,
+            [catalogueId],
+          )
+          const identityMetadata = JSON.stringify({
+            origin: 'manual_validation_modal',
+            validatedByUserId: auth.session.user_id,
+            editedAt: new Date().toISOString(),
+          })
+          if (nvdVendor && nvdProduct) {
+            await client.query(
+              `INSERT INTO rmm_software_vulnerability_identities
+                (catalogue_id,source,vendor,product,cpe,ecosystem,package_name,confidence,enabled,metadata)
+               VALUES ($1,'nvd',$2,$3,'','','','curated',true,$4::jsonb)
+               ON CONFLICT (catalogue_id,source,vendor,product,cpe,ecosystem,package_name)
+               DO UPDATE SET confidence='curated',enabled=true,metadata=EXCLUDED.metadata,updated_at=now()`,
+              [catalogueId, nvdVendor, nvdProduct, identityMetadata],
+            )
+          }
+          if (osvEcosystem && osvPackage) {
+            await client.query(
+              `INSERT INTO rmm_software_vulnerability_identities
+                (catalogue_id,source,vendor,product,cpe,ecosystem,package_name,confidence,enabled,metadata)
+               VALUES ($1,'osv','','','',$2,$3,'curated',true,$4::jsonb)
+               ON CONFLICT (catalogue_id,source,vendor,product,cpe,ecosystem,package_name)
+               DO UPDATE SET confidence='curated',enabled=true,metadata=EXCLUDED.metadata,updated_at=now()`,
+              [catalogueId, osvEcosystem, osvPackage, identityMetadata],
+            )
+          }
+          if (githubRepository) {
+            await client.query(
+              `INSERT INTO rmm_software_vulnerability_identities
+                (catalogue_id,source,vendor,product,cpe,ecosystem,package_name,confidence,enabled,metadata)
+               VALUES ($1,'github','','','','GitHub',$2,'curated',true,$3::jsonb)
+               ON CONFLICT (catalogue_id,source,vendor,product,cpe,ecosystem,package_name)
+               DO UPDATE SET confidence='curated',enabled=true,metadata=EXCLUDED.metadata,updated_at=now()`,
+              [catalogueId, githubRepository, JSON.stringify({
+                origin: 'manual_validation_modal',
+                repository: githubRepository,
+                validatedByUserId: auth.session.user_id,
+                editedAt: new Date().toISOString(),
+              })],
+            )
+          }
+        }
+
+        if (coreValidationChanged) {
+          await client.query(
           `UPDATE rmm_software_vendor_releases
               SET trust_state='asset_candidate',
                   source_payload=source_payload || jsonb_build_object(
@@ -3111,10 +3274,10 @@ export function registerRmmPatchingRoutes(app) {
                     || jsonb_build_object('manualValidationEditAt',now()),
                   source_metadata=source_metadata || jsonb_build_object(
                     'expectedSigner',$8::text,'trustState','asset_candidate','manualValidationEditAt',now()
-                  ),
+                  ) || $10::jsonb,
                   updated_by_user_id=$9,updated_at=now()
             WHERE id=$1`,
-          [catalogueId, canonicalName, publisher, namePattern, publisherPattern, JSON.stringify(verification), JSON.stringify(execution), expectedSigner, auth.session.user_id],
+          [catalogueId, canonicalName, publisher, namePattern, publisherPattern, JSON.stringify(verification), JSON.stringify(execution), expectedSigner, auth.session.user_id, JSON.stringify(vulnerabilityMetadataPatch)],
         )
         await client.query(
           `UPDATE rmm_software_qualification_queue
@@ -3124,21 +3287,151 @@ export function registerRmmPatchingRoutes(app) {
               AND state NOT IN ('running','cleanup_pending','cleanup_running')`,
           [catalogueId],
         )
+        } else {
+          await client.query(
+            `UPDATE rmm_software_catalogue
+                SET canonical_name=$2,publisher=$3,name_pattern=$4,publisher_pattern=$5,
+                    verification=$6::jsonb,execution=$7::jsonb,
+                    source_metadata=source_metadata || $8::jsonb,
+                    qualification_state=CASE
+                      WHEN qualification_state='blocked' THEN qualification_state
+                      WHEN $10::boolean THEN 'deployment_candidate'
+                      ELSE qualification_state
+                    END,
+                    qualification_version=CASE WHEN $10::boolean THEN '' ELSE qualification_version END,
+                    qualified_at=CASE WHEN $10::boolean THEN NULL ELSE qualified_at END,
+                    updated_by_user_id=$9,updated_at=now()
+              WHERE id=$1`,
+            [catalogueId, canonicalName, publisher, namePattern, publisherPattern, JSON.stringify(verification), JSON.stringify(execution), JSON.stringify(vulnerabilityMetadataPatch), auth.session.user_id, vulnerabilityIdentityEdited],
+          )
+        }
       })
     } else {
-      await pool.query(
-        `UPDATE rmm_software_catalogue
-            SET canonical_name=$3,publisher=$4,name_pattern=$5,publisher_pattern=$6,
-                verification=$7::jsonb,execution=$8::jsonb,
-                qualification_state=CASE WHEN qualification_state='blocked' THEN qualification_state ELSE 'deployment_candidate' END,
-                updated_by_user_id=$9,updated_at=now()
-          WHERE id=$1 AND (tenant_id=$2 OR tenant_id IS NULL)`,
-        [catalogueId, auth.session.tenant_id, canonicalName, publisher, namePattern, publisherPattern, JSON.stringify(verification), JSON.stringify(execution), auth.session.user_id],
-      )
+      await withTransaction(async (client) => {
+        if (vulnerabilityIdentityEdited) {
+          await client.query(
+            `UPDATE rmm_software_vulnerability_identities
+                SET enabled=false,updated_at=now()
+              WHERE catalogue_id=$1 AND source IN ('nvd','osv','github')`,
+            [catalogueId],
+          )
+          const identityMetadata = JSON.stringify({
+            origin: 'manual_validation_modal',
+            validatedByUserId: auth.session.user_id,
+            editedAt: new Date().toISOString(),
+          })
+          if (nvdVendor && nvdProduct) {
+            await client.query(
+              `INSERT INTO rmm_software_vulnerability_identities
+                (catalogue_id,source,vendor,product,cpe,ecosystem,package_name,confidence,enabled,metadata)
+               VALUES ($1,'nvd',$2,$3,'','','','curated',true,$4::jsonb)
+               ON CONFLICT (catalogue_id,source,vendor,product,cpe,ecosystem,package_name)
+               DO UPDATE SET confidence='curated',enabled=true,metadata=EXCLUDED.metadata,updated_at=now()`,
+              [catalogueId, nvdVendor, nvdProduct, identityMetadata],
+            )
+          }
+          if (osvEcosystem && osvPackage) {
+            await client.query(
+              `INSERT INTO rmm_software_vulnerability_identities
+                (catalogue_id,source,vendor,product,cpe,ecosystem,package_name,confidence,enabled,metadata)
+               VALUES ($1,'osv','','','',$2,$3,'curated',true,$4::jsonb)
+               ON CONFLICT (catalogue_id,source,vendor,product,cpe,ecosystem,package_name)
+               DO UPDATE SET confidence='curated',enabled=true,metadata=EXCLUDED.metadata,updated_at=now()`,
+              [catalogueId, osvEcosystem, osvPackage, identityMetadata],
+            )
+          }
+          if (githubRepository) {
+            await client.query(
+              `INSERT INTO rmm_software_vulnerability_identities
+                (catalogue_id,source,vendor,product,cpe,ecosystem,package_name,confidence,enabled,metadata)
+               VALUES ($1,'github','','','','GitHub',$2,'curated',true,$3::jsonb)
+               ON CONFLICT (catalogue_id,source,vendor,product,cpe,ecosystem,package_name)
+               DO UPDATE SET confidence='curated',enabled=true,metadata=EXCLUDED.metadata,updated_at=now()`,
+              [catalogueId, githubRepository, JSON.stringify({
+                origin: 'manual_validation_modal',
+                repository: githubRepository,
+                validatedByUserId: auth.session.user_id,
+                editedAt: new Date().toISOString(),
+              })],
+            )
+          }
+        }
+        await client.query(
+          `UPDATE rmm_software_catalogue
+              SET canonical_name=$3,publisher=$4,name_pattern=$5,publisher_pattern=$6,
+                  verification=$7::jsonb,execution=$8::jsonb,
+                  source_metadata=source_metadata || $9::jsonb,
+                  qualification_state=CASE
+                    WHEN qualification_state='blocked' THEN qualification_state
+                    WHEN $10::boolean THEN 'deployment_candidate'
+                    ELSE qualification_state
+                  END,
+                  qualification_version=CASE WHEN $10::boolean THEN '' ELSE qualification_version END,
+                  qualified_at=CASE WHEN $10::boolean THEN NULL ELSE qualified_at END,
+                  updated_by_user_id=$11,updated_at=now()
+            WHERE id=$1 AND (tenant_id=$2 OR tenant_id IS NULL)`,
+          [
+            catalogueId,
+            auth.session.tenant_id,
+            canonicalName,
+            publisher,
+            namePattern,
+            publisherPattern,
+            JSON.stringify(verification),
+            JSON.stringify(execution),
+            JSON.stringify(vulnerabilityMetadataPatch),
+            coreValidationChanged || vulnerabilityIdentityEdited,
+            auth.session.user_id,
+          ],
+        )
+      })
     }
 
-    await audit(auth.session, 'software_catalogue.validation_updated', 'Updated validation settings for “' + canonicalName + '”', '', { catalogueId })
-    return c.json({ success: true, bundle: await patchBundle(auth.session.tenant_id) })
+    let vulnerabilityValidation = null
+    if (vulnerabilityIdentityEdited) {
+      try {
+        const identityAudit = await auditCatalogueVulnerabilityIdentities({ limit: 1, force: true, catalogueId })
+        vulnerabilityValidation = identityAudit.rows.find((row) => row.id === catalogueId) || {
+          state: 'needs_review',
+          method: 'identity_not_resolved',
+        }
+        if (vulnerabilityValidation.state === 'covered' && vulnerabilityValidation.resolvedSource === 'github') {
+          const advisoryValidation = await syncGithubRepositoryAdvisoriesForCatalogue(
+            catalogueId,
+            vulnerabilityValidation.packageName || githubRepository,
+          )
+          vulnerabilityValidation = {
+            ...vulnerabilityValidation,
+            advisoryValidation,
+            state: advisoryValidation.ok ? 'covered' : 'failed',
+            error: advisoryValidation.ok ? '' : clean(advisoryValidation.reason).replaceAll('_', ' '),
+          }
+        }
+        if (vulnerabilityValidation.state === 'covered') {
+          await recalculateTenantVulnerabilityExposures(auth.session.tenant_id).catch(() => null)
+          await promoteAutomaticAdmissionReady({ limit: 50 })
+        }
+      } catch (error) {
+        vulnerabilityValidation = {
+          state: 'failed',
+          method: 'identity_validation_error',
+          error: clean(error?.message || error).slice(0, 1000),
+        }
+      }
+    }
+
+    await audit(auth.session, 'software_catalogue.validation_updated', 'Updated validation settings for “' + canonicalName + '”', '', {
+      catalogueId,
+      coreValidationChanged,
+      vulnerabilityIdentityEdited,
+      vulnerabilityValidation,
+    })
+    return c.json({
+      success: true,
+      revalidateSource: coreValidationChanged,
+      vulnerabilityValidation,
+      bundle: await patchBundle(auth.session.tenant_id),
+    })
   })
 
   app.post('/api/v1/rmm/software-catalogue/:catalogueId/revalidate', async (c) => {
