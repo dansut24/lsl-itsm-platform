@@ -5,6 +5,7 @@ import {
   fetchPublicText,
   globMatcher,
   githubApiHeaders,
+  githubApiToken,
   installerType as detectInstallerType,
   jsonPathValue,
   latestGithubRelease,
@@ -1739,7 +1740,7 @@ export async function probeDueSoftwareVendorAssets({ limit = 20 } = {}) {
 }
 
 async function fastTrackLatestVersionSources() {
-  const githubTokenConfigured = Boolean(clean(process.env.GITHUB_TOKEN))
+  const githubTokenConfigured = Boolean(githubApiToken())
   const githubPollFloor = githubTokenConfigured ? 5 : 60
   const githubPollMinutes = Math.max(githubPollFloor, Math.min(1440, Number(process.env.RMM_GITHUB_RELEASE_POLL_MINUTES) || (githubTokenConfigured ? 15 : 240)))
   const result = await pool.query(
@@ -1780,7 +1781,7 @@ export async function syncDueSoftwareVendorSources() {
     console.error('RMM latest-version fast-track setup failed', error.message)
   })
   const syncLimit = Math.max(40, Math.min(250, Number(process.env.RMM_VENDOR_SYNC_DUE_LIMIT) || 120))
-  const githubTokenConfigured = Boolean(clean(process.env.GITHUB_TOKEN))
+  const githubTokenConfigured = Boolean(githubApiToken())
   const githubPerSweep = Math.max(1, Math.min(100, Number(process.env.RMM_GITHUB_SYNC_PER_SWEEP) || (githubTokenConfigured ? 60 : 1)))
   const due = await pool.query(
     `WITH ranked_due AS (

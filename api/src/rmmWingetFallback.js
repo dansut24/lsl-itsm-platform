@@ -15,9 +15,16 @@ function lower(value = '') { return clean(value).toLowerCase() }
 function normalizedName(value = '') {
   return clean(value).toLowerCase().replace(/[^a-z0-9]+/g, '')
 }
+function githubApiToken() {
+  const envToken = clean(process.env.GITHUB_TOKEN)
+  if (envToken) return envToken
+  const tokenFile = clean(process.env.GITHUB_TOKEN_FILE)
+  if (!tokenFile) return ''
+  try { return clean(fs.readFileSync(tokenFile, 'utf8')) } catch { return '' }
+}
 function githubApiHeaders(extra = {}) {
   const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'Hi5Central-WinGet-Manifest/1.0', ...extra }
-  const token = clean(process.env.GITHUB_TOKEN)
+  const token = githubApiToken()
   if (token) headers.Authorization = 'Bearer ' + token
   return headers
 }

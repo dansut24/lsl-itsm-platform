@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
 import { pool, withTransaction } from './db.js'
@@ -12,9 +13,17 @@ import {
 
 function clean(value = '') { return String(value ?? '').trim() }
 
+export function githubApiToken() {
+  const envToken = clean(process.env.GITHUB_TOKEN)
+  if (envToken) return envToken
+  const tokenFile = clean(process.env.GITHUB_TOKEN_FILE)
+  if (!tokenFile) return ''
+  try { return clean(fs.readFileSync(tokenFile, 'utf8')) } catch { return '' }
+}
+
 export function githubApiHeaders(extra = {}) {
   const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'Hi5Central-Software-Catalogue/1.0', ...extra }
-  const token = clean(process.env.GITHUB_TOKEN)
+  const token = githubApiToken()
   if (token) headers.Authorization = 'Bearer ' + token
   return headers
 }
