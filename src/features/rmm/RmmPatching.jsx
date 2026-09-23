@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   AlertTriangle,
   Box,
@@ -1741,18 +1742,20 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
       </div>}
     </section>}
 
-    {mappingApp && <MappingModal application={mappingApp} onClose={() => setMappingApp(null)} onSave={saveMapping} />}
-    {validationApp && <SoftwareValidationModal application={validationApp} source={validationSource} saving={saving} onClose={() => setValidationApp(null)} onSave={saveSoftwareValidation} />}
-    {showVendorSource && <VendorSourceModal source={editingVendorSource} saving={saving} onClose={() => { setShowVendorSource(false); setEditingVendorSource(null) }} onSave={saveVendorSource} />}
-    {patchApp && <SoftwarePatchModal
-      application={patchApp}
-      devices={bundle?.devices || []}
-      installs={patchInstallsForApplication(patchApp)}
-      onClose={() => setPatchApp(null)}
-      onPatch={runSoftwarePatch}
-      saving={saving}
-    />}
-    {showPolicy && <PolicyModal onClose={() => setShowPolicy(false)} onSave={savePolicy} />}
-    {assignPolicy && <AssignmentModal devices={bundle?.devices || devices} groups={scope.groups || []} onClose={() => setAssignPolicy(null)} onSave={saveAssignment} policy={assignPolicy} />}
+    {typeof document !== 'undefined' && createPortal(<>
+      {mappingApp && <MappingModal application={mappingApp} onClose={() => setMappingApp(null)} onSave={saveMapping} />}
+      {validationApp && <SoftwareValidationModal application={validationApp} source={validationSource} saving={saving} onClose={() => setValidationApp(null)} onSave={saveSoftwareValidation} />}
+      {showVendorSource && <VendorSourceModal source={editingVendorSource} saving={saving} onClose={() => { setShowVendorSource(false); setEditingVendorSource(null) }} onSave={saveVendorSource} />}
+      {patchApp && <SoftwarePatchModal
+        application={patchApp}
+        devices={bundle?.devices || []}
+        installs={patchInstallsForApplication(patchApp)}
+        onClose={() => setPatchApp(null)}
+        onPatch={runSoftwarePatch}
+        saving={saving}
+      />}
+      {showPolicy && <PolicyModal onClose={() => setShowPolicy(false)} onSave={savePolicy} />}
+      {assignPolicy && <AssignmentModal devices={bundle?.devices || devices} groups={scope.groups || []} onClose={() => setAssignPolicy(null)} onSave={saveAssignment} policy={assignPolicy} />}
+    </>, document.body)}
   </>
 }
