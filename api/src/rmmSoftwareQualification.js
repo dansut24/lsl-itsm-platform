@@ -14,6 +14,12 @@ function normalizedResponseFile(value) {
   return fileName || content ? { fileName, content } : null
 }
 
+function runnerSupportsResponseFiles(runner) {
+  const vendorDirect = object(object(runner?.patch_capabilities).vendorDirect)
+  return vendorDirect.jobScopedResponseFiles === true
+    && vendorDirect.responseFileTargetVersionToken === true
+}
+
 function identityPhraseMatches(value, pattern) {
   const haystack = lower(value)
   const needle = lower(pattern)
@@ -957,6 +963,15 @@ async function dispatchCleanInstall(queue, runner) {
   const sourceMetadata = object(catalogue.source_metadata)
   const execution = object(catalogue.execution)
   const verification = object(catalogue.verification)
+  const responseFile = normalizedResponseFile(execution.responseFile)
+  if (responseFile && !runnerSupportsResponseFiles(runner)) {
+    await markReview(queue.id, 'qualification_response_file_capability_required', {
+      stage: 'pre_install_response_file_capability',
+      requiredPatchHostVersion: '0.2.16',
+      currentPatchHostVersion: clean(object(runner.patch_capabilities).patchHostVersion || object(runner.patch_capabilities).version),
+    })
+    return { dispatched: false, blocked: true, reason: 'qualification_response_file_capability_required' }
+  }
   const fallbackPackageId = sourceMetadata.wingetFallbackReady === true
     ? clean(catalogue.binding_winget_package_id || sourceMetadata.wingetPackageId)
     : ''
