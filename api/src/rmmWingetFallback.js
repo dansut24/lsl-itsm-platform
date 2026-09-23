@@ -6,7 +6,7 @@ import { normalizeCatalogueVersion } from './rmmSoftwareVersioning.js'
 
 const SOURCE_URL = 'https://cdn.winget.microsoft.com/cache/source2.msix'
 const INDEX_DB_PATH = '/tmp/hi5central-winget-index.db'
-const CACHE_MS = 6 * 60 * 60 * 1000
+const CACHE_MS = Math.max(5 * 60 * 1000, Number(process.env.RMM_WINGET_INDEX_CACHE_MS) || 15 * 60 * 1000)
 let lastIndexRefreshAt = 0
 let lastSummary = null
 

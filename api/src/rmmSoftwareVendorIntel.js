@@ -1737,14 +1737,62 @@ export async function probeDueSoftwareVendorAssets({ limit = 20 } = {}) {
   return results
 }
 
+async function fastTrackLatestVersionSources() {
+  const result = await pool.query(
+    `UPDATE rmm_software_vendor_sources s
+        SET poll_minutes=5,
+            metadata=metadata || jsonb_build_object(
+              'latestVersionFastTrack',true,
+              'latestVersionFastTrackAt',now(),
+              'latestVersionFastTrackReason','active_catalogue_source'
+            ),
+            updated_at=now()
+      WHERE s.enabled=true
+        AND s.poll_minutes>5
+        AND s.source_type IN (
+          'github_releases','gitlab_releases','vendor_json','vendor_text','vendor_html',
+          'hashicorp_releases','python_releases','adoptium','static_release','package_registry','winget_manifest'
+        )
+        AND EXISTS (
+          SELECT 1
+            FROM rmm_software_vendor_bindings b
+            JOIN rmm_software_catalogue c
+              ON c.tenant_id IS NULL
+             AND c.status='active'
+             AND c.catalogue_source='vendor'
+             AND c.external_key=b.provider_package_id
+           WHERE b.source_key=s.source_key
+             AND b.enabled=true
+             AND c.qualification_state IN ('qualified','deployment_candidate','intelligence_only')
+        )
+      RETURNING s.source_key`,
+  )
+  return result.rows.map((row) => row.source_key)
+}
+
 export async function syncDueSoftwareVendorSources() {
+  await fastTrackLatestVersionSources().catch((error) => {
+    console.error('RMM latest-version fast-track setup failed', error.message)
+  })
+  const syncLimit = Math.max(40, Math.min(250, Number(process.env.RMM_VENDOR_SYNC_DUE_LIMIT) || 120))
   const due = await pool.query(
-    `SELECT source_key
-       FROM rmm_software_vendor_sources
-      WHERE enabled=true
-        AND (last_attempt_at IS NULL OR last_attempt_at + (poll_minutes || ' minutes')::interval <= now())
-      ORDER BY priority DESC,source_key
-      LIMIT 40`,
+    `SELECT s.source_key,
+            min(CASE WHEN c.qualification_state IN ('qualified','deployment_candidate') THEN 0 ELSE 1 END) AS lane,
+            max(s.priority) AS source_priority
+       FROM rmm_software_vendor_sources s
+       LEFT JOIN rmm_software_vendor_bindings b
+         ON b.source_key=s.source_key AND b.enabled=true
+       LEFT JOIN rmm_software_catalogue c
+         ON c.tenant_id IS NULL
+        AND c.status='active'
+        AND c.catalogue_source='vendor'
+        AND c.external_key=b.provider_package_id
+      WHERE s.enabled=true
+        AND (s.last_attempt_at IS NULL OR s.last_attempt_at + (s.poll_minutes || ' minutes')::interval <= now())
+      GROUP BY s.source_key
+      ORDER BY lane ASC,source_priority DESC,s.source_key
+      LIMIT $1`,
+    [syncLimit],
   )
   const results = []
   for (const row of due.rows) {
@@ -2183,7 +2231,7 @@ export function startSoftwareVendorSyncScheduler() {
   setTimeout(prepareBaselines, 15_000).unref?.()
   setInterval(prepareBaselines, 5 * 60_000).unref?.()
   setTimeout(run, 10_000).unref?.()
-  setInterval(run, 5 * 60 * 1000).unref?.()
+  setInterval(run, Math.max(60_000, Number(process.env.RMM_VENDOR_SYNC_INTERVAL_MS) || 60_000)).unref?.()
   setTimeout(qualify, 30_000).unref?.()
   setInterval(qualify, 60_000).unref?.()
   setTimeout(runQualificationRunnerTick, 5_000).unref?.()
