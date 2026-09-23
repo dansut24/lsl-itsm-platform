@@ -2467,7 +2467,7 @@ export async function queueAutomaticCleanInstallQualifications({ limit = 8, maxP
   return result.rows
 }
 
-export async function queueAutomaticUpgradeQualifications({ limit = 12 } = {}) {
+export async function queueAutomaticUpgradeQualifications({ limit = 12, allowCleanOnly = false } = {}) {
   const safeLimit = Math.max(1, Math.min(50, Number(limit) || 12))
   const result = await pool.query(
     `WITH candidates AS (
@@ -2482,7 +2482,7 @@ export async function queueAutomaticUpgradeQualifications({ limit = 12 } = {}) {
           AND c.qualification_state='deployment_candidate'
           AND c.source_metadata->>'deploymentMode'='vendor_direct'
           AND c.source_metadata->>'trustState'='direct_ready'
-          AND COALESCE(q.evidence->>'manualQualificationMode','')<>'clean_only'
+          AND ($2::boolean OR COALESCE(q.evidence->>'manualQualificationMode','')<>'clean_only')
           AND EXISTS (
             SELECT 1
               FROM rmm_software_vendor_releases current_release
@@ -2551,7 +2551,7 @@ export async function queueAutomaticUpgradeQualifications({ limit = 12 } = {}) {
        AND rmm_software_qualification_queue.last_error='manual_revalidation_reset'
      )
      RETURNING id,catalogue_id,test_type,state,priority`,
-    [safeLimit],
+    [safeLimit, Boolean(allowCleanOnly)],
   )
   return result.rows
 }

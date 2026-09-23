@@ -2507,9 +2507,22 @@ export function startSoftwareVendorSyncScheduler() {
         await queueAutomaticCleanInstallQualifications({ limit: 8, maxPending: 12 })
         await queueAutomaticUpgradeQualifications({ limit: 12 })
       } else if (catalogueQualificationPipelineEnabled) {
-        await queueAutomaticCleanInstallQualifications({ limit: 4, maxPending: 4 })
-        await queueAutomaticUpgradeQualifications({ limit: 4 })
-        await queueAutomaticRollbackQualifications({ limit: 4 })
+        await queueAutomaticRollbackQualifications({ limit: 8 })
+        await queueAutomaticUpgradeQualifications({ limit: 8, allowCleanOnly: true })
+
+        const completionBacklog = await pool.query(
+          `SELECT count(*)::int AS count
+             FROM rmm_software_qualification_queue q
+             JOIN rmm_software_catalogue c ON c.id=q.catalogue_id
+            WHERE c.tenant_id IS NULL
+              AND c.status='active'
+              AND c.qualification_state='deployment_candidate'
+              AND q.test_type IN ('upgrade','rollback')
+              AND q.state IN ('queued','running','cleanup_pending','cleanup_running')`,
+        )
+        if (Number(completionBacklog.rows[0]?.count || 0) === 0) {
+          await queueAutomaticCleanInstallQualifications({ limit: 1, maxPending: 1 })
+        }
       }
     } catch (error) {
       console.error('RMM vendor/software qualification scheduler failed', error)
