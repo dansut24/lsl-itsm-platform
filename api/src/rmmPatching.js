@@ -3086,7 +3086,7 @@ export function registerRmmPatchingRoutes(app) {
           `UPDATE rmm_software_vendor_releases
               SET trust_state='asset_candidate',
                   source_payload=source_payload || jsonb_build_object(
-                    'expectedSigner',$3,
+                    'expectedSigner',$3::text,
                     'verification',$4::jsonb,
                     'manualValidationEditAt',now()
                   ),
@@ -3106,7 +3106,7 @@ export function registerRmmPatchingRoutes(app) {
                     - 'sha256Verified' - 'authenticodeVerified'
                     || jsonb_build_object('manualValidationEditAt',now()),
                   source_metadata=source_metadata || jsonb_build_object(
-                    'expectedSigner',$8,'trustState','asset_candidate','manualValidationEditAt',now()
+                    'expectedSigner',$8::text,'trustState','asset_candidate','manualValidationEditAt',now()
                   ),
                   updated_by_user_id=$9,updated_at=now()
             WHERE id=$1`,
