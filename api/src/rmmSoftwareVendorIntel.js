@@ -581,6 +581,7 @@ async function syncGenericConfigured(sourceKey, state) {
   let resolvedInstallerType = clean(config.installerType).toLowerCase()
   let releaseUrl = ''
   let verificationProductCode = ''
+  let verificationVendorBuild = ''
   let selectedAssetReason = ''
   let payload = {}
 
@@ -740,8 +741,46 @@ async function syncGenericConfigured(sourceKey, state) {
       },
     }
   } else if (state.source_type === 'vendor_json') {
-    const response = await fetchPublicJson(state.source_url)
-    if (sourceKey === 'go_golang') {
+    let vendorJsonUrl = state.source_url
+    if (/^jetbrains_[a-z0-9_]+$/.test(sourceKey)) {
+      const historyUrl = new URL(state.source_url)
+      historyUrl.searchParams.delete('latest')
+      vendorJsonUrl = historyUrl.toString()
+    }
+    const response = await fetchPublicJson(vendorJsonUrl)
+    if (/^jetbrains_[a-z0-9_]+$/.test(sourceKey)) {
+      const product = Array.isArray(response) ? response[0] : response
+      const releases = (Array.isArray(product?.releases) ? product.releases : [])
+        .filter((item) => lower(item?.type) === 'release')
+        .filter((item) => /^20\d{2}\.\d+(?:\.\d+)?$/.test(clean(item?.version)))
+        .filter((item) => clean(item?.downloads?.windows?.link))
+        .sort((a, b) => compareVersionValues(clean(a.version), clean(b.version)))
+      const latest = releases.at(-1)
+      if (!latest) throw new Error(sourceKey + ' returned no stable JetBrains Windows release')
+      version = clean(latest.version)
+      releaseDate = normalizedReleaseDate(latest.date)
+      const windows = object(latest.downloads?.windows)
+      installerUrl = (await publicHttpsUrl(clean(windows.link))).toString()
+      const checksumUrl = clean(windows.checksumLink)
+      if (checksumUrl) {
+        const checksumText = await fetchPublicText(checksumUrl, { maxBytes: 1024 * 1024 })
+        installerSha256 = normalizedSha256(clean(checksumText).split(/\s+/)[0])
+      }
+      if (!installerSha256) throw new Error(sourceKey + ' stable Windows release did not include a usable SHA-256')
+      resolvedInstallerType = detectInstallerType(new URL(installerUrl).pathname, resolvedInstallerType)
+      releaseUrl = vendorJsonUrl
+      verificationVendorBuild = clean(latest.build)
+      selectedAssetReason = 'vendor_stable_release'
+      payload = { jetbrains: {
+        version,
+        build: verificationVendorBuild,
+        type: clean(latest.type),
+        date: clean(latest.date),
+        installerUrl,
+        checksumUrl,
+        stable: true,
+      } }
+    } else if (sourceKey === 'go_golang') {
       const releases = Array.isArray(response) ? response : []
       const latest = releases.find((item) => item?.stable !== false) || releases[0]
       if (!latest?.version) throw new Error('Go release feed returned no stable release')
@@ -1151,7 +1190,7 @@ async function syncGenericConfigured(sourceKey, state) {
   }
   const verification = { ...object(config.verificationConfig) }
   if (verificationProductCode) verification.productCode = verificationProductCode
-  const jetbrainsBuild = jetbrainsVendorBuild(sourceKey,version,installerUrl)
+  const jetbrainsBuild = verificationVendorBuild || jetbrainsVendorBuild(sourceKey,version,installerUrl)
   if (jetbrainsBuild && resolvedInstallerType === 'exe') {
     verification.versionTransform = 'jetbrains_vendor_build'
     verification.releaseVersion = version
@@ -1941,6 +1980,89 @@ async function runQualificationRunnerTick() {
   }
 }
 
+async function retainPreviousVendorJsonReleaseCandidate({ sourceKey, binding: b, config, currentVersion }) {
+  if (!/^jetbrains_[a-z0-9_]+$/.test(sourceKey)) return null
+  const retained=await pool.query(
+    `SELECT version FROM rmm_software_vendor_releases
+      WHERE source_key=$1 AND provider_package_id=$2 AND channel=$3 AND platform=$4 AND architecture=$5
+        AND trust_state IN ('asset_candidate','direct_ready') AND asset_health_state IS DISTINCT FROM 'dead'
+        AND installer_type IN ('msi','exe')`,
+    [sourceKey,b.provider_package_id,b.channel,b.platform,b.architecture],
+  )
+  if(retained.rows.some((row)=>compareVersionValues(row.version,currentVersion)<0
+    && !/(alpha|beta|preview|nightly|canary|rc|eap|dev)/i.test(row.version))) return null
+
+  const historyUrl=new URL(b.source_url)
+  historyUrl.searchParams.delete('latest')
+  const response=await fetchPublicJson(historyUrl.toString())
+  const product=Array.isArray(response) ? response[0] : response
+  const releases=(Array.isArray(product?.releases) ? product.releases : [])
+    .filter((item)=>lower(item?.type)==='release')
+    .filter((item)=>/^20\d{2}\.\d+(?:\.\d+)?$/.test(clean(item?.version)))
+    .filter((item)=>compareVersionValues(clean(item.version),currentVersion)<0)
+    .filter((item)=>clean(item?.downloads?.windows?.link))
+    .sort((a,b)=>compareVersionValues(clean(a.version),clean(b.version)))
+  const previous=releases.at(-1)
+  if(!previous) return null
+
+  const windows=object(previous.downloads?.windows)
+  const installerUrl=(await publicHttpsUrl(clean(windows.link))).toString()
+  const checksumUrl=clean(windows.checksumLink)
+  let installerSha256=''
+  if(checksumUrl){
+    const checksumText=await fetchPublicText(checksumUrl,{maxBytes:1024*1024})
+    installerSha256=normalizedSha256(clean(checksumText).split(/\s+/)[0])
+  }
+  if(!installerSha256) throw new Error(sourceKey + ' previous stable release did not include a usable SHA-256')
+  const installerType=detectInstallerType(new URL(installerUrl).pathname,clean(config.installerType).toLowerCase())
+  if(!['msi','exe'].includes(installerType)) return null
+
+  const expectedSigner=clean(config.autoExpectedSigner || config.expectedSigner || config.signerBaseline)
+  const verification={...object(config.verificationConfig)}
+  const vendorBuild=clean(previous.build)
+  if(vendorBuild && installerType==='exe'){
+    verification.versionTransform='jetbrains_vendor_build'
+    verification.releaseVersion=clean(previous.version)
+    verification.vendorBuild=vendorBuild
+  }
+  const installArguments=clean(config.installArguments) || (installerType==='exe' ? '/S' : '')
+  const payload={
+    historicalReleaseCandidate:true,
+    historicalRole:'upgrade_baseline',
+    expectedSigner,
+    deploymentMode:'intelligence_only',
+    verification,
+    installArguments,
+    jetbrains:{
+      version:clean(previous.version),
+      build:vendorBuild,
+      type:clean(previous.type),
+      date:clean(previous.date),
+      installerUrl,
+      checksumUrl,
+      stable:true,
+      historical:true,
+    },
+  }
+
+  const result=await pool.query(
+    `INSERT INTO rmm_software_vendor_releases
+      (source_key,provider_package_id,canonical_name,publisher,channel,platform,architecture,version,
+       release_date,installer_url,installer_sha256,installer_type,release_url,asset_name,trust_state,trust_evidence,
+       source_priority,source_payload,last_seen_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'asset_candidate',$15::jsonb,$16,$17::jsonb,now())
+     ON CONFLICT (source_key,provider_package_id,channel,platform,architecture,version)
+     DO NOTHING
+     RETURNING id,version,trust_state`,
+    [sourceKey,b.provider_package_id,b.canonical_name,b.publisher,b.channel,b.platform,b.architecture,
+      clean(previous.version),normalizedReleaseDate(previous.date),installerUrl,installerSha256,installerType,
+      historyUrl.toString(),decodeURIComponent(new URL(installerUrl).pathname.split('/').at(-1)||''),
+      JSON.stringify({source:'vendor_json_history',historicalReleaseCandidate:true,vendorChecksumPresent:true,
+        expectedSigner,stableRelease:true}),b.priority,JSON.stringify(payload)],
+  )
+  return result.rows[0] || null
+}
+
 async function retainPreviousHtmlReleaseCandidate({ sourceKey, binding: b, config, currentVersion }) {
   const retained = await pool.query(
     `SELECT version FROM rmm_software_vendor_releases
@@ -2107,6 +2229,13 @@ export async function prepareQualificationBaselineForCatalogue(catalogueId) {
     })
   } else if (row.source_type==='winget_manifest') {
     retained=await retainPreviousWingetReleaseCandidate({
+      sourceKey:row.source_key,
+      binding:b,
+      config,
+      currentVersion:row.target_version,
+    })
+  } else if (row.source_type==='vendor_json') {
+    retained=await retainPreviousVendorJsonReleaseCandidate({
       sourceKey:row.source_key,
       binding:b,
       config,
