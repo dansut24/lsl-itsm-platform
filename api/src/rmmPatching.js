@@ -775,7 +775,7 @@ async function qualificationLabPayload(tenantId, catalogueId) {
     ],
     actions:{
       canRevalidate:Boolean(globalVendor && app.source_key),
-      canPreparePrevious:Boolean(globalVendor && ['github_releases','winget_manifest','vendor_html'].includes(clean(app.source_type)) && !previousReady),
+      canPreparePrevious:Boolean(globalVendor && ['github_releases','winget_manifest','vendor_json','vendor_html'].includes(clean(app.source_type)) && !previousReady),
       canRunClean:Boolean(globalVendor && sourceHealthy && currentArtifactReady),
       canRunUpgrade:Boolean(globalVendor && cleanPassed && uninstallPassed && currentArtifactReady && previousReady),
       canRunFull:Boolean(globalVendor && sourceHealthy && currentArtifactReady),
