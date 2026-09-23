@@ -2267,11 +2267,39 @@ export async function prepareQualificationBaselineForCatalogue(catalogueId) {
   }
 
   const ready = stableOlder.find((release) => clean(release.trust_state)==='direct_ready')
-  if (ready) return { prepared: true, ready: true, state: 'trusted_baseline_available', release: ready }
+  if (ready) {
+    await pool.query(
+      `UPDATE rmm_software_vendor_sources
+          SET metadata=(metadata - 'baselinePreparationError') || $2::jsonb,updated_at=now()
+        WHERE source_key=$1`,
+      [row.source_key,JSON.stringify({
+        baselinePreparationState:'trusted_baseline_available',
+        baselinePreparationTargetVersion:row.target_version,
+        baselinePreparationPreviousVersion:clean(ready.version),
+        baselinePreparationCompletedAt:new Date().toISOString(),
+        baselinePreparationRequestedForCatalogueId:catalogueId,
+      })],
+    )
+    return { prepared: true, ready: true, state: 'trusted_baseline_available', release: ready }
+  }
   const pending = stableOlder.find((release) =>
     ['asset_candidate','winget_ready'].includes(clean(release.trust_state))
       && !historicalArtifactUnavailable(release))
-  if (pending) return { prepared: true, ready: false, state: 'awaiting_artifact_verification', release: pending }
+  if (pending) {
+    await pool.query(
+      `UPDATE rmm_software_vendor_sources
+          SET metadata=(metadata - 'baselinePreparationError') || $2::jsonb,updated_at=now()
+        WHERE source_key=$1`,
+      [row.source_key,JSON.stringify({
+        baselinePreparationState:'awaiting_artifact_verification',
+        baselinePreparationTargetVersion:row.target_version,
+        baselinePreparationPreviousVersion:clean(pending.version),
+        baselinePreparationCompletedAt:new Date().toISOString(),
+        baselinePreparationRequestedForCatalogueId:catalogueId,
+      })],
+    )
+    return { prepared: true, ready: false, state: 'awaiting_artifact_verification', release: pending }
+  }
 
   const unavailableRelease = stableOlder.find(historicalArtifactUnavailable) || stableOlder[0] || null
   const config={...object(b.source_metadata),...object(b.binding_metadata)}
@@ -2317,6 +2345,7 @@ export async function prepareQualificationBaselineForCatalogue(catalogueId) {
         WHERE source_key=$1`,
       [row.source_key,JSON.stringify({
         baselinePreparationState:'previous_stable_installer_unavailable',
+        baselinePreparationTargetVersion:row.target_version,
         baselinePreparationReason:reason,
         baselinePreparationPreviousVersion:clean(unavailableRelease?.version),
         baselinePreparationCompletedAt:new Date().toISOString(),
@@ -2339,6 +2368,7 @@ export async function prepareQualificationBaselineForCatalogue(catalogueId) {
       WHERE source_key=$1`,
     [row.source_key,JSON.stringify({
       baselinePreparationState:'awaiting_artifact_verification',
+      baselinePreparationTargetVersion:row.target_version,
       baselinePreparationCompletedAt:new Date().toISOString(),
       baselinePreparationRequestedForCatalogueId:catalogueId,
     })],
@@ -2427,6 +2457,8 @@ export async function prepareQualificationBaselines({ limit = 4 } = {}) {
             : 'previous_stable_installer_unavailable'
         const baselinePatch = {
           baselinePreparationState:state,
+          baselinePreparationTargetVersion:row.target_version,
+          baselinePreparationPreviousVersion:clean((ready || pending || failed)?.version),
           baselinePreparationCompletedAt:new Date().toISOString(),
           ...(state==='previous_stable_installer_unavailable' ? {
             baselinePreparationReason:failureReason(failed) || clean(failed?.trust_state) || 'historical_artifact_not_retrievable',

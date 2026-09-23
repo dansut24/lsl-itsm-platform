@@ -2388,7 +2388,10 @@ export async function promoteAutomaticAdmissionReady({ limit = 12 } = {}) {
                 )
               ) AS vulnerability_covered,
               (c.source_metadata->'vulnerabilityIdentityAudit'->>'state'='no_published_identity') AS vulnerability_limited,
-              (s.metadata->>'baselinePreparationState'='previous_stable_installer_unavailable') AS history_limited,
+              (
+                s.metadata->>'baselinePreparationState'='previous_stable_installer_unavailable'
+                AND s.metadata->>'baselinePreparationTargetVersion'=c.target_version
+              ) AS history_limited,
               EXISTS (
                 SELECT 1
                   FROM rmm_software_qualification_queue qi

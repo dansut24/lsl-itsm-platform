@@ -427,6 +427,7 @@ async function catalogueRows(tenantId) {
       && Number(row.vulnerability_identity_count || 0) > 0
     const vulnerabilityLimited = clean(identityAudit.state) === 'no_published_identity'
     const historyLimited = clean(sourceLiveMetadata.baselinePreparationState) === 'previous_stable_installer_unavailable'
+      && clean(sourceLiveMetadata.baselinePreparationTargetVersion) === clean(row.target_version)
     const targetVersion = clean(row.target_version)
     const cleanInstallVersion = clean(qualificationEvidence.cleanInstallVersion)
     const installTestPassed = qualificationEvidence.cleanInstallVerified === true
@@ -662,6 +663,7 @@ async function qualificationLabPayload(tenantId, catalogueId) {
     && !terminalHistoricalReasons.has(release.trustReason)) || null
   const baselinePreparationState=clean(sourceLive.baselinePreparationState)
   const previousUnavailable=Boolean(!previousReady && !previousPending
+    && clean(sourceLive.baselinePreparationTargetVersion)===clean(app.target_version)
     && (baselinePreparationState==='previous_stable_installer_unavailable'
       || stableOlder.some((release)=>release.trustState==='rejected' || terminalHistoricalReasons.has(release.trustReason))))
   const previousUnavailableRelease=previousUnavailable
