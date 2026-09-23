@@ -3408,7 +3408,6 @@ export function registerRmmPatchingRoutes(app) {
           }
         }
         if (vulnerabilityValidation.state === 'covered') {
-          await recalculateTenantVulnerabilityExposures(auth.session.tenant_id).catch(() => null)
           await promoteAutomaticAdmissionReady({ limit: 50 })
         }
       } catch (error) {
