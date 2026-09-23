@@ -21,7 +21,7 @@ import { recalculateAllTenantVulnerabilityExposures } from './rmmVulnerabilityEx
 import { resolvePreviousWingetVendorInstaller, resolveWingetVendorInstaller, syncAutomaticWingetFallbacks, wingetEnterpriseSeedMatches } from './rmmWingetFallback.js'
 import { importCuratedSoftwareCatalogue } from './rmmCuratedSoftwareCatalogue.js'
 import { syncEvergreenCorroboration } from './rmmEvergreenIntel.js'
-import { promoteAutomaticAdmissionReady, queueAutomaticCleanInstallQualifications, queueAutomaticUpgradeQualifications, queueCommonSoftwareQualifications, runSoftwareQualificationQueue } from './rmmSoftwareQualification.js'
+import { promoteAutomaticAdmissionReady, queueAutomaticCleanInstallQualifications, queueAutomaticRollbackQualifications, queueAutomaticUpgradeQualifications, queueCommonSoftwareQualifications, runSoftwareQualificationQueue } from './rmmSoftwareQualification.js'
 import { COMMON_WINDOWS_SOFTWARE_LOWER } from './rmmCommonSoftware.js'
 import { htmlHostAllowed, parseVendorHtmlReleases } from './vendorHtmlRecipe.js'
 import {
@@ -2500,10 +2500,16 @@ export function startSoftwareVendorSyncScheduler() {
       ])
       const automaticQualificationSeedingEnabled = !['0', 'false', 'off', 'no']
         .includes(clean(process.env.RMM_AUTOMATIC_QUALIFICATION_SEEDING_ENABLED || 'true').toLowerCase())
+      const catalogueQualificationPipelineEnabled = !['0', 'false', 'off', 'no']
+        .includes(clean(process.env.RMM_CATALOGUE_QUALIFICATION_PIPELINE_ENABLED || 'false').toLowerCase())
       if (automaticQualificationSeedingEnabled) {
         await queueCommonSoftwareQualifications({ limit: 50 })
         await queueAutomaticCleanInstallQualifications({ limit: 8, maxPending: 12 })
         await queueAutomaticUpgradeQualifications({ limit: 12 })
+      } else if (catalogueQualificationPipelineEnabled) {
+        await queueAutomaticCleanInstallQualifications({ limit: 4, maxPending: 4 })
+        await queueAutomaticUpgradeQualifications({ limit: 4 })
+        await queueAutomaticRollbackQualifications({ limit: 4 })
       }
     } catch (error) {
       console.error('RMM vendor/software qualification scheduler failed', error)

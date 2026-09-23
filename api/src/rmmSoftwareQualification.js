@@ -2311,11 +2311,16 @@ export async function queueCommonSoftwareQualifications({ limit = 50 } = {}) {
           ) IS NOT NULL
           AND lower(COALESCE(c.qualification_evidence->>'sha256Verified','false'))='true'
           AND lower(COALESCE(c.qualification_evidence->>'authenticodeVerified','false'))='true'
-          AND c.source_metadata->'vulnerabilityIdentityAudit'->>'state'='covered'
-          AND EXISTS (
-            SELECT 1
-              FROM rmm_software_vulnerability_identities vi
-             WHERE vi.catalogue_id=c.id AND vi.enabled=true
+          AND (
+            (
+              c.source_metadata->'vulnerabilityIdentityAudit'->>'state'='covered'
+              AND EXISTS (
+                SELECT 1
+                  FROM rmm_software_vulnerability_identities vi
+                 WHERE vi.catalogue_id=c.id AND vi.enabled=true
+              )
+            )
+            OR c.source_metadata->'vulnerabilityIdentityAudit'->>'state'='no_published_identity'
           )
           AND NOT EXISTS (
             SELECT 1
@@ -2400,11 +2405,16 @@ export async function queueAutomaticCleanInstallQualifications({ limit = 8, maxP
           ) IS NOT NULL
           AND lower(COALESCE(c.qualification_evidence->>'sha256Verified','false'))='true'
           AND lower(COALESCE(c.qualification_evidence->>'authenticodeVerified','false'))='true'
-          AND c.source_metadata->'vulnerabilityIdentityAudit'->>'state'='covered'
-          AND EXISTS (
-            SELECT 1
-              FROM rmm_software_vulnerability_identities vi
-             WHERE vi.catalogue_id=c.id AND vi.enabled=true
+          AND (
+            (
+              c.source_metadata->'vulnerabilityIdentityAudit'->>'state'='covered'
+              AND EXISTS (
+                SELECT 1
+                  FROM rmm_software_vulnerability_identities vi
+                 WHERE vi.catalogue_id=c.id AND vi.enabled=true
+              )
+            )
+            OR c.source_metadata->'vulnerabilityIdentityAudit'->>'state'='no_published_identity'
           )
           AND NOT EXISTS (
             SELECT 1
@@ -2544,6 +2554,43 @@ export async function queueAutomaticUpgradeQualifications({ limit = 12 } = {}) {
     [safeLimit],
   )
   return result.rows
+}
+
+export async function queueAutomaticRollbackQualifications({ limit = 8 } = {}) {
+  const safeLimit = Math.max(1, Math.min(25, Number(limit) || 8))
+  const result = await pool.query(
+    `SELECT c.id AS catalogue_id,c.canonical_name,qu.priority
+       FROM rmm_software_catalogue c
+       JOIN rmm_software_qualification_queue qi
+         ON qi.catalogue_id=c.id
+        AND qi.test_type='clean_install'
+        AND qi.state='passed'
+       JOIN rmm_software_qualification_queue qu
+         ON qu.catalogue_id=c.id
+        AND qu.test_type='upgrade'
+        AND qu.state='passed'
+      WHERE c.tenant_id IS NULL
+        AND c.status='active'
+        AND c.qualification_state='deployment_candidate'
+        AND lower(COALESCE(c.qualification_evidence->>'upgradeVerified','false'))='true'
+        AND lower(COALESCE(c.qualification_evidence->>'upgradePatchDetectionVerified','false'))='true'
+        AND NOT EXISTS (
+          SELECT 1
+            FROM rmm_software_qualification_queue qr
+           WHERE qr.catalogue_id=c.id
+             AND qr.test_type='rollback'
+             AND qr.state IN ('queued','running','cleanup_pending','cleanup_running','passed','review_required')
+        )
+      ORDER BY qu.priority DESC,lower(c.canonical_name)
+      LIMIT $1`,
+    [safeLimit],
+  )
+  const queued = []
+  for (const row of result.rows) {
+    const outcome = await queueRollbackQualification(row.catalogue_id)
+    if (outcome?.queued) queued.push(outcome)
+  }
+  return queued
 }
 
 export async function promoteAutomaticAdmissionReady({ limit = 12 } = {}) {
