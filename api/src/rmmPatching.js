@@ -3064,6 +3064,10 @@ export function registerRmmPatchingRoutes(app) {
         namePattern,
         publisherPattern,
         installArguments: clean(execution.installArguments),
+        manualExecutionOverride: body.execution && Object.prototype.hasOwnProperty.call(body.execution, 'installArguments'),
+        manualExecutionOverrideAt: body.execution && Object.prototype.hasOwnProperty.call(body.execution, 'installArguments')
+          ? new Date().toISOString()
+          : undefined,
         verificationConfig: verification,
       }
       await withTransaction(async (client) => {

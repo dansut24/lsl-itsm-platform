@@ -970,7 +970,21 @@ async function upgradeReleasePair(catalogueId) {
             COALESCE(r.source_payload->'verification',c.verification) AS release_verification,
             jsonb_build_object(
               'installArguments',
-              COALESCE(NULLIF(r.source_payload->>'installArguments',''),c.execution->>'installArguments','')
+              CASE
+                WHEN lower(COALESCE(b.metadata->>'manualExecutionOverride','false'))='true'
+                  THEN COALESCE(
+                    NULLIF(b.metadata->>'installArguments',''),
+                    NULLIF(r.source_payload->>'installArguments',''),
+                    c.execution->>'installArguments',
+                    ''
+                  )
+                ELSE COALESCE(
+                  NULLIF(r.source_payload->>'installArguments',''),
+                  NULLIF(b.metadata->>'installArguments',''),
+                  c.execution->>'installArguments',
+                  ''
+                )
+              END
             ) AS release_execution,
             s.last_success_at AS source_last_success_at,s.last_error AS source_last_error,
             COALESCE(NULLIF(b.metadata->>'expectedSigner',''),
@@ -1307,6 +1321,30 @@ async function reconcileUpgradeQueueRow(queue, runner) {
 
       const detected = outdated[0].item
       const detectedVersion = clean(detected?.version)
+      const detectedScope = qualificationScope(detected?.scope)
+      const detectedUserProfile = lower(detected?.user_profile)
+      if (detectedScope === 'user' || detectedUserProfile.includes('systemprofile')) {
+        await pool.query(
+          `UPDATE rmm_software_qualification_queue
+              SET evidence=evidence || $2::jsonb,updated_at=now()
+            WHERE id=$1`,
+          [current.id, JSON.stringify({
+            postInstallScopeMismatch: true,
+            stage: 'upgrade_baseline_scope_mismatch_cleanup',
+            expectedScope: 'machine',
+            actualScope: clean(detected?.scope),
+            actualUserProfile: clean(detected?.user_profile),
+            observedScopeIdentity: {
+              name: clean(detected?.name),
+              publisher: clean(detected?.publisher),
+              version: clean(detected?.version),
+              registryKey: clean(detected?.registry_key),
+            },
+          })],
+        )
+        const dispatched = await dispatchUninstall(current, runner, detected)
+        return { id: current.id, state: dispatched.dispatched ? 'cleanup_running' : 'review_required' }
+      }
       await pool.query(
         `UPDATE rmm_software_qualification_queue
             SET evidence=evidence || $2::jsonb,updated_at=now()
