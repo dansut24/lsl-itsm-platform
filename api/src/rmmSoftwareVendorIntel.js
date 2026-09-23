@@ -1830,7 +1830,7 @@ async function fastTrackLatestVersionSources() {
           AND c.qualification_state IN ('qualified','qualified_limited','deployment_candidate','intelligence_only')
         WHERE s.enabled=true
           AND s.source_type IN (
-            'github_releases','gitlab_releases','vendor_json','vendor_text','vendor_html',
+            'github_releases','gitlab_releases','vendor_api','vendor_json','vendor_text','vendor_html',
             'hashicorp_releases','python_releases','adoptium','static_release','package_registry','winget_manifest'
           )
         GROUP BY s.source_key,s.source_type
