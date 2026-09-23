@@ -172,6 +172,7 @@ function SoftwareValidationModal({ application, source, onClose, onSave, saving 
   const sourceMeta = source?.metadata || {}
   const verification = catalogue.verification || {}
   const execution = catalogue.execution || {}
+  const [feedback, setFeedback] = useState(null)
   const [form, setForm] = useState({
     canonicalName: catalogue.canonicalName || application?.name || '',
     publisher: catalogue.publisher || application?.publisher || '',
@@ -191,35 +192,55 @@ function SoftwareValidationModal({ application, source, onClose, onSave, saving 
     versionTransform: verification.versionTransform || '',
     installArguments: execution.installArguments || '',
   })
-  const update = (key, value) => setForm((current) => ({ ...current, [key]: value }))
+  const update = (key, value) => {
+    setFeedback(null)
+    setForm((current) => ({ ...current, [key]: value }))
+  }
   const vendorManaged = Boolean(catalogue.builtIn && catalogue.sourceKey)
 
-  return <div className="rmm-patch-modal-backdrop">
-    <form className="rmm-patch-modal" onSubmit={(event) => {
-      event.preventDefault()
-      onSave({
-        canonicalName: form.canonicalName,
-        publisher: form.publisher,
-        namePattern: form.namePattern,
-        publisherPattern: form.publisherPattern,
-        sourceUrl: form.sourceUrl,
-        repository: form.repository,
-        assetPattern: form.assetPattern,
-        checksumAssetPattern: form.checksumAssetPattern,
-        releaseTagPattern: form.releaseTagPattern,
-        staticInstallerUrl: form.staticInstallerUrl,
-        staticSha256: form.staticSha256,
-        staticReleaseUrl: form.staticReleaseUrl,
-        expectedSigner: form.expectedSigner,
-        verification: {
-          ...verification,
-          displayNameContains: form.displayNameContains,
-          publisherContains: form.verificationPublisher,
-          versionTransform: form.versionTransform,
-        },
-        execution: { ...execution, installArguments: form.installArguments },
+  async function submitValidation(event) {
+    event.preventDefault()
+    setFeedback({ tone: 'running', message: 'Saving validation settings and starting revalidation…' })
+    const result = await onSave({
+      canonicalName: form.canonicalName,
+      publisher: form.publisher,
+      namePattern: form.namePattern,
+      publisherPattern: form.publisherPattern,
+      sourceUrl: form.sourceUrl,
+      repository: form.repository,
+      assetPattern: form.assetPattern,
+      checksumAssetPattern: form.checksumAssetPattern,
+      releaseTagPattern: form.releaseTagPattern,
+      staticInstallerUrl: form.staticInstallerUrl,
+      staticSha256: form.staticSha256,
+      staticReleaseUrl: form.staticReleaseUrl,
+      expectedSigner: form.expectedSigner,
+      verification: {
+        ...verification,
+        displayNameContains: form.displayNameContains,
+        publisherContains: form.verificationPublisher,
+        versionTransform: form.versionTransform,
+      },
+      execution: { ...execution, installArguments: form.installArguments },
+    })
+    if (result?.success) {
+      setFeedback({
+        tone: 'success',
+        message: result.message || 'Saved successfully. Source revalidation has started.',
       })
-    }}>
+      if (result.installArguments !== undefined) {
+        setForm((current) => ({ ...current, installArguments: result.installArguments }))
+      }
+      return
+    }
+    setFeedback({
+      tone: result?.saved ? 'warning' : 'error',
+      message: result?.error || 'Unable to save and revalidate this software.',
+    })
+  }
+
+  return <div className="rmm-patch-modal-backdrop">
+    <form className="rmm-patch-modal" onSubmit={submitValidation}>
       <header>
         <div><span className="rmm-eyebrow">Per-software validation</span><h2>{catalogue.canonicalName || application?.name}</h2></div>
         <button aria-label="Close" onClick={onClose} type="button"><X size={17} /></button>
@@ -245,7 +266,15 @@ function SoftwareValidationModal({ application, source, onClose, onSave, saving 
         <label>Silent install arguments<input value={form.installArguments} onChange={(event) => update('installArguments', event.target.value)} /></label>
       </div>
       <div className="rmm-patch-security-note"><ShieldCheck size={16} /><span><strong>Fail closed:</strong> a changed source or signer is not deployable again until validation succeeds.</span></div>
-      <footer><button onClick={onClose} type="button">Cancel</button><button className="rmm-primary" disabled={saving || form.canonicalName.trim().length < 2 || form.namePattern.trim().length < 2} type="submit"><RefreshCw size={15} /> Save & revalidate</button></footer>
+      {feedback && <div className={'rmm-validation-feedback ' + feedback.tone} role={feedback.tone === 'error' ? 'alert' : 'status'} aria-live="polite">
+        {feedback.tone === 'success'
+          ? <CheckCircle2 size={16} />
+          : feedback.tone === 'running'
+            ? <RefreshCw size={16} className="spin" />
+            : <AlertTriangle size={16} />}
+        <span>{feedback.message}</span>
+      </div>}
+      <footer><button onClick={onClose} type="button">{feedback?.tone === 'success' ? 'Close' : 'Cancel'}</button><button className="rmm-primary" disabled={saving || form.canonicalName.trim().length < 2 || form.namePattern.trim().length < 2} type="submit"><RefreshCw size={15} /> {saving ? 'Saving & revalidating…' : 'Save & revalidate'}</button></footer>
     </form>
   </div>
 }
@@ -1041,18 +1070,44 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
   }
 
   async function saveSoftwareValidation(form) {
-    if (!validationApp?.catalogue?.id) return
+    if (!validationApp?.catalogue?.id) {
+      return { success: false, error: 'No catalogue application is selected.' }
+    }
     setSaving(true)
     setError('')
+    let settingsSaved = false
     try {
       const updated = await updateSoftwareValidation(validationApp.catalogue.id, form)
+      settingsSaved = true
       setBundle(updated.bundle)
-      const validated = await revalidateSoftwareCatalogueEntry(validationApp.catalogue.id)
-      setBundle(validated.bundle)
-      setValidationApp(null)
+
+      let validated
+      try {
+        validated = await revalidateSoftwareCatalogueEntry(validationApp.catalogue.id)
+        setBundle(validated.bundle)
+      } catch (requestError) {
+        if (requestError?.data?.bundle) setBundle(requestError.data.bundle)
+        const message = requestError?.message || 'Source revalidation failed.'
+        setError(message)
+        return {
+          success: false,
+          saved: true,
+          error: 'Validation settings were saved, but revalidation failed: ' + message,
+        }
+      }
+
+      const persisted = (validated?.bundle?.catalogue || [])
+        .find((item) => item.id === validationApp.catalogue.id)
+      return {
+        success: true,
+        message: 'Saved successfully. Validation settings updated and source revalidation started.',
+        installArguments: persisted?.execution?.installArguments ?? form.execution?.installArguments ?? '',
+      }
     } catch (requestError) {
       if (requestError?.data?.bundle) setBundle(requestError.data.bundle)
-      setError(requestError?.message || 'Unable to update and revalidate this software.')
+      const message = requestError?.message || 'Unable to update and revalidate this software.'
+      setError(message)
+      return { success: false, saved: settingsSaved, error: message }
     } finally {
       setSaving(false)
     }

@@ -129,10 +129,10 @@
 .rmm-patch-policy-grid .meta strong { font-size:8px; }
 .rmm-patch-policy-grid footer { margin-top:10px; color:var(--rmm-muted); font-size:7px; }
 .rmm-patch-policy-grid footer button { min-height:32px; display:inline-flex; align-items:center; gap:5px; border:1px solid var(--rmm-border); border-radius:7px; padding:0 8px; background:var(--rmm-surface); color:var(--rmm-text); font:inherit; font-size:7px; font-weight:850; cursor:pointer; }
-.rmm-patch-modal-backdrop { position:fixed; inset:0; z-index:2000; display:grid; place-items:center; padding:18px; background:rgba(4,11,20,.56); backdrop-filter:blur(4px); }
-.rmm-patch-modal { width:min(760px,100%); max-height:calc(100dvh - 36px); overflow-y:auto; border:1px solid var(--rmm-border); border-radius:12px; padding:14px; background:var(--rmm-surface); box-shadow:0 28px 80px rgba(0,0,0,.28); }
+.rmm-patch-modal-backdrop { position:fixed; inset:0; z-index:17000; display:grid; place-items:center; padding:max(18px,env(safe-area-inset-top)) 18px max(18px,env(safe-area-inset-bottom)); background:rgba(4,11,20,.56); backdrop-filter:blur(4px); }
+.rmm-patch-modal { width:min(760px,100%); max-height:calc(100dvh - max(36px,env(safe-area-inset-top) + env(safe-area-inset-bottom))); overflow-y:auto; overscroll-behavior:contain; border:1px solid var(--rmm-border); border-radius:12px; padding:14px; background:var(--rmm-surface); box-shadow:0 28px 80px rgba(0,0,0,.28); }
 .rmm-patch-modal.small { width:min(520px,100%); }
-.rmm-patch-modal header { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; }
+.rmm-patch-modal header { position:sticky; top:-14px; z-index:2; display:flex; justify-content:space-between; align-items:flex-start; gap:10px; margin:-14px -14px 0; padding:14px; border-bottom:1px solid var(--rmm-border); background:var(--rmm-surface); }
 .rmm-patch-modal header h2 { margin:3px 0 0; font-size:13px; }
 .rmm-patch-modal header > button { width:34px; height:34px; display:grid; place-items:center; border:1px solid var(--rmm-border); border-radius:8px; background:var(--rmm-soft); color:var(--rmm-text); cursor:pointer; }
 .rmm-patch-modal > p { margin:9px 0 12px; color:var(--rmm-muted); font-size:8px; line-height:1.5; }
@@ -142,6 +142,15 @@
 .rmm-patch-form-grid input,.rmm-patch-form-grid select,.rmm-patch-form-grid textarea,.rmm-patch-modal > label select { width:100%; min-height:38px; border:1px solid var(--rmm-border); border-radius:8px; padding:8px 9px; background:var(--rmm-soft); color:var(--rmm-text); font:inherit; font-size:8px; }
 .rmm-patch-security-note { display:flex; align-items:flex-start; gap:8px; margin-top:10px; border:1px solid rgba(35,158,99,.22); border-radius:8px; padding:9px; background:rgba(35,158,99,.06); color:var(--rmm-muted); font-size:7px; line-height:1.45; }
 .rmm-patch-security-note svg { flex:0 0 auto; color:#239e63; }
+.rmm-validation-feedback { display:flex; align-items:flex-start; gap:8px; margin-top:10px; border:1px solid var(--rmm-border); border-radius:8px; padding:10px; font-size:8px; font-weight:800; line-height:1.4; }
+.rmm-validation-feedback svg { flex:0 0 auto; margin-top:1px; }
+.rmm-validation-feedback.success { border-color:rgba(35,158,99,.35); background:rgba(35,158,99,.10); color:#167a4a; }
+.rmm-validation-feedback.success svg { color:#239e63; }
+.rmm-validation-feedback.running { border-color:rgba(var(--rmm-accent-rgb),.28); background:rgba(var(--rmm-accent-rgb),.08); color:var(--rmm-text); }
+.rmm-validation-feedback.warning { border-color:rgba(201,137,28,.35); background:rgba(201,137,28,.10); color:#9a6814; }
+.rmm-validation-feedback.error { border-color:rgba(195,57,57,.35); background:rgba(195,57,57,.10); color:#a92f2f; }
+.rmm-validation-feedback .spin { animation:rmm-validation-spin .8s linear infinite; }
+@keyframes rmm-validation-spin { to { transform:rotate(360deg); } }
 .rmm-patch-checks { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px; }
 .rmm-patch-checks label { display:flex; align-items:flex-start; gap:8px; border:1px solid var(--rmm-border); border-radius:8px; padding:9px; background:var(--rmm-soft); }
 .rmm-patch-checks input { margin-top:2px; accent-color:var(--rmm-accent); }
