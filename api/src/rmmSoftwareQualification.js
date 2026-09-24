@@ -2349,7 +2349,11 @@ export async function queueCommonSoftwareQualifications({ limit = 50 } = {}) {
   return result.rows
 }
 
-export async function queueAutomaticCleanInstallQualifications({ limit = 8, maxPending = 12 } = {}) {
+export async function queueAutomaticCleanInstallQualifications({
+  limit = 8,
+  maxPending = 12,
+  allowUnresolvedVulnerability = false,
+} = {}) {
   const safeLimit = Math.max(1, Math.min(25, Number(limit) || 8))
   const safeMaxPending = Math.max(1, Math.min(50, Number(maxPending) || 12))
   const pending = await pool.query(
@@ -2406,7 +2410,8 @@ export async function queueAutomaticCleanInstallQualifications({ limit = 8, maxP
           AND lower(COALESCE(c.qualification_evidence->>'sha256Verified','false'))='true'
           AND lower(COALESCE(c.qualification_evidence->>'authenticodeVerified','false'))='true'
           AND (
-            (
+            $2::boolean
+            OR (
               c.source_metadata->'vulnerabilityIdentityAudit'->>'state'='covered'
               AND EXISTS (
                 SELECT 1
@@ -2422,10 +2427,20 @@ export async function queueAutomaticCleanInstallQualifications({ limit = 8, maxP
              WHERE existing.catalogue_id=c.id
                AND existing.test_type='clean_install'
                AND NOT (
-                 existing.state='review_required'
-                 AND existing.last_error IN (
-                   'qualification_artifact_gate_failed',
-                   'qualification_source_health_not_ready'
+                 (
+                   existing.state='review_required'
+                   AND existing.last_error IN (
+                     'qualification_artifact_gate_failed',
+                     'qualification_source_health_not_ready'
+                   )
+                 )
+                 OR (
+                   existing.state='cancelled'
+                   AND existing.last_error IN (
+                     'manual_revalidation_reset',
+                     'qualification_pipeline_paused_for_progression_fix',
+                     'completion_first_pipeline_superseded_clean_buffer'
+                   )
                  )
                )
           )
@@ -2456,13 +2471,22 @@ export async function queueAutomaticCleanInstallQualifications({ limit = 8, maxP
        started_at=NULL,
        completed_at=NULL,
        updated_at=now()
-     WHERE rmm_software_qualification_queue.state='review_required'
+     WHERE (
+       rmm_software_qualification_queue.state='review_required'
        AND rmm_software_qualification_queue.last_error IN (
          'qualification_artifact_gate_failed',
          'qualification_source_health_not_ready'
        )
+     ) OR (
+       rmm_software_qualification_queue.state='cancelled'
+       AND rmm_software_qualification_queue.last_error IN (
+         'manual_revalidation_reset',
+         'qualification_pipeline_paused_for_progression_fix',
+         'completion_first_pipeline_superseded_clean_buffer'
+       )
+     )
      RETURNING id,catalogue_id,test_type,state,priority`,
-    [Math.min(safeLimit, available)],
+    [Math.min(safeLimit, available), Boolean(allowUnresolvedVulnerability)],
   )
   return result.rows
 }

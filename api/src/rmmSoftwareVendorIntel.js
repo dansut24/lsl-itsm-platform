@@ -2004,13 +2004,51 @@ export async function softwareVendorSummary() {
 
 let schedulerStarted = false
 let qualificationRunnerTickActive = false
+let qualificationProgressionTickActive = false
+
+function catalogueQualificationPipelineEnabled() {
+  return !['0', 'false', 'off', 'no']
+    .includes(clean(process.env.RMM_CATALOGUE_QUALIFICATION_PIPELINE_ENABLED || 'false').toLowerCase())
+}
+
+async function runQualificationProgressionTick() {
+  if (qualificationProgressionTickActive || !catalogueQualificationPipelineEnabled()) return
+  qualificationProgressionTickActive = true
+  try {
+    await promoteAutomaticAdmissionReady({ limit: 50 })
+    await queueAutomaticRollbackQualifications({ limit: 8 })
+    await queueAutomaticUpgradeQualifications({ limit: 8, allowCleanOnly: true })
+
+    const completionBacklog = await pool.query(
+      `SELECT count(*)::int AS count
+         FROM rmm_software_qualification_queue q
+         JOIN rmm_software_catalogue c ON c.id=q.catalogue_id
+        WHERE c.tenant_id IS NULL
+          AND c.status='active'
+          AND c.qualification_state='deployment_candidate'
+          AND q.test_type IN ('upgrade','rollback')
+          AND q.state IN ('queued','running','cleanup_pending','cleanup_running')`,
+    )
+    if (Number(completionBacklog.rows[0]?.count || 0) === 0) {
+      await queueAutomaticCleanInstallQualifications({
+        limit: 1,
+        maxPending: 1,
+        allowUnresolvedVulnerability: true,
+      })
+    }
+  } catch (error) {
+    console.error('RMM qualification progression tick failed', error)
+  } finally {
+    qualificationProgressionTickActive = false
+  }
+}
 
 async function runQualificationRunnerTick() {
   if (qualificationRunnerTickActive) return
   qualificationRunnerTickActive = true
   try {
     await runSoftwareQualificationQueue({ dispatchLimit: 1 })
-    await promoteAutomaticAdmissionReady({ limit: 12 })
+    await promoteAutomaticAdmissionReady({ limit: 50 })
   } catch (error) {
     console.error('RMM qualification runner tick failed', error)
   } finally {
@@ -2500,41 +2538,24 @@ export function startSoftwareVendorSyncScheduler() {
       ])
       const automaticQualificationSeedingEnabled = !['0', 'false', 'off', 'no']
         .includes(clean(process.env.RMM_AUTOMATIC_QUALIFICATION_SEEDING_ENABLED || 'true').toLowerCase())
-      const catalogueQualificationPipelineEnabled = !['0', 'false', 'off', 'no']
-        .includes(clean(process.env.RMM_CATALOGUE_QUALIFICATION_PIPELINE_ENABLED || 'false').toLowerCase())
       if (automaticQualificationSeedingEnabled) {
         await queueCommonSoftwareQualifications({ limit: 50 })
         await queueAutomaticCleanInstallQualifications({ limit: 8, maxPending: 12 })
         await queueAutomaticUpgradeQualifications({ limit: 12 })
-      } else if (catalogueQualificationPipelineEnabled) {
-        await queueAutomaticRollbackQualifications({ limit: 8 })
-        await queueAutomaticUpgradeQualifications({ limit: 8, allowCleanOnly: true })
-
-        const completionBacklog = await pool.query(
-          `SELECT count(*)::int AS count
-             FROM rmm_software_qualification_queue q
-             JOIN rmm_software_catalogue c ON c.id=q.catalogue_id
-            WHERE c.tenant_id IS NULL
-              AND c.status='active'
-              AND c.qualification_state='deployment_candidate'
-              AND q.test_type IN ('upgrade','rollback')
-              AND q.state IN ('queued','running','cleanup_pending','cleanup_running')`,
-        )
-        if (Number(completionBacklog.rows[0]?.count || 0) === 0) {
-          await queueAutomaticCleanInstallQualifications({ limit: 1, maxPending: 1 })
-        }
       }
     } catch (error) {
       console.error('RMM vendor/software qualification scheduler failed', error)
     }
   }
-  const prepareBaselines = () => prepareQualificationBaselines({ limit: 4 }).catch(error => console.error('Qualification baseline preparation failed', error))
+  const prepareBaselines = () => prepareQualificationBaselines({ limit: 6 }).catch(error => console.error('Qualification baseline preparation failed', error))
   setTimeout(prepareBaselines, 15_000).unref?.()
-  setInterval(prepareBaselines, 5 * 60_000).unref?.()
+  setInterval(prepareBaselines, 2 * 60_000).unref?.()
   setTimeout(run, 10_000).unref?.()
   setInterval(run, Math.max(60_000, Number(process.env.RMM_VENDOR_SYNC_INTERVAL_MS) || 60_000)).unref?.()
   setTimeout(qualify, 30_000).unref?.()
   setInterval(qualify, 60_000).unref?.()
+  setTimeout(runQualificationProgressionTick, 8_000).unref?.()
+  setInterval(runQualificationProgressionTick, 15_000).unref?.()
   setTimeout(runQualificationRunnerTick, 5_000).unref?.()
   setInterval(runQualificationRunnerTick, 10_000).unref?.()
 }
