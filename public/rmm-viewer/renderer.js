@@ -123,11 +123,12 @@ function clampMobileViewport() {
     baseWidth = main.width;
     baseHeight = baseWidth / videoAspect;
   }
-  // A small overscroll margin lets a zoomed monitor corner move inward from
-  // the physical screen edge, which makes corner controls practical to tap.
-  const overscroll = mobileViewZoom > 1.001
-    ? Math.min(96, Math.max(36, Math.min(main.width, main.height) * 0.12))
-    : 0;
+  // Let a zoomed monitor corner move inward from the physical screen edge,
+  // but fade that allowance smoothly back to zero as zoom returns to Fit.
+  // The old hard on/off margin caused a visible jump near 1x.
+  const overscrollMax = Math.min(96, Math.max(36, Math.min(main.width, main.height) * 0.12));
+  const overscrollBlend = Math.max(0, Math.min(1, (mobileViewZoom - 1) / 0.5));
+  const overscroll = overscrollMax * overscrollBlend;
   const maxX = Math.max(0, (baseWidth * mobileViewZoom - main.width) / 2) + overscroll;
   const maxY = Math.max(0, (baseHeight * mobileViewZoom - main.height) / 2) + overscroll;
   mobileViewPanX = Math.max(-maxX, Math.min(maxX, mobileViewPanX));
@@ -1864,261 +1865,261 @@ function bindRemoteInput() {
     ev.preventDefault();
   }, { passive: false });
 
-  // Mobile/tablet direct-touch controls. Mouse listeners above remain the
-  // desktop path; touch/pen pointer events are handled separately so browsers
-  // do not synthesize duplicate mouse clicks.
-  const touchPointers = new Map();
-  const viewportPointers = new Map();
-  const viewportGesturePointerIds = new Set();
-  let touchPrimaryId = null;
-  let touchStart = null;
-  let touchDragging = false;
-  let touchLongPressTimer = null;
-  let touchLongPressFired = false;
-  let twoFingerLastY = null;
-  let viewportGestureStart = null;
-  let viewportPinchActive = false;
-  let twoFingerMode = "none";
+  // Mobile/tablet direct-touch controls. A single state machine owns every
+  // touch pointer on the viewer canvas. The previous split implementation let
+  // #main and #remote-video capture the same pointer independently; after a
+  // pinch one side could miss pointerup/pointercancel and leave touch stuck.
+  //
+  // One finger on the rendered monitor = remote touch/drag.
+  // Two fingers anywhere on the viewer canvas = viewport pinch/pan.
   const gestureSurface = elMain || elVideo.parentElement || elVideo;
-  if (gestureSurface && isMobileViewerSurface()) gestureSurface.style.touchAction = "none";
+  const mobilePointers = new Map();
+  let remoteTouchId = null;
+  let remoteTouchStart = null;
+  let remoteTouchDragging = false;
+  let remoteTouchLongPressTimer = null;
+  let remoteTouchLongPressFired = false;
+  let viewportGesture = null;
+  let viewportGestureConsumed = false;
+  let viewportGestureRaf = 0;
 
-  const clearTouchLongPress = () => {
-    if (touchLongPressTimer) clearTimeout(touchLongPressTimer);
-    touchLongPressTimer = null;
+  if (gestureSurface && isMobileViewerSurface()) {
+    gestureSurface.style.touchAction = "none";
+  }
+
+  const clearRemoteLongPress = () => {
+    if (remoteTouchLongPressTimer) clearTimeout(remoteTouchLongPressTimer);
+    remoteTouchLongPressTimer = null;
   };
 
-  const touchDistance = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
-  const viewportGestureTarget = (target) => target === elVideo || target === gestureSurface;
-  const viewportPair = () => Array.from(viewportPointers.entries()).slice(0, 2);
+  const pointerDistance = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+
+  const isPointInsideRemoteVideo = (clientX, clientY) => {
+    if (!elVideo || !elVideo.videoWidth || !elVideo.videoHeight) return false;
+    const r = getVideoContentRect(elVideo);
+    return clientX >= r.left && clientX <= r.left + r.width &&
+      clientY >= r.top && clientY <= r.top + r.height;
+  };
+
+  const mobilePair = () => Array.from(mobilePointers.values()).slice(0, 2);
+
+  const cancelRemoteTouchForViewport = () => {
+    clearRemoteLongPress();
+    if (remoteTouchDragging) {
+      sendInput("mouse_up", { button: 0 }, true);
+    }
+    remoteTouchDragging = false;
+    remoteTouchLongPressFired = false;
+    remoteTouchId = null;
+    remoteTouchStart = null;
+  };
 
   const beginViewportGesture = () => {
-    const pair = viewportPair();
-    if (pair.length < 2 || !gestureSurface) return false;
-    const a = pair[0][1];
-    const b = pair[1][1];
+    const pts = mobilePair();
+    if (pts.length < 2 || !gestureSurface) return false;
+
+    cancelRemoteTouchForViewport();
+    const a = pts[0];
+    const b = pts[1];
     const centerX = (a.clientX + b.clientX) / 2;
     const centerY = (a.clientY + b.clientY) / 2;
     const rect = gestureSurface.getBoundingClientRect();
     const zoom = Math.max(1, mobileViewZoom);
-    viewportGestureStart = {
-      distance: Math.max(1, touchDistance(a, b)),
+
+    viewportGesture = {
+      distance: Math.max(1, pointerDistance(a, b)),
       zoom,
       anchorX: (centerX - (rect.left + rect.width / 2) - mobileViewPanX) / zoom,
       anchorY: (centerY - (rect.top + rect.height / 2) - mobileViewPanY) / zoom
     };
-    viewportPinchActive = true;
-    for (const [id] of pair) viewportGesturePointerIds.add(id);
-    clearTouchLongPress();
-    if (touchDragging) {
-      sendInput("mouse_up", { button: 0 }, true);
-      touchDragging = false;
-    }
-    const bothInsideVideo = pair.every(([, point]) => point.insideVideo);
-    twoFingerMode = mobileViewZoom > 1.001 || !bothInsideVideo ? "viewport" : "pending";
-    twoFingerLastY = centerY;
+    viewportGestureConsumed = true;
     return true;
   };
 
   const updateViewportGesture = () => {
-    const pair = viewportPair();
-    if (pair.length < 2 || !gestureSurface) return false;
-    if (!viewportGestureStart && !beginViewportGesture()) return false;
-    const a = pair[0][1];
-    const b = pair[1][1];
+    const pts = mobilePair();
+    if (pts.length < 2 || !gestureSurface) return false;
+    if (!viewportGesture && !beginViewportGesture()) return false;
+
+    const a = pts[0];
+    const b = pts[1];
     const centerX = (a.clientX + b.clientX) / 2;
     const centerY = (a.clientY + b.clientY) / 2;
-    const distance = Math.max(1, touchDistance(a, b));
-    const ratio = distance / Math.max(1, viewportGestureStart.distance);
+    const distance = Math.max(1, pointerDistance(a, b));
+    const ratio = distance / Math.max(1, viewportGesture.distance);
+    const nextZoom = Math.max(1, Math.min(4, viewportGesture.zoom * ratio));
+    const rect = gestureSurface.getBoundingClientRect();
 
-    if (twoFingerMode === "pending" && Math.abs(ratio - 1) >= 0.04) {
-      twoFingerMode = "viewport";
-    }
+    // Preserve the remote point that was under the initial pinch centre.
+    // This keeps both zoom-in and zoom-out stable instead of recentering.
+    mobileViewZoom = nextZoom;
+    mobileViewPanX = (centerX - (rect.left + rect.width / 2)) - viewportGesture.anchorX * nextZoom;
+    mobileViewPanY = (centerY - (rect.top + rect.height / 2)) - viewportGesture.anchorY * nextZoom;
 
-    if (twoFingerMode === "viewport") {
-      const rect = gestureSurface.getBoundingClientRect();
-      const nextZoom = Math.max(1, Math.min(4, viewportGestureStart.zoom * ratio));
-      mobileViewZoom = nextZoom;
-      // Keep the same remote point under the moving pinch centre. This avoids
-      // the old centre-zoom jump and makes edge/corner navigation predictable.
-      mobileViewPanX = (centerX - (rect.left + rect.width / 2)) - viewportGestureStart.anchorX * nextZoom;
-      mobileViewPanY = (centerY - (rect.top + rect.height / 2)) - viewportGestureStart.anchorY * nextZoom;
-      applyMobileViewport();
-      twoFingerLastY = centerY;
-      return true;
-    }
-
-    // At fit zoom, a straight two-finger vertical gesture remains remote scroll.
-    if (twoFingerLastY != null) {
-      const delta = Math.round((twoFingerLastY - centerY) * 2.2);
-      if (Math.abs(delta) >= 2) sendInput("wheel", { delta_x: 0, delta_y: delta, delta_mode: 0 }, true);
-    }
-    twoFingerLastY = centerY;
+    applyMobileViewport();
     return true;
   };
 
-  const endViewportPointer = (ev) => {
-    if (!viewportPointers.has(ev.pointerId)) return;
-    const wasGesturePointer = viewportGesturePointerIds.has(ev.pointerId);
-    viewportPointers.delete(ev.pointerId);
-    viewportGesturePointerIds.delete(ev.pointerId);
-    if (wasGesturePointer) ev.preventDefault();
-    if (viewportPointers.size < 2) {
-      viewportPinchActive = false;
-      viewportGestureStart = null;
-      twoFingerLastY = null;
-      twoFingerMode = "none";
+  const scheduleViewportGestureUpdate = () => {
+    if (viewportGestureRaf) return;
+    viewportGestureRaf = window.requestAnimationFrame(() => {
+      viewportGestureRaf = 0;
+      if (mobilePointers.size >= 2 && viewportGesture) updateViewportGesture();
+    });
+  };
+
+  const resetMobileGestureWhenReleased = () => {
+    if (mobilePointers.size !== 0) return;
+    if (viewportGestureRaf) {
+      window.cancelAnimationFrame(viewportGestureRaf);
+      viewportGestureRaf = 0;
     }
+    clearRemoteLongPress();
+    remoteTouchId = null;
+    remoteTouchStart = null;
+    remoteTouchDragging = false;
+    remoteTouchLongPressFired = false;
+    viewportGesture = null;
+    viewportGestureConsumed = false;
+  };
+
+  const mobilePointerAllowed = (ev) => {
+    if (!isMobileViewerSurface()) return false;
+    if (ev.pointerType !== "touch" && ev.pointerType !== "pen") return false;
+    // Do not steal touches intended for Viewer controls/panels. Black canvas
+    // space and the transformed video itself are the viewport gesture surface.
+    return ev.target === gestureSurface || ev.target === elVideo;
   };
 
   gestureSurface?.addEventListener("pointerdown", (ev) => {
-    if (!isMobileViewerSurface() || (ev.pointerType !== "touch" && ev.pointerType !== "pen")) return;
-    if (!viewportGestureTarget(ev.target)) return;
+    if (!mobilePointerAllowed(ev)) return;
     noteTouchInteraction();
-    viewportPointers.set(ev.pointerId, {
+    ev.preventDefault();
+
+    mobilePointers.set(ev.pointerId, {
+      id: ev.pointerId,
       clientX: ev.clientX,
-      clientY: ev.clientY,
-      insideVideo: ev.target === elVideo
+      clientY: ev.clientY
     });
-    if (viewportPointers.size >= 2) {
+
+    // Capture every mobile pointer in exactly one place. All move/up/cancel
+    // events now return here, even if a finger crosses outside the video.
+    try { gestureSurface.setPointerCapture(ev.pointerId); } catch {}
+
+    if (mobilePointers.size >= 2) {
       beginViewportGesture();
-      ev.preventDefault();
-      try { gestureSurface.setPointerCapture(ev.pointerId); } catch {}
-    }
-  }, { passive: false });
-
-  gestureSurface?.addEventListener("pointermove", (ev) => {
-    const point = viewportPointers.get(ev.pointerId);
-    if (!point) return;
-    viewportPointers.set(ev.pointerId, { ...point, clientX: ev.clientX, clientY: ev.clientY });
-    if (viewportPointers.size >= 2) {
-      noteTouchInteraction();
-      ev.preventDefault();
-      updateViewportGesture();
-    }
-  }, { passive: false });
-
-  gestureSurface?.addEventListener("pointerup", endViewportPointer, { passive: false });
-  gestureSurface?.addEventListener("pointercancel", endViewportPointer, { passive: false });
-
-  elVideo.addEventListener("pointerdown", (ev) => {
-    if (ev.pointerType !== "touch" && ev.pointerType !== "pen") return;
-    noteTouchInteraction();
-    ev.preventDefault();
-    try { elVideo.setPointerCapture(ev.pointerId); } catch {}
-    enterRemoteControlMode();
-    touchPointers.set(ev.pointerId, { clientX: ev.clientX, clientY: ev.clientY });
-
-    if (touchPointers.size === 1) {
-      touchPrimaryId = ev.pointerId;
-      touchStart = { clientX: ev.clientX, clientY: ev.clientY };
-      touchDragging = false;
-      touchLongPressFired = false;
-      const p = getNormalizedPointer(ev);
-      moveRemoteCursorByNorm(p.x_norm, p.y_norm);
-      sendInput("mouse_move", p);
-      clearTouchLongPress();
-      touchLongPressTimer = setTimeout(() => {
-        if (!touchDragging && touchPointers.size === 1 && touchPrimaryId === ev.pointerId) {
-          sendInput("mouse_down", { button: 2 });
-          sendInput("mouse_up", { button: 2 });
-          touchLongPressFired = true;
-        }
-      }, 650);
-    } else if (touchPointers.size === 2) {
-      clearTouchLongPress();
-      if (touchDragging) {
-        sendInput("mouse_up", { button: 0 }, true);
-        touchDragging = false;
-      }
-      // The parent viewer canvas owns all two-finger viewport gestures so the
-      // second finger may start outside the fitted monitor rectangle.
-    }
-  }, { passive: false });
-
-  elVideo.addEventListener("pointermove", (ev) => {
-    if (ev.pointerType !== "touch" && ev.pointerType !== "pen") return;
-    if (!touchPointers.has(ev.pointerId)) return;
-    noteTouchInteraction();
-    ev.preventDefault();
-    touchPointers.set(ev.pointerId, { clientX: ev.clientX, clientY: ev.clientY });
-
-    if (viewportPinchActive || touchPointers.size >= 2) {
-      clearTouchLongPress();
       return;
     }
 
-    if (ev.pointerId !== touchPrimaryId) return;
+    if (!isPointInsideRemoteVideo(ev.clientX, ev.clientY)) {
+      // A first finger in the black surround is intentionally inert; adding a
+      // second finger turns it into a canvas-wide pinch without remote clicks.
+      return;
+    }
+
+    enterRemoteControlMode();
+    remoteTouchId = ev.pointerId;
+    remoteTouchStart = { clientX: ev.clientX, clientY: ev.clientY };
+    remoteTouchDragging = false;
+    remoteTouchLongPressFired = false;
+
     const p = getNormalizedPointer(ev);
     moveRemoteCursorByNorm(p.x_norm, p.y_norm);
     sendInput("mouse_move", p);
-    if (touchStart && touchDistance(ev, touchStart) > 8) {
-      clearTouchLongPress();
-      if (!touchDragging && !touchLongPressFired) {
+
+    clearRemoteLongPress();
+    remoteTouchLongPressTimer = setTimeout(() => {
+      if (mobilePointers.size === 1 && remoteTouchId === ev.pointerId && !remoteTouchDragging) {
+        sendInput("mouse_down", { button: 2 }, true);
+        sendInput("mouse_up", { button: 2 }, true);
+        remoteTouchLongPressFired = true;
+      }
+    }, 650);
+  }, { passive: false });
+
+  gestureSurface?.addEventListener("pointermove", (ev) => {
+    const point = mobilePointers.get(ev.pointerId);
+    if (!point) return;
+    noteTouchInteraction();
+    ev.preventDefault();
+
+    point.clientX = ev.clientX;
+    point.clientY = ev.clientY;
+    mobilePointers.set(ev.pointerId, point);
+
+    if (mobilePointers.size >= 2 || viewportGesture) {
+      scheduleViewportGestureUpdate();
+      return;
+    }
+
+    if (viewportGestureConsumed || ev.pointerId !== remoteTouchId) return;
+
+    const p = getNormalizedPointer(ev);
+    moveRemoteCursorByNorm(p.x_norm, p.y_norm);
+    sendInput("mouse_move", p);
+
+    if (remoteTouchStart && pointerDistance(ev, remoteTouchStart) > 8) {
+      clearRemoteLongPress();
+      if (!remoteTouchDragging && !remoteTouchLongPressFired) {
         sendInput("mouse_down", { button: 0 }, true);
-        touchDragging = true;
+        remoteTouchDragging = true;
       }
     }
   }, { passive: false });
 
-  const finishTouchPointer = (ev) => {
-    if (ev.pointerType !== "touch" && ev.pointerType !== "pen") return;
-    if (!touchPointers.has(ev.pointerId)) return;
+  const finishMobilePointer = (ev, cancelled) => {
+    if (!mobilePointers.has(ev.pointerId)) return;
     noteTouchInteraction();
     ev.preventDefault();
-    const wasPrimary = ev.pointerId === touchPrimaryId;
-    const wasViewportGesture = viewportGesturePointerIds.has(ev.pointerId) || viewportPinchActive;
-    touchPointers.delete(ev.pointerId);
-    clearTouchLongPress();
 
-    if (wasPrimary) {
-      if (touchDragging) sendInput("mouse_up", { button: 0 }, true);
-      else if (!wasViewportGesture && !touchLongPressFired && touchPointers.size === 0) {
+    const wasRemoteTouch = ev.pointerId === remoteTouchId;
+    const wasViewportGesture = viewportGestureConsumed || mobilePointers.size >= 2;
+    mobilePointers.delete(ev.pointerId);
+    try { gestureSurface.releasePointerCapture(ev.pointerId); } catch {}
+
+    if (wasRemoteTouch) {
+      clearRemoteLongPress();
+      if (remoteTouchDragging) {
+        sendInput("mouse_up", { button: 0 }, true);
+      } else if (!cancelled && !wasViewportGesture && !remoteTouchLongPressFired) {
         const p = getNormalizedPointer(ev);
         moveRemoteCursorByNorm(p.x_norm, p.y_norm);
         sendInput("mouse_move", p, true);
         sendInput("mouse_down", { button: 0 }, true);
         sendInput("mouse_up", { button: 0 }, true);
       }
-      touchPrimaryId = null;
-      touchStart = null;
-      touchDragging = false;
-      touchLongPressFired = false;
+      remoteTouchId = null;
+      remoteTouchStart = null;
+      remoteTouchDragging = false;
+      remoteTouchLongPressFired = false;
     }
-    if (touchPointers.size < 2) {
-      twoFingerLastY = null;
-      viewportGestureStart = null;
-      twoFingerMode = "none";
+
+    if (wasViewportGesture) {
+      if (viewportGestureRaf) {
+        window.cancelAnimationFrame(viewportGestureRaf);
+        viewportGestureRaf = 0;
+      }
+      // Settle exactly to Fit only after the pinch has ended, never while the
+      // fingers are moving. This avoids threshold bounce during zoom-out.
+      if (mobileViewZoom < 1.02) {
+        mobileViewZoom = 1;
+        mobileViewPanX = 0;
+        mobileViewPanY = 0;
+        applyMobileViewport();
+      }
+      // Once a two-finger gesture begins, the remaining finger stays inert
+      // until all fingers lift. This prevents pinch-end from becoming a click
+      // or drag and guarantees the next touch starts from a clean state.
+      viewportGesture = null;
+      viewportGestureConsumed = true;
+      cancelRemoteTouchForViewport();
     }
+
+    resetMobileGestureWhenReleased();
   };
 
-  const cancelTouchPointer = (ev) => {
-    if (ev.pointerType !== "touch" && ev.pointerType !== "pen") return;
-    if (!touchPointers.has(ev.pointerId)) return;
-    noteTouchInteraction();
-    ev.preventDefault();
-    const wasPrimary = ev.pointerId === touchPrimaryId;
-    touchPointers.delete(ev.pointerId);
-    clearTouchLongPress();
-
-    // Cancellation means the browser/OS took the gesture. It must never be
-    // converted into a remote click. The old shared finish handler did exactly
-    // that and could create apparently random button/menu presses.
-    if (wasPrimary) {
-      if (touchDragging) sendInput("mouse_up", { button: 0 }, true);
-      touchPrimaryId = null;
-      touchStart = null;
-      touchDragging = false;
-      touchLongPressFired = false;
-    }
-    if (touchPointers.size < 2) {
-      twoFingerLastY = null;
-      viewportGestureStart = null;
-      twoFingerMode = "none";
-    }
-  };
-
-  elVideo.addEventListener("pointerup", finishTouchPointer, { passive: false });
-  elVideo.addEventListener("pointercancel", cancelTouchPointer, { passive: false });
+  gestureSurface?.addEventListener("pointerup", (ev) => finishMobilePointer(ev, false), { passive: false });
+  gestureSurface?.addEventListener("pointercancel", (ev) => finishMobilePointer(ev, true), { passive: false });
 
   window.addEventListener("blur", () => {
     if (remoteAltTabActive) {
