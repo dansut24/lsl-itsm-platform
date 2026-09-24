@@ -1783,6 +1783,15 @@ function bindRemoteInput() {
   elVideo.style.outline = "none";
   elVideo.style.border = "none";
   elVideo.style.cursor = "default";
+  elVideo.style.touchAction = "none";
+
+  // Some mobile browsers/WebViews emit compatibility mouse events after
+  // PointerEvents. Suppress that duplicate path so one tap is one remote click.
+  let suppressCompatibilityMouseUntilMs = 0;
+  const noteTouchInteraction = () => {
+    suppressCompatibilityMouseUntilMs = Date.now() + 1200;
+  };
+  const compatibilityMouseSuppressed = () => Date.now() < suppressCompatibilityMouseUntilMs;
 
   elVideo.addEventListener("mouseenter", (ev) => {
     if (!pc || pc.connectionState !== "connected") return;
@@ -1795,6 +1804,7 @@ function bindRemoteInput() {
   });
 
   elVideo.addEventListener("mousedown", (ev) => {
+    if (compatibilityMouseSuppressed()) { ev.preventDefault(); return; }
     enterRemoteControlMode();
     moveRemoteCursorByClient(ev.clientX, ev.clientY);
 
@@ -1808,11 +1818,13 @@ function bindRemoteInput() {
   });
 
   window.addEventListener("mouseup", (ev) => {
+    if (compatibilityMouseSuppressed()) return;
     if (!controlActive) return;
     sendInput("mouse_up", { button: ev.button });
   });
 
   elVideo.addEventListener("mousemove", (ev) => {
+    if (compatibilityMouseSuppressed()) return;
     if (!controlActive) enterRemoteControlMode();
     moveRemoteCursorByClient(ev.clientX, ev.clientY);
     const p = getNormalizedPointer(ev);
@@ -1821,6 +1833,7 @@ function bindRemoteInput() {
   });
 
   elVideo.addEventListener("wheel", (ev) => {
+    if (compatibilityMouseSuppressed()) { ev.preventDefault(); return; }
     // Trackpads fire wheel events without a physical wheel click. Treat wheel
     // as an intent to control the remote/backstage surface so two-finger
     // scrolling works even before a click focuses the viewer.
@@ -1867,6 +1880,7 @@ function bindRemoteInput() {
 
   elVideo.addEventListener("pointerdown", (ev) => {
     if (ev.pointerType !== "touch" && ev.pointerType !== "pen") return;
+    noteTouchInteraction();
     ev.preventDefault();
     try { elVideo.setPointerCapture(ev.pointerId); } catch {}
     enterRemoteControlMode();
@@ -1913,6 +1927,7 @@ function bindRemoteInput() {
   elVideo.addEventListener("pointermove", (ev) => {
     if (ev.pointerType !== "touch" && ev.pointerType !== "pen") return;
     if (!touchPointers.has(ev.pointerId)) return;
+    noteTouchInteraction();
     ev.preventDefault();
     touchPointers.set(ev.pointerId, { clientX: ev.clientX, clientY: ev.clientY });
 
@@ -1964,6 +1979,7 @@ function bindRemoteInput() {
   const finishTouchPointer = (ev) => {
     if (ev.pointerType !== "touch" && ev.pointerType !== "pen") return;
     if (!touchPointers.has(ev.pointerId)) return;
+    noteTouchInteraction();
     ev.preventDefault();
     const wasPrimary = ev.pointerId === touchPrimaryId;
     touchPointers.delete(ev.pointerId);
@@ -1990,8 +2006,34 @@ function bindRemoteInput() {
     }
   };
 
+  const cancelTouchPointer = (ev) => {
+    if (ev.pointerType !== "touch" && ev.pointerType !== "pen") return;
+    if (!touchPointers.has(ev.pointerId)) return;
+    noteTouchInteraction();
+    ev.preventDefault();
+    const wasPrimary = ev.pointerId === touchPrimaryId;
+    touchPointers.delete(ev.pointerId);
+    clearTouchLongPress();
+
+    // Cancellation means the browser/OS took the gesture. It must never be
+    // converted into a remote click. The old shared finish handler did exactly
+    // that and could create apparently random button/menu presses.
+    if (wasPrimary) {
+      if (touchDragging) sendInput("mouse_up", { button: 0 }, true);
+      touchPrimaryId = null;
+      touchStart = null;
+      touchDragging = false;
+      touchLongPressFired = false;
+    }
+    if (touchPointers.size < 2) {
+      twoFingerLastY = null;
+      viewportGestureStart = null;
+      twoFingerMode = "none";
+    }
+  };
+
   elVideo.addEventListener("pointerup", finishTouchPointer, { passive: false });
-  elVideo.addEventListener("pointercancel", finishTouchPointer, { passive: false });
+  elVideo.addEventListener("pointercancel", cancelTouchPointer, { passive: false });
 
   window.addEventListener("blur", () => {
     if (remoteAltTabActive) {
@@ -2318,15 +2360,15 @@ async function handleOffer(msg) {
       // Prefer codecs that keep browser/mobile sessions sharp without forcing
       // the conservative H.264 level-3.1 720p ceiling. The Agent still makes
       // the final choice from the codecs actually returned in our SDP answer.
-      const vp9 = codecs.filter(c => String(c.mimeType).toLowerCase() === "video/vp9");
       const vp8 = codecs.filter(c => String(c.mimeType).toLowerCase() === "video/vp8");
       const h264 = codecs.filter(c => String(c.mimeType).toLowerCase() === "video/h264");
+      const vp9 = codecs.filter(c => String(c.mimeType).toLowerCase() === "video/vp9");
       const rest = codecs.filter(c => {
         const mt = String(c.mimeType).toLowerCase();
-        return mt !== "video/vp9" && mt !== "video/vp8" && mt !== "video/h264";
+        return mt !== "video/vp8" && mt !== "video/h264" && mt !== "video/vp9";
       });
-      console.log("[codec] viewer codec preference", { vp9: vp9.length, vp8: vp8.length, h264: h264.length, rest: rest.length });
-      transceiver.setCodecPreferences([...vp9, ...vp8, ...h264, ...rest]);
+      console.log("[codec] viewer codec preference", { vp8: vp8.length, h264: h264.length, vp9: vp9.length, rest: rest.length });
+      transceiver.setCodecPreferences([...vp8, ...h264, ...vp9, ...rest]);
     }
   } catch (e) {
     console.warn("[webrtc] codec preference step failed:", e?.message || e);
