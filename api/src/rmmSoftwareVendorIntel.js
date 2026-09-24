@@ -237,7 +237,14 @@ async function upsertRelease({
     if (existing.rowCount) {
       await client.query(
         `UPDATE rmm_software_catalogue
-            SET canonical_name=$2,publisher=$3,
+            SET status=CASE
+                  WHEN status='archived'
+                   AND source_metadata->>'catalogueArchivePolicy'='business_focused_structural_cleanup_v1'
+                   AND $15 IN ('deployment_candidate','qualified','qualified_limited')
+                    THEN 'active'
+                  ELSE status
+                END,
+                canonical_name=$2,publisher=$3,
                 name_pattern=COALESCE(NULLIF($8,''),NULLIF($12::jsonb->>'displayNameContains',''),NULLIF(name_pattern,''),$2),
                 publisher_pattern=COALESCE(NULLIF($9,''),NULLIF($12::jsonb->>'publisherContains',''),NULLIF(publisher_pattern,''),$3),
                 provider=$10,provider_package_id=$1,target_version=$4,
@@ -1490,19 +1497,80 @@ async function syncVsCode() {
   const b = await binding('microsoft_vscode')
   if (!b) return null
   const payload = await fetchJson(b.source_url)
-  const latest = clean(Array.isArray(payload) ? payload[0] : '')
+  const versions = Array.isArray(payload) ? payload.map(clean).filter(Boolean) : []
+  const latest = clean(versions[0])
   if (!latest) throw new Error('VS Code release API returned no stable version')
+
+  const verification = {
+    method: 'uninstall_registry',
+    packageId: '',
+    productCode: '',
+    displayNameContains: 'Microsoft Visual Studio Code',
+    publisherContains: 'Microsoft',
+    filePath: '',
+  }
+  const execution = { installArguments: '/VERYSILENT /NORESTART /MERGETASKS=!runcode' }
+  const catalogueMetadata = {
+    deploymentMode: 'vendor_direct',
+    namePattern: 'Visual Studio Code',
+    publisherPattern: 'Microsoft',
+    automaticVendorRelease: true,
+  }
+  const qualificationNotes = 'Official Microsoft VS Code system installer. Hi5Central verifies SHA-256, Authenticode, install/uninstall, upgrade and rollback before qualification.'
+
+  const previous = clean(versions.find((version) => compareVersionValues(version, latest) < 0))
+  if (previous) {
+    await upsertRelease({
+      sourceKey: b.source_key,
+      packageId: b.provider_package_id,
+      canonicalName: b.canonical_name,
+      publisher: b.publisher || 'Microsoft Corporation',
+      channel: b.channel,
+      platform: b.platform,
+      architecture: b.architecture,
+      version: previous,
+      installerUrl: `https://update.code.visualstudio.com/${encodeURIComponent(previous)}/win32-x64-system/stable`,
+      installerType: 'exe',
+      releaseUrl: b.source_url,
+      assetName: `VSCodeSetup-x64-${previous}.exe`,
+      trustState: 'asset_candidate',
+      qualificationState: 'deployment_candidate',
+      qualificationNotes,
+      sourcePriority: Math.max(1, Number(b.priority || 900) - 1),
+      payload: {
+        versions: versions.slice(0, 25),
+        historicalReleaseCandidate: true,
+        vendorChecksumPresent: false,
+      },
+      catalogueProvider: 'managed',
+      verification,
+      execution,
+      catalogueMetadata,
+    })
+  }
+
   return upsertRelease({
     sourceKey: b.source_key,
     packageId: b.provider_package_id,
     canonicalName: b.canonical_name,
-    publisher: b.publisher,
+    publisher: b.publisher || 'Microsoft Corporation',
     channel: b.channel,
     platform: b.platform,
     architecture: b.architecture,
     version: latest,
+    installerUrl: `https://update.code.visualstudio.com/${encodeURIComponent(latest)}/win32-x64-system/stable`,
+    installerType: 'exe',
+    releaseUrl: b.source_url,
+    assetName: `VSCodeSetup-x64-${latest}.exe`,
+    trustState: 'asset_candidate',
+    qualificationState: 'deployment_candidate',
+    qualificationNotes,
     sourcePriority: b.priority,
-    payload: { versions: payload.slice(0, 25) },
+    payload: { versions: versions.slice(0, 25), vendorChecksumPresent: false },
+    catalogueProvider: 'managed',
+    verification,
+    execution,
+    catalogueMetadata,
   })
 }
 async function syncSevenZip() {
@@ -1549,6 +1617,202 @@ async function syncAdobeReader() {
     payload: { source: b.source_url },
   })
 }
+async function syncPuttyDirect() {
+  const b = await binding('registry_chocolatey_putty')
+  if (!b) return null
+
+  const resolved = await resolveWingetVendorInstaller('PuTTY.PuTTY')
+  if (!resolved?.ok) throw new Error('PuTTY upstream MSI could not be resolved: ' + clean(resolved?.reason || 'unknown'))
+  if (clean(resolved.scope).toLowerCase() === 'user') throw new Error('PuTTY upstream package resolved to user scope')
+  if (clean(resolved.installerType).toLowerCase() !== 'msi') throw new Error('PuTTY upstream package is not MSI')
+
+  const publisher = clean(resolved.publishers?.[0] || b.publisher || 'Simon Tatham')
+  const verification = {
+    method: 'uninstall_registry',
+    packageId: '',
+    productCode: '',
+    displayNameContains: 'PuTTY',
+    publisherContains: publisher,
+    filePath: '',
+  }
+  const catalogueMetadata = {
+    deploymentMode: 'vendor_direct',
+    namePattern: 'PuTTY',
+    publisherPattern: publisher,
+    nvdVendor: 'simon_tatham',
+    nvdProduct: 'putty',
+    automaticVendorRelease: true,
+  }
+  const qualificationNotes = 'Official PuTTY MSI resolved from the signed WinGet manifest to the upstream vendor host. Hi5Central independently pins SHA-256 and Authenticode before deployment.'
+
+  const previous = await resolvePreviousWingetVendorInstaller('PuTTY.PuTTY', resolved.version).catch(() => null)
+  if (previous?.ok) {
+    await upsertRelease({
+      sourceKey: b.source_key,
+      packageId: b.provider_package_id,
+      canonicalName: b.canonical_name,
+      publisher,
+      channel: b.channel,
+      platform: b.platform,
+      architecture: b.architecture,
+      version: previous.version,
+      installerUrl: previous.installerUrl,
+      installerType: previous.installerType,
+      releaseUrl: previous.manifestUrl,
+      assetName: clean(new URL(previous.installerUrl).pathname.split('/').at(-1)),
+      trustState: 'asset_candidate',
+      qualificationState: 'deployment_candidate',
+      qualificationNotes,
+      sourcePriority: Math.max(1, Number(b.priority || 900) - 1),
+      payload: {
+        historicalReleaseCandidate: true,
+        vendorChecksumPresent: false,
+        wingetManifest: {
+          packageId: previous.packageId,
+          manifestUrl: previous.manifestUrl,
+          corroboratingSha256: previous.installerSha256,
+        },
+        verification,
+      },
+      catalogueProvider: 'managed',
+      verification,
+      execution: { installArguments: '' },
+      catalogueMetadata,
+    })
+  }
+
+  return upsertRelease({
+    sourceKey: b.source_key,
+    packageId: b.provider_package_id,
+    canonicalName: b.canonical_name,
+    publisher,
+    channel: b.channel,
+    platform: b.platform,
+    architecture: b.architecture,
+    version: resolved.version,
+    installerUrl: resolved.installerUrl,
+    installerType: resolved.installerType,
+    releaseUrl: resolved.manifestUrl,
+    assetName: clean(new URL(resolved.installerUrl).pathname.split('/').at(-1)),
+    trustState: 'asset_candidate',
+    qualificationState: 'deployment_candidate',
+    qualificationNotes,
+    sourcePriority: b.priority,
+    payload: {
+      vendorChecksumPresent: false,
+      wingetManifest: {
+        packageId: resolved.packageId,
+        manifestUrl: resolved.manifestUrl,
+        corroboratingSha256: resolved.installerSha256,
+      },
+      verification,
+    },
+    catalogueProvider: 'managed',
+    verification,
+    execution: { installArguments: '' },
+    catalogueMetadata,
+  })
+}
+
+async function syncMySqlConnectorOdbcArchiveVariant(sourceKey, {
+  version,
+  series,
+  architecture,
+  archiveArchitecture,
+} = {}) {
+  const b = await binding(sourceKey)
+  if (!b) return null
+
+  const safeVersion = clean(version)
+  const safeSeries = clean(series)
+  const safeArchitecture = clean(architecture).toLowerCase()
+  const safeArchiveArchitecture = clean(archiveArchitecture)
+  if (!safeVersion || !safeSeries || !['x86','x64'].includes(safeArchitecture) || !safeArchiveArchitecture) {
+    throw new Error(sourceKey + ' archive variant configuration is incomplete')
+  }
+
+  const file = `mysql-connector-odbc-${safeVersion}-${safeArchiveArchitecture}.msi`
+  const installerUrl = `https://cdn.mysql.com/archives/mysql-connector-odbc-${safeSeries}/${file}`
+  const safeUrl = await publicHttpsUrl(installerUrl)
+  const probe = await fetch(safeUrl, {
+    method: 'HEAD',
+    headers: { 'User-Agent': 'Hi5Central-Software-Catalogue/1.0' },
+    signal: AbortSignal.timeout(30_000),
+  })
+  if (!probe.ok) throw new Error(sourceKey + ' archive MSI HTTP ' + probe.status)
+
+  const displayName = safeSeries === '8.0'
+    ? 'MySQL Connector/ODBC 8.0'
+    : safeSeries === '9.7'
+      ? 'MySQL Connector/ODBC 9.7'
+      : `MySQL Connector/ODBC ${safeSeries}`
+  const verification = {
+    method: 'uninstall_registry',
+    packageId: '',
+    productCode: '',
+    displayNameContains: displayName,
+    publisherContains: 'Oracle',
+    filePath: '',
+  }
+  const catalogueMetadata = {
+    deploymentMode: 'vendor_direct',
+    namePattern: displayName,
+    publisherPattern: 'Oracle',
+    automaticVendorRelease: true,
+    architecture: safeArchitecture,
+    mysqlConnectorOdbcSeries: safeSeries,
+    pinnedCompatibilitySeries: true,
+  }
+  const qualificationNotes = `Official MySQL Connector/ODBC ${safeSeries} ${safeArchitecture} MSI from Oracle's archive. Hi5Central independently pins SHA-256 and Authenticode before deployment.`
+
+  return upsertRelease({
+    sourceKey: b.source_key,
+    packageId: b.provider_package_id,
+    canonicalName: b.canonical_name,
+    publisher: b.publisher || 'Oracle Corporation',
+    channel: b.channel,
+    platform: b.platform,
+    architecture: safeArchitecture,
+    version: safeVersion,
+    installerUrl: safeUrl.toString(),
+    installerType: 'msi',
+    releaseUrl: 'https://downloads.mysql.com/archives/c-odbc/',
+    assetName: file,
+    trustState: 'asset_candidate',
+    qualificationState: 'deployment_candidate',
+    qualificationNotes,
+    sourcePriority: b.priority,
+    payload: {
+      source: 'https://downloads.mysql.com/archives/c-odbc/',
+      vendorChecksumPresent: false,
+      compatibilitySeries: safeSeries,
+      architecture: safeArchitecture,
+    },
+    catalogueProvider: 'managed',
+    verification,
+    execution: { installArguments: '' },
+    catalogueMetadata,
+  })
+}
+
+async function syncMySqlConnectorOdbc8X86() {
+  return syncMySqlConnectorOdbcArchiveVariant('mysql_connector_odbc_8_x86', {
+    version: '8.0.43',
+    series: '8.0',
+    architecture: 'x86',
+    archiveArchitecture: 'win32',
+  })
+}
+
+async function syncMySqlConnectorOdbc9X64() {
+  return syncMySqlConnectorOdbcArchiveVariant('mysql_connector_odbc_9_x64', {
+    version: '9.7.0',
+    series: '9.7',
+    architecture: 'x64',
+    archiveArchitecture: 'winx64',
+  })
+}
+
 async function syncMySqlConnectorOdbc() {
   const b = await binding('mysql_connector_odbc')
   if (!b) return null
@@ -1649,7 +1913,10 @@ const adapters = {
   microsoft_vscode: syncVsCode,
   sevenzip: syncSevenZip,
   adobe_acrobat_reader: syncAdobeReader,
+  registry_chocolatey_putty: syncPuttyDirect,
   mysql_connector_odbc: syncMySqlConnectorOdbc,
+  mysql_connector_odbc_8_x86: syncMySqlConnectorOdbc8X86,
+  mysql_connector_odbc_9_x64: syncMySqlConnectorOdbc9X64,
 }
 
 function normalizedSoftwareName(value = '') {
@@ -2214,6 +2481,158 @@ export async function softwareVendorSummary() {
   return { sources: sources.rows, latest, sourceHealth, health, readiness, readinessCounts }
 }
 
+export async function archiveStructurallyUnusableCatalogueEntries({ dryRun = true, limit = 500 } = {}) {
+  const packageRegistriesWithoutEndpointInstallers = [
+    'npm',
+    'pypi',
+    'rubygems',
+    'packagist',
+    'nuget',
+    'maven',
+    'crates',
+    'go',
+  ]
+  const safeLimit = Math.max(1, Math.min(2000, Number(limit) || 500))
+  const candidates = await pool.query(
+    `SELECT c.id,c.canonical_name,c.platform,c.external_key,
+            COALESCE(s.source_key,'') AS source_key,
+            COALESCE(s.source_type,'') AS source_type,
+            COALESCE(s.metadata->>'registry','') AS registry,
+            CASE
+              WHEN EXISTS (
+                SELECT 1
+                  FROM rmm_software_catalogue sibling
+                 WHERE sibling.tenant_id IS NULL
+                   AND sibling.status='active'
+                   AND sibling.id<>c.id
+                   AND lower(sibling.canonical_name)=lower(c.canonical_name)
+                   AND sibling.qualification_state IN ('deployment_candidate','qualified','qualified_limited')
+              ) THEN 'redundant_intelligence_only_duplicate'
+              WHEN c.platform IN ('windows','cross_platform')
+               AND COALESCE(c.source_metadata->>'releaseAssetBlocker','') IN (
+                 'vendor_windows_asset_missing',
+                 'portable_transport_not_qualified',
+                 'msix_transport_not_qualified'
+               ) THEN 'non_deployable_windows_transport'
+              ELSE 'non_deployable_package_registry'
+            END AS archive_reason
+       FROM rmm_software_catalogue c
+       LEFT JOIN rmm_software_vendor_sources s
+         ON s.source_key=c.source_metadata->>'latestSource'
+      WHERE c.tenant_id IS NULL
+        AND c.catalogue_source='vendor'
+        AND c.status='active'
+        AND c.qualification_state='intelligence_only'
+        AND (
+          EXISTS (
+            SELECT 1
+              FROM rmm_software_catalogue sibling
+             WHERE sibling.tenant_id IS NULL
+               AND sibling.status='active'
+               AND sibling.id<>c.id
+               AND lower(sibling.canonical_name)=lower(c.canonical_name)
+               AND sibling.qualification_state IN ('deployment_candidate','qualified','qualified_limited')
+          )
+          OR (
+            NOT (lower(c.canonical_name)=ANY($1::text[]))
+            AND s.source_type='package_registry'
+            AND lower(COALESCE(s.metadata->>'registry',''))=ANY($2::text[])
+            AND COALESCE(c.source_metadata->>'wingetPackageId',c.source_metadata->>'autoWingetPackageId','')=''
+            AND NOT EXISTS (
+              SELECT 1
+                FROM rmm_software_vendor_releases r
+               WHERE r.provider_package_id=c.external_key
+                 AND r.trust_state='direct_ready'
+                 AND r.installer_type IN ('msi','exe')
+                 AND r.installer_url LIKE 'https://%'
+                 AND r.installer_sha256 ~* '^[a-f0-9]{64}$'
+            )
+          )
+          OR (
+            NOT (lower(c.canonical_name)=ANY($1::text[]))
+            AND c.platform IN ('windows','cross_platform')
+            AND COALESCE(c.source_metadata->>'releaseAssetBlocker','') IN (
+              'vendor_windows_asset_missing',
+              'portable_transport_not_qualified',
+              'msix_transport_not_qualified'
+            )
+            AND COALESCE(c.source_metadata->>'wingetPackageId',c.source_metadata->>'autoWingetPackageId','')=''
+            AND NOT EXISTS (
+              SELECT 1
+                FROM rmm_software_vendor_releases r
+               WHERE r.provider_package_id=c.external_key
+                 AND r.trust_state='direct_ready'
+                 AND r.installer_type IN ('msi','exe')
+                 AND r.installer_url LIKE 'https://%'
+                 AND r.installer_sha256 ~* '^[a-f0-9]{64}$'
+            )
+          )
+        )
+      ORDER BY
+        CASE WHEN EXISTS (
+          SELECT 1
+            FROM rmm_software_catalogue sibling
+           WHERE sibling.tenant_id IS NULL
+             AND sibling.status='active'
+             AND sibling.id<>c.id
+             AND lower(sibling.canonical_name)=lower(c.canonical_name)
+             AND sibling.qualification_state IN ('deployment_candidate','qualified','qualified_limited')
+        ) THEN 0 ELSE 1 END,
+        lower(c.canonical_name)
+      LIMIT $3`,
+    [COMMON_WINDOWS_SOFTWARE_LOWER, packageRegistriesWithoutEndpointInstallers, safeLimit],
+  )
+
+  if (dryRun || !candidates.rowCount) {
+    return {
+      dryRun: Boolean(dryRun),
+      candidates: candidates.rowCount,
+      archived: 0,
+      rows: candidates.rows,
+    }
+  }
+
+  const archived = []
+  await withTransaction(async (client) => {
+    for (const row of candidates.rows) {
+      const result = await client.query(
+        `UPDATE rmm_software_catalogue
+            SET status='archived',
+                source_metadata=source_metadata || jsonb_build_object(
+                  'catalogueArchiveReason',$2::text,
+                  'catalogueArchivedAt',now(),
+                  'cataloguePreviousStatus',status,
+                  'catalogueArchivePolicy','business_focused_structural_cleanup_v1'
+                ),
+                qualification_notes=CASE
+                  WHEN qualification_notes='' THEN 'Archived from the deployable catalogue: ' || $3::text
+                  ELSE qualification_notes || ' Archived from the deployable catalogue: ' || $3::text
+                END,
+                updated_at=now()
+          WHERE id=$1 AND status='active'
+          RETURNING id,canonical_name`,
+        [
+          row.id,
+          row.archive_reason,
+          row.archive_reason === 'redundant_intelligence_only_duplicate'
+            ? 'a deployable catalogue entry for this application already exists'
+            : row.archive_reason === 'non_deployable_windows_transport'
+              ? 'no supported Windows MSI/EXE or approved fallback transport is currently available'
+              : 'this package-registry record has no endpoint MSI/EXE or WinGet deployment route',
+        ],
+      )
+      if (result.rowCount) archived.push({ ...row, id: result.rows[0].id })
+    }
+  })
+
+  return {
+    dryRun: false,
+    candidates: candidates.rowCount,
+    archived: archived.length,
+    rows: archived,
+  }
+}
+
 let schedulerStarted = false
 let qualificationRunnerTickActive = false
 let qualificationProgressionTickActive = false
@@ -2242,11 +2661,29 @@ async function runQualificationProgressionTick() {
           AND q.state IN ('queued','running','cleanup_pending','cleanup_running')`,
     )
     if (Number(completionBacklog.rows[0]?.count || 0) === 0) {
-      await queueAutomaticCleanInstallQualifications({
-        limit: 1,
-        maxPending: 1,
+      await queueCommonSoftwareQualifications({
+        limit: COMMON_WINDOWS_SOFTWARE_LOWER.length,
         allowUnresolvedVulnerability: true,
       })
+      const businessCleanBacklog = await pool.query(
+        `SELECT count(*)::int AS count
+           FROM rmm_software_qualification_queue q
+           JOIN rmm_software_catalogue c ON c.id=q.catalogue_id
+          WHERE c.tenant_id IS NULL
+            AND c.status='active'
+            AND c.qualification_state='deployment_candidate'
+            AND q.test_type='clean_install'
+            AND q.state IN ('queued','running','cleanup_pending','cleanup_running')
+            AND lower(c.canonical_name)=ANY($1::text[])`,
+        [COMMON_WINDOWS_SOFTWARE_LOWER],
+      )
+      if (Number(businessCleanBacklog.rows[0]?.count || 0) === 0) {
+        await queueAutomaticCleanInstallQualifications({
+          limit: 1,
+          maxPending: 1,
+          allowUnresolvedVulnerability: true,
+        })
+      }
     }
   } catch (error) {
     console.error('RMM qualification progression tick failed', error)
@@ -2761,9 +3198,16 @@ export function startSoftwareVendorSyncScheduler() {
   }
   const seedBusinessEssentials = () => seedBusinessEssentialVendorCatalogue()
     .catch(error => console.error('Business Essentials catalogue seed failed', error))
+  const archiveStructuralDeadWeight = () => archiveStructurallyUnusableCatalogueEntries({ dryRun: false, limit: 1000 })
+    .then((result) => {
+      if (result.archived) console.log('Business-focused catalogue cleanup', { archived: result.archived, candidates: result.candidates })
+    })
+    .catch(error => console.error('Business-focused catalogue cleanup failed', error))
   const prepareBaselines = () => prepareQualificationBaselines({ limit: 6 }).catch(error => console.error('Qualification baseline preparation failed', error))
   setTimeout(seedBusinessEssentials, 20_000).unref?.()
   setInterval(seedBusinessEssentials, 24 * 60 * 60_000).unref?.()
+  setTimeout(archiveStructuralDeadWeight, 45_000).unref?.()
+  setInterval(archiveStructuralDeadWeight, 24 * 60 * 60_000).unref?.()
   setTimeout(prepareBaselines, 15_000).unref?.()
   setInterval(prepareBaselines, 2 * 60_000).unref?.()
   setTimeout(run, 10_000).unref?.()

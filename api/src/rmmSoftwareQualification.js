@@ -159,6 +159,41 @@ function terminalJobFailure(job) {
   return clean(job.error_message || object(job.result).error || job.status)
 }
 
+function windowsInstallerBusy(job) {
+  const result = object(job?.result)
+  if (Number(result.exitCode) === 1618) return true
+  return array(result.installAttempts).some((attempt) => Number(object(attempt).exitCode) === 1618)
+}
+
+async function requeueWindowsInstallerBusy(queue, stage = 'install') {
+  const attempts = Math.max(1, Number(queue?.attempt_count) || 1)
+  if (attempts >= 3) return false
+  const retrySeconds = Math.min(180, 60 * attempts)
+  const retryNotBefore = new Date(Date.now() + retrySeconds * 1000).toISOString()
+  await pool.query(
+    `UPDATE rmm_software_qualification_queue
+        SET state='queued',
+            runner_agent_device_id=NULL,
+            agent_job_id=NULL,
+            deployment_id=NULL,
+            cleanup_job_id=NULL,
+            last_error='qualification_windows_installer_busy',
+            evidence=evidence || $2::jsonb,
+            started_at=NULL,
+            completed_at=NULL,
+            updated_at=now()
+      WHERE id=$1`,
+    [queue.id, JSON.stringify({
+      stage: clean(stage),
+      transientInstallerBusy: true,
+      retryNotBefore,
+      retryDelaySeconds: retrySeconds,
+      windowsInstallerExitCode: 1618,
+    })],
+  )
+  return true
+}
+
 async function liveQualificationRunner() {
   const result = await pool.query(
     `SELECT q.agent_device_id,a.tenant_id,a.inventory_id,a.agent_version,a.patch_capabilities,
@@ -1445,6 +1480,11 @@ async function reconcileUpgradeQueueRow(queue, runner) {
         return { id: current.id, state: 'cancelled', ...historicalUnavailable }
       }
 
+      if (windowsInstallerBusy(job)) {
+        const requeued = await requeueWindowsInstallerBusy(current, clean(evidence.stage) || 'upgrade_install')
+        if (requeued) return { id: current.id, state: 'queued', retry: 'windows_installer_busy' }
+      }
+
       if (failure === 'qualification_runtime_limit_exceeded' && runner
         && clean(current.runner_agent_device_id) === clean(runner.agent_device_id)) {
         const installed=installedMatches(runner.source_payload,current)
@@ -2182,6 +2222,10 @@ async function reconcileQueueRow(queue, runner) {
           return { id:current.id,state:dispatched.dispatched?'cleanup_running':'review_required' }
         }
       }
+      if (windowsInstallerBusy(job)) {
+        const requeued = await requeueWindowsInstallerBusy(current, 'install')
+        if (requeued) return { id: current.id, state: 'queued', retry: 'windows_installer_busy' }
+      }
       await markReview(current.id, failure || providerFailure || 'qualification_install_verification_failed', { stage: 'install' })
       return { id: current.id, state: 'review_required' }
     }
@@ -2310,7 +2354,7 @@ async function reconcileQueueRow(queue, runner) {
   return { id: current.id, state: current.state }
 }
 
-export async function queueCommonSoftwareQualifications({ limit = 50 } = {}) {
+export async function queueCommonSoftwareQualifications({ limit = 50, allowUnresolvedVulnerability = true } = {}) {
   const safeLimit = Math.max(1, Math.min(COMMON_WINDOWS_SOFTWARE_LOWER.length, Number(limit) || 50))
   const result = await pool.query(
     `WITH candidates AS (
@@ -2346,7 +2390,8 @@ export async function queueCommonSoftwareQualifications({ limit = 50 } = {}) {
           AND lower(COALESCE(c.qualification_evidence->>'sha256Verified','false'))='true'
           AND lower(COALESCE(c.qualification_evidence->>'authenticodeVerified','false'))='true'
           AND (
-            (
+            $3::boolean
+            OR (
               c.source_metadata->'vulnerabilityIdentityAudit'->>'state'='covered'
               AND EXISTS (
                 SELECT 1
@@ -2359,7 +2404,19 @@ export async function queueCommonSoftwareQualifications({ limit = 50 } = {}) {
           AND NOT EXISTS (
             SELECT 1
               FROM rmm_software_qualification_queue q
-             WHERE q.catalogue_id=c.id AND q.test_type='clean_install'
+             WHERE q.catalogue_id=c.id
+               AND q.test_type='clean_install'
+               AND NOT (
+                 q.state='review_required'
+                 AND q.last_error IN (
+                   'qualification_runner_not_clean',
+                   'qualification_direct_release_not_ready',
+                   'qualification_artifact_gate_failed',
+                   'qualification_source_health_not_ready',
+                   'PatchHost did not return a result.',
+                   'telemetry HTTP status 502'
+                 )
+               )
           )
         ORDER BY priority DESC,lower(c.canonical_name)
         LIMIT $2
@@ -2369,16 +2426,40 @@ export async function queueCommonSoftwareQualifications({ limit = 50 } = {}) {
      SELECT catalogue_id,'clean_install','queued',priority,0,'',
             jsonb_build_object(
               'automaticCleanInstallQualification',true,
-              'qualificationCohort','common_50',
-              'vendorDirectRequired',true,
-              'wingetQualificationAllowed',false,
+              'qualificationCohort','business_essentials',
+              'businessPriority',true,
+              'vendorArtifactRequired',true,
+              'wingetQualificationAllowed',true,
               'queuedAt',now()
             ),
             now(),now()
        FROM candidates
-     ON CONFLICT (catalogue_id,test_type) DO NOTHING
+     ON CONFLICT (catalogue_id,test_type)
+     DO UPDATE SET
+       state='queued',
+       priority=EXCLUDED.priority,
+       attempt_count=0,
+       runner_agent_device_id=NULL,
+       agent_job_id=NULL,
+       deployment_id=NULL,
+       cleanup_job_id=NULL,
+       last_error='',
+       evidence=(rmm_software_qualification_queue.evidence || EXCLUDED.evidence)
+         || jsonb_build_object('businessRetryAt',now()),
+       started_at=NULL,
+       completed_at=NULL,
+       updated_at=now()
+     WHERE rmm_software_qualification_queue.state='review_required'
+       AND rmm_software_qualification_queue.last_error IN (
+         'qualification_runner_not_clean',
+         'qualification_direct_release_not_ready',
+         'qualification_artifact_gate_failed',
+         'qualification_source_health_not_ready',
+         'PatchHost did not return a result.',
+         'telemetry HTTP status 502'
+       )
      RETURNING id,catalogue_id,test_type,state,priority`,
-    [COMMON_WINDOWS_SOFTWARE_LOWER, safeLimit],
+    [COMMON_WINDOWS_SOFTWARE_LOWER, safeLimit, Boolean(allowUnresolvedVulnerability)],
   )
   return result.rows
 }
@@ -2967,10 +3048,11 @@ export async function runSoftwareQualificationQueue({ dispatchLimit = 1 } = {}) 
   }
 
   const queued = await pool.query(
-    `SELECT q.id,q.catalogue_id,q.test_type,q.priority,c.canonical_name,c.target_version
+    `SELECT q.id,q.catalogue_id,q.test_type,q.priority,c.canonical_name,c.target_version,c.installer_type
        FROM rmm_software_qualification_queue q
        JOIN rmm_software_catalogue c ON c.id=q.catalogue_id
       WHERE q.state='queued'
+        AND COALESCE(NULLIF(q.evidence->>'retryNotBefore','')::timestamptz,'-infinity'::timestamptz) <= now()
         AND c.status='active'
         AND (
           c.qualification_state='deployment_candidate'
@@ -3008,8 +3090,28 @@ export async function runSoftwareQualificationQueue({ dispatchLimit = 1 } = {}) 
       LIMIT $1`,
     [Math.max(1, Math.min(3, Number(dispatchLimit) || 1))],
   )
+  const recentMsiBusy = await pool.query(
+    `SELECT 1
+       FROM rmm_agent_jobs
+      WHERE agent_device_id=$1
+        AND updated_at > now()-interval '90 seconds'
+        AND COALESCE(result->>'exitCode','')='1618'
+      LIMIT 1`,
+    [runner.agent_device_id],
+  )
+  const msiBusyBackoff = recentMsiBusy.rowCount > 0
   const dispatched = []
   for (const queue of queued.rows) {
+    if (msiBusyBackoff && lower(queue.installer_type) === 'msi') {
+      dispatched.push({
+        id: queue.id,
+        applicationName: queue.canonical_name,
+        testType: queue.test_type,
+        dispatched: false,
+        reason: 'windows_installer_busy_backoff',
+      })
+      continue
+    }
     const result = queue.test_type === 'upgrade'
       ? await dispatchUpgradeBaseline(queue, runner)
       : queue.test_type === 'rollback'
