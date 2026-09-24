@@ -541,9 +541,12 @@ export async function resolveWingetVendorInstaller(packageId, version = '') {
     const installers = parseWingetInstallers(manifest.text)
       .filter(acceptableUpstreamInstaller)
       .sort((a, b) => {
-        const weight = (item) => item.architecture === 'x64' || item.architecture === 'amd64'
+        const architectureWeight = (item) => item.architecture === 'x64' || item.architecture === 'amd64'
           ? 0 : ['neutral',''].includes(item.architecture) ? 1 : item.architecture === 'x86' ? 2 : 9
-        return weight(a) - weight(b)
+        const scopeWeight = (item) => lower(item.scope) === 'machine'
+          ? 0 : !clean(item.scope) ? 1 : lower(item.scope) === 'user' ? 2 : 3
+        return architectureWeight(a) - architectureWeight(b)
+          || scopeWeight(a) - scopeWeight(b)
       })
     const selected = installers.find((item) => !['arm64','arm'].includes(item.architecture))
     if (!selected) {

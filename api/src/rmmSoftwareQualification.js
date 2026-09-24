@@ -20,6 +20,36 @@ function runnerSupportsResponseFiles(runner) {
     && vendorDirect.responseFileTargetVersionToken === true
 }
 
+function runnerSupportsWingetExactVersion(runner) {
+  const winget = object(object(runner?.patch_capabilities).winget)
+  return winget.exactVersionInstall === true
+    && winget.exactVersionUpgrade === true
+}
+
+function wingetPackageIdForRelease(release) {
+  const sourceMetadata = object(release?.source_metadata)
+  const releasePayload = object(release?.release_source_payload)
+  const wingetManifest = object(releasePayload.wingetManifest)
+  return clean(
+    release?.binding_winget_package_id
+      || sourceMetadata.wingetPackageId
+      || wingetManifest.packageId,
+  )
+}
+
+function qualificationTransport(release) {
+  const sourceMetadata = object(release?.source_metadata)
+  const mode = clean(sourceMetadata.deploymentMode)
+  const trustState = clean(sourceMetadata.trustState || release?.trust_state)
+  const wingetPackageId = wingetPackageIdForRelease(release)
+  if (mode === 'winget_preferred'
+    && ['winget_ready','direct_ready'].includes(trustState)
+    && wingetPackageId) {
+    return { provider: 'winget', packageId: wingetPackageId }
+  }
+  return { provider: 'vendor_direct', packageId: clean(release?.provider_package_id) }
+}
+
 function identityPhraseMatches(value, pattern) {
   const haystack = lower(value)
   const needle = lower(pattern)
@@ -888,7 +918,9 @@ async function directReleaseForCatalogue(catalogueId) {
             COALESCE(NULLIF(b.metadata->>'wingetPackageId',''),'') AS binding_winget_package_id
        FROM rmm_software_catalogue c
        JOIN rmm_software_vendor_releases r
-         ON r.provider_package_id=c.external_key AND r.version=c.target_version
+         ON r.provider_package_id=c.external_key
+        AND r.source_key=c.source_metadata->>'latestSource'
+        AND r.version=c.target_version
        JOIN rmm_software_vendor_sources s ON s.source_key=r.source_key AND s.enabled=true
        LEFT JOIN rmm_software_vendor_bindings b
          ON b.source_key=r.source_key AND b.provider_package_id=r.provider_package_id
@@ -896,6 +928,8 @@ async function directReleaseForCatalogue(catalogueId) {
         AND b.enabled=true
       WHERE c.id=$1 AND c.tenant_id IS NULL AND c.status='active'
         AND c.qualification_state='deployment_candidate'
+        AND c.source_metadata->>'deploymentMode' IN ('vendor_direct','winget_preferred')
+        AND c.source_metadata->>'trustState'='direct_ready'
         AND r.trust_state='direct_ready'
       ORDER BY r.source_priority DESC,COALESCE(r.release_date,r.last_seen_at) DESC
       LIMIT 1`,
@@ -2293,7 +2327,7 @@ export async function queueCommonSoftwareQualifications({ limit = 50 } = {}) {
           AND c.status='active'
           AND c.qualification_state='deployment_candidate'
           AND lower(c.canonical_name)=ANY($1::text[])
-          AND c.source_metadata->>'deploymentMode'='vendor_direct'
+          AND c.source_metadata->>'deploymentMode' IN ('vendor_direct','winget_preferred')
           AND c.source_metadata->>'trustState'='direct_ready'
           AND lower(COALESCE(c.installer_type,'')) IN ('msi','exe')
           AND COALESCE(c.target_version,'')<>''
@@ -2391,7 +2425,7 @@ export async function queueAutomaticCleanInstallQualifications({
         WHERE c.tenant_id IS NULL
           AND c.status='active'
           AND c.qualification_state='deployment_candidate'
-          AND c.source_metadata->>'deploymentMode'='vendor_direct'
+          AND c.source_metadata->>'deploymentMode' IN ('vendor_direct','winget_preferred')
           AND c.source_metadata->>'trustState'='direct_ready'
           AND lower(COALESCE(c.installer_type,'')) IN ('msi','exe')
           AND COALESCE(c.target_version,'')<>''
@@ -2504,7 +2538,7 @@ export async function queueAutomaticUpgradeQualifications({ limit = 12, allowCle
         WHERE c.tenant_id IS NULL
           AND c.status='active'
           AND c.qualification_state='deployment_candidate'
-          AND c.source_metadata->>'deploymentMode'='vendor_direct'
+          AND c.source_metadata->>'deploymentMode' IN ('vendor_direct','winget_preferred')
           AND c.source_metadata->>'trustState'='direct_ready'
           AND ($2::boolean OR COALESCE(q.evidence->>'manualQualificationMode','')<>'clean_only')
           AND EXISTS (
@@ -2692,7 +2726,7 @@ export async function promoteAutomaticAdmissionReady({ limit = 12 } = {}) {
         WHERE c.tenant_id IS NULL
           AND c.status='active'
           AND c.qualification_state IN ('deployment_candidate','qualified_limited')
-          AND c.source_metadata->>'deploymentMode'='vendor_direct'
+          AND c.source_metadata->>'deploymentMode' IN ('vendor_direct','winget_preferred')
           AND c.source_metadata->>'trustState'='direct_ready'
           AND lower(COALESCE(c.installer_type,'')) IN ('msi','exe')
           AND s.last_success_at IS NOT NULL
@@ -3121,7 +3155,7 @@ export async function queueUpgradeQualification(catalogueId) {
       WHERE c.id=$1
         AND c.tenant_id IS NULL
         AND c.status='active'
-        AND c.source_metadata->>'deploymentMode'='vendor_direct'
+        AND c.source_metadata->>'deploymentMode' IN ('vendor_direct','winget_preferred')
         AND c.source_metadata->>'trustState'='direct_ready'
       LIMIT 1`,
     [catalogueId],
@@ -3244,7 +3278,7 @@ export async function queueRollbackQualification(catalogueId) {
       WHERE c.id=$1
         AND c.tenant_id IS NULL
         AND c.status='active'
-        AND c.source_metadata->>'deploymentMode'='vendor_direct'
+        AND c.source_metadata->>'deploymentMode' IN ('vendor_direct','winget_preferred')
         AND c.source_metadata->>'trustState'='direct_ready'
       LIMIT 1`,
     [catalogueId],

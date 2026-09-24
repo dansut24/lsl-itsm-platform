@@ -22,7 +22,7 @@ import { resolvePreviousWingetVendorInstaller, resolveWingetVendorInstaller, syn
 import { importCuratedSoftwareCatalogue } from './rmmCuratedSoftwareCatalogue.js'
 import { syncEvergreenCorroboration } from './rmmEvergreenIntel.js'
 import { promoteAutomaticAdmissionReady, queueAutomaticCleanInstallQualifications, queueAutomaticRollbackQualifications, queueAutomaticUpgradeQualifications, queueCommonSoftwareQualifications, runSoftwareQualificationQueue } from './rmmSoftwareQualification.js'
-import { COMMON_WINDOWS_SOFTWARE_LOWER } from './rmmCommonSoftware.js'
+import { BUSINESS_ESSENTIAL_WINGET_PACKAGES, COMMON_WINDOWS_SOFTWARE_LOWER } from './rmmCommonSoftware.js'
 import { htmlHostAllowed, parseVendorHtmlReleases } from './vendorHtmlRecipe.js'
 import {
   classifyGithubReleaseBacklog,
@@ -1549,6 +1549,98 @@ async function syncAdobeReader() {
     payload: { source: b.source_url },
   })
 }
+async function syncMySqlConnectorOdbc() {
+  const b = await binding('mysql_connector_odbc')
+  if (!b) return null
+
+  const currentHtml = await fetchText(b.source_url, 'text/html')
+  const currentVersion = clean(currentHtml.match(/<h1>\s*Connector\/ODBC\s+([0-9]+(?:\.[0-9]+)+)\s*<\/h1>/i)?.[1])
+  if (!currentVersion) throw new Error('MySQL Connector/ODBC download page did not contain the current GA version')
+
+  const currentFileMatch = currentHtml.match(/(mysql-connector-odbc-([0-9]+(?:\.[0-9]+)+)-winx64\.msi)/i)
+  const currentFile = clean(currentFileMatch?.[1])
+  if (!currentFile || clean(currentFileMatch?.[2]) !== currentVersion) {
+    throw new Error('MySQL Connector/ODBC download page did not contain the current x64 MSI')
+  }
+
+  const currentBranch = currentVersion.split('.').slice(0, 2).join('.')
+  const currentInstallerUrl = `https://cdn.mysql.com/Downloads/Connector-ODBC/${currentBranch}/${currentFile}`
+  const verification = {
+    method: 'uninstall_registry',
+    packageId: '',
+    productCode: '',
+    displayNameContains: 'MySQL Connector/ODBC',
+    publisherContains: 'Oracle',
+    filePath: '',
+  }
+  const catalogueMetadata = {
+    deploymentMode: 'vendor_direct',
+    namePattern: 'MySQL Connector/ODBC',
+    publisherPattern: 'Oracle',
+    automaticVendorRelease: true,
+  }
+  const qualificationNotes = 'Official MySQL x64 MSI. Hi5Central pins SHA-256 and Authenticode on the qualification endpoint before deployment.'
+
+  try {
+    const archiveUrl = 'https://downloads.mysql.com/archives/c-odbc/'
+    const archiveHtml = await fetchText(archiveUrl, 'text/html')
+    const previousFileMatch = archiveHtml.match(/(mysql-connector-odbc-([0-9]+(?:\.[0-9]+)+)-winx64\.msi)/i)
+    const previousFile = clean(previousFileMatch?.[1])
+    const previousVersion = clean(previousFileMatch?.[2])
+    if (previousFile && previousVersion && compareVersionValues(previousVersion, currentVersion) < 0) {
+      await upsertRelease({
+        sourceKey: b.source_key,
+        packageId: b.provider_package_id,
+        canonicalName: b.canonical_name,
+        publisher: b.publisher,
+        channel: b.channel,
+        platform: b.platform,
+        architecture: b.architecture,
+        version: previousVersion,
+        installerUrl: `https://cdn.mysql.com/archives/mysql-connector-odbc-${previousVersion.split('.').slice(0, 2).join('.')}/${previousFile}`,
+        installerType: 'msi',
+        releaseUrl: archiveUrl,
+        assetName: previousFile,
+        trustState: 'asset_candidate',
+        qualificationState: 'deployment_candidate',
+        qualificationNotes,
+        sourcePriority: Math.max(1, Number(b.priority || 900) - 1),
+        payload: { source: archiveUrl, historicalReleaseCandidate: true, vendorChecksumPresent: false },
+        catalogueProvider: 'managed',
+        verification,
+        execution: { installArguments: '' },
+        catalogueMetadata,
+      })
+    }
+  } catch (error) {
+    console.warn('MySQL Connector/ODBC previous release discovery failed', clean(error?.message || error))
+  }
+
+  return upsertRelease({
+    sourceKey: b.source_key,
+    packageId: b.provider_package_id,
+    canonicalName: b.canonical_name,
+    publisher: b.publisher,
+    channel: b.channel,
+    platform: b.platform,
+    architecture: b.architecture,
+    version: currentVersion,
+    installerUrl: currentInstallerUrl,
+    installerType: 'msi',
+    releaseUrl: b.source_url,
+    assetName: currentFile,
+    trustState: 'asset_candidate',
+    qualificationState: 'deployment_candidate',
+    qualificationNotes,
+    sourcePriority: b.priority,
+    payload: { source: b.source_url, vendorChecksumPresent: false },
+    catalogueProvider: 'managed',
+    verification,
+    execution: { installArguments: '' },
+    catalogueMetadata,
+  })
+}
+
 const adapters = {
   google_chrome: syncChrome,
   microsoft_edge: syncEdge,
@@ -1557,6 +1649,7 @@ const adapters = {
   microsoft_vscode: syncVsCode,
   sevenzip: syncSevenZip,
   adobe_acrobat_reader: syncAdobeReader,
+  mysql_connector_odbc: syncMySqlConnectorOdbc,
 }
 
 function normalizedSoftwareName(value = '') {
@@ -1572,6 +1665,125 @@ function wingetManifestSourceKey(packageId = '') {
     hash = Math.imul(hash, 16777619)
   }
   return 'winget_manifest_' + slug + '_' + (hash >>> 0).toString(36)
+}
+
+export async function seedBusinessEssentialVendorCatalogue({ syncLimit = BUSINESS_ESSENTIAL_WINGET_PACKAGES.length, dryRun = false } = {}) {
+  const existingResult = await pool.query(
+    `SELECT canonical_name,qualification_state,status,provider_package_id,source_metadata
+       FROM rmm_software_catalogue
+      WHERE tenant_id IS NULL`,
+  )
+  const deployableNames = new Set()
+  const existingPackages = new Set()
+  for (const row of existingResult.rows) {
+    const metadata = object(row.source_metadata)
+    const deploymentMode = clean(metadata.deploymentMode)
+    const deployable = row.status === 'active'
+      && row.qualification_state !== 'intelligence_only'
+      && deploymentMode !== 'intelligence_only'
+    if (deployable) deployableNames.add(normalizedSoftwareName(row.canonical_name))
+    const reservePackage = row.status !== 'active' || deployable
+    if (reservePackage) {
+      for (const value of [metadata.wingetPackageId, metadata.autoWingetPackageId, row.provider_package_id]) {
+        const packageId = clean(value)
+        if (packageId && !packageId.startsWith('vendor:')) existingPackages.add(lower(packageId))
+      }
+    }
+  }
+
+  const entries = []
+  const skipped = []
+  const rejected = []
+  for (const wanted of BUSINESS_ESSENTIAL_WINGET_PACKAGES) {
+    const nameKey = normalizedSoftwareName(wanted.canonicalName)
+    const packageKey = lower(wanted.packageId)
+    if (deployableNames.has(nameKey) || existingPackages.has(packageKey)) {
+      skipped.push({ canonicalName: wanted.canonicalName, packageId: wanted.packageId, reason: 'already_deployable' })
+      continue
+    }
+
+    let resolved
+    try {
+      resolved = await resolveWingetVendorInstaller(wanted.packageId)
+    } catch (error) {
+      rejected.push({ canonicalName: wanted.canonicalName, packageId: wanted.packageId, reason: clean(error?.message || error) })
+      continue
+    }
+    if (!resolved?.ok) {
+      rejected.push({ canonicalName: wanted.canonicalName, packageId: wanted.packageId, reason: clean(resolved?.reason || 'not_resolved') })
+      continue
+    }
+    if (clean(resolved.scope).toLowerCase() === 'user') {
+      rejected.push({ canonicalName: wanted.canonicalName, packageId: wanted.packageId, reason: 'user_scope_only' })
+      continue
+    }
+    if (!['msi', 'exe'].includes(clean(resolved.installerType).toLowerCase())) {
+      rejected.push({ canonicalName: wanted.canonicalName, packageId: wanted.packageId, reason: 'installer_not_msi_or_exe' })
+      continue
+    }
+    if (!/^[a-f0-9]{64}$/i.test(clean(resolved.installerSha256))) {
+      rejected.push({ canonicalName: wanted.canonicalName, packageId: wanted.packageId, reason: 'installer_sha256_missing' })
+      continue
+    }
+    if (!clean(resolved.version) || /(?:alpha|beta|rc|preview|eap|nightly|dev|canary)/i.test(clean(resolved.version))) {
+      rejected.push({ canonicalName: wanted.canonicalName, packageId: wanted.packageId, reason: 'non_stable_version' })
+      continue
+    }
+
+    const publisher = clean(resolved.publishers?.[0])
+    const sourceKey = wingetManifestSourceKey(resolved.packageId)
+    entries.push({
+      sourceKey,
+      displayName: wanted.canonicalName,
+      canonicalName: wanted.canonicalName,
+      publisher,
+      sourceType: 'winget_manifest',
+      sourceUrl: 'https://github.com/microsoft/winget-pkgs',
+      deploymentMode: 'winget_preferred',
+      wingetPackageId: resolved.packageId,
+      installerType: resolved.installerType,
+      installArguments: clean(resolved.installArguments),
+      namePattern: clean(resolved.name || wanted.canonicalName),
+      publisherPattern: publisher,
+      verificationConfig: {
+        method: clean(resolved.productCode) ? 'uninstall_registry' : 'winget',
+        packageId: clean(resolved.productCode) ? '' : resolved.packageId,
+        productCode: clean(resolved.productCode),
+        displayNameContains: clean(resolved.name || wanted.canonicalName),
+        publisherContains: publisher,
+      },
+      priority: Math.max(800, Number(wanted.priority) || 900),
+      pollMinutes: 180,
+      qualificationNotes: 'Hi5Central Business Essentials: upstream MSI/EXE resolved from the current WinGet manifest. Pending independent artifact, install, uninstall, upgrade and rollback qualification.',
+    })
+    existingPackages.add(packageKey)
+    deployableNames.add(nameKey)
+  }
+
+  if (entries.length && !dryRun) await importCuratedSoftwareCatalogue(entries)
+
+  const syncResults = []
+  const safeSyncLimit = dryRun ? 0 : Math.max(0, Math.min(entries.length, Number(syncLimit) || 0))
+  for (const entry of entries.slice(0, safeSyncLimit)) {
+    try {
+      syncResults.push(await syncSoftwareVendorSource(entry.sourceKey))
+    } catch (error) {
+      syncResults.push({ sourceKey: entry.sourceKey, ok: false, error: clean(error?.message || error) })
+    }
+  }
+
+  return {
+    dryRun: Boolean(dryRun),
+    requested: BUSINESS_ESSENTIAL_WINGET_PACKAGES.length,
+    imported: entries.length,
+    skipped: skipped.length,
+    rejected: rejected.length,
+    synced: syncResults.filter((item) => item?.ok).length,
+    entries: entries.map((entry) => ({ canonicalName: entry.canonicalName, packageId: entry.wingetPackageId, sourceKey: entry.sourceKey })),
+    skippedItems: skipped,
+    rejectedItems: rejected,
+    syncResults,
+  }
 }
 
 export async function seedEnterpriseWingetVendorCatalogue({ targetTotal = 500, scanLimit = 1200, resolveLimit = 400, syncLimit = 20 } = {}) {
@@ -2547,7 +2759,11 @@ export function startSoftwareVendorSyncScheduler() {
       console.error('RMM vendor/software qualification scheduler failed', error)
     }
   }
+  const seedBusinessEssentials = () => seedBusinessEssentialVendorCatalogue()
+    .catch(error => console.error('Business Essentials catalogue seed failed', error))
   const prepareBaselines = () => prepareQualificationBaselines({ limit: 6 }).catch(error => console.error('Qualification baseline preparation failed', error))
+  setTimeout(seedBusinessEssentials, 20_000).unref?.()
+  setInterval(seedBusinessEssentials, 24 * 60 * 60_000).unref?.()
   setTimeout(prepareBaselines, 15_000).unref?.()
   setInterval(prepareBaselines, 2 * 60_000).unref?.()
   setTimeout(run, 10_000).unref?.()
