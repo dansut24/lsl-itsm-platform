@@ -126,15 +126,30 @@ let mobileViewPanX = 0;
 let mobileViewPanY = 0;
 
 const MOBILE_PREFS_KEY = "hi5central.viewer.mobile.v2";
-let mobilePrefs = { inputMode: "direct", toolbar: "auto", resolution: "auto", scale: "fit" };
+const MOBILE_PREF_DEFAULTS = { inputMode: "direct", toolbar: "auto", resolution: "auto", scale: "fit" };
+let mobilePrefsStore = { devices: {}, fallback: { ...MOBILE_PREF_DEFAULTS } };
+let mobilePrefs = { ...MOBILE_PREF_DEFAULTS };
+
+function normalizeMobilePrefs(value) {
+  const p = { ...MOBILE_PREF_DEFAULTS, ...(value && typeof value === 'object' ? value : {}) };
+  if (!['direct','trackpad'].includes(p.inputMode)) p.inputMode = 'direct';
+  if (!['auto','always'].includes(p.toolbar)) p.toolbar = 'auto';
+  if (!['auto','native','1080p','720p'].includes(p.resolution)) p.resolution = 'auto';
+  if (!['fit','stretch'].includes(p.scale)) p.scale = 'fit';
+  return p;
+}
+
 try {
   const saved = JSON.parse(localStorage.getItem(MOBILE_PREFS_KEY) || "{}");
-  if (saved && typeof saved === "object") mobilePrefs = { ...mobilePrefs, ...saved };
+  if (saved?.devices && typeof saved.devices === 'object') {
+    mobilePrefsStore = { devices: saved.devices, fallback: normalizeMobilePrefs(saved.fallback) };
+    mobilePrefs = normalizeMobilePrefs(mobilePrefsStore.fallback);
+  } else if (saved && typeof saved === 'object' && Object.keys(saved).length) {
+    // Migrate the first mobile-v2 global format into the per-device fallback.
+    mobilePrefs = normalizeMobilePrefs(saved);
+    mobilePrefsStore.fallback = { ...mobilePrefs };
+  }
 } catch {}
-if (!['direct','trackpad'].includes(mobilePrefs.inputMode)) mobilePrefs.inputMode = 'direct';
-if (!['auto','always'].includes(mobilePrefs.toolbar)) mobilePrefs.toolbar = 'auto';
-if (!['auto','native','1080p','720p'].includes(mobilePrefs.resolution)) mobilePrefs.resolution = 'auto';
-if (!['fit','stretch'].includes(mobilePrefs.scale)) mobilePrefs.scale = 'fit';
 
 let mobileInputMode = mobilePrefs.inputMode;
 let mobilePanMode = false;
@@ -144,14 +159,26 @@ let mobileLastTap = null;
 let mobileClipboardRequestPending = false;
 let mobileTrackpadCursor = { x_norm: 0.5, y_norm: 0.5 };
 
+function loadMobilePrefsForDevice(deviceId) {
+  const key = String(deviceId || '').trim();
+  mobilePrefs = normalizeMobilePrefs((key && mobilePrefsStore.devices[key]) || mobilePrefsStore.fallback);
+  mobileInputMode = mobilePrefs.inputMode;
+  mobilePanMode = false;
+  mobilePrecisionMode = false;
+  mobileLastTap = null;
+}
+
 function saveMobilePrefs() {
-  mobilePrefs = {
+  mobilePrefs = normalizeMobilePrefs({
     inputMode: mobileInputMode,
     toolbar: mobilePrefs.toolbar,
     resolution: mobilePrefs.resolution,
     scale: mobilePrefs.scale
-  };
-  try { localStorage.setItem(MOBILE_PREFS_KEY, JSON.stringify(mobilePrefs)); } catch {}
+  });
+  const key = String(currentSession?.deviceId || '').trim();
+  if (key) mobilePrefsStore.devices[key] = { ...mobilePrefs };
+  else mobilePrefsStore.fallback = { ...mobilePrefs };
+  try { localStorage.setItem(MOBILE_PREFS_KEY, JSON.stringify(mobilePrefsStore)); } catch {}
 }
 
 function setMobileClipboardStatus(text) {
@@ -3331,6 +3358,8 @@ function startSession(params) {
     viewerClient,
     launchMode
   };
+
+  loadMobilePrefsForDevice(deviceId);
 
   if (isMobileViewerSurface()) {
     setMobileToolbarCollapsed(false);
