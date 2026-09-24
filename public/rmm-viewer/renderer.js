@@ -59,12 +59,18 @@ const elBtnKeyboard = document.getElementById("btn-keyboard");
 const elMobileKeyboard = document.getElementById("mobile-keyboard");
 const elMobileKeyboardRows = document.getElementById("mobile-keyboard-rows");
 const elMobileKeyboardClose = document.getElementById("mobile-keyboard-close");
+const elMobileTextInput = document.getElementById("mobile-text-input");
+const elMobileTextSend = document.getElementById("mobile-text-send");
 
 if (elVideo) {
   elVideo.autoplay = true;
   elVideo.playsInline = true;
   elVideo.muted = true;
   elVideo.defaultMuted = true;
+  elVideo.setAttribute("playsinline", "");
+  elVideo.setAttribute("webkit-playsinline", "");
+  elVideo.setAttribute("autoplay", "");
+  elVideo.setAttribute("muted", "");
 }
 
 /* -----------------------------------------
@@ -181,7 +187,13 @@ function keyboardCodeForText(text) {
   if (/^[a-z]$/i.test(text)) return 'Key' + text.toUpperCase();
   if (/^[0-9]$/.test(text)) return 'Digit' + text;
   if (text === ' ') return 'Space';
-  return '';
+  const punctuation = {
+    '`': 'Backquote', '-': 'Minus', '=': 'Equal',
+    '[': 'BracketLeft', ']': 'BracketRight', '\\': 'Backslash',
+    ';': 'Semicolon', "'": 'Quote', ',': 'Comma',
+    '.': 'Period', '/': 'Slash'
+  };
+  return punctuation[text] || '';
 }
 
 function normalizeMobileKey(def) {
@@ -287,9 +299,27 @@ function toggleMobileKeyboard(force) {
   window.requestAnimationFrame(() => applyMobileViewport());
 }
 
+function sendMobileTextEntry() {
+  if (!elMobileTextInput) return;
+  const text = String(elMobileTextInput.value || '');
+  if (!text) return;
+  enterRemoteControlMode();
+  sendInput('text_input', { text }, true);
+  elMobileTextInput.value = '';
+  elMobileTextInput.focus({ preventScroll: true });
+}
+
 renderMobileKeyboard();
 elBtnKeyboard?.addEventListener('click', () => toggleMobileKeyboard());
 elMobileKeyboardClose?.addEventListener('click', () => toggleMobileKeyboard(false));
+elMobileTextSend?.addEventListener('click', sendMobileTextEntry);
+elMobileTextInput?.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Enter' && !ev.shiftKey) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    sendMobileTextEntry();
+  }
+});
 
 let remoteMonitors = [];
 let currentMonitorIndex = 0;
@@ -312,6 +342,7 @@ let secureDesktopActive = false;
 let desktopHandoffActive = false;
 let revealOnNextFrame = false;
 let monitorSwitchUntilMs = 0;
+let lastKeyframeRequestAtMs = 0;
 let overlayMode = "hard";
 
 /* -----------------------------------------
@@ -350,8 +381,46 @@ const NEGOTIATION_GRACE_MS = 2500;
 ------------------------------------------ */
 
 function setStatus(dotClass, label) {
+  const text = String(label || "");
+  const hideActiveStreamTag =
+    text === "Streaming" ||
+    text.startsWith("Streaming ·") ||
+    text === "Switching…" ||
+    text === "Switching...";
+
+  const statusChip = elStatusLabel?.closest(".session-meta");
+  if (statusChip) statusChip.style.display = hideActiveStreamTag ? "none" : "";
+
   if (elStatusDot) elStatusDot.className = dotClass || "";
-  if (elStatusLabel) elStatusLabel.textContent = label || "";
+  if (elStatusLabel) elStatusLabel.textContent = hideActiveStreamTag ? "" : text;
+}
+
+async function ensureRemoteVideoPlayback(reason = "") {
+  if (!elVideo || !elVideo.srcObject) return false;
+  elVideo.autoplay = true;
+  elVideo.playsInline = true;
+  elVideo.muted = true;
+  elVideo.defaultMuted = true;
+  elVideo.setAttribute("playsinline", "");
+  elVideo.setAttribute("webkit-playsinline", "");
+  try {
+    await elVideo.play();
+    return true;
+  } catch (err) {
+    console.warn("[video] play() deferred", { reason, error: err?.message || String(err) });
+    return false;
+  }
+}
+
+function armDecodedFrameReveal() {
+  if (!elVideo || typeof elVideo.requestVideoFrameCallback !== "function") return;
+  try {
+    elVideo.requestVideoFrameCallback(() => {
+      markFrameRendered();
+      updateResolution();
+      refreshRemoteCursorPosition();
+    });
+  } catch {}
 }
 
 function setOverlayMode(mode) {
@@ -453,6 +522,7 @@ function showStream() {
 }
 
 function markFrameRendered() {
+  const firstRenderedFrame = !hasEverRenderedFrame;
   hasEverRenderedFrame = true;
   lastFrameAtMs = Date.now();
 
@@ -460,7 +530,7 @@ function markFrameRendered() {
     return;
   }
 
-  if (revealOnNextFrame) {
+  if (firstRenderedFrame || revealOnNextFrame) {
     revealOnNextFrame = false;
     secureDesktopLikely = false;
     showStream();
@@ -1150,9 +1220,16 @@ function startTransitionWatchdog() {
 
   transitionWatchdogTimer = setInterval(() => {
     if (!pc || pc.connectionState !== "connected") return;
-    if (!hasEverRenderedFrame) return;
 
     const now = Date.now();
+
+    if (!hasEverRenderedFrame) {
+      if (lastFrameAtMs && now >= lastFrameAtMs) {
+        requestRemoteKeyframe("initial-frame-timeout");
+        ensureRemoteVideoPlayback("initial-frame-timeout");
+      }
+      return;
+    }
 
     if (monitorSwitchUntilMs && now < monitorSwitchUntilMs) {
       return;
@@ -1164,6 +1241,8 @@ function startTransitionWatchdog() {
 
     if (now - lastFrameAtMs > FRAME_STALL_MS) {
       secureDesktopLikely = true;
+      requestRemoteKeyframe("decoded-frame-stall");
+      ensureRemoteVideoPlayback("decoded-frame-stall");
     }
   }, 250);
 }
@@ -1176,6 +1255,21 @@ function enterRemoteControlMode() {
   }
   showRemoteCursor();
   refreshRemoteCursorPosition();
+}
+
+function requestRemoteKeyframe(reason = "viewer-recovery") {
+  if (!currentSession || !inputDc || inputDc.readyState !== "open") return false;
+  const now = Date.now();
+  if (now - lastKeyframeRequestAtMs < 1200) return false;
+  lastKeyframeRequestAtMs = now;
+  try {
+    inputDc.send(JSON.stringify({ kind: "request_keyframe", reason }));
+    console.log("[video] requested remote keyframe", { reason });
+    return true;
+  } catch (err) {
+    console.warn("[video] keyframe request failed", err);
+    return false;
+  }
 }
 
 function sendInput(kind, extra = {}, force = false) {
@@ -1283,14 +1377,16 @@ function isModifierCode(code) {
 }
 
 function isPrintableKey(ev) {
-  if (!ev || ev.ctrlKey || ev.altKey || ev.metaKey) return false;
+  if (!ev || ev.metaKey) return false;
+  const altGraph = !!ev.getModifierState?.("AltGraph");
+  // Browsers commonly expose AltGr as Ctrl+Alt. When AltGraph produced a
+  // printable character, send the actual Unicode character instead of a
+  // physical US-layout key combination.
+  if ((ev.ctrlKey || ev.altKey) && !altGraph) return false;
   if (isModifierCode(ev.code)) return false;
   if (typeof ev.key !== "string") return false;
   if (ev.key.length === 0) return false;
   if (NON_TEXT_KEYS.has(ev.key)) return false;
-  // Printable characters, including non-ASCII and composed characters.
-  // Require a single Unicode character here; named keys like "Shift"/"Alt"
-  // must never be injected as text.
   return Array.from(ev.key).length === 1;
 }
 
@@ -1387,6 +1483,7 @@ function resetTransitionState() {
   desktopHandoffActive = false;
   revealOnNextFrame = false;
   monitorSwitchUntilMs = 0;
+  lastKeyframeRequestAtMs = 0;
   overlayMode = "hard";
 }
 
@@ -1907,8 +2004,18 @@ function bindRemoteInput() {
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
       leaveRemoteControlMode();
+    } else {
+      ensureRemoteVideoPlayback("visibility-resume");
+      armDecodedFrameReveal();
     }
   });
+
+  document.addEventListener("pointerdown", () => {
+    if (isMobileViewerSurface() && elVideo?.srcObject) {
+      ensureRemoteVideoPlayback("mobile-user-gesture");
+      armDecodedFrameReveal();
+    }
+  }, { passive: true });
 
   function isLocalViewerInputTarget(target) {
     const el = target instanceof Element ? target : null;
@@ -2277,19 +2384,18 @@ async function handleOffer(msg) {
     elVideo.onloadedmetadata = async () => {
       updateResolution();
       refreshRemoteCursorPosition();
-      try {
-        await elVideo.play();
-      } catch {}
+      await ensureRemoteVideoPlayback("loadedmetadata");
+      armDecodedFrameReveal();
     };
 
     elVideo.onloadeddata = () => {
       markFrameRendered();
+      armDecodedFrameReveal();
     };
 
     elVideo.oncanplay = async () => {
-      try {
-        await elVideo.play();
-      } catch {}
+      await ensureRemoteVideoPlayback("canplay");
+      armDecodedFrameReveal();
     };
 
     elVideo.onplaying = () => {
@@ -2297,29 +2403,28 @@ async function handleOffer(msg) {
       markFrameRendered();
       updateResolution();
       refreshRemoteCursorPosition();
+      armDecodedFrameReveal();
     };
 
     elVideo.onerror = () => {
       console.error("[video] error", elVideo.error);
     };
 
-    try {
-      elVideo.pause();
-    } catch {}
+    if (elVideo.srcObject !== stream) {
+      elVideo.srcObject = stream;
+    }
 
-    elVideo.srcObject = null;
-    elVideo.srcObject = stream;
+    ev.track.onunmute = () => {
+      ensureRemoteVideoPlayback("track-unmute");
+      armDecodedFrameReveal();
+    };
 
-    showStream();
     bindRemoteInput();
     refreshRemoteCursorPosition();
-    setStatus("online", "Streaming");
+    setStatus("", "Connected · waiting for video");
 
-    try {
-      await elVideo.play();
-    } catch (err) {
-      console.error("[video] immediate play() failed", err);
-    }
+    await ensureRemoteVideoPlayback("ontrack");
+    armDecodedFrameReveal();
 
     try { window.hi5?.notifyConnected?.(currentSession?.deviceId); } catch {}
 
@@ -2336,8 +2441,13 @@ async function handleOffer(msg) {
     console.log("[rtc] connectionState:", pc.connectionState);
 
     if (pc.connectionState === "connected") {
+      ensureRemoteVideoPlayback("peer-connected");
+      armDecodedFrameReveal();
       if (hasEverRenderedFrame) {
         showStream();
+        setStatus("online", "Streaming");
+      } else {
+        setStatus("", "Connected · waiting for video");
       }
     }
   };
@@ -2566,7 +2676,7 @@ async function onSignalMessage(raw) {
         desktopHandoffActive = false;
         secureDesktopLikely = false;
         revealOnNextFrame = true;
-        setStatus("", "Switching…");
+        setStatus("online", "Streaming");
         break;
       }
 
@@ -2589,7 +2699,7 @@ async function onSignalMessage(raw) {
         secureDesktopActive = false;
         secureDesktopLikely = false;
         revealOnNextFrame = true;
-        setStatus("", "Switching…");
+        setStatus("online", "Streaming");
         break;
       }
 
