@@ -2474,8 +2474,9 @@ function bindRemoteInput() {
     if(mobilePanMode){ updatePanGesture(point); return; }
     if(viewportGestureConsumed||ev.pointerId!==remoteTouchId) return;
 
-    const moved=remoteTouchStart&&pointerDistance(ev,remoteTouchStart)>(mobilePrecisionMode?18:12);
-    if(moved) clearRemoteLongPress();
+    const touchTravel=remoteTouchStart?pointerDistance(ev,remoteTouchStart):0;
+    if(touchTravel>4) clearRemoteLongPress();
+    const moved=touchTravel>(mobilePrecisionMode?18:12);
 
     if(mobileInputMode==='trackpad'){
       const r=getVideoContentRect(elVideo);
