@@ -660,7 +660,8 @@
         backdrop-filter: blur(12px);
         -webkit-backdrop-filter: blur(12px);
       }
-      #mobile-view-controls.visible { display: flex; flex-wrap: wrap; justify-content: flex-end; max-width: min(94vw, 430px); }
+      #mobile-view-controls.visible { display: flex; flex-wrap: wrap; justify-content: flex-end; max-width: min(94vw, 430px); transition: opacity 160ms ease, transform 160ms ease; }
+      body.mobile-toolbar-collapsed #mobile-view-controls { opacity: 0; transform: translateY(12px); pointer-events: none; }
       #mobile-view-controls button {
         min-width: 38px;
         height: 34px;
