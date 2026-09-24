@@ -62,6 +62,24 @@ const elMobileKeyboardRows = document.getElementById("mobile-keyboard-rows");
 const elMobileKeyboardClose = document.getElementById("mobile-keyboard-close");
 const elMobileTextInput = document.getElementById("mobile-text-input");
 const elMobileTextSend = document.getElementById("mobile-text-send");
+const elMobileInputMode = document.getElementById("mobile-input-mode");
+const elMobilePanMode = document.getElementById("mobile-pan-mode");
+const elMobilePrecisionMode = document.getElementById("mobile-precision-mode");
+const elMobileToolbarHandle = document.getElementById("mobile-toolbar-handle");
+const elMobileScrollRail = document.getElementById("mobile-scroll-rail");
+const elMobileScrollThumb = document.getElementById("mobile-scroll-thumb");
+const elMobilePointerReticle = document.getElementById("mobile-pointer-reticle");
+const elMobilePrecisionLoupe = document.getElementById("mobile-precision-loupe");
+const elMobileClipboardPaste = document.getElementById("mobile-clipboard-paste");
+const elMobileClipboardCopy = document.getElementById("mobile-clipboard-copy");
+const elMobileClipboardStatus = document.getElementById("mobile-clipboard-status");
+const elBtnSettings = document.getElementById("btn-settings");
+const elSettingsPanel = document.getElementById("settings-panel");
+const elSettingsClose = document.getElementById("settings-close");
+const elViewerScaleMode = document.getElementById("viewer-scale-mode");
+const elRemoteResolutionPref = document.getElementById("remote-resolution-pref");
+const elMobileInputPref = document.getElementById("mobile-input-pref");
+const elMobileToolbarPref = document.getElementById("mobile-toolbar-pref");
 
 if (elVideo) {
   elVideo.autoplay = true;
@@ -81,6 +99,9 @@ if (elVideo) {
 let ws = null;
 let pc = null;
 let inputDc = null;
+let inputControlDc = null;
+let mouseMoveDc = null;
+let mouseMoveSeq = 0;
 
 let currentSession = null;
 let audioEnabled = false;
@@ -103,6 +124,51 @@ let lastCursorNorm = null;
 let mobileViewZoom = 1;
 let mobileViewPanX = 0;
 let mobileViewPanY = 0;
+
+const MOBILE_PREFS_KEY = "hi5central.viewer.mobile.v2";
+let mobilePrefs = { inputMode: "direct", toolbar: "auto", resolution: "auto", scale: "fit" };
+try {
+  const saved = JSON.parse(localStorage.getItem(MOBILE_PREFS_KEY) || "{}");
+  if (saved && typeof saved === "object") mobilePrefs = { ...mobilePrefs, ...saved };
+} catch {}
+if (!['direct','trackpad'].includes(mobilePrefs.inputMode)) mobilePrefs.inputMode = 'direct';
+if (!['auto','always'].includes(mobilePrefs.toolbar)) mobilePrefs.toolbar = 'auto';
+if (!['auto','native','1080p','720p'].includes(mobilePrefs.resolution)) mobilePrefs.resolution = 'auto';
+if (!['fit','stretch'].includes(mobilePrefs.scale)) mobilePrefs.scale = 'fit';
+
+let mobileInputMode = mobilePrefs.inputMode;
+let mobilePanMode = false;
+let mobilePrecisionMode = false;
+let mobileToolbarTimer = null;
+let mobileLastTap = null;
+let mobileClipboardRequestPending = false;
+let mobileTrackpadCursor = { x_norm: 0.5, y_norm: 0.5 };
+
+function saveMobilePrefs() {
+  mobilePrefs = {
+    inputMode: mobileInputMode,
+    toolbar: mobilePrefs.toolbar,
+    resolution: mobilePrefs.resolution,
+    scale: mobilePrefs.scale
+  };
+  try { localStorage.setItem(MOBILE_PREFS_KEY, JSON.stringify(mobilePrefs)); } catch {}
+}
+
+function setMobileClipboardStatus(text) {
+  if (elMobileClipboardStatus) elMobileClipboardStatus.textContent = String(text || '');
+}
+
+function resolvedMobileResolutionPref() {
+  if (!isMobileViewerSurface()) return mobilePrefs.resolution;
+  return mobilePrefs.resolution === 'auto' ? '720p' : mobilePrefs.resolution;
+}
+
+function mobileStreamProfilePayload() {
+  const pref = resolvedMobileResolutionPref();
+  if (pref === '720p') return { max_width: 1280, max_height: 720, target_fps: 30, preference: pref };
+  if (pref === '1080p') return { max_width: 1920, max_height: 1080, target_fps: 30, preference: pref };
+  return { max_width: 0, max_height: 0, target_fps: 30, preference: pref };
+}
 
 function isMobileViewerSurface() {
   return window.matchMedia?.('(max-width: 820px), (pointer: coarse)')?.matches ?? false;
@@ -169,10 +235,185 @@ function setMobileViewControlsVisible(visible) {
   elMobileViewControls.classList.toggle('visible', !!visible && isMobileViewerSurface());
 }
 
-elMobileZoomOut?.addEventListener('click', () => setMobileViewZoom(mobileViewZoom - 0.5));
-elMobileZoomIn?.addEventListener('click', () => setMobileViewZoom(mobileViewZoom + 0.5));
-elMobileZoomFit?.addEventListener('click', resetMobileViewport);
-window.addEventListener('resize', () => { if (isMobileViewerSurface()) applyMobileViewport(); });
+elMobileZoomOut?.addEventListener('click', () => { setMobileViewZoom(mobileViewZoom - 0.5); wakeMobileToolbar(); });
+elMobileZoomIn?.addEventListener('click', () => { setMobileViewZoom(mobileViewZoom + 0.5); wakeMobileToolbar(); });
+elMobileZoomFit?.addEventListener('click', () => { resetMobileViewport(); wakeMobileToolbar(); });
+window.addEventListener('resize', () => {
+  if (isMobileViewerSurface()) applyMobileViewport({ clamp: mobileViewZoom <= 1.001 });
+});
+
+function showMobileTouchContact(clientX, clientY) {
+  if (!isMobileViewerSurface()) return;
+  const dot = document.createElement('div');
+  dot.className = 'mobile-touch-contact';
+  dot.style.left = clientX + 'px';
+  dot.style.top = clientY + 'px';
+  document.body.appendChild(dot);
+  setTimeout(() => dot.remove(), 500);
+}
+
+function shouldShowMobileReticle() {
+  return isMobileViewerSurface() && (mobileInputMode === 'trackpad' || mobilePrecisionMode);
+}
+
+function updateMobileReticle(xNorm = mobileTrackpadCursor.x_norm, yNorm = mobileTrackpadCursor.y_norm) {
+  if (!elMobilePointerReticle) return;
+  if (!shouldShowMobileReticle() || !elVideo?.videoWidth || !elVideo?.videoHeight) {
+    elMobilePointerReticle.style.display = 'none';
+    return;
+  }
+  const r = getVideoContentRect(elVideo);
+  elMobilePointerReticle.style.left = (r.left + Math.max(0, Math.min(1, xNorm)) * r.width) + 'px';
+  elMobilePointerReticle.style.top = (r.top + Math.max(0, Math.min(1, yNorm)) * r.height) + 'px';
+  elMobilePointerReticle.style.display = 'block';
+}
+
+function hideMobilePrecisionLoupe() {
+  if (elMobilePrecisionLoupe) elMobilePrecisionLoupe.style.display = 'none';
+}
+
+function updateMobilePrecisionLoupe(xNorm, yNorm, clientX, clientY) {
+  if (!mobilePrecisionMode || !elMobilePrecisionLoupe || !elVideo?.videoWidth || !elVideo?.videoHeight) {
+    hideMobilePrecisionLoupe();
+    return;
+  }
+  try {
+    const ctx = elMobilePrecisionLoupe.getContext('2d');
+    if (!ctx) return;
+    const vw = elVideo.videoWidth;
+    const vh = elVideo.videoHeight;
+    const cropW = Math.max(80, Math.min(240, Math.round(vw * 0.10)));
+    const cropH = Math.max(80, Math.min(240, Math.round(vh * 0.10)));
+    const cx = Math.max(0, Math.min(vw, xNorm * vw));
+    const cy = Math.max(0, Math.min(vh, yNorm * vh));
+    const sx = Math.max(0, Math.min(vw - cropW, cx - cropW / 2));
+    const sy = Math.max(0, Math.min(vh - cropH, cy - cropH / 2));
+    const cw = elMobilePrecisionLoupe.width;
+    const ch = elMobilePrecisionLoupe.height;
+    ctx.clearRect(0, 0, cw, ch);
+    ctx.drawImage(elVideo, sx, sy, cropW, cropH, 0, 0, cw, ch);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(255,255,255,.96)';
+    ctx.beginPath();
+    ctx.moveTo(cw / 2, 0); ctx.lineTo(cw / 2, ch);
+    ctx.moveTo(0, ch / 2); ctx.lineTo(cw, ch / 2);
+    ctx.stroke();
+    const margin = 8;
+    const displayW = 92;
+    const displayH = 92;
+    let left = clientX - displayW / 2;
+    let top = clientY - displayH - 34;
+    left = Math.max(margin, Math.min(window.innerWidth - displayW - margin, left));
+    if (top < margin) top = Math.min(window.innerHeight - displayH - margin, clientY + 34);
+    elMobilePrecisionLoupe.style.left = left + 'px';
+    elMobilePrecisionLoupe.style.top = top + 'px';
+    elMobilePrecisionLoupe.style.display = 'block';
+  } catch {}
+}
+
+function setMobileToolbarCollapsed(collapsed) {
+  if (!isMobileViewerSurface()) return;
+  document.body.classList.toggle('mobile-toolbar-collapsed', !!collapsed);
+}
+
+function scheduleMobileToolbarHide(delay = 4200) {
+  if (mobileToolbarTimer) clearTimeout(mobileToolbarTimer);
+  mobileToolbarTimer = null;
+  if (!isMobileViewerSurface() || mobilePrefs.toolbar !== 'auto' || !currentSession) return;
+  mobileToolbarTimer = setTimeout(() => {
+    if (mobileKeyboardOpen || elFilesPanel?.classList.contains('visible') || elChatPanel?.classList.contains('visible') || elSettingsPanel?.classList.contains('visible')) return;
+    setMobileToolbarCollapsed(true);
+  }, delay);
+}
+
+function wakeMobileToolbar() {
+  if (!isMobileViewerSurface()) return;
+  setMobileToolbarCollapsed(false);
+  scheduleMobileToolbarHide();
+}
+
+function updateMobileModeUi() {
+  if (elMobileInputMode) {
+    elMobileInputMode.textContent = mobileInputMode === 'trackpad' ? 'Trackpad' : 'Touch';
+    elMobileInputMode.classList.toggle('active', mobileInputMode === 'trackpad');
+  }
+  elMobilePanMode?.classList.toggle('active', mobilePanMode);
+  elMobilePrecisionMode?.classList.toggle('active', mobilePrecisionMode);
+  if (elMobileInputPref) elMobileInputPref.value = mobileInputMode;
+  if (elMobileToolbarPref) elMobileToolbarPref.value = mobilePrefs.toolbar;
+  if (elRemoteResolutionPref) elRemoteResolutionPref.value = mobilePrefs.resolution;
+  if (elViewerScaleMode) elViewerScaleMode.value = mobilePrefs.scale;
+  if (elMobileScrollRail) elMobileScrollRail.classList.toggle('visible', !!currentSession && isMobileViewerSurface());
+  updateMobileReticle();
+}
+
+function setMobileInputMode(mode) {
+  mobileInputMode = mode === 'trackpad' ? 'trackpad' : 'direct';
+  mobilePanMode = false;
+  mobilePrecisionMode = false;
+  mobileLastTap = null;
+  saveMobilePrefs();
+  updateMobileModeUi();
+  wakeMobileToolbar();
+}
+
+function toggleMobilePanMode() {
+  mobilePanMode = !mobilePanMode;
+  if (mobilePanMode) mobilePrecisionMode = false;
+  updateMobileModeUi();
+  hideMobilePrecisionLoupe();
+  wakeMobileToolbar();
+}
+
+function toggleMobilePrecisionMode() {
+  mobilePrecisionMode = !mobilePrecisionMode;
+  if (mobilePrecisionMode) mobilePanMode = false;
+  updateMobileModeUi();
+  if (!mobilePrecisionMode) hideMobilePrecisionLoupe();
+  wakeMobileToolbar();
+}
+
+function applyViewerScalePreference() {
+  const scale = mobilePrefs.scale === 'stretch' ? 'fill' : 'contain';
+  if (isMobileViewerSurface() && elVideo) elVideo.style.objectFit = scale;
+  else if (elVideo) elVideo.style.objectFit = mobilePrefs.scale === 'stretch' ? 'fill' : '';
+  applyMobileViewport({ clamp: false });
+}
+
+function toggleSettingsPanel(force) {
+  if (!elSettingsPanel) return;
+  const show = typeof force === 'boolean' ? force : !elSettingsPanel.classList.contains('visible');
+  elSettingsPanel.classList.toggle('visible', show);
+  if (show) { leaveRemoteControlMode(); wakeMobileToolbar(); }
+  else scheduleMobileToolbarHide(1800);
+}
+
+elMobileInputMode?.addEventListener('click', () => setMobileInputMode(mobileInputMode === 'trackpad' ? 'direct' : 'trackpad'));
+elMobilePanMode?.addEventListener('click', toggleMobilePanMode);
+elMobilePrecisionMode?.addEventListener('click', toggleMobilePrecisionMode);
+elMobileToolbarHandle?.addEventListener('click', wakeMobileToolbar);
+elBtnSettings?.addEventListener('click', () => toggleSettingsPanel());
+elSettingsClose?.addEventListener('click', () => toggleSettingsPanel(false));
+elMobileInputPref?.addEventListener('change', () => setMobileInputMode(elMobileInputPref.value));
+elMobileToolbarPref?.addEventListener('change', () => {
+  mobilePrefs.toolbar = elMobileToolbarPref.value === 'always' ? 'always' : 'auto';
+  saveMobilePrefs();
+  setMobileToolbarCollapsed(false);
+  scheduleMobileToolbarHide();
+});
+elRemoteResolutionPref?.addEventListener('change', () => {
+  mobilePrefs.resolution = ['native','1080p','720p'].includes(elRemoteResolutionPref.value) ? elRemoteResolutionPref.value : 'auto';
+  saveMobilePrefs();
+  sendViewerStreamProfile();
+});
+elViewerScaleMode?.addEventListener('change', () => {
+  mobilePrefs.scale = elViewerScaleMode.value === 'stretch' ? 'stretch' : 'fit';
+  saveMobilePrefs();
+  applyViewerScalePreference();
+});
+
+updateMobileModeUi();
+applyViewerScalePreference();
 
 let mobileKeyboardOpen = false;
 let mobileKeyboardLayer = 'letters';
@@ -302,6 +543,7 @@ function renderMobileKeyboard() {
 
 function toggleMobileKeyboard(force) {
   if (!elMobileKeyboard || !isMobileViewerSurface()) return;
+  wakeMobileToolbar();
   mobileKeyboardOpen = typeof force === 'boolean' ? force : !mobileKeyboardOpen;
   elMobileKeyboard.classList.toggle('visible', mobileKeyboardOpen);
   elBtnKeyboard?.classList.toggle('active', mobileKeyboardOpen);
@@ -527,8 +769,11 @@ function showStream() {
   if (elVideo) elVideo.classList.add("visible");
   if (elStatsBar) elStatsBar.classList.add("visible");
   if (isMobileViewerSurface()) {
-    applyMobileViewport();
+    applyViewerScalePreference();
+    applyMobileViewport({ clamp: mobileViewZoom <= 1.001 });
     setMobileViewControlsVisible(true);
+    updateMobileModeUi();
+    wakeMobileToolbar();
   }
 }
 
@@ -717,6 +962,7 @@ function moveRemoteCursorByClient(clientX, clientY) {
 }
 
 async function openFileBrowserWindow() {
+  if (isMobileViewerSurface()) wakeMobileToolbar();
   try {
     if (typeof window.hi5OpenFileBrowserWindow === "function") {
       await window.hi5OpenFileBrowserWindow("");
@@ -816,6 +1062,7 @@ function appendChatMessage(msg) {
 
 async function openTechChatWindow() {
   leaveRemoteControlMode();
+  if (isMobileViewerSurface()) wakeMobileToolbar();
   if (isMobileViewerSurface()) toggleMobileKeyboard(false);
   try {
     if (typeof window.hi5OpenChatWindow === "function") {
@@ -1283,14 +1530,53 @@ function requestRemoteKeyframe(reason = "viewer-recovery") {
   }
 }
 
+function sendFastMouseMove(extra = {}) {
+  if (!mouseMoveDc || mouseMoveDc.readyState !== "open") return false;
+  const x = Number(extra.x_norm);
+  const y = Number(extra.y_norm);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+  try {
+    const buffer = new ArrayBuffer(21);
+    const view = new DataView(buffer);
+    mouseMoveSeq = (mouseMoveSeq + 1) >>> 0;
+    view.setUint8(0, 1);
+    view.setUint32(1, mouseMoveSeq, true);
+    view.setFloat32(5, Math.max(0, Math.min(1, x)), true);
+    view.setFloat32(9, Math.max(0, Math.min(1, y)), true);
+    view.setFloat64(13, performance.now(), true);
+    mouseMoveDc.send(buffer);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sendControlObject(message) {
+  const payload = JSON.stringify(message || {});
+  const channels = [inputControlDc, inputDc];
+  for (const channel of channels) {
+    if (!channel || channel.readyState !== 'open') continue;
+    try { channel.send(payload); return true; } catch {}
+  }
+  return false;
+}
+
+function sendViewerStreamProfile() {
+  if (!currentSession) return false;
+  const profile = mobileStreamProfilePayload();
+  return sendControlObject({ kind: 'viewer_stream_profile', viewer_client: isMobileViewerSurface() ? 'mobile' : 'desktop', ...profile });
+}
+
 function sendInput(kind, extra = {}, force = false) {
   if (!currentSession) return;
   if (!force && !controlActive) return;
 
-  const payload = JSON.stringify({ kind, ...extra });
+  if (kind === 'mouse_move' && sendFastMouseMove(extra)) return;
 
-  if (inputDc && inputDc.readyState === "open") {
-    inputDc.send(payload);
+  const payload = JSON.stringify({ kind, ...extra });
+  const channel = inputControlDc && inputControlDc.readyState === 'open' ? inputControlDc : inputDc;
+  if (channel && channel.readyState === "open") {
+    channel.send(payload);
     return;
   }
 
@@ -1303,6 +1589,57 @@ function sendInput(kind, extra = {}, force = false) {
     }));
   }
 }
+
+async function pastePhoneClipboardToRemote() {
+  let text = '';
+  try { text = await navigator.clipboard.readText(); } catch {}
+  if (!text) text = String(elMobileTextInput?.value || '');
+  if (!text) {
+    setMobileClipboardStatus('Clipboard is empty or unavailable.');
+    return;
+  }
+  enterRemoteControlMode();
+  sendInput('clipboard_paste', { text }, true);
+  setMobileClipboardStatus('Pasted clipboard to remote.');
+  scheduleMobileToolbarHide();
+}
+
+function requestRemoteClipboard() {
+  if (!currentSession) return;
+  mobileClipboardRequestPending = true;
+  setMobileClipboardStatus('Copying remote selection…');
+  enterRemoteControlMode();
+  sendInput('clipboard_get', {}, true);
+}
+
+async function handleViewerControlMessage(raw) {
+  let msg = null;
+  try { msg = typeof raw === 'string' ? JSON.parse(raw) : JSON.parse(new TextDecoder().decode(raw)); } catch { return; }
+  if (!msg || typeof msg !== 'object') return;
+  if (msg.type === 'clipboard_result') {
+    mobileClipboardRequestPending = false;
+    const text = String(msg.text || '');
+    if (!msg.ok) {
+      setMobileClipboardStatus('Remote clipboard could not be read.');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      setMobileClipboardStatus('Remote clipboard copied to this device.');
+    } catch {
+      if (elMobileTextInput) {
+        elMobileTextInput.value = text;
+        try { elMobileTextInput.focus({ preventScroll: true }); elMobileTextInput.select(); } catch {}
+      }
+      setMobileClipboardStatus('Remote clipboard loaded below — use Copy if prompted by iOS.');
+    }
+  } else if (msg.type === 'viewer_stream_profile_result') {
+    console.log('[mobile] stream profile', msg);
+  }
+}
+
+elMobileClipboardPaste?.addEventListener('click', pastePhoneClipboardToRemote);
+elMobileClipboardCopy?.addEventListener('click', requestRemoteClipboard);
 
 function updateSessionToggleButtons() {
   if (elBtnAudio) {
@@ -1516,6 +1853,14 @@ function disconnect(reason, options = {}) {
 
   leaveRemoteControlMode();
   hideRemoteCursor();
+  hideMobilePrecisionLoupe();
+  if (elMobilePointerReticle) elMobilePointerReticle.style.display = 'none';
+  if (elMobileScrollRail) elMobileScrollRail.classList.remove('visible');
+  setMobileViewControlsVisible(false);
+  if (mobileToolbarTimer) { clearTimeout(mobileToolbarTimer); mobileToolbarTimer = null; }
+  document.body.classList.remove('mobile-toolbar-collapsed');
+  mobilePanMode = false;
+  mobilePrecisionMode = false;
   resetTransitionState();
 
   if (localInputBlocked && currentSession) {
@@ -1544,10 +1889,9 @@ function disconnect(reason, options = {}) {
 
   try { closeTechChatWindow(); } catch {}
 
-  if (inputDc) {
-    try { inputDc.close(); } catch {}
-    inputDc = null;
-  }
+  if (inputDc) { try { inputDc.close(); } catch {} inputDc = null; }
+  if (inputControlDc) { try { inputControlDc.close(); } catch {} inputControlDc = null; }
+  if (mouseMoveDc) { try { mouseMoveDc.close(); } catch {} mouseMoveDc = null; }
 
   if (pc) {
     try { pc.close(); } catch {}
@@ -1869,278 +2213,345 @@ function bindRemoteInput() {
     ev.preventDefault();
   }, { passive: false });
 
-  // Mobile/tablet direct-touch controls. A single state machine owns every
-  // touch pointer on the viewer canvas. The previous split implementation let
-  // #main and #remote-video capture the same pointer independently; after a
-  // pinch one side could miss pointerup/pointercancel and leave touch stuck.
-  //
-  // One finger on the rendered monitor = remote touch/drag.
-  // Two fingers anywhere on the viewer canvas = viewport pinch/pan.
+  // Mobile/tablet interaction. One state machine owns touch pointers across
+  // Direct Touch, Trackpad and transient Pan mode. Two-finger behaviour is
+  // intentionally mode-specific so pinch, scroll and remote clicks never race.
   const gestureSurface = elMain || elVideo.parentElement || elVideo;
   const mobilePointers = new Map();
   let remoteTouchId = null;
   let remoteTouchStart = null;
+  let remoteTouchLast = null;
   let remoteTouchDragging = false;
   let remoteTouchLongPressTimer = null;
   let remoteTouchLongPressFired = false;
   let viewportGesture = null;
   let viewportGestureConsumed = false;
   let viewportGestureRaf = 0;
+  let panGesture = null;
+  let trackpadScroll = null;
+  let scrollRailPointerId = null;
+  let scrollRailLastY = 0;
 
-  if (gestureSurface && isMobileViewerSurface()) {
-    gestureSurface.style.touchAction = "none";
-  }
+  if (gestureSurface && isMobileViewerSurface()) gestureSurface.style.touchAction = "none";
 
   const clearRemoteLongPress = () => {
     if (remoteTouchLongPressTimer) clearTimeout(remoteTouchLongPressTimer);
     remoteTouchLongPressTimer = null;
   };
-
   const pointerDistance = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
-
+  const mobilePair = () => Array.from(mobilePointers.values()).slice(0, 2);
   const isPointInsideRemoteVideo = (clientX, clientY) => {
     if (!elVideo || !elVideo.videoWidth || !elVideo.videoHeight) return false;
     const r = getVideoContentRect(elVideo);
-    return clientX >= r.left && clientX <= r.left + r.width &&
-      clientY >= r.top && clientY <= r.top + r.height;
+    return clientX >= r.left && clientX <= r.left + r.width && clientY >= r.top && clientY <= r.top + r.height;
+  };
+  const currentTrackpadPoint = () => ({
+    x_norm: Math.max(0, Math.min(1, mobileTrackpadCursor.x_norm)),
+    y_norm: Math.max(0, Math.min(1, mobileTrackpadCursor.y_norm))
+  });
+
+  const sendMobileClick = (p, clientX, clientY, button = 0) => {
+    const point = { x_norm: p.x_norm, y_norm: p.y_norm };
+    mobileTrackpadCursor = { ...point };
+    moveRemoteCursorByNorm(point.x_norm, point.y_norm);
+    updateMobileReticle(point.x_norm, point.y_norm);
+    sendInput('mouse_click', { ...point, button }, true);
+    // Pulse the actual remote target, not the raw finger position. This mirrors
+    // Windows touch feedback and never lies during a pinch/pan gesture.
+    const r = getVideoContentRect(elVideo);
+    showMobileTouchContact(r.left + point.x_norm * r.width, r.top + point.y_norm * r.height);
   };
 
-  const mobilePair = () => Array.from(mobilePointers.values()).slice(0, 2);
+  const finishMobileTap = (p, clientX, clientY) => {
+    const now = performance.now();
+    const previous = mobileLastTap;
+    const nearPrevious = previous && (now - previous.at) <= 420 &&
+      Math.hypot(clientX - previous.clientX, clientY - previous.clientY) <= 34;
+    sendMobileClick(p, clientX, clientY, 0);
+    mobileLastTap = nearPrevious ? null : { at: now, clientX, clientY };
+  };
 
-  const cancelRemoteTouchForViewport = () => {
+  const cancelRemoteTouch = ({ releaseDrag = true } = {}) => {
     clearRemoteLongPress();
-    if (remoteTouchDragging) {
-      sendInput("mouse_up", { button: 0 }, true);
-    }
-    remoteTouchDragging = false;
-    remoteTouchLongPressFired = false;
+    if (releaseDrag && remoteTouchDragging) sendInput('mouse_up', { button: 0 }, true);
     remoteTouchId = null;
     remoteTouchStart = null;
+    remoteTouchLast = null;
+    remoteTouchDragging = false;
+    remoteTouchLongPressFired = false;
+    hideMobilePrecisionLoupe();
   };
 
   const beginViewportGesture = () => {
     const pts = mobilePair();
     if (pts.length < 2 || !gestureSurface) return false;
-
-    cancelRemoteTouchForViewport();
-    const a = pts[0];
-    const b = pts[1];
-    const centerX = (a.clientX + b.clientX) / 2;
-    const centerY = (a.clientY + b.clientY) / 2;
-    const rect = gestureSurface.getBoundingClientRect();
-    const zoom = Math.max(1, mobileViewZoom);
-
-    const distance = Math.max(1, pointerDistance(a, b));
-    viewportGesture = {
-      distance,
-      zoom,
-      anchorX: (centerX - (rect.left + rect.width / 2) - mobileViewPanX) / zoom,
-      anchorY: (centerY - (rect.top + rect.height / 2) - mobileViewPanY) / zoom,
-      smoothCenterX: centerX,
-      smoothCenterY: centerY,
-      smoothDistance: distance
+    cancelRemoteTouch();
+    trackpadScroll = null;
+    const a=pts[0], b=pts[1];
+    const centerX=(a.clientX+b.clientX)/2, centerY=(a.clientY+b.clientY)/2;
+    const rect=gestureSurface.getBoundingClientRect();
+    const zoom=Math.max(1,mobileViewZoom);
+    const distance=Math.max(1,pointerDistance(a,b));
+    viewportGesture={
+      distance, zoom,
+      anchorX:(centerX-(rect.left+rect.width/2)-mobileViewPanX)/zoom,
+      anchorY:(centerY-(rect.top+rect.height/2)-mobileViewPanY)/zoom,
+      smoothCenterX:centerX, smoothCenterY:centerY, smoothDistance:distance
     };
-    viewportGestureConsumed = true;
+    viewportGestureConsumed=true;
     return true;
   };
 
   const updateViewportGesture = () => {
-    const pts = mobilePair();
-    if (pts.length < 2 || !gestureSurface) return false;
-    if (!viewportGesture && !beginViewportGesture()) return false;
-
-    const a = pts[0];
-    const b = pts[1];
-    const rawCenterX = (a.clientX + b.clientX) / 2;
-    const rawCenterY = (a.clientY + b.clientY) / 2;
-    const rawDistance = Math.max(1, pointerDistance(a, b));
-
-    // Pointer events for the two fingers do not necessarily arrive in the same
-    // browser frame. A light one-frame low-pass removes the alternating-centre
-    // wobble without making the gesture feel heavy or delayed.
-    const alpha = 0.72;
-    viewportGesture.smoothCenterX += (rawCenterX - viewportGesture.smoothCenterX) * alpha;
-    viewportGesture.smoothCenterY += (rawCenterY - viewportGesture.smoothCenterY) * alpha;
-    viewportGesture.smoothDistance += (rawDistance - viewportGesture.smoothDistance) * alpha;
-    const centerX = viewportGesture.smoothCenterX;
-    const centerY = viewportGesture.smoothCenterY;
-    const distance = viewportGesture.smoothDistance;
-    const ratio = distance / Math.max(1, viewportGesture.distance);
-    const nextZoom = Math.max(1, Math.min(4, viewportGesture.zoom * ratio));
-    const rect = gestureSurface.getBoundingClientRect();
-
-    // Preserve the remote point that was under the initial pinch centre.
-    // This keeps both zoom-in and zoom-out stable instead of recentering.
-    mobileViewZoom = nextZoom;
-    mobileViewPanX = (centerX - (rect.left + rect.width / 2)) - viewportGesture.anchorX * nextZoom;
-    mobileViewPanY = (centerY - (rect.top + rect.height / 2)) - viewportGesture.anchorY * nextZoom;
-
-    applyMobileViewport({ clamp: false });
+    const pts=mobilePair();
+    if(pts.length<2||!gestureSurface) return false;
+    if(!viewportGesture&&!beginViewportGesture()) return false;
+    const a=pts[0], b=pts[1];
+    const rawCenterX=(a.clientX+b.clientX)/2, rawCenterY=(a.clientY+b.clientY)/2;
+    const rawDistance=Math.max(1,pointerDistance(a,b));
+    const alpha=.72;
+    viewportGesture.smoothCenterX += (rawCenterX-viewportGesture.smoothCenterX)*alpha;
+    viewportGesture.smoothCenterY += (rawCenterY-viewportGesture.smoothCenterY)*alpha;
+    viewportGesture.smoothDistance += (rawDistance-viewportGesture.smoothDistance)*alpha;
+    const centerX=viewportGesture.smoothCenterX, centerY=viewportGesture.smoothCenterY;
+    const nextZoom=Math.max(1,Math.min(4,viewportGesture.zoom*(viewportGesture.smoothDistance/Math.max(1,viewportGesture.distance))));
+    const rect=gestureSurface.getBoundingClientRect();
+    mobileViewZoom=nextZoom;
+    mobileViewPanX=(centerX-(rect.left+rect.width/2))-viewportGesture.anchorX*nextZoom;
+    mobileViewPanY=(centerY-(rect.top+rect.height/2))-viewportGesture.anchorY*nextZoom;
+    applyMobileViewport({clamp:false});
     return true;
   };
 
-  const scheduleViewportGestureUpdate = () => {
-    if (viewportGestureRaf) return;
-    viewportGestureRaf = window.requestAnimationFrame(() => {
-      viewportGestureRaf = 0;
-      if (mobilePointers.size >= 2 && viewportGesture) updateViewportGesture();
+  const scheduleViewportGestureUpdate=()=>{
+    if(viewportGestureRaf) return;
+    viewportGestureRaf=requestAnimationFrame(()=>{
+      viewportGestureRaf=0;
+      if(mobilePointers.size>=2&&viewportGesture) updateViewportGesture();
     });
   };
 
-  const resetMobileGestureWhenReleased = () => {
-    if (mobilePointers.size !== 0) return;
-    if (viewportGestureRaf) {
-      window.cancelAnimationFrame(viewportGestureRaf);
-      viewportGestureRaf = 0;
+  const beginTrackpadScroll=()=>{
+    const pts=mobilePair();
+    if(pts.length<2) return false;
+    cancelRemoteTouch();
+    viewportGesture=null;
+    trackpadScroll={ centerY:(pts[0].clientY+pts[1].clientY)/2 };
+    viewportGestureConsumed=true;
+    return true;
+  };
+  const updateTrackpadScroll=()=>{
+    const pts=mobilePair();
+    if(pts.length<2||!trackpadScroll) return;
+    const centerY=(pts[0].clientY+pts[1].clientY)/2;
+    const dy=centerY-trackpadScroll.centerY;
+    if(Math.abs(dy)>=1.5){
+      sendInput('wheel',{delta_x:0,delta_y:Math.round(-dy*3.2),delta_mode:0},true);
+      trackpadScroll.centerY=centerY;
     }
+  };
+
+  const beginPanGesture=(point)=>{
+    cancelRemoteTouch();
+    panGesture={clientX:point.clientX,clientY:point.clientY,panX:mobileViewPanX,panY:mobileViewPanY};
+    viewportGestureConsumed=true;
+  };
+  const updatePanGesture=(point)=>{
+    if(!panGesture) return;
+    mobileViewPanX=panGesture.panX+(point.clientX-panGesture.clientX);
+    mobileViewPanY=panGesture.panY+(point.clientY-panGesture.clientY);
+    applyMobileViewport({clamp:true});
+  };
+
+  const startLongPress=(pointerId)=>{
     clearRemoteLongPress();
-    remoteTouchId = null;
-    remoteTouchStart = null;
-    remoteTouchDragging = false;
-    remoteTouchLongPressFired = false;
-    viewportGesture = null;
-    viewportGestureConsumed = false;
+    remoteTouchLongPressTimer=setTimeout(()=>{
+      if(mobilePointers.size!==1||remoteTouchId!==pointerId||remoteTouchDragging) return;
+      const p=mobileInputMode==='trackpad'?currentTrackpadPoint():getNormalizedPointer(mobilePointers.get(pointerId));
+      sendInput('mouse_click',{...p,button:2},true);
+      const r=getVideoContentRect(elVideo);
+      showMobileTouchContact(r.left+p.x_norm*r.width,r.top+p.y_norm*r.height);
+      remoteTouchLongPressFired=true;
+    },650);
   };
 
-  const mobilePointerAllowed = (ev) => {
-    if (!isMobileViewerSurface()) return false;
-    if (ev.pointerType !== "touch" && ev.pointerType !== "pen") return false;
-    // Do not steal touches intended for Viewer controls/panels. Black canvas
-    // space and the transformed video itself are the viewport gesture surface.
-    return ev.target === gestureSurface || ev.target === elVideo;
+  const mobilePointerAllowed=(ev)=>{
+    if(!isMobileViewerSurface()) return false;
+    if(ev.pointerType!=="touch"&&ev.pointerType!=="pen") return false;
+    return ev.target===gestureSurface||ev.target===elVideo;
   };
 
-  gestureSurface?.addEventListener("pointerdown", (ev) => {
-    if (!mobilePointerAllowed(ev)) return;
+  gestureSurface?.addEventListener('pointerdown',(ev)=>{
+    if(!mobilePointerAllowed(ev)) return;
     noteTouchInteraction();
     ev.preventDefault();
+    const point={id:ev.pointerId,clientX:ev.clientX,clientY:ev.clientY,startX:ev.clientX,startY:ev.clientY};
+    mobilePointers.set(ev.pointerId,point);
+    try{gestureSurface.setPointerCapture(ev.pointerId);}catch{}
 
-    mobilePointers.set(ev.pointerId, {
-      id: ev.pointerId,
-      clientX: ev.clientX,
-      clientY: ev.clientY
-    });
-
-    // Capture every mobile pointer in exactly one place. All move/up/cancel
-    // events now return here, even if a finger crosses outside the video.
-    try { gestureSurface.setPointerCapture(ev.pointerId); } catch {}
-
-    if (mobilePointers.size >= 2) {
-      beginViewportGesture();
+    if(mobilePointers.size>=2){
+      if(mobileInputMode==='trackpad'&&!mobilePanMode) beginTrackpadScroll();
+      else beginViewportGesture();
       return;
     }
 
-    if (!isPointInsideRemoteVideo(ev.clientX, ev.clientY)) {
-      // A first finger in the black surround is intentionally inert; adding a
-      // second finger turns it into a canvas-wide pinch without remote clicks.
-      return;
-    }
+    if(mobilePanMode){ beginPanGesture(point); return; }
+    if(mobileInputMode==='direct'&&!isPointInsideRemoteVideo(ev.clientX,ev.clientY)) return;
 
     enterRemoteControlMode();
-    remoteTouchId = ev.pointerId;
-    remoteTouchStart = { clientX: ev.clientX, clientY: ev.clientY };
-    remoteTouchDragging = false;
-    remoteTouchLongPressFired = false;
+    remoteTouchId=ev.pointerId;
+    remoteTouchStart={clientX:ev.clientX,clientY:ev.clientY};
+    remoteTouchLast={clientX:ev.clientX,clientY:ev.clientY};
+    remoteTouchDragging=false;
+    remoteTouchLongPressFired=false;
 
-    const p = getNormalizedPointer(ev);
-    moveRemoteCursorByNorm(p.x_norm, p.y_norm);
-    sendInput("mouse_move", p);
+    // Trackpad double-tap-and-hold becomes a normal Windows drag. If the
+    // finger does not move, down/up still forms the second click of a double-click.
+    if (mobileInputMode === 'trackpad' && mobileLastTap && (performance.now() - mobileLastTap.at) <= 420) {
+      const p = currentTrackpadPoint();
+      sendInput('mouse_down', { ...p, button: 0 }, true);
+      const rr = getVideoContentRect(elVideo);
+      showMobileTouchContact(rr.left + p.x_norm * rr.width, rr.top + p.y_norm * rr.height);
+      remoteTouchDragging = true;
+      mobileLastTap = null;
+    }
 
-    clearRemoteLongPress();
-    remoteTouchLongPressTimer = setTimeout(() => {
-      if (mobilePointers.size === 1 && remoteTouchId === ev.pointerId && !remoteTouchDragging) {
-        sendInput("mouse_down", { button: 2 }, true);
-        sendInput("mouse_up", { button: 2 }, true);
-        remoteTouchLongPressFired = true;
-      }
-    }, 650);
-  }, { passive: false });
+    if(mobileInputMode==='direct'){
+      const p=getNormalizedPointer(ev);
+      mobileTrackpadCursor={...p};
+      moveRemoteCursorByNorm(p.x_norm,p.y_norm);
+      sendInput('mouse_move',p);
+      updateMobileReticle(p.x_norm,p.y_norm);
+      updateMobilePrecisionLoupe(p.x_norm,p.y_norm,ev.clientX,ev.clientY);
+    } else {
+      const p=lastCursorNorm||mobileTrackpadCursor||{x_norm:.5,y_norm:.5};
+      mobileTrackpadCursor={x_norm:p.x_norm??.5,y_norm:p.y_norm??.5};
+      updateMobileReticle();
+    }
+    startLongPress(ev.pointerId);
+  },{passive:false});
 
-  gestureSurface?.addEventListener("pointermove", (ev) => {
-    const point = mobilePointers.get(ev.pointerId);
-    if (!point) return;
+  gestureSurface?.addEventListener('pointermove',(ev)=>{
+    const point=mobilePointers.get(ev.pointerId);
+    if(!point) return;
     noteTouchInteraction();
     ev.preventDefault();
+    point.clientX=ev.clientX; point.clientY=ev.clientY;
+    mobilePointers.set(ev.pointerId,point);
 
-    point.clientX = ev.clientX;
-    point.clientY = ev.clientY;
-    mobilePointers.set(ev.pointerId, point);
-
-    if (mobilePointers.size >= 2 || viewportGesture) {
-      scheduleViewportGestureUpdate();
+    if(mobilePointers.size>=2){
+      if(mobileInputMode==='trackpad'&&!mobilePanMode){ if(!trackpadScroll) beginTrackpadScroll(); updateTrackpadScroll(); }
+      else { if(!viewportGesture) beginViewportGesture(); scheduleViewportGestureUpdate(); }
       return;
     }
+    if(mobilePanMode){ updatePanGesture(point); return; }
+    if(viewportGestureConsumed||ev.pointerId!==remoteTouchId) return;
 
-    if (viewportGestureConsumed || ev.pointerId !== remoteTouchId) return;
+    const moved=remoteTouchStart&&pointerDistance(ev,remoteTouchStart)>(mobilePrecisionMode?18:12);
+    if(moved) clearRemoteLongPress();
 
-    const p = getNormalizedPointer(ev);
-    moveRemoteCursorByNorm(p.x_norm, p.y_norm);
-    sendInput("mouse_move", p);
-
-    if (remoteTouchStart && pointerDistance(ev, remoteTouchStart) > 8) {
-      clearRemoteLongPress();
-      if (!remoteTouchDragging && !remoteTouchLongPressFired) {
-        sendInput("mouse_down", { button: 0 }, true);
-        remoteTouchDragging = true;
+    if(mobileInputMode==='trackpad'){
+      const r=getVideoContentRect(elVideo);
+      const dx=ev.clientX-(remoteTouchLast?.clientX??ev.clientX);
+      const dy=ev.clientY-(remoteTouchLast?.clientY??ev.clientY);
+      const sensitivity=1.22;
+      mobileTrackpadCursor.x_norm=Math.max(0,Math.min(1,mobileTrackpadCursor.x_norm+(dx/Math.max(1,r.width))*sensitivity));
+      mobileTrackpadCursor.y_norm=Math.max(0,Math.min(1,mobileTrackpadCursor.y_norm+(dy/Math.max(1,r.height))*sensitivity));
+      const p=currentTrackpadPoint();
+      moveRemoteCursorByNorm(p.x_norm,p.y_norm);
+      sendInput('mouse_move',p);
+      updateMobileReticle(p.x_norm,p.y_norm);
+      updateMobilePrecisionLoupe(p.x_norm,p.y_norm,ev.clientX,ev.clientY);
+    } else {
+      const p=getNormalizedPointer(ev);
+      mobileTrackpadCursor={...p};
+      moveRemoteCursorByNorm(p.x_norm,p.y_norm);
+      sendInput('mouse_move',p);
+      updateMobileReticle(p.x_norm,p.y_norm);
+      updateMobilePrecisionLoupe(p.x_norm,p.y_norm,ev.clientX,ev.clientY);
+      if(moved&&!mobilePrecisionMode&&!remoteTouchDragging&&!remoteTouchLongPressFired){
+        sendInput('mouse_down',{button:0},true);
+        const rr=getVideoContentRect(elVideo);
+        showMobileTouchContact(rr.left+p.x_norm*rr.width,rr.top+p.y_norm*rr.height);
+        remoteTouchDragging=true;
       }
     }
-  }, { passive: false });
+    remoteTouchLast={clientX:ev.clientX,clientY:ev.clientY};
+  },{passive:false});
 
-  const finishMobilePointer = (ev, cancelled) => {
-    if (!mobilePointers.has(ev.pointerId)) return;
-    noteTouchInteraction();
-    ev.preventDefault();
+  const resetMobileGestureWhenReleased=()=>{
+    if(mobilePointers.size!==0) return;
+    if(viewportGestureRaf){cancelAnimationFrame(viewportGestureRaf);viewportGestureRaf=0;}
+    clearRemoteLongPress();
+    cancelRemoteTouch({releaseDrag:false});
+    viewportGesture=null; viewportGestureConsumed=false; panGesture=null; trackpadScroll=null;
+  };
 
-    const wasRemoteTouch = ev.pointerId === remoteTouchId;
-    const wasViewportGesture = viewportGestureConsumed || mobilePointers.size >= 2;
+  const finishMobilePointer=(ev,cancelled)=>{
+    const point=mobilePointers.get(ev.pointerId);
+    if(!point) return;
+    noteTouchInteraction(); ev.preventDefault();
+    const wasRemote=ev.pointerId===remoteTouchId;
+    const wasViewport=viewportGestureConsumed||mobilePointers.size>=2||!!panGesture||!!trackpadScroll;
     mobilePointers.delete(ev.pointerId);
-    try { gestureSurface.releasePointerCapture(ev.pointerId); } catch {}
+    try{gestureSurface.releasePointerCapture(ev.pointerId);}catch{}
 
-    if (wasRemoteTouch) {
+    if(wasRemote){
       clearRemoteLongPress();
-      if (remoteTouchDragging) {
-        sendInput("mouse_up", { button: 0 }, true);
-      } else if (!cancelled && !wasViewportGesture && !remoteTouchLongPressFired) {
-        const p = getNormalizedPointer(ev);
-        moveRemoteCursorByNorm(p.x_norm, p.y_norm);
-        sendInput("mouse_move", p, true);
-        sendInput("mouse_down", { button: 0 }, true);
-        sendInput("mouse_up", { button: 0 }, true);
+      if(remoteTouchDragging){ sendInput('mouse_up',{button:0},true); }
+      else if(!cancelled&&!wasViewport&&!remoteTouchLongPressFired){
+        const p=mobileInputMode==='trackpad'?currentTrackpadPoint():getNormalizedPointer(ev);
+        finishMobileTap(p,ev.clientX,ev.clientY);
       }
-      remoteTouchId = null;
-      remoteTouchStart = null;
-      remoteTouchDragging = false;
-      remoteTouchLongPressFired = false;
+      hideMobilePrecisionLoupe();
+      remoteTouchId=null; remoteTouchStart=null; remoteTouchLast=null; remoteTouchDragging=false; remoteTouchLongPressFired=false;
     }
 
-    if (wasViewportGesture) {
-      if (viewportGestureRaf) {
-        window.cancelAnimationFrame(viewportGestureRaf);
-        viewportGestureRaf = 0;
-      }
-      // A pinch ends exactly where the user's fingers leave it. Do not clamp
-      // or recenter here: release-time correction makes a carefully chosen
-      // zoom target jump toward an edge. Only an intentional return to Fit
-      // recentres the viewport.
-      if (mobileViewZoom < 1.02) {
-        mobileViewZoom = 1;
-        mobileViewPanX = 0;
-        mobileViewPanY = 0;
-        applyMobileViewport({ clamp: false });
-      }
-      // Once a two-finger gesture begins, the remaining finger stays inert
-      // until all fingers lift. This prevents pinch-end from becoming a click
-      // or drag and guarantees the next touch starts from a clean state.
-      viewportGesture = null;
-      viewportGestureConsumed = true;
-      cancelRemoteTouchForViewport();
+    if(wasViewport){
+      const completedOneShotPan = !!panGesture && mobilePanMode;
+      if(viewportGestureRaf){cancelAnimationFrame(viewportGestureRaf);viewportGestureRaf=0;}
+      if(mobileViewZoom<1.02&&viewportGesture){mobileViewZoom=1;mobileViewPanX=0;mobileViewPanY=0;applyMobileViewport({clamp:false});}
+      viewportGesture=null; trackpadScroll=null; panGesture=null; viewportGestureConsumed=true;
+      cancelRemoteTouch();
+      if (completedOneShotPan) { mobilePanMode = false; updateMobileModeUi(); }
     }
-
     resetMobileGestureWhenReleased();
   };
 
-  gestureSurface?.addEventListener("pointerup", (ev) => finishMobilePointer(ev, false), { passive: false });
-  gestureSurface?.addEventListener("pointercancel", (ev) => finishMobilePointer(ev, true), { passive: false });
+  gestureSurface?.addEventListener('pointerup',(ev)=>finishMobilePointer(ev,false),{passive:false});
+  gestureSurface?.addEventListener('pointercancel',(ev)=>finishMobilePointer(ev,true),{passive:false});
+
+  // Dedicated edge scroll zone: one-finger vertical swipe always means remote
+  // wheel input, so scrolling never competes with pinch or direct touch.
+  elMobileScrollRail?.addEventListener('pointerdown',(ev)=>{
+    if(!isMobileViewerSurface()||!currentSession) return;
+    ev.preventDefault(); ev.stopPropagation();
+    scrollRailPointerId=ev.pointerId; scrollRailLastY=ev.clientY;
+    try{elMobileScrollRail.setPointerCapture(ev.pointerId);}catch{}
+    enterRemoteControlMode();
+  },{passive:false});
+  elMobileScrollRail?.addEventListener('pointermove',(ev)=>{
+    if(ev.pointerId!==scrollRailPointerId) return;
+    ev.preventDefault(); ev.stopPropagation();
+    const dy=ev.clientY-scrollRailLastY;
+    if(Math.abs(dy)>=1){
+      sendInput('wheel',{delta_x:0,delta_y:Math.round(-dy*3.6),delta_mode:0},true);
+      scrollRailLastY=ev.clientY;
+      if(elMobileScrollThumb){
+        const rect=elMobileScrollRail.getBoundingClientRect();
+        const pos=Math.max(0,Math.min(rect.height-42,ev.clientY-rect.top-21));
+        elMobileScrollThumb.style.top=pos+'px';
+      }
+    }
+  },{passive:false});
+  const endScrollRail=(ev)=>{
+    if(ev.pointerId!==scrollRailPointerId) return;
+    ev.preventDefault(); ev.stopPropagation();
+    try{elMobileScrollRail.releasePointerCapture(ev.pointerId);}catch{}
+    scrollRailPointerId=null;
+  };
+  elMobileScrollRail?.addEventListener('pointerup',endScrollRail,{passive:false});
+  elMobileScrollRail?.addEventListener('pointercancel',endScrollRail,{passive:false});
 
   window.addEventListener("blur", () => {
     if (remoteAltTabActive) {
@@ -2482,16 +2893,41 @@ async function handleOffer(msg) {
   }
 
   pc.ondatachannel = (ev) => {
-    if (!ev.channel) return;
+    const channel = ev.channel;
+    if (!channel) return;
 
-    if (ev.channel.label === "input") {
-      inputDc = ev.channel;
-
-      inputDc.onopen = () => {};
-      inputDc.onclose = () => {
-        inputDc = null;
+    const attachControlMessage = () => {
+      channel.onmessage = (message) => {
+        const data = message?.data;
+        if (typeof data === 'string') handleViewerControlMessage(data);
+        else if (data instanceof ArrayBuffer) handleViewerControlMessage(data);
+        else if (data?.arrayBuffer) data.arrayBuffer().then(handleViewerControlMessage).catch(() => {});
       };
+    };
+
+    if (channel.label === "input") {
+      inputDc = channel;
+      attachControlMessage();
+      inputDc.onopen = () => { sendViewerStreamProfile(); };
+      inputDc.onclose = () => { if (inputDc === channel) inputDc = null; };
       inputDc.onerror = () => {};
+      return;
+    }
+
+    if (channel.label === "input-control") {
+      inputControlDc = channel;
+      attachControlMessage();
+      inputControlDc.onopen = () => { sendViewerStreamProfile(); };
+      inputControlDc.onclose = () => { if (inputControlDc === channel) inputControlDc = null; };
+      inputControlDc.onerror = () => {};
+      return;
+    }
+
+    if (channel.label === "input-move" || channel.label === "viewer-mouse-move") {
+      mouseMoveDc = channel;
+      mouseMoveDc.binaryType = 'arraybuffer';
+      mouseMoveDc.onclose = () => { if (mouseMoveDc === channel) mouseMoveDc = null; };
+      mouseMoveDc.onerror = () => {};
     }
   };
 
@@ -2895,6 +3331,13 @@ function startSession(params) {
     viewerClient,
     launchMode
   };
+
+  if (isMobileViewerSurface()) {
+    setMobileToolbarCollapsed(false);
+    updateMobileModeUi();
+    applyViewerScalePreference();
+    scheduleMobileToolbarHide(6500);
+  }
 
   remoteMonitors = [];
   currentMonitorIndex = 0;
