@@ -2118,17 +2118,16 @@ function bindRemoteInput() {
         window.cancelAnimationFrame(viewportGestureRaf);
         viewportGestureRaf = 0;
       }
-      // Settle exactly to Fit only after the pinch has ended, never while the
-      // fingers are moving. This avoids threshold bounce during zoom-out.
+      // A pinch ends exactly where the user's fingers leave it. Do not clamp
+      // or recenter here: release-time correction makes a carefully chosen
+      // zoom target jump toward an edge. Only an intentional return to Fit
+      // recentres the viewport.
       if (mobileViewZoom < 1.02) {
         mobileViewZoom = 1;
         mobileViewPanX = 0;
         mobileViewPanY = 0;
+        applyMobileViewport({ clamp: false });
       }
-      // Settle edge bounds exactly once after the fingers stop moving.
-      // This may correct an intentional overscroll but cannot feed jitter back
-      // into the active gesture.
-      applyMobileViewport({ clamp: true });
       // Once a two-finger gesture begins, the remaining finger stays inert
       // until all fingers lift. This prevents pinch-end from becoming a click
       // or drag and guarantees the next touch starts from a clean state.
