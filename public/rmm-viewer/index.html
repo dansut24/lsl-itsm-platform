@@ -489,7 +489,7 @@
     }
     .settings-select option { background: #11161d; color: var(--text); }
 
-    #mobile-view-controls, #mobile-keyboard, #mobile-toolbar-handle, #mobile-scroll-rail { display: none; }
+    #mobile-view-controls, #mobile-keyboard, #mobile-toolbar-handle, #mobile-scroll-rail, #mobile-bottom-actions { display: none; }
     .mobile-only-action, .mobile-only-setting { display: none; }
 
     .mobile-touch-contact {
@@ -580,7 +580,7 @@
         grid-row: 2;
         width: 100%;
         display: grid;
-        grid-template-columns: repeat(11, minmax(0, 1fr));
+        grid-template-columns: repeat(10, minmax(0, 1fr));
         gap: 4px;
         padding: 4px;
         border: 1px solid var(--border);
@@ -647,7 +647,7 @@
       #mobile-view-controls {
         position: absolute;
         right: max(8px, env(safe-area-inset-right));
-        bottom: max(10px, env(safe-area-inset-bottom));
+        bottom: calc(max(10px, env(safe-area-inset-bottom)) + 54px);
         top: auto;
         z-index: 12;
         display: none;
@@ -681,6 +681,61 @@
       }
       #mobile-input-mode { min-width: 64px !important; font-size: 11px !important; }
       #mobile-pan-mode, #mobile-precision-mode { min-width: 42px !important; }
+
+      #mobile-bottom-actions {
+        position: absolute;
+        left: 50%;
+        bottom: max(8px, env(safe-area-inset-bottom));
+        transform: translateX(-50%);
+        z-index: 26;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 6px;
+        border: 1px solid rgba(255,255,255,.13);
+        border-radius: 13px;
+        background: rgba(8,12,19,.94);
+        box-shadow: 0 8px 24px rgba(0,0,0,.30);
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+      }
+      #mobile-bottom-actions.visible { display: flex; }
+      #mobile-bottom-actions button {
+        min-height: 38px;
+        min-width: 78px;
+        padding: 0 10px;
+        border: 1px solid rgba(255,255,255,.12);
+        border-radius: 9px;
+        background: rgba(255,255,255,.06);
+        color: var(--text);
+        font: inherit;
+        font-size: 11px;
+        font-weight: 760;
+        touch-action: manipulation;
+      }
+      #mobile-bottom-actions button:disabled { opacity: .42; }
+      #mobile-bottom-actions button.active {
+        border-color: rgba(var(--accent),.72);
+        background: rgba(var(--accent),.30);
+        color: #fff;
+      }
+      #mobile-clipboard-status {
+        position: absolute;
+        left: 50%;
+        bottom: calc(100% + 6px);
+        transform: translateX(-50%);
+        min-width: 160px;
+        max-width: 78vw;
+        min-height: 0;
+        padding: 5px 8px;
+        border-radius: 8px;
+        background: rgba(8,12,19,.92);
+        color: var(--muted);
+        font-size: 10px;
+        text-align: center;
+        pointer-events: none;
+      }
+      #mobile-clipboard-status:empty { display: none; }
 
       #mobile-scroll-rail {
         position: absolute;
@@ -726,16 +781,20 @@
         font-weight: 720;
         touch-action: manipulation;
       }
-      #mobile-clipboard-status { min-height: 14px; padding: 0 3px; color: var(--muted); font-size: 10px; }
       #mobile-keyboard.visible {
         display: flex;
-        flex: 0 0 auto;
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: calc(max(8px, env(safe-area-inset-bottom)) + 52px);
         flex-direction: column;
         gap: 5px;
         max-height: min(46dvh, 330px);
         overflow-y: auto;
-        padding: 6px 6px max(6px, env(safe-area-inset-bottom));
-        border-top: 1px solid var(--border);
+        padding: 6px;
+        border: 1px solid var(--border);
+        border-left: 0;
+        border-right: 0;
         background: rgba(8,12,19,.985);
         box-shadow: 0 -12px 32px rgba(0,0,0,.28);
         z-index: 30;
@@ -851,7 +910,6 @@
     <button id="btn-chat" class="icon-btn" disabled title="Chat" aria-label="Chat">💬<span class="label">Chat</span></button>
     <button id="btn-audio" class="icon-btn" disabled title="Play remote audio" aria-label="Remote audio">🔇<span class="label">Audio</span></button>
     <button id="btn-block-input" class="icon-btn" disabled title="Block the local user's keyboard and mouse" aria-label="Block local keyboard and mouse">🔓<span class="label">User input</span></button>
-    <button id="btn-keyboard" class="icon-btn mobile-only-action" disabled title="Keyboard" aria-label="Remote keyboard">⌨<span class="label">Keyboard</span></button>
     <button id="btn-backstage" class="icon-btn" disabled title="Backstage Desktop" aria-label="Backstage Desktop">🧰<span class="label">Backstage</span></button>
     <button id="btn-console" class="icon-btn" disabled title="Console Desktop" aria-label="Console Desktop">🖥️<span class="label">Console</span></button>
     <button id="btn-start-menu" class="icon-btn" disabled title="Start Menu" aria-label="Start Menu">⊞<span class="label">Start</span></button>
@@ -879,6 +937,12 @@
     <button id="mobile-zoom-out" type="button" aria-label="Zoom out">−</button>
     <button id="mobile-zoom-fit" type="button">Fit</button>
     <button id="mobile-zoom-in" type="button" aria-label="Zoom in">+</button>
+  </div>
+  <div id="mobile-bottom-actions" aria-label="Mobile keyboard and clipboard controls">
+    <button id="btn-keyboard" class="mobile-bottom-btn" disabled type="button" aria-label="Remote keyboard">⌨ Keyboard</button>
+    <button id="mobile-clipboard-paste" type="button" disabled>Paste</button>
+    <button id="mobile-clipboard-copy" type="button" disabled>Copy remote</button>
+    <div id="mobile-clipboard-status" aria-live="polite"></div>
   </div>
   <div id="mobile-scroll-rail" aria-label="Remote scroll area"><div id="mobile-scroll-thumb"></div></div>
   <div id="mobile-pointer-reticle" aria-hidden="true"></div>
@@ -932,7 +996,7 @@
             <option value="auto">Auto</option>
             <option value="native">Native</option>
             <option value="1080p">1080p</option>
-            <option value="720p">720p</option>
+            <option value="720p">720p (performance)</option>
           </select>
         </div>
         <div class="settings-control mobile-only-setting">
@@ -993,8 +1057,7 @@
 </div>
 
 <section id="mobile-keyboard" aria-label="Remote keyboard">
-  <div class="mobile-keyboard-head"><span>Remote keyboard</span><div class="mobile-keyboard-head-actions"><button id="mobile-clipboard-paste" type="button">Paste</button><button id="mobile-clipboard-copy" type="button">Copy remote</button><button id="mobile-keyboard-close" type="button" aria-label="Close keyboard">✕</button></div></div>
-  <div id="mobile-clipboard-status"></div>
+  <div class="mobile-keyboard-head"><span>Remote keyboard</span><div class="mobile-keyboard-head-actions"><button id="mobile-keyboard-close" type="button" aria-label="Close keyboard">✕</button></div></div>
   <div class="mobile-text-entry">
     <textarea id="mobile-text-input" rows="1" inputmode="text" enterkeyhint="send" autocapitalize="sentences" autocomplete="off" spellcheck="false" placeholder="Paste or enter text"></textarea>
     <button id="mobile-text-send" type="button">Send</button>

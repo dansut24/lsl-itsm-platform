@@ -66,6 +66,7 @@ const elMobileInputMode = document.getElementById("mobile-input-mode");
 const elMobilePanMode = document.getElementById("mobile-pan-mode");
 const elMobilePrecisionMode = document.getElementById("mobile-precision-mode");
 const elMobileToolbarHandle = document.getElementById("mobile-toolbar-handle");
+const elMobileBottomActions = document.getElementById("mobile-bottom-actions");
 const elMobileScrollRail = document.getElementById("mobile-scroll-rail");
 const elMobileScrollThumb = document.getElementById("mobile-scroll-thumb");
 const elMobilePointerReticle = document.getElementById("mobile-pointer-reticle");
@@ -124,6 +125,10 @@ let lastCursorNorm = null;
 let mobileViewZoom = 1;
 let mobileViewPanX = 0;
 let mobileViewPanY = 0;
+let mobileViewportResumeAnchor = null;
+let mobileViewportStableAnchor = null;
+let mobileViewportResumeToken = 0;
+let mobileViewportResumeUntil = 0;
 
 const MOBILE_PREFS_KEY = "hi5central.viewer.mobile.v2";
 const MOBILE_PREF_DEFAULTS = { inputMode: "direct", toolbar: "auto", resolution: "auto", scale: "fit" };
@@ -187,7 +192,9 @@ function setMobileClipboardStatus(text) {
 
 function resolvedMobileResolutionPref() {
   if (!isMobileViewerSurface()) return mobilePrefs.resolution;
-  return mobilePrefs.resolution === 'auto' ? '720p' : mobilePrefs.resolution;
+  // Auto prioritises text/image fidelity. 720p remains an explicit performance
+  // option for constrained links, but is no longer forced on every phone.
+  return mobilePrefs.resolution === 'auto' ? 'native' : mobilePrefs.resolution;
 }
 
 function mobileStreamProfilePayload() {
@@ -248,6 +255,7 @@ function setMobileViewZoom(nextZoom) {
   mobileViewZoom = Math.max(1, Math.min(4, Number(nextZoom) || 1));
   if (mobileViewZoom === 1) { mobileViewPanX = 0; mobileViewPanY = 0; }
   applyMobileViewport();
+  rememberMobileViewportStableAnchor();
 }
 
 function resetMobileViewport() {
@@ -255,6 +263,7 @@ function resetMobileViewport() {
   mobileViewPanX = 0;
   mobileViewPanY = 0;
   applyMobileViewport();
+  rememberMobileViewportStableAnchor();
 }
 
 function setMobileViewControlsVisible(visible) {
@@ -262,11 +271,97 @@ function setMobileViewControlsVisible(visible) {
   elMobileViewControls.classList.toggle('visible', !!visible && isMobileViewerSurface());
 }
 
+function setMobileBottomActionsVisible(visible) {
+  if (!elMobileBottomActions) return;
+  elMobileBottomActions.classList.toggle('visible', !!visible && isMobileViewerSurface());
+}
+
+function captureMobileViewportAnchor() {
+  if (!isMobileViewerSurface() || !elMain || !elVideo || !elVideo.videoWidth || !elVideo.videoHeight) return null;
+  const main = elMain.getBoundingClientRect();
+  const content = getVideoContentRect(elVideo);
+  if (!main.width || !main.height || !content.width || !content.height) return null;
+  const centerX = main.left + main.width / 2;
+  const centerY = main.top + main.height / 2;
+  return {
+    zoom: mobileViewZoom,
+    focusX: Math.max(-0.5, Math.min(1.5, (centerX - content.left) / content.width)),
+    focusY: Math.max(-0.5, Math.min(1.5, (centerY - content.top) / content.height))
+  };
+}
+
+function rememberMobileViewportStableAnchor() {
+  const anchor = captureMobileViewportAnchor();
+  if (anchor) mobileViewportStableAnchor = { ...anchor };
+  return anchor;
+}
+
+function restoreMobileViewportAnchor(anchor) {
+  if (!anchor || !isMobileViewerSurface() || !elMain || !elVideo) return;
+  mobileViewZoom = Math.max(1, Math.min(4, Number(anchor.zoom) || 1));
+  if (mobileViewZoom <= 1.001) {
+    mobileViewZoom = 1;
+    mobileViewPanX = 0;
+    mobileViewPanY = 0;
+    applyMobileViewport({ clamp: false });
+    return;
+  }
+
+  // First paint at the new iOS viewport geometry, then translate so the exact
+  // same remote point remains under the centre of the phone screen.
+  applyMobileViewport({ clamp: false });
+  const main = elMain.getBoundingClientRect();
+  const content = getVideoContentRect(elVideo);
+  if (!main.width || !main.height || !content.width || !content.height) return;
+  const centerX = main.left + main.width / 2;
+  const centerY = main.top + main.height / 2;
+  const targetX = content.left + Number(anchor.focusX ?? 0.5) * content.width;
+  const targetY = content.top + Number(anchor.focusY ?? 0.5) * content.height;
+  mobileViewPanX += centerX - targetX;
+  mobileViewPanY += centerY - targetY;
+  applyMobileViewport({ clamp: false });
+  mobileViewportStableAnchor = { ...anchor, zoom: mobileViewZoom };
+}
+
+function cancelMobileViewportResumeRestore() {
+  ++mobileViewportResumeToken;
+  mobileViewportResumeUntil = 0;
+}
+
+function scheduleMobileViewportResumeRestore(anchor = mobileViewportResumeAnchor) {
+  if (!anchor || !isMobileViewerSurface()) return;
+  mobileViewportResumeAnchor = { ...anchor };
+  mobileViewportResumeUntil = performance.now() + 1600;
+  const token = ++mobileViewportResumeToken;
+  const restore = () => {
+    if (token !== mobileViewportResumeToken || !currentSession || document.hidden) return;
+    restoreMobileViewportAnchor(mobileViewportResumeAnchor);
+  };
+  requestAnimationFrame(() => requestAnimationFrame(restore));
+  for (const delay of [70, 180, 380, 750, 1200]) setTimeout(restore, delay);
+}
+
+function handleMobileViewportGeometryChange() {
+  if (!isMobileViewerSurface() || document.hidden) return;
+  if (mobileViewportResumeAnchor && performance.now() < mobileViewportResumeUntil) {
+    requestAnimationFrame(() => restoreMobileViewportAnchor(mobileViewportResumeAnchor));
+    return;
+  }
+  if (mobileViewZoom > 1.001 && mobileViewportStableAnchor) {
+    requestAnimationFrame(() => restoreMobileViewportAnchor(mobileViewportStableAnchor));
+    return;
+  }
+  applyMobileViewport({ clamp: mobileViewZoom <= 1.001 });
+}
+
 elMobileZoomOut?.addEventListener('click', () => { setMobileViewZoom(mobileViewZoom - 0.5); wakeMobileToolbar(); });
 elMobileZoomIn?.addEventListener('click', () => { setMobileViewZoom(mobileViewZoom + 0.5); wakeMobileToolbar(); });
 elMobileZoomFit?.addEventListener('click', () => { resetMobileViewport(); wakeMobileToolbar(); });
-window.addEventListener('resize', () => {
-  if (isMobileViewerSurface()) applyMobileViewport({ clamp: mobileViewZoom <= 1.001 });
+window.addEventListener('resize', handleMobileViewportGeometryChange);
+window.visualViewport?.addEventListener('resize', handleMobileViewportGeometryChange);
+window.visualViewport?.addEventListener('scroll', handleMobileViewportGeometryChange);
+window.addEventListener('pageshow', () => {
+  if (mobileViewportResumeAnchor) scheduleMobileViewportResumeRestore(mobileViewportResumeAnchor);
 });
 
 function showMobileTouchContact(clientX, clientY) {
@@ -570,13 +665,15 @@ function renderMobileKeyboard() {
 
 function toggleMobileKeyboard(force) {
   if (!elMobileKeyboard || !isMobileViewerSurface()) return;
+  const anchor = captureMobileViewportAnchor();
   wakeMobileToolbar();
   mobileKeyboardOpen = typeof force === 'boolean' ? force : !mobileKeyboardOpen;
   elMobileKeyboard.classList.toggle('visible', mobileKeyboardOpen);
   elBtnKeyboard?.classList.toggle('active', mobileKeyboardOpen);
   if (!mobileKeyboardOpen) clearMobileKeyboardModifiers();
   renderMobileKeyboard();
-  window.requestAnimationFrame(() => applyMobileViewport({ clamp: false }));
+  if (anchor) scheduleMobileViewportResumeRestore(anchor);
+  else window.requestAnimationFrame(() => applyMobileViewport({ clamp: false }));
 }
 
 function sendMobileTextEntry() {
@@ -593,6 +690,14 @@ renderMobileKeyboard();
 elBtnKeyboard?.addEventListener('click', () => toggleMobileKeyboard());
 elMobileKeyboardClose?.addEventListener('click', () => toggleMobileKeyboard(false));
 elMobileTextSend?.addEventListener('click', sendMobileTextEntry);
+elMobileTextInput?.addEventListener('focus', () => {
+  const anchor = captureMobileViewportAnchor();
+  if (anchor) scheduleMobileViewportResumeRestore(anchor);
+});
+elMobileTextInput?.addEventListener('blur', () => {
+  const anchor = captureMobileViewportAnchor() || mobileViewportStableAnchor;
+  if (anchor) scheduleMobileViewportResumeRestore(anchor);
+});
 elMobileTextInput?.addEventListener('keydown', (ev) => {
   if (ev.key === 'Enter' && !ev.shiftKey) {
     ev.preventDefault();
@@ -799,6 +904,7 @@ function showStream() {
     applyViewerScalePreference();
     applyMobileViewport({ clamp: mobileViewZoom <= 1.001 });
     setMobileViewControlsVisible(true);
+    setMobileBottomActionsVisible(true);
     updateMobileModeUi();
     wakeMobileToolbar();
   }
@@ -833,7 +939,7 @@ function updateResolution() {
   if (elVideo.videoWidth && elVideo.videoHeight && elStatRes) {
     elStatRes.textContent = `${elVideo.videoWidth}×${elVideo.videoHeight}`;
   }
-  if (isMobileViewerSurface()) applyMobileViewport();
+  if (isMobileViewerSurface()) handleMobileViewportGeometryChange();
   refreshRemoteCursorPosition();
 }
 if (elVideo) elVideo.addEventListener("resize", updateResolution);
@@ -1884,6 +1990,7 @@ function disconnect(reason, options = {}) {
   if (elMobilePointerReticle) elMobilePointerReticle.style.display = 'none';
   if (elMobileScrollRail) elMobileScrollRail.classList.remove('visible');
   setMobileViewControlsVisible(false);
+  setMobileBottomActionsVisible(false);
   if (mobileToolbarTimer) { clearTimeout(mobileToolbarTimer); mobileToolbarTimer = null; }
   document.body.classList.remove('mobile-toolbar-collapsed');
   mobilePanMode = false;
@@ -1942,6 +2049,8 @@ function disconnect(reason, options = {}) {
   if (elBtnAudio) elBtnAudio.disabled = true;
   if (elBtnBlockInput) elBtnBlockInput.disabled = true;
   if (elBtnKeyboard) elBtnKeyboard.disabled = true;
+  if (elMobileClipboardPaste) elMobileClipboardPaste.disabled = true;
+  if (elMobileClipboardCopy) elMobileClipboardCopy.disabled = true;
   if (mobileKeyboardOpen) toggleMobileKeyboard(false);
   if (elBtnBackstage) elBtnBackstage.disabled = true;
   if (elBtnConsole) elBtnConsole.disabled = true;
@@ -2347,6 +2456,7 @@ function bindRemoteInput() {
     mobileViewPanX=(centerX-(rect.left+rect.width/2))-viewportGesture.anchorX*nextZoom;
     mobileViewPanY=(centerY-(rect.top+rect.height/2))-viewportGesture.anchorY*nextZoom;
     applyMobileViewport({clamp:false});
+    rememberMobileViewportStableAnchor();
     return true;
   };
 
@@ -2388,6 +2498,7 @@ function bindRemoteInput() {
     mobileViewPanX=panGesture.panX+(point.clientX-panGesture.clientX);
     mobileViewPanY=panGesture.panY+(point.clientY-panGesture.clientY);
     applyMobileViewport({clamp:true});
+    rememberMobileViewportStableAnchor();
   };
 
   const startLongPress=(pointerId)=>{
@@ -2410,6 +2521,7 @@ function bindRemoteInput() {
 
   gestureSurface?.addEventListener('pointerdown',(ev)=>{
     if(!mobilePointerAllowed(ev)) return;
+    cancelMobileViewportResumeRestore();
     noteTouchInteraction();
     ev.preventDefault();
     const point={id:ev.pointerId,clientX:ev.clientX,clientY:ev.clientY,startX:ev.clientX,startY:ev.clientY};
@@ -2515,6 +2627,26 @@ function bindRemoteInput() {
     viewportGesture=null; viewportGestureConsumed=false; panGesture=null; trackpadScroll=null;
   };
 
+  const resetMobileGestureForLifecycle=()=>{
+    if(viewportGestureRaf){cancelAnimationFrame(viewportGestureRaf);viewportGestureRaf=0;}
+    clearRemoteLongPress();
+    for(const pointerId of mobilePointers.keys()){
+      try{gestureSurface?.releasePointerCapture(pointerId);}catch{}
+    }
+    if(remoteTouchDragging){
+      try{sendInput('mouse_up',{button:0},true);}catch{}
+    }
+    mobilePointers.clear();
+    remoteTouchId=null; remoteTouchStart=null; remoteTouchLast=null;
+    remoteTouchDragging=false; remoteTouchLongPressFired=false;
+    viewportGesture=null; viewportGestureConsumed=false; panGesture=null; trackpadScroll=null;
+    if(scrollRailPointerId!=null){
+      try{elMobileScrollRail?.releasePointerCapture(scrollRailPointerId);}catch{}
+      scrollRailPointerId=null;
+    }
+    hideMobilePrecisionLoupe();
+  };
+
   const finishMobilePointer=(ev,cancelled)=>{
     const point=mobilePointers.get(ev.pointerId);
     if(!point) return;
@@ -2553,6 +2685,7 @@ function bindRemoteInput() {
   // wheel input, so scrolling never competes with pinch or direct touch.
   elMobileScrollRail?.addEventListener('pointerdown',(ev)=>{
     if(!isMobileViewerSurface()||!currentSession) return;
+    cancelMobileViewportResumeRestore();
     ev.preventDefault(); ev.stopPropagation();
     scrollRailPointerId=ev.pointerId; scrollRailLastY=ev.clientY;
     try{elMobileScrollRail.setPointerCapture(ev.pointerId);}catch{}
@@ -2591,11 +2724,26 @@ function bindRemoteInput() {
 
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
+      if (isMobileViewerSurface()) {
+        mobileViewportResumeAnchor = captureMobileViewportAnchor();
+        if (mobileViewportResumeAnchor) mobileViewportStableAnchor = { ...mobileViewportResumeAnchor };
+        resetMobileGestureForLifecycle();
+      }
       leaveRemoteControlMode();
     } else {
       ensureRemoteVideoPlayback("visibility-resume");
       armDecodedFrameReveal();
+      if (isMobileViewerSurface() && mobileViewportResumeAnchor) {
+        scheduleMobileViewportResumeRestore(mobileViewportResumeAnchor);
+      }
     }
+  });
+
+  window.addEventListener('pagehide', () => {
+    if (!isMobileViewerSurface()) return;
+    mobileViewportResumeAnchor = captureMobileViewportAnchor() || mobileViewportResumeAnchor;
+    if (mobileViewportResumeAnchor) mobileViewportStableAnchor = { ...mobileViewportResumeAnchor };
+    resetMobileGestureForLifecycle();
   });
 
   document.addEventListener("pointerdown", () => {
@@ -3383,6 +3531,8 @@ function startSession(params) {
   setRemoteAudioEnabled(false);
   setLocalInputBlocked(false, false);
   if (elBtnKeyboard) elBtnKeyboard.disabled = false;
+  if (elMobileClipboardPaste) elMobileClipboardPaste.disabled = false;
+  if (elMobileClipboardCopy) elMobileClipboardCopy.disabled = false;
   if (elBtnBackstage) {
     elBtnBackstage.hidden = launchMode !== "backstage";
     elBtnBackstage.disabled = true;
