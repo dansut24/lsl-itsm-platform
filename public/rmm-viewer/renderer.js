@@ -576,7 +576,7 @@ function toggleMobileKeyboard(force) {
   elBtnKeyboard?.classList.toggle('active', mobileKeyboardOpen);
   if (!mobileKeyboardOpen) clearMobileKeyboardModifiers();
   renderMobileKeyboard();
-  window.requestAnimationFrame(() => applyMobileViewport());
+  window.requestAnimationFrame(() => applyMobileViewport({ clamp: false }));
 }
 
 function sendMobileTextEntry() {
