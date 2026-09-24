@@ -135,14 +135,18 @@ function clampMobileViewport() {
   mobileViewPanY = Math.max(-maxY, Math.min(maxY, mobileViewPanY));
 }
 
-function applyMobileViewport() {
+function applyMobileViewport({ clamp = true } = {}) {
   if (!elVideo) return;
   if (!isMobileViewerSurface()) {
     elVideo.style.transform = '';
     return;
   }
   mobileViewZoom = Math.max(1, Math.min(4, mobileViewZoom));
-  clampMobileViewport();
+  // Do not feed clamped coordinates back into an active pinch. When zooming
+  // out near an edge, the legal pan bounds shrink every frame; clamping here
+  // makes the image visibly "tick" under the fingers. We settle bounds once
+  // the gesture ends instead.
+  if (clamp) clampMobileViewport();
   elVideo.style.transform = 'translate3d(' + mobileViewPanX + 'px, ' + mobileViewPanY + 'px, 0) scale(' + mobileViewZoom + ')';
   refreshRemoteCursorPosition();
 }
@@ -1926,11 +1930,15 @@ function bindRemoteInput() {
     const rect = gestureSurface.getBoundingClientRect();
     const zoom = Math.max(1, mobileViewZoom);
 
+    const distance = Math.max(1, pointerDistance(a, b));
     viewportGesture = {
-      distance: Math.max(1, pointerDistance(a, b)),
+      distance,
       zoom,
       anchorX: (centerX - (rect.left + rect.width / 2) - mobileViewPanX) / zoom,
-      anchorY: (centerY - (rect.top + rect.height / 2) - mobileViewPanY) / zoom
+      anchorY: (centerY - (rect.top + rect.height / 2) - mobileViewPanY) / zoom,
+      smoothCenterX: centerX,
+      smoothCenterY: centerY,
+      smoothDistance: distance
     };
     viewportGestureConsumed = true;
     return true;
@@ -1943,9 +1951,20 @@ function bindRemoteInput() {
 
     const a = pts[0];
     const b = pts[1];
-    const centerX = (a.clientX + b.clientX) / 2;
-    const centerY = (a.clientY + b.clientY) / 2;
-    const distance = Math.max(1, pointerDistance(a, b));
+    const rawCenterX = (a.clientX + b.clientX) / 2;
+    const rawCenterY = (a.clientY + b.clientY) / 2;
+    const rawDistance = Math.max(1, pointerDistance(a, b));
+
+    // Pointer events for the two fingers do not necessarily arrive in the same
+    // browser frame. A light one-frame low-pass removes the alternating-centre
+    // wobble without making the gesture feel heavy or delayed.
+    const alpha = 0.72;
+    viewportGesture.smoothCenterX += (rawCenterX - viewportGesture.smoothCenterX) * alpha;
+    viewportGesture.smoothCenterY += (rawCenterY - viewportGesture.smoothCenterY) * alpha;
+    viewportGesture.smoothDistance += (rawDistance - viewportGesture.smoothDistance) * alpha;
+    const centerX = viewportGesture.smoothCenterX;
+    const centerY = viewportGesture.smoothCenterY;
+    const distance = viewportGesture.smoothDistance;
     const ratio = distance / Math.max(1, viewportGesture.distance);
     const nextZoom = Math.max(1, Math.min(4, viewportGesture.zoom * ratio));
     const rect = gestureSurface.getBoundingClientRect();
@@ -1956,7 +1975,7 @@ function bindRemoteInput() {
     mobileViewPanX = (centerX - (rect.left + rect.width / 2)) - viewportGesture.anchorX * nextZoom;
     mobileViewPanY = (centerY - (rect.top + rect.height / 2)) - viewportGesture.anchorY * nextZoom;
 
-    applyMobileViewport();
+    applyMobileViewport({ clamp: false });
     return true;
   };
 
@@ -2105,8 +2124,11 @@ function bindRemoteInput() {
         mobileViewZoom = 1;
         mobileViewPanX = 0;
         mobileViewPanY = 0;
-        applyMobileViewport();
       }
+      // Settle edge bounds exactly once after the fingers stop moving.
+      // This may correct an intentional overscroll but cannot feed jitter back
+      // into the active gesture.
+      applyMobileViewport({ clamp: true });
       // Once a two-finger gesture begins, the remaining finger stays inert
       // until all fingers lift. This prevents pinch-end from becoming a click
       // or drag and guarantees the next touch starts from a clean state.
