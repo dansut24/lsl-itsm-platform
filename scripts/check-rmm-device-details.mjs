@@ -12,6 +12,7 @@ const toolApi = read('api/src/rmmDeviceTools.js')
 const activity = read('src/features/rmm/RmmActivityViews.jsx')
 const activityCss = read('src/features/rmm/RmmActivityViews.css')
 const activityApi = read('api/src/rmmActivity.js')
+const agentApi = read('api/src/rmmAgent.js')
 
 const failures = []
 const expect = (value, message) => { if (!value) failures.push(message) }
@@ -73,6 +74,13 @@ expect(activity.includes('window.setInterval(() => load(true), 5000)'), 'Device 
 expect(activity.includes("createPortal(modal, document.querySelector('.rmm-app') || document.body)"), 'Audit detail modal must portal outside the scrolling page so the mobile header cannot cover it.')
 expect(activityCss.includes('padding: calc(env(safe-area-inset-top) + 8px) 0 0;') && activityCss.includes('overscroll-behavior: contain;'), 'Mobile audit details must respect the safe-area top and own their scrolling.')
 expect(activityApi.includes("'/api/v1/rmm/activity/:eventId'"), 'Durable audit detail routes require a tenant-scoped activity-record endpoint.')
+
+// Agent upgrades must not accumulate every installer and scheduled runner forever.
+expect(agentApi.includes("Filter 'Hi5CentralAgentSetup-*.exe'") && agentApi.includes("AddHours(-6)"), 'Agent upgrade dispatch must scavenge stale downloaded installers.')
+expect(agentApi.includes("Filter 'installer-*.log'") && agentApi.includes("AddDays(-7)") && agentApi.includes("Select-Object -Skip 3"), 'Agent upgrade logs must be age- and count-bounded.')
+expect(agentApi.includes("Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue } catch"), 'Agent upgrade runner must delete a successful downloaded installer.')
+expect(agentApi.includes("Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue; exit 1"), 'Agent upgrade runner must delete a failed downloaded installer.')
+expect(agentApi.includes("Unregister-ScheduledTask") && agentApi.includes("Hi5CentralAgentUpgrade-*"), 'Old Agent upgrade scheduled tasks must be removed before the next upgrade.')
 
 if (failures.length) {
   console.error('RMM Device Details contract check failed:')
