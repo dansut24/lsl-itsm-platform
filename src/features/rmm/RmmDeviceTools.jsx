@@ -75,6 +75,10 @@ function Empty({ children }) {
   return <div className="rmm-tool-empty">{children}</div>
 }
 
+function ToolStatusPill({ children, tone = 'neutral' }) {
+  return <span className={`rmm-status-pill ${tone}`}>{children}</span>
+}
+
 function ToolSearch({ value, onChange, placeholder }) {
   return <label className="rmm-tool-search"><Search size={15} /><input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /></label>
 }
@@ -591,11 +595,11 @@ function SessionsTool({ device }) {
     <div className="rmm-tool-summary-grid sessions-summary"><span><small>Console user</small><strong>{info.console_user || 'Not reported'}</strong></span><span><small>Local users</small><strong>{localUserCount ?? 'Awaiting Agent inventory'}</strong></span><span><small>Local admins</small><strong>{adminCount ?? 'Not reported'}</strong></span><span><small>RDP sessions</small><strong>{info.rdp_sessions ?? 'Not reported'}</strong></span></div>
 
     <section className="rmm-account-section"><header><div><strong>Local users</strong><small>Windows accounts defined on this endpoint</small></div><span>{users.length || '—'}</span></header>
-      {users.length ? <div className="rmm-account-grid">{users.map((user) => <article key={user.sid || user.name}><div className="rmm-account-title"><span><Users size={16} /></span><div><strong>{user.name || 'Unnamed account'}</strong><small>{user.full_name || user.description || user.sid || 'Local account'}</small></div><StatusPill tone={user.enabled === false ? 'neutral' : 'healthy'}>{user.enabled === false ? 'Disabled' : 'Enabled'}</StatusPill></div><div className="rmm-account-meta"><span><small>Role</small><strong>{isAdmin(user) ? 'Administrator' : 'Standard user'}</strong></span><span><small>Last logon</small><strong>{user.last_logon ? new Date(user.last_logon).toLocaleString() : 'Not reported'}</strong></span><span><small>SID</small><strong title={user.sid || ''}>{user.sid || 'Not reported'}</strong></span></div></article>)}</div> : <Empty>Local-user inventory will appear after the updated Agent reports its next inventory snapshot.</Empty>}
+      {users.length ? <div className="rmm-account-grid">{users.map((user) => <article key={user.sid || user.name}><div className="rmm-account-title"><span><Users size={16} /></span><div><strong>{user.name || 'Unnamed account'}</strong><small>{user.full_name || user.description || user.sid || 'Local account'}</small></div><ToolStatusPill tone={user.enabled === false ? 'neutral' : 'healthy'}>{user.enabled === false ? 'Disabled' : 'Enabled'}</ToolStatusPill></div><div className="rmm-account-meta"><span><small>Role</small><strong>{isAdmin(user) ? 'Administrator' : 'Standard user'}</strong></span><span><small>Last logon</small><strong>{user.last_logon ? new Date(user.last_logon).toLocaleString() : 'Not reported'}</strong></span><span><small>SID</small><strong title={user.sid || ''}>{user.sid || 'Not reported'}</strong></span></div></article>)}</div> : <Empty>Local-user inventory will appear after the updated Agent reports its next inventory snapshot.</Empty>}
     </section>
 
     <section className="rmm-account-section"><header><div><strong>Local administrators</strong><small>Members of the endpoint Administrators group</small></div><span>{admins.length}</span></header>
-      {admins.length ? <div className="rmm-admin-list">{admins.map((admin, index) => <article key={(admin.name || 'admin') + index}><span><Users size={15} /></span><div><strong>{admin.name || 'Unknown principal'}</strong><small>{[admin.object_class, admin.principal_source].filter(Boolean).join(' · ') || 'Administrator'}</small></div><StatusPill tone="warning">Admin</StatusPill></article>)}</div> : <Empty>No local administrator membership has been reported.</Empty>}
+      {admins.length ? <div className="rmm-admin-list">{admins.map((admin, index) => <article key={(admin.name || 'admin') + index}><span><Users size={15} /></span><div><strong>{admin.name || 'Unknown principal'}</strong><small>{[admin.object_class, admin.principal_source].filter(Boolean).join(' · ') || 'Administrator'}</small></div><ToolStatusPill tone="warning">Admin</ToolStatusPill></article>)}</div> : <Empty>No local administrator membership has been reported.</Empty>}
     </section>
 
     <section className="rmm-account-section"><header><div><strong>Interactive sessions</strong><small>Console, Remote Desktop and Windows session state</small></div><span>{sessions.length}</span></header><div className="rmm-tool-table-head sessions"><span>User</span><span>Session</span><span>Station</span><span>State</span></div><div className="rmm-tool-table-body">{sessions.map((row) => <div className="rmm-tool-table-row sessions" key={row.id}><span><strong>{row.user || 'System / no user'}</strong></span><span>{row.id}</span><span>{row.station || '—'}</span><span>{windowsSessionState(row.state)}</span></div>)}</div>{!sessions.length && <Empty>No Windows session inventory has been reported.</Empty>}</section>
@@ -671,9 +675,28 @@ function ToolLauncher({ onSelect }) {
   </div>
 }
 
-export function RmmDeviceToolWorkspace({ device, embedded = false, initialTool = '', onClose }) {
+export function RmmDeviceToolWorkspace({ device, embedded = false, initialTool = '', onClose, onToolChange }) {
   const [tool, setTool] = useState(initialTool)
   const [runAs, setRunAs] = useState('system')
+  const toolNavRef = useRef(null)
+  useEffect(() => { setTool(initialTool || '') }, [initialTool])
+  useEffect(() => {
+    const nav = toolNavRef.current
+    if (!nav) return undefined
+    const frame = window.requestAnimationFrame(() => {
+      const activeId = tool || 'all'
+      const button = nav.querySelector('[data-tool-id="' + activeId + '"]')
+      if (!button) return
+      const left = Math.max(0, button.offsetLeft - Math.max(0, (nav.clientWidth - button.offsetWidth) / 2))
+      nav.scrollTo({ left, behavior: 'smooth' })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [tool])
+  function selectTool(nextTool) {
+    const normalized = TOOLS.some((item) => item[0] === nextTool) ? nextTool : ''
+    setTool(normalized)
+    onToolChange?.(normalized)
+  }
   const selected = TOOLS.find((item) => item[0] === tool) || null
   const online = Boolean(device?.agentDeviceId) && String(device?.status || '').toLowerCase() === 'online'
 
@@ -691,13 +714,13 @@ export function RmmDeviceToolWorkspace({ device, embedded = false, initialTool =
     <header><div><span className="rmm-eyebrow">{device.name}</span><h2>{selected?.[1] || 'Device tools'}</h2><p>{online ? selected ? 'Live management from the device Tools tab' : 'Select a live management workspace for this endpoint' : 'Device is offline'}</p></div>{!embedded && <button aria-label="Close device tool" onClick={onClose} type="button"><X size={19} /></button>}</header>
     {online
       ? <div className="rmm-device-tool-body">
-          <nav aria-label="Device tools">
-            <button className={!tool ? 'active' : ''} onClick={() => setTool('')} type="button"><Settings2 size={16} /><span>All tools</span><ChevronRight size={13} /></button>
-            {TOOLS.map(([id, label, Icon]) => <button className={tool === id ? 'active' : ''} key={id} onClick={() => setTool(id)} type="button"><Icon size={16} /><span>{label}</span><ChevronRight size={13} /></button>)}
+          <nav aria-label="Device tools" ref={toolNavRef}>
+            <button aria-current={!tool ? 'page' : undefined} className={!tool ? 'active' : ''} data-tool-id="all" onClick={() => selectTool('')} type="button"><Settings2 size={16} /><span>All tools</span><ChevronRight size={13} /></button>
+            {TOOLS.map(([id, label, Icon]) => <button aria-current={tool === id ? 'page' : undefined} className={tool === id ? 'active' : ''} data-tool-id={id} key={id} onClick={() => selectTool(id)} type="button"><Icon size={16} /><span>{label}</span><ChevronRight size={13} /></button>)}
           </nav>
           <main className={tool === 'powershell' || tool === 'cmd' ? 'is-terminal' : ''}>
             {(tool === 'powershell' || tool === 'cmd') && <div className="rmm-terminal-context"><span><strong>Run as</strong><small>Changing context starts a new terminal session.</small></span><div role="group" aria-label="Terminal execution context"><button className={runAs === 'user' ? 'active' : ''} onClick={() => setRunAs('user')} type="button">User</button><button className={runAs === 'system' ? 'active' : ''} onClick={() => setRunAs('system')} type="button">SYSTEM</button></div></div>}
-            {tool ? content : <ToolLauncher onSelect={setTool} />}
+            {tool ? content : <ToolLauncher onSelect={selectTool} />}
           </main>
         </div>
       : <div className="rmm-device-tool-offline"><WifiOff size={28} /><strong>Live tools are unavailable while this device is offline</strong><span>No Agent job or tool session will be queued. Use Overview, Activity or Jobs while you wait for the endpoint to reconnect.</span></div>}

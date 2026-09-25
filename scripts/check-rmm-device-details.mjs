@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import { rmmDevicePath, rmmRouteFromLocation } from '../src/lib/tenantSurface.js'
 
 const read = (path) => fs.readFileSync(new URL('../' + path, import.meta.url), 'utf8')
 const bootstrap = read('src/production/ProductionRmmBootstrap.jsx')
@@ -32,6 +33,20 @@ expect(toolApi.includes('Select a registry hive before reading registry data.'),
 // Users & Sessions must surface inventory users, admins, and interactive sessions.
 expect(tools.includes('device.inventory?.local_users') && tools.includes('Local administrators') && tools.includes('Interactive sessions'), 'Users & Sessions must show local users, admins and Windows sessions.')
 expect(tools.includes('device.inventory?.security?.local_admins'), 'Users & Sessions must consume the Agent local-admin inventory.')
+expect(tools.includes('function ToolStatusPill') && !tools.includes('<StatusPill'), 'Users & Sessions must use a tool-local status badge and must not depend on the private RMM page StatusPill.')
+
+// Device sections/tools are durable deep links and toolbar selection follows the active tool.
+const canonicalSurface = { canonical: true, pathBased: false }
+const cmdPath = rmmDevicePath(canonicalSurface, 'INTUNE-BAD3-E6C7D788BE', 'tools', 'cmd')
+expect(cmdPath === '/devices/INTUNE-BAD3-E6C7D788BE/tools/cmd', 'CMD deep link must use /devices/<id>/tools/cmd.')
+const cmdRoute = rmmRouteFromLocation(canonicalSurface, { pathname: cmdPath, search: '', origin: 'https://test2-rmm.hi5central.com' })
+expect(cmdRoute.deviceId === 'INTUNE-BAD3-E6C7D788BE' && cmdRoute.deviceSection === 'tools' && cmdRoute.deviceTool === 'cmd', 'CMD deep link must parse back to the same device/tool.')
+const activityRoute = rmmRouteFromLocation(canonicalSurface, { pathname: '/devices/INTUNE-BAD3-E6C7D788BE/activity', search: '', origin: 'https://test2-rmm.hi5central.com' })
+expect(activityRoute.deviceSection === 'activity' && activityRoute.deviceTool === '', 'Device Activity deep link must restore the Activity section.')
+const registryRoute = rmmRouteFromLocation(canonicalSurface, { pathname: '/devices/INTUNE-BAD3-E6C7D788BE/tools/registry', search: '', origin: 'https://test2-rmm.hi5central.com' })
+expect(registryRoute.deviceSection === 'tools' && registryRoute.deviceTool === 'registry', 'Registry deep link must restore Registry Editor.')
+expect(platform.includes('initialSection={selectedDeviceSection}') && platform.includes('initialTool={selectedDeviceTool}'), 'Device Details must hydrate its selected section/tool from the route.')
+expect(tools.includes("nav.scrollTo({ left, behavior: 'smooth' })") && tools.includes('data-tool-id={id}'), 'Mobile tool toolbar must scroll the active tool into view.')
 
 // Mobile embedded tools belong to page flow rather than a fixed mini viewport.
 expect(toolCss.includes('.rmm-device-tool-workspace.is-embedded {\n    height: auto;') && toolCss.includes('overflow-y: visible;'), 'Embedded mobile tools must allow page-owned vertical scrolling.')

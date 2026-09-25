@@ -255,10 +255,23 @@ export function rmmRouteFromLocation(surface = resolveTenantSurface(), location 
   const prefix = surface?.pathBased || !surface?.canonical ? '/rmm' : ''
   const normalized = prefix && pathname.startsWith(prefix) ? pathname.slice(prefix.length) || '/' : pathname
 
-  const deviceMatch = normalized.match(/^\/devices\/([^/]+)$/i)
+  const deviceMatch = normalized.match(/^\/devices\/([^/]+)(?:\/([^/]+))?(?:\/([^/]+))?\/?$/i)
   if (deviceMatch) {
     const deviceId = decodeURIComponent(deviceMatch[1]).toUpperCase()
-    return { viewId: 'devices', deviceId, path: rmmPath(surface, 'devices', deviceId) }
+    const allowedSections = new Set(['overview','hardware','software','patching','security','tools','activity','jobs','itsm'])
+    const allowedTools = new Set(['powershell','cmd','files','processes','services','registry','disks','sessions','events'])
+    let deviceSection = String(deviceMatch[2] || 'overview').toLowerCase()
+    let deviceTool = String(deviceMatch[3] || '').toLowerCase()
+    if (!allowedSections.has(deviceSection)) deviceSection = 'overview'
+    if (deviceSection !== 'tools') deviceTool = ''
+    else if (deviceTool && !allowedTools.has(deviceTool)) deviceTool = ''
+    return {
+      viewId: 'devices',
+      deviceId,
+      deviceSection,
+      deviceTool,
+      path: rmmDevicePath(surface, deviceId, deviceSection, deviceTool),
+    }
   }
 
   const pageMatch = normalized.match(/^\/(dashboard|devices|sites|groups|alerts|remote|patching|software|automation|policies|reports|activity-audit|agent-deployment|settings)$/i)
@@ -278,4 +291,16 @@ export function rmmPath(surface = resolveTenantSurface(), viewId = 'dashboard', 
   return surface?.pathBased || !surface?.canonical
     ? `/rmm${canonicalPath === '/' ? '' : canonicalPath}`
     : canonicalPath
+}
+
+export function rmmDevicePath(surface = resolveTenantSurface(), deviceId = '', section = 'overview', tool = '') {
+  const encoded = encodeURIComponent(String(deviceId || '').toUpperCase())
+  const allowedSections = new Set(['overview','hardware','software','patching','security','tools','activity','jobs','itsm'])
+  const allowedTools = new Set(['powershell','cmd','files','processes','services','registry','disks','sessions','events'])
+  const normalizedSection = allowedSections.has(String(section || '').toLowerCase()) ? String(section).toLowerCase() : 'overview'
+  const normalizedTool = normalizedSection === 'tools' && allowedTools.has(String(tool || '').toLowerCase()) ? String(tool).toLowerCase() : ''
+  const sectionSuffix = normalizedSection === 'overview' ? '' : `/${normalizedSection}`
+  const toolSuffix = normalizedTool ? `/${normalizedTool}` : ''
+  const canonicalPath = `/devices/${encoded}${sectionSuffix}${toolSuffix}`
+  return surface?.pathBased || !surface?.canonical ? `/rmm${canonicalPath}` : canonicalPath
 }

@@ -50,7 +50,7 @@ import {
   rmmDevices,
 } from '../../data/rmmData.js'
 import { deploymentConfig } from '../../lib/deploymentConfig.js'
-import { resolveTenantSurface, rmmPath, rmmRouteFromLocation } from '../../lib/tenantSurface.js'
+import { resolveTenantSurface, rmmDevicePath, rmmPath, rmmRouteFromLocation } from '../../lib/tenantSurface.js'
 import { loadRmmScope } from '../../lib/rmmScopeApi.js'
 import { deploySoftwarePatch, deploySoftwarePatches, loadRmmPatching, rejectDeviceSoftwarePatch, restoreDeviceSoftwarePatch } from '../../lib/rmmPatchingApi.js'
 import {
@@ -819,12 +819,12 @@ function DeviceItsm({ relatedTickets, onCreateIncident }) {
   )
 }
 
-function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device, onBack, navigate, onCreateIncident, tickets = [] }) {
-  const [section, setSection] = useState('overview')
+function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device, initialSection = 'overview', initialTool = '', onBack, onDeviceRoute, navigate, onCreateIncident, tickets = [] }) {
+  const [section, setSection] = useState(initialSection || 'overview')
   const hasLiveAgent = Boolean(device.agentDeviceId)
   const deviceOnline = deviceIsOnline(device)
   const deviceOffline = hasLiveAgent && !deviceOnline
-  const [tool, setTool] = useState('')
+  const [tool, setTool] = useState(initialTool || '')
   const [toolsOpen, setToolsOpen] = useState(false)
   const [remoteState, setRemoteState] = useState('')
   const [remoteBusy, setRemoteBusy] = useState(false)
@@ -843,6 +843,12 @@ function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device
   useEffect(() => {
     prefetchDeviceHistory(device).catch(() => {})
   }, [device.agentDeviceId])
+
+  useEffect(() => {
+    setSection(initialSection || 'overview')
+    setTool(initialSection === 'tools' ? (initialTool || '') : '')
+    setToolsOpen(false)
+  }, [device.id, initialSection, initialTool])
 
   useEffect(() => {
     let active = true
@@ -931,13 +937,16 @@ function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device
     }
     setTool(nextTool)
     setSection('tools')
+    onDeviceRoute?.('tools', nextTool)
   }
 
   function selectSection(nextSection) {
     setToolsOpen(false)
+    const nextTool = nextSection === 'tools' && section === 'tools' ? tool : ''
     if (nextSection !== 'tools') setTool('')
     else if (section !== 'tools') setTool('')
     setSection(nextSection)
+    onDeviceRoute?.(nextSection, nextTool)
   }
 
   let content
@@ -945,7 +954,7 @@ function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device
   else if (section === 'software') content = <DeviceSoftware device={device} />
   else if (section === 'patching') content = <DevicePatching device={device} />
   else if (section === 'security') content = <DeviceSecurity device={device} />
-  else if (section === 'tools') content = <RmmDeviceToolWorkspace device={device} embedded initialTool={tool} key={tool || 'tool-launcher'} />
+  else if (section === 'tools') content = <RmmDeviceToolWorkspace device={device} embedded initialTool={tool} key={device.id + ':' + (tool || 'tool-launcher')} onToolChange={(nextTool) => { setTool(nextTool); onDeviceRoute?.('tools', nextTool) }} />
   else if (section === 'activity') content = <DeviceActivityTimeline device={device} />
   else if (section === 'jobs') content = <DeviceJobsPanel device={device} />
   else if (section === 'itsm') content = <DeviceItsm device={device} onCreateIncident={createIncident} relatedTickets={relatedTickets} />
@@ -1137,6 +1146,8 @@ export function RmmPlatformApp({ accent, canAudit = false, canBackstageRemote = 
   const initialRoute = rmmRouteFromLocation()
   const [activeView, setActiveView] = useState(initialRoute.viewId || 'dashboard')
   const [selectedDeviceId, setSelectedDeviceId] = useState(initialRoute.deviceId || '')
+  const [selectedDeviceSection, setSelectedDeviceSection] = useState(initialRoute.deviceSection || 'overview')
+  const [selectedDeviceTool, setSelectedDeviceTool] = useState(initialRoute.deviceTool || '')
   const [mobileOpen, setMobileOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [toast, setToast] = useState('')
@@ -1149,6 +1160,8 @@ export function RmmPlatformApp({ accent, canAudit = false, canBackstageRemote = 
       const route = rmmRouteFromLocation()
       setActiveView(route.viewId || 'dashboard')
       setSelectedDeviceId(route.deviceId || '')
+      setSelectedDeviceSection(route.deviceSection || 'overview')
+      setSelectedDeviceTool(route.deviceTool || '')
       setMobileOpen(false)
     }
     window.addEventListener('popstate', handlePop)
@@ -1170,6 +1183,8 @@ export function RmmPlatformApp({ accent, canAudit = false, canBackstageRemote = 
   function navigate(viewId, options = {}) {
     setActiveView(viewId)
     setSelectedDeviceId('')
+    setSelectedDeviceSection('overview')
+    setSelectedDeviceTool('')
     setMobileOpen(false)
     setQuery('')
     const path = rmmPath(undefined, viewId)
@@ -1181,8 +1196,10 @@ export function RmmPlatformApp({ accent, canAudit = false, canBackstageRemote = 
     if (!device) return
     setActiveView('devices')
     setSelectedDeviceId(device.id)
+    setSelectedDeviceSection('overview')
+    setSelectedDeviceTool('')
     setMobileOpen(false)
-    window.history.pushState({}, '', rmmPath(undefined, 'devices', device.id))
+    window.history.pushState({}, '', rmmDevicePath(undefined, device.id, 'overview'))
     document.querySelector('.rmm-main-scroll')?.scrollTo?.({ top: 0, behavior: 'auto' })
   }
 
@@ -1193,7 +1210,7 @@ export function RmmPlatformApp({ accent, canAudit = false, canBackstageRemote = 
 
   function renderPage() {
     if (dataLoading && !selectedDevice && ['dashboard','devices','sites','groups','patching','software','reports'].includes(activeView)) return <RmmPageSkeleton />
-    if (selectedDevice) return <RmmDeviceDetail canBackstageRemote={canBackstageRemote} canRemote={canRemote} device={selectedDevice} navigate={navigate} onBack={() => { setSelectedDeviceId(''); window.history.pushState({}, '', rmmPath(undefined, 'devices')) }} onCreateIncident={createItsmIncident} tickets={tickets} />
+    if (selectedDevice) return <RmmDeviceDetail canBackstageRemote={canBackstageRemote} canRemote={canRemote} device={selectedDevice} initialSection={selectedDeviceSection} initialTool={selectedDeviceTool} navigate={navigate} onDeviceRoute={(nextSection, nextTool = '') => { setSelectedDeviceSection(nextSection || 'overview'); setSelectedDeviceTool(nextTool || ''); window.history.pushState({}, '', rmmDevicePath(undefined, selectedDevice.id, nextSection || 'overview', nextTool || '')) }} onBack={() => { setSelectedDeviceId(''); setSelectedDeviceSection('overview'); setSelectedDeviceTool(''); window.history.pushState({}, '', rmmPath(undefined, 'devices')) }} onCreateIncident={createItsmIncident} tickets={tickets} />
     if (activeView === 'devices') return <RmmDeviceInventory devices={devices} sites={sites} openDevice={openDevice} query={query} preset={inventoryPreset} onPresetApplied={() => setInventoryPreset(null)} />
     if (activeView === 'sites') return <RmmSitesManagement devices={devices} query={query} sites={sites} onSitesChange={onSitesChange} onViewDevices={openScopedInventory} />
     if (activeView === 'groups') return <RmmDeviceGroupsManagement devices={devices} query={query} sites={sites} onViewDevices={openScopedInventory} />
