@@ -17,6 +17,10 @@ expect(source.includes('qualification_preclean_residue_detected'), 'Qualificatio
 expect(source.includes('qualification_preclean_reboot_required'), 'Qualification pre-clean must preserve reboot-required failures instead of collapsing them to failed.')
 expect(source.includes('uninstallReason: cleanupReason'), 'Qualification pre-clean must preserve the Agent uninstall reason in evidence.')
 expect(source.includes('catalogue_qualification_preclean'), 'Qualification pre-clean jobs must be auditable separately from normal cleanup.')
+expect(source.includes("installerTechnology: 'office_odt_sfx'"), 'Microsoft 365 qualification uninstall must use the Office Deployment Tool transport.')
+expect(source.includes("intent: 'uninstall'"), 'Office Click-to-Run qualification cleanup must declare uninstall intent.')
+expect(source.includes('expectAbsent: true'), 'Office Click-to-Run uninstall must verify product absence.')
+expect(source.includes('officeClickToRunUninstall'), 'Qualification must gate Office uninstall on PatchHost capability.')
 
 if (failures) process.exit(1)
 console.log('Qualification pre-clean contract check passed.')

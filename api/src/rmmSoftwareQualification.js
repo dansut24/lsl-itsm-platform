@@ -24,6 +24,10 @@ function runnerSupportsOfficeClickToRun(runner) {
   return object(object(runner?.patch_capabilities).vendorDirect).officeClickToRun === true
 }
 
+function runnerSupportsOfficeClickToRunUninstall(runner) {
+  return object(object(runner?.patch_capabilities).vendorDirect).officeClickToRunUninstall === true
+}
+
 function runnerSupportsWingetExactVersion(runner) {
   const winget = object(object(runner?.patch_capabilities).winget)
   return winget.exactVersionInstall === true
@@ -541,17 +545,123 @@ async function learnVerifiedObservedIdentity(queue, runner) {
   return { learned: true, identity }
 }
 
-async function dispatchUninstall(queue, runner, item) {
-  const liveSocket = agentSocketForDevice(runner.agent_device_id)
-  const canPush = Boolean(liveSocket && liveSocket.readyState === 1)
-
-  const payload = {
+async function qualificationUninstallJobSpec(queue, item) {
+  const genericPayload = {
     name: clean(item?.name),
     registry_key: clean(item?.registry_key),
     scope: clean(item?.scope),
     user_profile: clean(item?.user_profile),
   }
-  if (!payload.name && !payload.registry_key) {
+
+  const result = await pool.query(
+    `SELECT c.canonical_name,c.publisher,c.target_version,c.provider_package_id,c.verification,c.source_metadata,
+            r.id AS vendor_release_id,r.source_key,r.installer_url,r.installer_sha256,r.installer_type,r.source_payload,
+            COALESCE(NULLIF(b.metadata->>'expectedSigner',''),NULLIF(r.source_payload->>'expectedSigner',''),NULLIF(c.source_metadata->>'expectedSigner',''),'') AS expected_signer,
+            COALESCE(NULLIF(b.metadata->>'installerTechnology',''),NULLIF(r.source_payload->>'installerTechnology',''),NULLIF(c.source_metadata->>'installerTechnology',''),'') AS installer_technology
+       FROM rmm_software_catalogue c
+       JOIN rmm_software_vendor_releases r
+         ON r.provider_package_id=c.external_key
+        AND r.version=c.target_version
+        AND r.trust_state='direct_ready'
+       LEFT JOIN rmm_software_vendor_bindings b
+         ON b.source_key=r.source_key
+        AND b.provider_package_id=r.provider_package_id
+        AND b.channel=r.channel
+        AND b.platform=r.platform
+        AND b.architecture=r.architecture
+        AND b.enabled=true
+      WHERE c.id=$1
+        AND c.tenant_id IS NULL
+        AND c.status='active'
+      ORDER BY r.last_seen_at DESC
+      LIMIT 1`,
+    [queue.catalogue_id],
+  )
+  const row = result.rows[0]
+  if (!row || lower(row.installer_technology) !== 'office_odt_sfx') {
+    return { jobType: 'software.uninstall', payload: genericPayload, officeOdt: false }
+  }
+
+  const verification = object(row.verification)
+  const sourcePayload = object(row.source_payload)
+  const sourceVerification = object(sourcePayload.verification)
+  const productId = clean(verification.productId || sourceVerification.productId)
+  if (!productId) {
+    return { error: 'qualification_office_c2r_product_id_missing', officeOdt: true }
+  }
+
+  const language = clean(item?.name).match(/-\s*([a-z]{2}-[a-z]{2})\s*$/i)?.[1] || 'MatchOS'
+  const installedVersion = clean(item?.version || row.target_version)
+  const responseFile = {
+    fileName: 'microsoft-365-remove.xml',
+    content: [
+      '<Configuration>',
+      '  <Remove>',
+      `    <Product ID="${productId}">`,
+      `      <Language ID="${language}" />`,
+      '    </Product>',
+      '  </Remove>',
+      '  <Display Level="None" AcceptEULA="TRUE" />',
+      '</Configuration>',
+      '',
+    ].join('\n'),
+  }
+
+  return {
+    jobType: 'patch.software',
+    officeOdt: true,
+    vendorReleaseId: row.vendor_release_id,
+    payload: {
+      protocolVersion: 1,
+      action: 'software.install',
+      intent: 'uninstall',
+      catalogueId: queue.catalogue_id,
+      applicationName: clean(row.canonical_name),
+      publisher: clean(row.publisher),
+      packageId: clean(row.provider_package_id),
+      installedVersion,
+      targetVersion: installedVersion || clean(row.target_version),
+      provider: 'vendor_direct',
+      vendorSource: clean(row.source_key),
+      downloadUrl: clean(row.installer_url),
+      sha256: clean(row.installer_sha256).toUpperCase(),
+      installerType: lower(row.installer_type),
+      installerTechnology: 'office_odt_sfx',
+      installArguments: '/configure {HI5_RESPONSE_FILE}',
+      responseFile,
+      expectedSigner: clean(row.expected_signer),
+      fallbackProvider: '',
+      verification: {
+        ...verification,
+        ...sourceVerification,
+        method: 'office_c2r_registry',
+        productId,
+        targetVersion: installedVersion || clean(row.target_version),
+        expectAbsent: true,
+      },
+    },
+  }
+}
+
+async function dispatchUninstall(queue, runner, item) {
+  const liveSocket = agentSocketForDevice(runner.agent_device_id)
+  const canPush = Boolean(liveSocket && liveSocket.readyState === 1)
+
+  const uninstallSpec = await qualificationUninstallJobSpec(queue, item)
+  if (uninstallSpec.error) {
+    await markReview(queue.id, uninstallSpec.error)
+    return { dispatched: false }
+  }
+  if (uninstallSpec.officeOdt && !runnerSupportsOfficeClickToRunUninstall(runner)) {
+    await markReview(queue.id, 'qualification_office_c2r_uninstall_capability_required', {
+      requiredPatchHostVersion: '0.2.19',
+      currentPatchHostVersion: clean(object(runner.patch_capabilities).patchHostVersion || object(runner.patch_capabilities).version),
+    })
+    return { dispatched: false, blocked: true }
+  }
+  const payload = uninstallSpec.payload
+  const jobType = uninstallSpec.jobType
+  if (jobType === 'software.uninstall' && !payload.name && !payload.registry_key) {
     await markReview(queue.id, 'qualification_uninstall_identity_missing')
     return { dispatched: false }
   }
@@ -559,16 +669,18 @@ async function dispatchUninstall(queue, runner, item) {
   const inserted = await pool.query(
     `INSERT INTO rmm_agent_jobs
       (tenant_id,agent_device_id,job_type,payload,initiated_by,initiated_by_label,request_metadata)
-     VALUES ($1,$2,'software.uninstall',$3::jsonb,'system','Catalogue qualification',$4::jsonb)
+     VALUES ($1,$2,$3,$4::jsonb,'system','Catalogue qualification',$5::jsonb)
      RETURNING id,status,created_at`,
     [
       runner.tenant_id,
       runner.agent_device_id,
+      jobType,
       JSON.stringify(payload),
       JSON.stringify({
         source: 'catalogue_qualification_cleanup',
         qualification_queue_id: queue.id,
         catalogue_id: queue.catalogue_id,
+        ...(uninstallSpec.officeOdt ? { uninstall_transport: 'office_odt', vendor_release_id: uninstallSpec.vendorReleaseId } : {}),
       }),
     ],
   )
@@ -584,7 +696,7 @@ async function dispatchUninstall(queue, runner, item) {
     if (claimed.rowCount) {
       const pushed = sendAgentMessage(runner.agent_device_id, {
         type: 'job_execute',
-        job: { id: job.id, job_type: 'software.uninstall', payload, created_at: job.created_at },
+        job: { id: job.id, job_type: jobType, payload, created_at: job.created_at },
       })
       if (pushed) {
         delivery = 'websocket'
@@ -607,8 +719,9 @@ async function dispatchUninstall(queue, runner, item) {
     [queue.id, job.id, JSON.stringify({
       cleanupDispatchedAt: new Date().toISOString(),
       cleanupDelivery: delivery,
-      uninstallName: payload.name,
-      uninstallRegistryKey: payload.registry_key,
+      uninstallName: clean(item?.name),
+      uninstallRegistryKey: clean(item?.registry_key),
+      uninstallTransport: uninstallSpec.officeOdt ? 'office_odt' : 'native',
       installedDisplayName: clean(item?.name),
       installedPublisher: clean(item?.publisher),
       installLocation: clean(item?.install_location),
@@ -625,13 +738,22 @@ async function dispatchUninstall(queue, runner, item) {
 async function dispatchPrecleanUninstall(queue, runner, item) {
   const liveSocket = agentSocketForDevice(runner.agent_device_id)
   const canPush = Boolean(liveSocket && liveSocket.readyState === 1)
-  const payload = {
-    name: clean(item?.name),
-    registry_key: clean(item?.registry_key),
-    scope: clean(item?.scope),
-    user_profile: clean(item?.user_profile),
+  const uninstallSpec = await qualificationUninstallJobSpec(queue, item)
+  if (uninstallSpec.error) {
+    await markReview(queue.id, uninstallSpec.error, { stage: 'preclean' })
+    return { dispatched: false }
   }
-  if (!payload.name && !payload.registry_key) {
+  if (uninstallSpec.officeOdt && !runnerSupportsOfficeClickToRunUninstall(runner)) {
+    await markReview(queue.id, 'qualification_office_c2r_uninstall_capability_required', {
+      stage: 'preclean',
+      requiredPatchHostVersion: '0.2.19',
+      currentPatchHostVersion: clean(object(runner.patch_capabilities).patchHostVersion || object(runner.patch_capabilities).version),
+    })
+    return { dispatched: false, blocked: true }
+  }
+  const payload = uninstallSpec.payload
+  const jobType = uninstallSpec.jobType
+  if (jobType === 'software.uninstall' && !payload.name && !payload.registry_key) {
     await markReview(queue.id, 'qualification_preclean_identity_missing', { stage: 'preclean' })
     return { dispatched: false }
   }
@@ -639,16 +761,18 @@ async function dispatchPrecleanUninstall(queue, runner, item) {
   const inserted = await pool.query(
     `INSERT INTO rmm_agent_jobs
       (tenant_id,agent_device_id,job_type,payload,initiated_by,initiated_by_label,request_metadata)
-     VALUES ($1,$2,'software.uninstall',$3::jsonb,'system','Catalogue qualification pre-clean',$4::jsonb)
+     VALUES ($1,$2,$3,$4::jsonb,'system','Catalogue qualification pre-clean',$5::jsonb)
      RETURNING id,status,created_at`,
     [
       runner.tenant_id,
       runner.agent_device_id,
+      jobType,
       JSON.stringify(payload),
       JSON.stringify({
         source: 'catalogue_qualification_preclean',
         qualification_queue_id: queue.id,
         catalogue_id: queue.catalogue_id,
+        ...(uninstallSpec.officeOdt ? { uninstall_transport: 'office_odt', vendor_release_id: uninstallSpec.vendorReleaseId } : {}),
       }),
     ],
   )
@@ -664,7 +788,7 @@ async function dispatchPrecleanUninstall(queue, runner, item) {
     if (claimed.rowCount) {
       const pushed = sendAgentMessage(runner.agent_device_id, {
         type: 'job_execute',
-        job: { id: job.id, job_type: 'software.uninstall', payload, created_at: job.created_at },
+        job: { id: job.id, job_type: jobType, payload, created_at: job.created_at },
       })
       if (pushed) {
         delivery = 'websocket'
@@ -690,8 +814,9 @@ async function dispatchPrecleanUninstall(queue, runner, item) {
       cleanupPhase: 'preclean',
       precleanDispatchedAt: new Date().toISOString(),
       precleanDelivery: delivery,
-      precleanName: payload.name,
-      precleanRegistryKey: payload.registry_key,
+      precleanName: clean(item?.name),
+      precleanRegistryKey: clean(item?.registry_key),
+      precleanTransport: uninstallSpec.officeOdt ? 'office_odt' : 'native',
       precleanVersion: clean(item?.version),
       precleanScope: clean(item?.scope),
     })],
@@ -702,13 +827,22 @@ async function dispatchPrecleanUninstall(queue, runner, item) {
 async function dispatchRollbackUninstall(queue, runner, item, stage) {
   const liveSocket = agentSocketForDevice(runner.agent_device_id)
   const canPush = Boolean(liveSocket && liveSocket.readyState === 1)
-  const payload = {
-    name: clean(item?.name),
-    registry_key: clean(item?.registry_key),
-    scope: clean(item?.scope),
-    user_profile: clean(item?.user_profile),
+  const uninstallSpec = await qualificationUninstallJobSpec(queue, item)
+  if (uninstallSpec.error) {
+    await markReview(queue.id, uninstallSpec.error, { stage })
+    return { dispatched: false }
   }
-  if (!payload.name && !payload.registry_key) {
+  if (uninstallSpec.officeOdt && !runnerSupportsOfficeClickToRunUninstall(runner)) {
+    await markReview(queue.id, 'qualification_office_c2r_uninstall_capability_required', {
+      stage,
+      requiredPatchHostVersion: '0.2.19',
+      currentPatchHostVersion: clean(object(runner.patch_capabilities).patchHostVersion || object(runner.patch_capabilities).version),
+    })
+    return { dispatched: false, blocked: true }
+  }
+  const payload = uninstallSpec.payload
+  const jobType = uninstallSpec.jobType
+  if (jobType === 'software.uninstall' && !payload.name && !payload.registry_key) {
     await markReview(queue.id, 'qualification_rollback_uninstall_identity_missing', { stage })
     return { dispatched: false }
   }
@@ -716,17 +850,19 @@ async function dispatchRollbackUninstall(queue, runner, item, stage) {
   const inserted = await pool.query(
     `INSERT INTO rmm_agent_jobs
       (tenant_id,agent_device_id,job_type,payload,initiated_by,initiated_by_label,request_metadata)
-     VALUES ($1,$2,'software.uninstall',$3::jsonb,'system','Catalogue rollback qualification',$4::jsonb)
+     VALUES ($1,$2,$3,$4::jsonb,'system','Catalogue rollback qualification',$5::jsonb)
      RETURNING id,status,created_at`,
     [
       runner.tenant_id,
       runner.agent_device_id,
+      jobType,
       JSON.stringify(payload),
       JSON.stringify({
         source: 'catalogue_qualification_rollback',
         qualification_queue_id: queue.id,
         catalogue_id: queue.catalogue_id,
         stage,
+        ...(uninstallSpec.officeOdt ? { uninstall_transport: 'office_odt', vendor_release_id: uninstallSpec.vendorReleaseId } : {}),
       }),
     ],
   )
@@ -741,7 +877,7 @@ async function dispatchRollbackUninstall(queue, runner, item, stage) {
     if (claimed.rowCount) {
       const pushed = sendAgentMessage(runner.agent_device_id, {
         type: 'job_execute',
-        job: { id: job.id, job_type: 'software.uninstall', payload, created_at: job.created_at },
+        job: { id: job.id, job_type: jobType, payload, created_at: job.created_at },
       })
       if (pushed) {
         delivery = 'websocket'
@@ -765,8 +901,9 @@ async function dispatchRollbackUninstall(queue, runner, item, stage) {
       stage,
       rollbackUninstallDispatchedAt: new Date().toISOString(),
       rollbackUninstallDelivery: delivery,
-      uninstallName: payload.name,
-      uninstallRegistryKey: payload.registry_key,
+      uninstallName: clean(item?.name),
+      uninstallRegistryKey: clean(item?.registry_key),
+      uninstallTransport: uninstallSpec.officeOdt ? 'office_odt' : 'native',
       installedDisplayName: clean(item?.name),
       installedPublisher: clean(item?.publisher),
       installLocation: clean(item?.install_location),
