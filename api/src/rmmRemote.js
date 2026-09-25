@@ -17,7 +17,7 @@ const SESSION_TTL_SECONDS = 15 * 60
 const ACTIVE_RECONNECT_TTL_SECONDS = 8 * 60 * 60
 const MAX_VIEWER_PAYLOAD_BYTES = 8 * 1024 * 1024
 const VIEWER_RECONNECT_GRACE_MS = 90 * 1000
-const AGENT_RESTART_GRACE_MS = 4 * 60 * 1000
+const AGENT_RESTART_GRACE_MS = 10 * 60 * 1000
 const activeViewerSessions = new Map()
 
 const VIEWER_MESSAGE_TYPES = new Set([
@@ -320,12 +320,14 @@ export function attachRmmViewerWebSocket(server) {
     const ice = iceConfiguration(sessionId)
     await pool.query(
       `UPDATE rmm_remote_sessions
-          SET status='viewer_connected',viewer_connected_at=COALESCE(viewer_connected_at,now()),last_activity_at=now(),
+          SET status=CASE WHEN started_at IS NULL THEN 'viewer_connected' ELSE 'active' END,
+              viewer_connected_at=COALESCE(viewer_connected_at,now()),last_activity_at=now(),
               expires_at=GREATEST(expires_at, now() + ($2::text || ' seconds')::interval),updated_at=now()
         WHERE id=$1`,
       [remote.id, ACTIVE_RECONNECT_TTL_SECONDS],
     ).catch(() => {})
     const previousActive = activeViewerSessions.get(sessionId)
+    const viewerInterruptedAt = previousActive?.viewerDisconnectedAt || 0
     if (previousActive?.cleanupTimer) clearTimeout(previousActive.cleanupTimer)
     if (previousActive?.agentRestartTimer) clearTimeout(previousActive.agentRestartTimer)
     if (previousActive?.agentWs && previousActive?.relayFromAgent) {
@@ -343,6 +345,18 @@ export function attachRmmViewerWebSocket(server) {
       agentDisconnectedAt: 0,
     }
     activeViewerSessions.set(sessionId, active)
+    if (viewerInterruptedAt) {
+      const interruptionSeconds = Math.max(0, Math.round((Date.now() - viewerInterruptedAt) / 1000))
+      recordRmmActivity({
+        tenantId: remote.tenant_id, agentDeviceId: remote.agent_device_id, inventoryId: remote.inventory_id,
+        actorUserId: remote.created_by_user_id, actorType: 'system', actorLabel: 'SYSTEM',
+        eventType: 'remote.viewer_transport_recovered', category: 'remote',
+        summary: 'SYSTEM: remote Viewer connection recovered',
+        detail: 'The same remote session resumed after ' + interruptionSeconds + ' seconds.',
+        outcome: 'success', severity: 'info', remoteSessionId: remote.id,
+        metadata: { mode: remote.mode, viewerClient: remote.viewer_client, interruptionSeconds, reason: 'viewer_reconnected' },
+      }).catch(() => {})
+    }
 
     const relayFromAgent = (buffer) => {
       const text = Buffer.isBuffer(buffer) ? buffer.toString('utf8') : String(buffer)
@@ -488,7 +502,17 @@ export function attachRmmViewerWebSocket(server) {
         finalizeCleanup(reason)
       }, VIEWER_RECONNECT_GRACE_MS)
       active.viewerWs = null
+      active.viewerDisconnectedAt = Date.now()
       active.cleanupTimer = cleanupTimer
+      recordRmmActivity({
+        tenantId: remote.tenant_id, agentDeviceId: remote.agent_device_id, inventoryId: remote.inventory_id,
+        actorUserId: remote.created_by_user_id, actorType: 'system', actorLabel: 'SYSTEM',
+        eventType: 'remote.viewer_transport_interrupted', category: 'remote',
+        summary: 'SYSTEM: remote Viewer connection interrupted',
+        detail: 'The session remains authorised while the Viewer reconnects.',
+        outcome: 'pending', severity: 'warning', remoteSessionId: remote.id,
+        metadata: { mode: remote.mode, viewerClient: remote.viewer_client, reason, graceMs: VIEWER_RECONNECT_GRACE_MS },
+      }).catch(() => {})
       activeViewerSessions.set(sessionId, active)
       pool.query(`UPDATE rmm_remote_sessions SET last_activity_at=now(),expires_at=GREATEST(expires_at,now() + interval '8 hours'),updated_at=now() WHERE id=$1`, [remote.id]).catch(() => {})
     }
