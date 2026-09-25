@@ -800,8 +800,10 @@ function QualificationWorkspace({
             <span><small>Source</small><strong>{lab.source?.sourceType?.replaceAll('_', ' ') || '—'}</strong></span>
             <span><small>Host</small><strong>{lab.source?.sourceHost || '—'}</strong></span>
             <span><small>Current artifact</small><strong>{current?.version || lab.application?.targetVersion || '—'}</strong></span>
-            <span><small>Signer</small><strong>{current?.signer || 'Not verified'}</strong></span>
-            <span><small>SHA-256</small><strong>{current?.sha256Verified ? 'Verified' : 'Pending'}</strong></span>
+            <span><small>Expected signer</small><strong>{current?.expectedSigner || 'Not configured'}</strong></span>
+            <span><small>Verified signer</small><strong>{current?.signatureVerified && current?.verifiedSigner ? current.verifiedSigner : 'Pending inspection'}</strong></span>
+            <span><small>Published SHA-256</small><strong>{current?.publishedSha256Present ? 'Recorded' : 'Missing'}</strong></span>
+            <span><small>Artifact hash</small><strong>{current?.sha256Verified ? 'Verified' : 'Pending inspection'}</strong></span>
             <span><small>Last source sync</small><strong>{labDate(lab.source?.lastSuccessAt)}</strong></span>
             {lab.source?.error && <span className="wide"><small>Source error</small><strong>{readinessLabel(lab.source.error)}</strong></span>}
           </div>}

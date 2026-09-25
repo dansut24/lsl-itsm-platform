@@ -441,6 +441,8 @@ export async function reconcileVendorArtifactInspections() {
             WHERE tenant_id IS NULL
               AND catalogue_source='vendor'
               AND external_key=$1
+              AND target_version=$4
+              AND source_metadata->>'latestSource'=$5
               AND status='active'`,
           [
             row.provider_package_id,
@@ -458,11 +460,15 @@ export async function reconcileVendorArtifactInspections() {
               source: 'automatic_vendor_release',
               vendorReleaseId: row.release_id,
               artifactInspectionJobId: row.id,
+              artifactVerificationVersion: row.version,
+              artifactVerifiedAt: new Date().toISOString(),
               authenticodeVerified: true,
               sha256Verified: true,
-              signer: expectedSigner,
+              signer,
               hashProvenance,
             }),
+            row.version,
+            row.source_key,
           ],
         )
       } else if (sourcePayload.historicalReleaseCandidate !== true) {
@@ -472,8 +478,15 @@ export async function reconcileVendorArtifactInspections() {
             WHERE tenant_id IS NULL
               AND catalogue_source='vendor'
               AND external_key=$1
+              AND target_version=$3
+              AND source_metadata->>'latestSource'=$4
               AND status='active'`,
-          [row.provider_package_id, JSON.stringify({ trustState, trustEvidence: evidence, ...(!deploymentSupported ? { deploymentMode: 'intelligence_only' } : {}) })],
+          [
+            row.provider_package_id,
+            JSON.stringify({ trustState, trustEvidence: evidence, ...(!deploymentSupported ? { deploymentMode: 'intelligence_only' } : {}) }),
+            row.version,
+            row.source_key,
+          ],
         )
       }
 
@@ -570,7 +583,13 @@ export async function queueVendorArtifactInspections(limit = 2) {
                   r.last_seen_at DESC
               ) AS rn
          FROM rmm_software_vendor_releases r
-        WHERE r.trust_state IN ('asset_candidate','winget_ready')
+        WHERE (
+            r.trust_state IN ('asset_candidate','winget_ready')
+            OR (
+              r.trust_state='direct_ready'
+              AND COALESCE(r.trust_evidence->>'signatureVerified','false')<>'true'
+            )
+          )
           AND r.installer_url<>''
           AND r.installer_type IN ('msi','exe')
           AND NOT EXISTS (
@@ -756,23 +775,49 @@ async function reconcileDirectReadyCatalogue() {
             qualification_evidence=c.qualification_evidence || jsonb_build_object(
               'source','vendor_release_trust_reconciliation',
               'vendorReleaseId',r.id,
+              'artifactVerificationVersion',c.target_version,
+              'artifactVerifiedAt',NULLIF(r.trust_evidence->>'inspectedAt',''),
               'authenticodeVerified',COALESCE((r.trust_evidence->>'signatureVerified')::boolean,false),
-              'sha256Verified',(r.installer_sha256 ~* '^[a-f0-9]{64}$')
+              'sha256Verified',(
+                COALESCE(r.trust_evidence->>'sha256','') ~* '^[a-f0-9]{64}$'
+                AND upper(r.trust_evidence->>'sha256')=upper(r.installer_sha256)
+              ),
+              'signer',COALESCE(r.trust_evidence->>'signer','')
             ),
-            qualification_notes=CASE WHEN c.qualification_notes<>'' THEN c.qualification_notes ELSE 'Deployment-ready vendor artifact reconciled from verified release trust evidence.' END,
+            qualification_notes=CASE
+              WHEN c.qualification_notes<>'' THEN c.qualification_notes
+              WHEN COALESCE((r.trust_evidence->>'signatureVerified')::boolean,false)
+               AND COALESCE(r.trust_evidence->>'sha256','') ~* '^[a-f0-9]{64}$'
+               AND upper(r.trust_evidence->>'sha256')=upper(r.installer_sha256)
+                THEN 'Deployment-ready vendor artifact reconciled from verified release trust evidence.'
+              ELSE 'Trusted release metadata is available; endpoint artifact signature/hash inspection is pending.'
+            END,
             updated_at=now()
        FROM rmm_software_vendor_releases r
        LEFT JOIN rmm_software_vendor_bindings b
          ON b.source_key=r.source_key AND b.provider_package_id=r.provider_package_id
         AND b.channel=r.channel AND b.platform=r.platform AND b.architecture=r.architecture AND b.enabled=true
       WHERE c.tenant_id IS NULL AND c.catalogue_source='vendor' AND c.status='active'
-        AND c.external_key=r.provider_package_id AND c.target_version=r.version
+        AND c.external_key=r.provider_package_id
+        AND c.source_metadata->>'latestSource'=r.source_key
+        AND c.target_version=r.version
         AND r.trust_state='direct_ready' AND r.installer_type IN ('msi','exe') AND r.installer_url LIKE 'https://%'
         AND r.installer_sha256 ~* '^[a-f0-9]{64}$'
         AND (COALESCE(c.source_metadata->>'deploymentMode','')<>'vendor_direct'
           OR COALESCE(c.source_metadata->>'trustState','')<>'direct_ready'
           OR COALESCE(c.source_metadata->>'expectedSigner','')=''
-          OR c.qualification_state='intelligence_only')
+          OR c.qualification_state='intelligence_only'
+          OR COALESCE(c.qualification_evidence->>'vendorReleaseId','')<>r.id::text
+          OR COALESCE(c.qualification_evidence->>'artifactVerificationVersion','')<>c.target_version
+          OR lower(COALESCE(c.qualification_evidence->>'authenticodeVerified','false'))
+             <> lower(COALESCE(r.trust_evidence->>'signatureVerified','false'))
+          OR lower(COALESCE(c.qualification_evidence->>'sha256Verified','false'))
+             <> CASE
+                  WHEN COALESCE(r.trust_evidence->>'sha256','') ~* '^[a-f0-9]{64}$'
+                   AND upper(r.trust_evidence->>'sha256')=upper(r.installer_sha256)
+                    THEN 'true'
+                  ELSE 'false'
+                END)
      RETURNING c.id,c.canonical_name,c.target_version`)
   await pool.query(
     `UPDATE rmm_software_vendor_bindings b

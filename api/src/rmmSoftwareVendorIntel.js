@@ -282,7 +282,20 @@ async function upsertRelease({
                     AND source_metadata->>'trustState' IN ('rejected','signer_review_required','installer_review_required') THEN 'intelligence_only'
                   ELSE $15
                 END,
-                qualification_evidence=qualification_evidence || $16::jsonb,
+                qualification_evidence=(
+                  CASE WHEN source_revision IS DISTINCT FROM $4 THEN
+                    qualification_evidence
+                      - 'vendorReleaseId'
+                      - 'artifactInspectionJobId'
+                      - 'artifactVerificationVersion'
+                      - 'artifactVerifiedAt'
+                      - 'authenticodeVerified'
+                      - 'sha256Verified'
+                      - 'signer'
+                      - 'hashProvenance'
+                    ELSE qualification_evidence
+                  END
+                ) || $16::jsonb,
                 qualification_notes=CASE WHEN qualification_notes<>'' THEN qualification_notes ELSE $17 END,
                 updated_at=now()
           WHERE id=$7`,

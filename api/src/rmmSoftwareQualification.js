@@ -2713,6 +2713,8 @@ export async function queueCommonSoftwareQualifications({ limit = 50, allowUnres
             NULLIF(r.source_payload->>'expectedSigner',''),
             NULLIF(r.trust_evidence->>'signer','')
           ) IS NOT NULL
+          AND c.qualification_evidence->>'vendorReleaseId'=r.id::text
+          AND c.qualification_evidence->>'artifactVerificationVersion'=c.target_version
           AND lower(COALESCE(c.qualification_evidence->>'sha256Verified','false'))='true'
           AND lower(COALESCE(c.qualification_evidence->>'authenticodeVerified','false'))='true'
           AND (
@@ -2848,6 +2850,8 @@ export async function queueAutomaticCleanInstallQualifications({
             NULLIF(r.source_payload->>'expectedSigner',''),
             NULLIF(r.trust_evidence->>'signer','')
           ) IS NOT NULL
+          AND c.qualification_evidence->>'vendorReleaseId'=r.id::text
+          AND c.qualification_evidence->>'artifactVerificationVersion'=c.target_version
           AND lower(COALESCE(c.qualification_evidence->>'sha256Verified','false'))='true'
           AND lower(COALESCE(c.qualification_evidence->>'authenticodeVerified','false'))='true'
           AND (
@@ -3140,6 +3144,10 @@ export async function promoteAutomaticAdmissionReady({ limit = 12 } = {}) {
          FROM rmm_software_catalogue c
          JOIN rmm_software_vendor_sources s
            ON s.source_key=c.source_metadata->>'latestSource' AND s.enabled=true
+         JOIN rmm_software_vendor_releases r
+           ON r.provider_package_id=c.external_key
+          AND r.source_key=c.source_metadata->>'latestSource'
+          AND r.version=c.target_version
         WHERE c.tenant_id IS NULL
           AND c.status='active'
           AND c.qualification_state IN ('deployment_candidate','qualified_limited')
@@ -3148,6 +3156,9 @@ export async function promoteAutomaticAdmissionReady({ limit = 12 } = {}) {
           AND lower(COALESCE(c.installer_type,'')) IN ('msi','exe')
           AND s.last_success_at IS NOT NULL
           AND COALESCE(s.last_error,'')=''
+          AND r.trust_state='direct_ready'
+          AND c.qualification_evidence->>'vendorReleaseId'=r.id::text
+          AND c.qualification_evidence->>'artifactVerificationVersion'=c.target_version
           AND lower(COALESCE(c.qualification_evidence->>'sha256Verified','false'))='true'
           AND lower(COALESCE(c.qualification_evidence->>'authenticodeVerified','false'))='true'
           AND lower(COALESCE(c.qualification_evidence->>'cleanInstallVerified','false'))='true'

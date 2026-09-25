@@ -434,6 +434,8 @@ async function catalogueRows(tenantId) {
       (deploymentMode === 'vendor_direct'
         && trustState === 'direct_ready'
         && ['msi','exe'].includes(installerType)
+        && clean(qualificationEvidence.vendorReleaseId)
+        && clean(qualificationEvidence.artifactVerificationVersion) === clean(row.target_version)
         && qualificationEvidence.sha256Verified === true
         && qualificationEvidence.authenticodeVerified === true)
       || officialWinget,
@@ -672,9 +674,20 @@ async function qualificationLabPayload(tenantId, catalogueId) {
     assetHttpStatus:release.asset_http_status || null,
     contentType:clean(release.asset_content_type),
     contentLength:Number(release.asset_content_length || 0) || null,
-    sha256Verified:/^[a-f0-9]{64}$/i.test(clean(release.installer_sha256)),
+    publishedSha256Present:/^[a-f0-9]{64}$/i.test(clean(release.installer_sha256)),
+    sha256Verified:Boolean(
+      /^[a-f0-9]{64}$/i.test(clean(release.installer_sha256))
+      && /^[a-f0-9]{64}$/i.test(clean(object(release.trust_evidence).sha256))
+      && clean(release.installer_sha256).toLowerCase()===clean(object(release.trust_evidence).sha256).toLowerCase()
+    ),
     signatureVerified:object(release.trust_evidence).signatureVerified === true,
-    signer:clean(object(release.trust_evidence).signer || object(release.source_payload).expectedSigner),
+    expectedSigner:clean(
+      object(release.source_payload).expectedSigner
+      || object(release.trust_evidence).signerBaseline
+    ),
+    verifiedSigner:object(release.trust_evidence).signatureVerified === true
+      ? clean(object(release.trust_evidence).signer)
+      : '',
     historical:object(release.source_payload).historicalReleaseCandidate === true,
     historicalRole:clean(object(release.source_payload).historicalRole),
     lastSeenAt:release.last_seen_at || null,
@@ -719,8 +732,10 @@ async function qualificationLabPayload(tenantId, catalogueId) {
   const rollbackQueue=queues.rollback || null
   const sourceHealthy=Boolean(app.source_enabled && app.last_success_at && !clean(app.last_error))
   const currentArtifactReady=Boolean(currentRelease?.trustState==='direct_ready'
+    && currentRelease?.publishedSha256Present
     && currentRelease?.sha256Verified
-    && currentRelease?.signatureVerified)
+    && currentRelease?.signatureVerified
+    && currentRelease?.verifiedSigner)
   const vulnerabilityCovered=clean(identityAudit.state)==='covered' && identityResult.rows.length>0
   const vulnerabilityLimited=vulnerabilityIdentityLimited(identityAudit)
   const cleanPassed=evidence.cleanInstallVerified===true
@@ -3214,8 +3229,10 @@ export function registerRmmPatchingRoutes(app) {
       const current=before.releases?.current
       const trusted=before.source?.state==='healthy'
         && before.application?.trustState==='direct_ready'
+        && current?.publishedSha256Present===true
         && current?.sha256Verified===true
         && current?.signatureVerified===true
+        && Boolean(current?.verifiedSigner)
       if(!trusted) return c.json({error:'Limited qualification still requires a healthy trusted source and a verified current installer artifact.'},409)
 
       const capabilityState=(key,testState,verifiedValue='verified')=>unsupportedCapabilities.includes(key)
