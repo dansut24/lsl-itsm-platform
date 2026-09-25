@@ -1,5 +1,5 @@
 import fs from 'node:fs'
-import { rmmDevicePath, rmmRouteFromLocation } from '../src/lib/tenantSurface.js'
+import { rmmActivityPath, rmmDevicePath, rmmRouteFromLocation } from '../src/lib/tenantSurface.js'
 
 const read = (path) => fs.readFileSync(new URL('../' + path, import.meta.url), 'utf8')
 const bootstrap = read('src/production/ProductionRmmBootstrap.jsx')
@@ -10,6 +10,8 @@ const platformCss = read('src/features/rmm/RmmPlatformApp.css')
 const deviceApi = read('api/src/microsoftIntegration.js')
 const toolApi = read('api/src/rmmDeviceTools.js')
 const activity = read('src/features/rmm/RmmActivityViews.jsx')
+const activityCss = read('src/features/rmm/RmmActivityViews.css')
+const activityApi = read('api/src/rmmActivity.js')
 
 const failures = []
 const expect = (value, message) => { if (!value) failures.push(message) }
@@ -46,6 +48,10 @@ const cmdRoute = rmmRouteFromLocation(canonicalSurface, { pathname: cmdPath, sea
 expect(cmdRoute.deviceId === 'INTUNE-BAD3-E6C7D788BE' && cmdRoute.deviceSection === 'tools' && cmdRoute.deviceTool === 'cmd', 'CMD deep link must parse back to the same device/tool.')
 const activityRoute = rmmRouteFromLocation(canonicalSurface, { pathname: '/devices/INTUNE-BAD3-E6C7D788BE/activity', search: '', origin: 'https://test2-rmm.hi5central.com' })
 expect(activityRoute.deviceSection === 'activity' && activityRoute.deviceTool === '', 'Device Activity deep link must restore the Activity section.')
+const auditDetailPath = rmmActivityPath(canonicalSurface, 'software', '123e4567-e89b-12d3-a456-426614174000')
+expect(auditDetailPath === '/activity/software/123e4567-e89b-12d3-a456-426614174000', 'Audit details must use /activity/<category>/<id> paths.')
+const auditDetailRoute = rmmRouteFromLocation(canonicalSurface, { pathname: auditDetailPath, search: '', origin: 'https://test2-rmm.hi5central.com' })
+expect(auditDetailRoute.viewId === 'activity-audit' && auditDetailRoute.activityCategory === 'software' && auditDetailRoute.activityId === '123e4567-e89b-12d3-a456-426614174000', 'Audit detail routes must restore category and activity ID.')
 const registryRoute = rmmRouteFromLocation(canonicalSurface, { pathname: '/devices/INTUNE-BAD3-E6C7D788BE/tools/registry', search: '', origin: 'https://test2-rmm.hi5central.com' })
 expect(registryRoute.deviceSection === 'tools' && registryRoute.deviceTool === 'registry', 'Registry deep link must restore Registry Editor.')
 expect(platform.includes('initialSection={selectedDeviceSection}') && platform.includes('initialTool={selectedDeviceTool}'), 'Device Details must hydrate its selected section/tool from the route.')
@@ -61,6 +67,9 @@ expect(platformCss.includes('.rmm-app-patch-table .rmm-table-row > span:nth-chil
 expect(platformCss.includes('.rmm-device-windows-patching-card .rmm-device-patch-table') && platformCss.includes("content: 'Reboot';"), 'Windows Update table must collapse to labelled mobile cards.')
 expect(toolCss.includes('.rmm-device-tool-workspace.is-embedded .rmm-tool-table-head {\n    display: none;') && toolCss.includes('grid-template-columns: repeat(2, minmax(0, 1fr)) !important;'), 'Phone tool tables must collapse to viewport-width cards instead of desktop-width horizontal tables.')
 expect(activity.includes('window.setInterval(() => load(true), 5000)'), 'Device Activity must live-refresh silently while its tab is open.')
+expect(activity.includes("createPortal(modal, document.querySelector('.rmm-app') || document.body)"), 'Audit detail modal must portal outside the scrolling page so the mobile header cannot cover it.')
+expect(activityCss.includes('padding: calc(env(safe-area-inset-top) + 8px) 0 0;') && activityCss.includes('overscroll-behavior: contain;'), 'Mobile audit details must respect the safe-area top and own their scrolling.')
+expect(activityApi.includes("'/api/v1/rmm/activity/:eventId'"), 'Durable audit detail routes require a tenant-scoped activity-record endpoint.')
 
 if (failures.length) {
   console.error('RMM Device Details contract check failed:')

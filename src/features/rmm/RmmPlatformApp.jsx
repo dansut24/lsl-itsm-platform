@@ -1151,6 +1151,8 @@ export function RmmPlatformApp({ accent, canAudit = false, canBackstageRemote = 
   const [selectedDeviceId, setSelectedDeviceId] = useState(initialRoute.deviceId || '')
   const [selectedDeviceSection, setSelectedDeviceSection] = useState(initialRoute.deviceSection || 'overview')
   const [selectedDeviceTool, setSelectedDeviceTool] = useState(initialRoute.deviceTool || '')
+  const [selectedActivityCategory, setSelectedActivityCategory] = useState(initialRoute.activityCategory || '')
+  const [selectedActivityId, setSelectedActivityId] = useState(initialRoute.activityId || '')
   const [mobileOpen, setMobileOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [toast, setToast] = useState('')
@@ -1165,6 +1167,8 @@ export function RmmPlatformApp({ accent, canAudit = false, canBackstageRemote = 
       setSelectedDeviceId(route.deviceId || '')
       setSelectedDeviceSection(route.deviceSection || 'overview')
       setSelectedDeviceTool(route.deviceTool || '')
+      setSelectedActivityCategory(route.activityCategory || '')
+      setSelectedActivityId(route.activityId || '')
       setMobileOpen(false)
     }
     window.addEventListener('popstate', handlePop)
@@ -1188,6 +1192,8 @@ export function RmmPlatformApp({ accent, canAudit = false, canBackstageRemote = 
     setSelectedDeviceId('')
     setSelectedDeviceSection('overview')
     setSelectedDeviceTool('')
+    setSelectedActivityCategory('')
+    setSelectedActivityId('')
     setMobileOpen(false)
     setQuery('')
     const path = rmmPath(undefined, viewId)
@@ -1201,6 +1207,8 @@ export function RmmPlatformApp({ accent, canAudit = false, canBackstageRemote = 
     setSelectedDeviceId(device.id)
     setSelectedDeviceSection('overview')
     setSelectedDeviceTool('')
+    setSelectedActivityCategory('')
+    setSelectedActivityId('')
     setMobileOpen(false)
     window.history.pushState({}, '', rmmDevicePath(undefined, device.id, 'overview'))
     document.querySelector('.rmm-main-scroll')?.scrollTo?.({ top: 0, behavior: 'auto' })
@@ -1224,7 +1232,7 @@ export function RmmPlatformApp({ accent, canAudit = false, canBackstageRemote = 
     if (activeView === 'automation') return <RmmAutomation />
     if (activeView === 'policies') return <RmmMonitoringPolicies devices={devices} openDevice={openDevice} sites={sites} />
     if (activeView === 'reports') return <RmmReports devices={devices} />
-    if (activeView === 'activity-audit') return canAudit ? <RmmAuditActivity devices={devices} /> : <RmmDashboard canAudit={canAudit} devices={devices} navigate={navigate} openDevice={openDevice} />
+    if (activeView === 'activity-audit') return canAudit ? <RmmAuditActivity activityCategory={selectedActivityCategory} activityId={selectedActivityId} devices={devices} /> : <RmmDashboard canAudit={canAudit} devices={devices} navigate={navigate} openDevice={openDevice} />
     if (activeView === 'agent-deployment') return <RmmAgentDeployment />
     if (activeView === 'settings') return <RmmSettings navigate={navigate} />
     return <RmmDashboard canAudit={canAudit} devices={devices} navigate={navigate} openDevice={openDevice} />

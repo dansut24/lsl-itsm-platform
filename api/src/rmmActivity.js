@@ -258,6 +258,19 @@ export function registerRmmActivityRoutes(app) {
     return c.json({ events: await queryActivity(c, auth.session.tenant_id) })
   })
 
+  app.get('/api/v1/rmm/activity/:eventId', async (c) => {
+    const auth = await requireActivityAccess(c, true)
+    if (auth.error) return auth.error
+    const sql =
+      "SELECT e.id,e.agent_device_id,e.inventory_id,e.actor_user_id,e.actor_type,e.actor_label,e.event_type,e.category,e.summary,e.detail,e.outcome,e.severity,e.correlation_id,e.job_id,e.remote_session_id,e.tool_session_id,e.metadata,e.created_at," +
+      "i.name AS device_name,i.reference AS device_reference,COALESCE(NULLIF(u.name,''),u.email,'') AS actor_user_name " +
+      "FROM rmm_activity_events e LEFT JOIN rmm_agent_devices a ON a.id=e.agent_device_id LEFT JOIN rmm_device_inventory i ON i.id=COALESCE(e.inventory_id,a.inventory_id) LEFT JOIN users u ON u.id=e.actor_user_id " +
+      "WHERE e.id=$1 AND e.tenant_id=$2 LIMIT 1"
+    const result = await pool.query(sql, [clean(c.req.param('eventId')), auth.session.tenant_id])
+    if (!result.rowCount) return c.json({ error: 'RMM activity record not found.' }, 404)
+    return c.json({ event: result.rows[0] })
+  })
+
   app.get('/api/v1/rmm/devices/:agentDeviceId/activity', async (c) => {
     const auth = await requireActivityAccess(c, false)
     if (auth.error) return auth.error

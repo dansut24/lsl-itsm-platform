@@ -274,6 +274,18 @@ export function rmmRouteFromLocation(surface = resolveTenantSurface(), location 
     }
   }
 
+  const activityMatch = normalized.match(/^\/activity(?:\/([^/]+)\/([^/]+))?\/?$/i)
+  if (activityMatch) {
+    const activityCategory = decodeURIComponent(activityMatch[1] || '').toLowerCase()
+    const activityId = decodeURIComponent(activityMatch[2] || '')
+    return {
+      viewId: 'activity-audit',
+      activityCategory,
+      activityId,
+      path: rmmActivityPath(surface, activityCategory, activityId),
+    }
+  }
+
   const pageMatch = normalized.match(/^\/(dashboard|devices|sites|groups|alerts|remote|patching|software|automation|policies|reports|activity-audit|agent-deployment|settings)$/i)
   if (pageMatch) {
     const viewId = pageMatch[1].toLowerCase()
@@ -283,8 +295,19 @@ export function rmmRouteFromLocation(surface = resolveTenantSurface(), location 
   return { viewId: 'dashboard', path: rmmPath(surface, 'dashboard') }
 }
 
+export function rmmActivityPath(surface = resolveTenantSurface(), category = '', activityId = '') {
+  const normalizedCategory = String(category || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '')
+  const normalizedId = String(activityId || '').trim()
+  const detailSuffix = normalizedCategory && normalizedId
+    ? `/${encodeURIComponent(normalizedCategory)}/${encodeURIComponent(normalizedId)}`
+    : ''
+  const canonicalPath = `/activity${detailSuffix}`
+  return surface?.pathBased || !surface?.canonical ? `/rmm${canonicalPath}` : canonicalPath
+}
+
 export function rmmPath(surface = resolveTenantSurface(), viewId = 'dashboard', recordId = '') {
   const page = String(viewId || 'dashboard').toLowerCase()
+  if (page === 'activity-audit') return rmmActivityPath(surface)
   const suffix = page === 'dashboard' ? '' : `/${page}`
   const recordSuffix = recordId ? `/${encodeURIComponent(String(recordId).toUpperCase())}` : ''
   const canonicalPath = `${suffix}${recordSuffix}` || '/'

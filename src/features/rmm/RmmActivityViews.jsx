@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   Activity, AlertTriangle, CheckCircle2, ChevronRight, Clock3, Filter,
   History, ListChecks, Monitor, Package, RefreshCw, Search, Server, ShieldCheck,
   TerminalSquare, User, X, XCircle,
 } from 'lucide-react'
 import { deploymentConfig } from '../../lib/deploymentConfig.js'
+import { rmmActivityPath, rmmPath } from '../../lib/tenantSurface.js'
 import './RmmActivityViews.css'
 
 const API_BASE = window.__HI5_API_BASE__ || deploymentConfig().apiUrl
@@ -91,7 +93,7 @@ function DetailModal({ detail, loading, onClose }) {
   const title = isTool
     ? ((payload.shell === 'cmd' ? 'Command Prompt' : payload.shell === 'powershell' ? 'PowerShell' : payload.tool) + ' session')
     : jobLabel(payload.job_type)
-  return <div className="rmm-audit-modal-backdrop" role="presentation">
+  const modal = <div className="rmm-audit-modal-backdrop" role="presentation">
     <section className="rmm-audit-modal" role="dialog" aria-modal="true" aria-label="Activity details">
       <header><div><span className="rmm-eyebrow">RMM audit detail</span><h2>{loading ? 'Loading details…' : title}</h2></div><button onClick={onClose} type="button" aria-label="Close"><X size={18} /></button></header>
       {loading ? <SkeletonRows count={4} /> : <>
@@ -114,6 +116,7 @@ function DetailModal({ detail, loading, onClose }) {
       </>}
     </section>
   </div>
+  return createPortal(modal, document.querySelector('.rmm-app') || document.body)
 }
 
 function ActivityRow({ event, onDetails }) {
@@ -131,19 +134,24 @@ function ActivityRow({ event, onDetails }) {
   </article>
 }
 
-function useActivityDetails() {
+function useActivityDetails({ activityCategory = '', activityId = '' } = {}) {
   const [detail, setDetail] = useState(null)
   const [loading, setLoading] = useState(false)
-  async function open(event) {
+  const returnPathRef = useRef('')
+  const routeOpenedRef = useRef('')
+
+  async function loadEventDetail(event) {
     setLoading(true)
-    setDetail({ kind: event.tool_session_id ? 'tool' : 'job', data: {} })
+    setDetail({ kind: event?.tool_session_id ? 'tool' : 'job', data: {} })
     try {
-      if (event.tool_session_id) {
+      if (event?.tool_session_id) {
         const payload = await apiJson('/api/v1/rmm/tool-sessions/' + encodeURIComponent(event.tool_session_id))
         setDetail({ kind: 'tool', data: payload.session || {} })
-      } else if (event.job_id) {
+      } else if (event?.job_id) {
         const payload = await apiJson('/api/v1/rmm/device-actions/' + encodeURIComponent(event.job_id))
         setDetail({ kind: 'job', data: payload.job || {} })
+      } else {
+        throw new Error('This activity record has no detailed job or tool session.')
       }
     } catch (error) {
       setDetail({ kind: 'job', data: { status: 'failed', error_message: error.message } })
@@ -151,7 +159,75 @@ function useActivityDetails() {
       setLoading(false)
     }
   }
-  return { detail, loading, open, close: () => { setDetail(null); setLoading(false) } }
+
+  async function open(event, { updatePath = true } = {}) {
+    if (!event) return
+    if (updatePath && event.id) {
+      returnPathRef.current = window.location.pathname + window.location.search
+      window.history.pushState({}, '', rmmActivityPath(undefined, event.category || 'job', event.id))
+    }
+    routeOpenedRef.current = String(event.id || '')
+    await loadEventDetail(event)
+  }
+
+  async function openById(id, expectedCategory = '') {
+    if (!id) return
+    setLoading(true)
+    setDetail({ kind: 'job', data: {} })
+    try {
+      const payload = await apiJson('/api/v1/rmm/activity/' + encodeURIComponent(id))
+      const event = payload.event || {}
+      const canonicalCategory = event.category || expectedCategory || 'job'
+      if (expectedCategory && event.category && String(event.category).toLowerCase() !== String(expectedCategory).toLowerCase()) {
+        window.history.replaceState({}, '', rmmActivityPath(undefined, canonicalCategory, event.id || id))
+      }
+      routeOpenedRef.current = String(event.id || id)
+      await loadEventDetail(event)
+    } catch (error) {
+      setDetail({ kind: 'job', data: { status: 'failed', error_message: error.message } })
+      setLoading(false)
+    }
+  }
+
+  function close() {
+    setDetail(null)
+    setLoading(false)
+    routeOpenedRef.current = ''
+    const returnPath = returnPathRef.current
+    returnPathRef.current = ''
+    if (returnPath) {
+      window.history.back()
+      return
+    }
+    if (/\/activity\/[^/]+\/[^/]+\/?$/i.test(window.location.pathname)) {
+      window.history.replaceState({}, '', rmmPath(undefined, 'activity-audit'))
+    }
+  }
+
+  useEffect(() => {
+    if (activityId) {
+      if (routeOpenedRef.current !== String(activityId)) openById(activityId, activityCategory)
+    } else if (routeOpenedRef.current) {
+      routeOpenedRef.current = ''
+      setDetail(null)
+      setLoading(false)
+    }
+  }, [activityCategory, activityId])
+
+  useEffect(() => {
+    const handlePop = () => {
+      if (!/\/activity\/[^/]+\/[^/]+\/?$/i.test(window.location.pathname)) {
+        routeOpenedRef.current = ''
+        returnPathRef.current = ''
+        setDetail(null)
+        setLoading(false)
+      }
+    }
+    window.addEventListener('popstate', handlePop)
+    return () => window.removeEventListener('popstate', handlePop)
+  }, [])
+
+  return { detail, loading, open, close }
 }
 
 export async function prefetchDeviceHistory(device) {
@@ -260,13 +336,13 @@ export function DeviceJobsPanel({ device }) {
   </section>
 }
 
-export function RmmAuditActivity({ devices = [] }) {
+export function RmmAuditActivity({ activityCategory = '', activityId = '', devices = [] }) {
   const [events, setEvents] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [filters, setFilters] = useState({ q: '', actor: '', agentDeviceId: '', category: '', outcome: '', from: '', to: '' })
   const [applied, setApplied] = useState(filters)
-  const details = useActivityDetails()
+  const details = useActivityDetails({ activityCategory, activityId })
 
   async function load(next = applied) {
     setLoading(true); setError('')
