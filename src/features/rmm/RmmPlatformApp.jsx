@@ -597,7 +597,9 @@ function NetworkAdaptersPanel({ device }) {
     <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Interfaces</span><h2>Network adapters</h2></div><small>{liveState}</small></div>
     <div className="rmm-adapter-list">{adapters.map((adapter) => {
       const name = adapter.name || adapter.adapter || adapter.description || 'Network adapter'
-      const live = liveByName[String(name).toLowerCase()] || {}
+      const live = liveByName[String(name).toLowerCase()]
+        || liveByName[String(adapter.description || '').toLowerCase()]
+        || {}
       const ipv4 = Array.isArray(adapter.ipv4) ? adapter.ipv4.find((value) => value && !String(value).startsWith('169.254.')) || adapter.ipv4[0] : adapter.address
       const type = adapter.connection_type || adapter.connection || adapter.type || 'Network'
       const inventorySpeed = Number(adapter.speed_bps)
