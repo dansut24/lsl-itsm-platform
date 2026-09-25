@@ -38,7 +38,13 @@ function randomSecret(prefix) { return `${prefix}_${randomBytes(32).toString('ba
 function isPortableUserAgent(value = '') {
   return /Android|iPhone|iPad|iPod|Mobile|Tablet|Kindle|Silk/i.test(String(value || ''))
 }
-function viewerClientForRequest(c) {
+function viewerClientForRequest(c, requestedClient = '') {
+  const requested = clean(requestedClient).toLowerCase()
+  // The authenticated portal performs the richer physical-device detection in
+  // JavaScript, where platform/touch hardware signals are available even when
+  // a browser intentionally presents a desktop User-Agent. Keep header-based
+  // detection only as a backwards-compatible fallback for older portal builds.
+  if (requested === 'browser' || requested === 'native') return requested
   const mobileHint = clean(c.req.header('sec-ch-ua-mobile')).toLowerCase()
   return mobileHint === '?1' || isPortableUserAgent(c.req.header('user-agent')) ? 'browser' : 'native'
 }
@@ -146,7 +152,7 @@ export function registerRmmRemoteRoutes(app) {
     const mode = clean(body.mode).toLowerCase() === 'backstage' ? 'backstage' : 'console'
     const modeError = ensureSessionModeAccess(c, auth.session, mode)
     if (modeError) return modeError
-    const viewerClient = viewerClientForRequest(c)
+    const viewerClient = viewerClientForRequest(c, body.viewerClient)
     const sessionId = randomUUID()
     const token = randomSecret('h5v')
     const expiresAt = new Date(Date.now() + SESSION_TTL_SECONDS * 1000)
@@ -290,7 +296,10 @@ export function attachRmmViewerWebSocket(server) {
     ).catch(() => null)
     if (viewerSession?.viewer_client === 'browser') {
       const requestedClient = clean(url.searchParams.get('client')).toLowerCase()
-      if (requestedClient !== 'browser' || !isPortableUserAgent(request.headers['user-agent'])) {
+      // The session itself already authorises the browser Viewer. Do not
+      // re-classify the physical device from the WebSocket User-Agent because
+      // desktop-mode/mobile wrapper browsers may intentionally spoof it.
+      if (requestedClient !== 'browser') {
         socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
         socket.destroy()
         return

@@ -63,6 +63,7 @@ import { RmmPatching as RmmPatchingWorkspace } from './RmmPatching.jsx'
 import { RmmAgentDeployment } from './RmmAgentDeployment.jsx'
 import { RmmAutomation } from './RmmAutomationWorkspace.jsx'
 import { DeviceActivityTimeline, DeviceJobsPanel, RmmAuditActivity, prefetchDeviceHistory } from './RmmActivityViews.jsx'
+import { detectRemoteViewerClient } from './remoteViewerClient.js'
 import { RmmDeviceToolWorkspace } from './RmmDeviceTools.jsx'
 import './RmmPlatformApp.css'
 
@@ -780,11 +781,18 @@ function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device
     setRemoteBusy(true)
     setRemoteState(mode === 'backstage' ? 'Starting Background session…' : 'Starting remote desktop…')
     try {
+      const viewerTarget = detectRemoteViewerClient()
       const response = await fetch(apiBase + '/api/v1/rmm/remote-sessions', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentDeviceId: device.agentDeviceId, mode }),
+        body: JSON.stringify({
+          agentDeviceId: device.agentDeviceId,
+          mode,
+          viewerClient: viewerTarget.viewerClient,
+          viewerDeviceClass: viewerTarget.deviceClass,
+          viewerDetection: viewerTarget.reason,
+        }),
       })
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(payload.error || 'Unable to start remote session.')

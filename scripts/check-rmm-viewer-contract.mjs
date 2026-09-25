@@ -5,9 +5,37 @@ const renderer = read('public/rmm-viewer/renderer.js')
 const browser = read('public/rmm-viewer/browser.js')
 const remote = read('api/src/rmmRemote.js')
 const agent = read('api/src/rmmAgent.js')
+const platform = read('src/features/rmm/RmmPlatformApp.jsx')
+const viewerDetector = read('src/features/rmm/remoteViewerClient.js')
+const { detectRemoteViewerClient } = await import('../src/features/rmm/remoteViewerClient.js')
 
 const failures = []
 const expect = (ok, message) => { if (!ok) failures.push(message) }
+
+// Physical device-class launch selection ------------------------------------
+const desktopUaOnIpad = detectRemoteViewerClient({
+  userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) AppleWebKit/605.1.15 Version/18 Safari/605.1.15',
+  platform: 'MacIntel',
+  vendor: 'Apple Computer, Inc.',
+  maxTouchPoints: 5,
+  userAgentData: { mobile: false, platform: 'macOS' },
+})
+expect(desktopUaOnIpad.viewerClient === 'browser', 'iPad/iOS desktop-UA browsers must use the browser Viewer.')
+const windowsTouch = detectRemoteViewerClient({
+  userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+  platform: 'Win32',
+  vendor: 'Google Inc.',
+  maxTouchPoints: 10,
+  userAgentData: { mobile: false, platform: 'Windows' },
+})
+expect(windowsTouch.viewerClient === 'native', 'Windows touch devices must remain eligible for the native Viewer.')
+const androidPhone = detectRemoteViewerClient({ userAgent: 'Mozilla/5.0 (Linux; Android 16; Pixel) Mobile', platform: 'Linux armv8l', maxTouchPoints: 5 })
+expect(androidPhone.viewerClient === 'browser', 'Android phones must use the browser Viewer.')
+expect(!/innerWidth|screen\.width|devicePixelRatio|max-width|min-width/.test(viewerDetector), 'Remote Viewer device-class detection must not depend on viewport/resolution.')
+expect(platform.includes('detectRemoteViewerClient()') && platform.includes('viewerClient: viewerTarget.viewerClient'), 'RMM launch must explicitly send the detected Viewer client type.')
+expect(remote.includes('viewerClientForRequest(c, body.viewerClient)'), 'API must honour the authenticated portal Viewer-client decision.')
+expect(remote.includes("if (requested === 'browser' || requested === 'native') return requested"), 'API explicit Viewer-client selection is missing.')
+expect(!remote.includes("requestedClient !== 'browser' || !isPortableUserAgent(request.headers['user-agent'])"), 'Browser Viewer WebSocket must not reclassify the device from a spoofable User-Agent.')
 
 // Launch/bootstrap safety ----------------------------------------------------
 expect(browser.includes('startWhenReady'), 'Browser Viewer must wait for renderer readiness before launching.')
