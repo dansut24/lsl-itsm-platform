@@ -48,6 +48,11 @@ expect(agent.includes('A replacement Agent socket is already authoritative'), 'S
 expect(remote.includes('remote.transport_interrupted') && remote.includes('remote.transport_recovered'), 'Restart continuity must be auditable without creating a second remote session.')
 expect(remote.includes('ACTIVE_RECONNECT_TTL_SECONDS') && remote.includes("interval '8 hours'"), 'Active remote sessions must keep a sliding reconnect token horizon.')
 expect(remote.includes('explicitViewerClose'), 'Explicit technician disconnect must bypass reconnect grace.')
+expect(remote.includes('const AGENT_RESTART_GRACE_MS = 10 * 60 * 1000'), 'Endpoint restart grace must remain ten minutes.')
+expect(remote.includes('const ACTIVE_RECONNECT_TTL_SECONDS = 8 * 60 * 60'), 'Active remote sessions must retain bounded reconnect authorisation.')
+expect(renderer.includes('mobileReconnectDeadline = now + 85000'), 'Mobile Viewer signaling recovery window must align with the server grace.')
+expect(remote.includes('remote.viewer_transport_interrupted') && remote.includes('remote.viewer_transport_recovered'), 'Viewer transport interruptions/recoveries must be auditable on the same session.')
+expect(remote.includes("previousActive.agentWs.off('message', previousActive.relayFromAgent)"), 'Superseded Viewer sessions must detach stale Agent relay listeners.')
 
 // Keyboard/input contract ----------------------------------------------------
 expect(renderer.includes("getModifierState?.('AltGraph')"), 'AltGraph-aware printable-key handling is missing.')

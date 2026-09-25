@@ -4096,7 +4096,7 @@ function scheduleMobileSessionReconnect(reason = 'network-recovery', { closeSock
   if (mobileEndpointRestartUntil > Date.now()) return false;
   if (String(reason).includes('frame-stall')) return false;
   const now = Date.now();
-  if (!mobileReconnectDeadline) mobileReconnectDeadline = now + 28000;
+  if (!mobileReconnectDeadline) mobileReconnectDeadline = now + 85000;
   if (document.hidden) {
     setMobileRecoveryStage('Suspended · reconnect pending');
     if (!mobileReconnectTimer) {
