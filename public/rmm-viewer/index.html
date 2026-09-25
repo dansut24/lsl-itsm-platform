@@ -444,7 +444,12 @@
     .file-entry .file-main { min-width:0; flex:1; }
     .file-entry .file-meta { font-size: 11px; color: var(--muted); margin-top: 4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .file-download { border:1px solid var(--border); background:rgba(255,255,255,.06); color:var(--text); border-radius:8px; padding:7px 9px; cursor:pointer; flex:0 0 auto; }
-    #file-mobile-status { padding:0 12px 10px; color:var(--muted); font-size:11px; min-height:20px; }
+    #file-mobile-status { padding:0 12px 6px; color:var(--muted); font-size:11px; min-height:18px; }
+    #file-transfer-ui { display:none; margin:0 12px 10px; padding:9px; border:1px solid var(--border); border-radius:10px; background:rgba(255,255,255,.04); gap:8px; align-items:center; }
+    #file-transfer-ui.visible { display:flex; }
+    #file-transfer-progress { flex:1; min-width:0; height:8px; border-radius:999px; overflow:hidden; background:rgba(255,255,255,.09); }
+    #file-transfer-progress > span { display:block; width:0%; height:100%; background:rgb(var(--accent)); transition:width 120ms linear; }
+    #file-transfer-ui button { min-height:34px; padding:0 9px; border:1px solid var(--border); border-radius:8px; background:rgba(255,255,255,.06); color:var(--text); font:inherit; font-size:11px; font-weight:700; }
 
     .settings-body {
       padding: 16px;
@@ -497,7 +502,7 @@
     }
     .settings-select option { background: #11161d; color: var(--text); }
 
-    #mobile-view-controls, #mobile-keyboard, #mobile-toolbar-handle, #mobile-scroll-rail, #mobile-bottom-actions { display: none; }
+    #mobile-view-controls, #mobile-keyboard, #mobile-toolbar-handle, #mobile-scroll-rail, #mobile-bottom-actions, #mobile-quality-indicator { display: none; }
     .mobile-only-action, .mobile-only-setting { display: none; }
 
     .mobile-touch-contact {
@@ -540,6 +545,14 @@
     }
     #mobile-pointer-reticle::before { left: 13px; top: -7px; width: 2px; height: 40px; }
     #mobile-pointer-reticle::after { top: 13px; left: -7px; height: 2px; width: 40px; }
+
+    #mobile-quality-indicator { position:fixed; top:max(8px, env(safe-area-inset-top)); right:max(8px, env(safe-area-inset-right)); z-index:72; min-height:28px; padding:0 9px; border:1px solid rgba(255,255,255,.14); border-radius:999px; background:rgba(8,12,19,.88); color:var(--text); font-size:10px; font-weight:800; line-height:26px; pointer-events:auto; backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); }
+    #mobile-quality-indicator.visible { display:block; }
+    #mobile-quality-indicator[data-quality="excellent"] { border-color:rgba(52,211,153,.55); }
+    #mobile-quality-indicator[data-quality="good"] { border-color:rgba(99,102,241,.55); }
+    #mobile-quality-indicator[data-quality="poor"], #mobile-quality-indicator[data-quality="reconnecting"] { border-color:rgba(251,191,36,.65); }
+    #mobile-diagnostics-card { display:none; }
+    #mobile-diagnostics-card.visible { display:block; }
 
     #mobile-precision-loupe {
       position: fixed;
@@ -599,6 +612,9 @@
       }
       .mobile-only-action { display: inline-flex; }
       .mobile-only-setting { display: flex; }
+      button, select, .icon-btn, #btn-monitor, .panel-close, .file-download { min-height:44px; }
+      #mobile-bottom-actions button, #mobile-view-controls button, .remote-key { min-height:44px; }
+      #mobile-toolbar-handle { min-height:34px; }
       .icon-btn, #btn-monitor {
         width: 100%;
         min-width: 0;
@@ -894,6 +910,9 @@
       .icon-btn, #btn-monitor { height: 30px; }
       #btn-disconnect { height: 29px; }
       #mobile-keyboard.visible { max-height: 52dvh; }
+      #mobile-bottom-actions { gap:4px; padding:4px; }
+      #mobile-bottom-actions button { min-width:66px; min-height:40px; padding:0 7px; font-size:10px; }
+      #mobile-view-controls button { min-height:40px; }
       .remote-key { height: 30px; font-size: 11px; }
       .mobile-keyboard-head { min-height: 24px; }
     }
@@ -938,6 +957,7 @@
   <audio id="remote-audio" autoplay></audio>
   <img id="remote-image" alt="Remote desktop stream" />
   <button id="mobile-toolbar-handle" type="button" aria-label="Show session toolbar">Controls</button>
+  <button id="mobile-quality-indicator" type="button" aria-label="Connection quality" title="Connection quality">Good</button>
   <div id="mobile-view-controls" aria-label="Mobile remote controls">
     <button id="mobile-input-mode" type="button" aria-label="Switch touch mode">Touch</button>
     <button id="mobile-pan-mode" type="button" aria-label="Pan viewport" title="Pan viewport">✋</button>
@@ -967,7 +987,12 @@
       <button id="file-upload" type="button">Upload</button>
       <input id="file-upload-input" type="file" multiple hidden />
     </div>
-    <div id="file-mobile-status"></div>
+    <div id="file-mobile-status" aria-live="polite"></div>
+    <div id="file-transfer-ui" aria-live="polite">
+      <div id="file-transfer-progress"><span></span></div>
+      <button id="file-transfer-cancel" type="button">Cancel</button>
+      <button id="file-transfer-retry" type="button" style="display:none">Retry</button>
+    </div>
     <div id="file-list"></div>
   </div>
 
@@ -1015,6 +1040,14 @@
           </select>
         </div>
         <div class="settings-control mobile-only-setting">
+          <label for="mobile-adaptive-pref">Adaptive quality</label>
+          <select id="mobile-adaptive-pref" class="settings-select"><option value="on">On</option><option value="off">Off</option></select>
+        </div>
+        <div class="settings-control mobile-only-setting">
+          <label for="mobile-diagnostics-pref">Mobile diagnostics</label>
+          <select id="mobile-diagnostics-pref" class="settings-select"><option value="off">Off</option><option value="on">On</option></select>
+        </div>
+        <div class="settings-control mobile-only-setting">
           <label for="mobile-toolbar-pref">Mobile toolbar</label>
           <select id="mobile-toolbar-pref" class="settings-select">
             <option value="auto">Auto hide</option>
@@ -1039,6 +1072,15 @@
         <div class="diag-row"><span>Packets lost</span><span id="diag-packets-lost">—</span></div>
         <div class="diag-row"><span>RTT</span><span id="diag-rtt">—</span></div>
         <div class="diag-row"><span>ICE servers</span><span id="diag-ice-servers">—</span></div>
+      </div>
+      <div id="mobile-diagnostics-card" class="settings-card">
+        <h3>Mobile diagnostics</h3>
+        <div class="diag-row"><span>Quality</span><span id="diag-mobile-quality">—</span></div>
+        <div class="diag-row"><span>Adaptive profile</span><span id="diag-mobile-profile">—</span></div>
+        <div class="diag-row"><span>Recovery</span><span id="diag-mobile-recovery">Idle</span></div>
+        <div class="diag-row"><span>Viewport</span><span id="diag-mobile-viewport">—</span></div>
+        <div class="diag-row"><span>Selected monitor</span><span id="diag-mobile-monitor">—</span></div>
+        <div class="diag-row"><span>Wake lock</span><span id="diag-mobile-wakelock">—</span></div>
       </div>
       <div class="settings-card">
         <h3>Hi5Central Viewer</h3>

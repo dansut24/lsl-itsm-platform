@@ -15,6 +15,7 @@ const TURN_HOST = process.env.TURN_HOST || `turn.${ROOT_DOMAIN}`
 const TURN_SHARED_SECRET_FILE = process.env.TURN_SHARED_SECRET_FILE || '/run/secrets/turn_shared_secret'
 const SESSION_TTL_SECONDS = 15 * 60
 const MAX_VIEWER_PAYLOAD_BYTES = 8 * 1024 * 1024
+const BROWSER_RECONNECT_GRACE_MS = 30 * 1000
 const activeViewerSessions = new Map()
 
 const VIEWER_MESSAGE_TYPES = new Set([
@@ -24,7 +25,7 @@ const VIEWER_MESSAGE_TYPES = new Set([
   'backstage_start', 'backstage_stop', 'console_start',
   'chat_message', 'chat_close',
   'remote_file_list_request', 'remote_file_download_request', 'remote_file_upload_request',
-  'remote_file_upload_start', 'remote_file_upload_chunk', 'remote_file_upload_complete_request',
+  'remote_file_upload_start', 'remote_file_upload_chunk', 'remote_file_upload_complete_request', 'remote_file_upload_cancel',
   'remote_file_delete_request', 'remote_file_mkdir_request', 'remote_file_rename_request',
   'viewer_disconnected', 'viewer_closed', 'viewer_left', 'end_session', 'stop_webrtc',
 ])
@@ -327,7 +328,12 @@ export function attachRmmViewerWebSocket(server) {
       `UPDATE rmm_remote_sessions SET status='viewer_connected',viewer_connected_at=now(),last_activity_at=now(),updated_at=now() WHERE id=$1`,
       [remote.id],
     ).catch(() => {})
-    activeViewerSessions.set(sessionId, { viewerWs, agentWs, tenantId: remote.tenant_id })
+    const previousActive = activeViewerSessions.get(sessionId)
+    if (previousActive?.cleanupTimer) clearTimeout(previousActive.cleanupTimer)
+    if (previousActive?.viewerWs && previousActive.viewerWs !== viewerWs) {
+      try { previousActive.viewerWs.close(4001, 'Viewer superseded') } catch {}
+    }
+    activeViewerSessions.set(sessionId, { viewerWs, agentWs, tenantId: remote.tenant_id, cleanupTimer: null })
 
     const relayFromAgent = (buffer) => {
       const text = Buffer.isBuffer(buffer) ? buffer.toString('utf8') : String(buffer)
@@ -376,12 +382,14 @@ export function attachRmmViewerWebSocket(server) {
     }
     agentWs.on('message', relayFromAgent)
 
+    let explicitViewerClose = false
     viewerWs.on('message', (buffer) => {
       const text = Buffer.isBuffer(buffer) ? buffer.toString('utf8') : String(buffer)
       let payload
       try { payload = JSON.parse(text) } catch { return }
       const type = clean(payload?.type)
       if (!VIEWER_MESSAGE_TYPES.has(type)) return
+      if (['viewer_disconnected','viewer_closed','viewer_left','end_session','stop_webrtc'].includes(type)) explicitViewerClose = true
       if (remote.mode !== 'backstage' && (type === 'backstage_start' || type === 'backstage_stop')) {
         safeSend(viewerWs, { type: 'viewer_error', session_id: sessionId, error: 'Background mode is not authorised for this remote session.' })
         return
@@ -398,10 +406,12 @@ export function attachRmmViewerWebSocket(server) {
       pool.query(`UPDATE rmm_remote_sessions SET last_activity_at=now(),updated_at=now() WHERE id=$1`, [remote.id]).catch(() => {})
     })
 
-    const cleanup = (reason = 'viewer_disconnected') => {
-      agentWs.off('message', relayFromAgent)
+    let disconnectHandled = false
+    const finalizeCleanup = (reason = 'viewer_disconnected') => {
       const active = activeViewerSessions.get(sessionId)
-      if (active?.viewerWs === viewerWs) activeViewerSessions.delete(sessionId)
+      if (active?.viewerWs && active.viewerWs !== viewerWs) return
+      if (active?.cleanupTimer) clearTimeout(active.cleanupTimer)
+      activeViewerSessions.delete(sessionId)
       safeSend(agentWs, { type: 'viewer_disconnected', session_id: sessionId })
       pool.query(
         `UPDATE rmm_remote_sessions
@@ -417,22 +427,31 @@ export function attachRmmViewerWebSocket(server) {
         const endedAt = updated.rows[0]?.ended_at ? new Date(updated.rows[0].ended_at).getTime() : Date.now()
         const durationSeconds = startedAt ? Math.max(0, Math.round((endedAt - startedAt) / 1000)) : null
         return recordRmmActivity({
-          tenantId: remote.tenant_id,
-          agentDeviceId: remote.agent_device_id,
-          inventoryId: remote.inventory_id,
-          actorUserId: remote.created_by_user_id,
-          actorType: 'technician',
-          actorLabel: technician,
-          eventType: remote.mode === 'backstage' ? 'remote.background_ended' : 'remote.console_ended',
-          category: 'remote',
+          tenantId: remote.tenant_id, agentDeviceId: remote.agent_device_id, inventoryId: remote.inventory_id,
+          actorUserId: remote.created_by_user_id, actorType: 'technician', actorLabel: technician,
+          eventType: remote.mode === 'backstage' ? 'remote.background_ended' : 'remote.console_ended', category: 'remote',
           summary: technician + ' ended a ' + (remote.mode === 'backstage' ? 'Background' : 'remote') + ' session',
           detail: durationSeconds == null ? 'Remote session ended.' : 'Session duration ' + durationSeconds + ' seconds.',
-          outcome: reason === 'viewer_error' ? 'failed' : 'success',
-          severity: reason === 'viewer_error' ? 'warning' : 'info',
-          remoteSessionId: remote.id,
-          metadata: { mode: remote.mode, viewerClient: remote.viewer_client, reason, durationSeconds },
+          outcome: reason === 'viewer_error' ? 'failed' : 'success', severity: reason === 'viewer_error' ? 'warning' : 'info',
+          remoteSessionId: remote.id, metadata: { mode: remote.mode, viewerClient: remote.viewer_client, reason, durationSeconds },
         })
       }).catch(() => {})
+    }
+
+    const cleanup = (reason = 'viewer_disconnected') => {
+      if (disconnectHandled) return
+      disconnectHandled = true
+      agentWs.off('message', relayFromAgent)
+      const active = activeViewerSessions.get(sessionId)
+      if (active?.viewerWs !== viewerWs) return
+      if (remote.viewer_client !== 'browser' || explicitViewerClose) { finalizeCleanup(reason); return }
+      const cleanupTimer = setTimeout(() => {
+        const latest = activeViewerSessions.get(sessionId)
+        if (latest?.cleanupTimer !== cleanupTimer || latest?.viewerWs) return
+        finalizeCleanup(reason)
+      }, BROWSER_RECONNECT_GRACE_MS)
+      activeViewerSessions.set(sessionId, { viewerWs: null, agentWs, tenantId: remote.tenant_id, cleanupTimer })
+      pool.query(`UPDATE rmm_remote_sessions SET last_activity_at=now(),updated_at=now() WHERE id=$1`, [remote.id]).catch(() => {})
     }
     viewerWs.once('close', () => cleanup('viewer_disconnected'))
     viewerWs.once('error', () => cleanup('viewer_error'))

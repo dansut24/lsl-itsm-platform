@@ -81,6 +81,20 @@ const elViewerScaleMode = document.getElementById("viewer-scale-mode");
 const elRemoteResolutionPref = document.getElementById("remote-resolution-pref");
 const elMobileInputPref = document.getElementById("mobile-input-pref");
 const elMobileToolbarPref = document.getElementById("mobile-toolbar-pref");
+const elMobileAdaptivePref = document.getElementById("mobile-adaptive-pref");
+const elMobileDiagnosticsPref = document.getElementById("mobile-diagnostics-pref");
+const elMobileQualityIndicator = document.getElementById("mobile-quality-indicator");
+const elMobileDiagnosticsCard = document.getElementById("mobile-diagnostics-card");
+const elDiagMobileQuality = document.getElementById("diag-mobile-quality");
+const elDiagMobileProfile = document.getElementById("diag-mobile-profile");
+const elDiagMobileRecovery = document.getElementById("diag-mobile-recovery");
+const elDiagMobileViewport = document.getElementById("diag-mobile-viewport");
+const elDiagMobileMonitor = document.getElementById("diag-mobile-monitor");
+const elDiagMobileWakeLock = document.getElementById("diag-mobile-wakelock");
+const elFileTransferUi = document.getElementById("file-transfer-ui");
+const elFileTransferProgress = document.querySelector("#file-transfer-progress > span");
+const elFileTransferCancel = document.getElementById("file-transfer-cancel");
+const elFileTransferRetry = document.getElementById("file-transfer-retry");
 
 if (elVideo) {
   elVideo.autoplay = true;
@@ -112,7 +126,16 @@ let pendingRemoteIce = [];
 
 let statsTimer = null;
 let transitionWatchdogTimer = null;
-let lastStats = { tsMs: 0, bytes: 0, frames: 0, packetsLost: 0, jitterDelay: 0, jitterEmitted: 0 };
+let lastStats = { tsMs: 0, bytes: 0, frames: 0, packetsLost: 0, packetsReceived: 0, jitterDelay: 0, jitterEmitted: 0 };
+let wakeLockSentinel = null;
+let wakeLockRequested = false;
+let mobileRecoveryStage = 'Idle';
+let mobileRecoveryAttempts = 0;
+let mobileReconnectTimer = null;
+let mobileReconnectDeadline = 0;
+let mobileLastGoodStatsAt = 0;
+let mobileAdaptiveState = { tier: 0, bad: 0, good: 0, lastChangeAt: 0, targetFps: 30, targetBitrateKbps: 8000, label: 'Native · 8 Mbps · 30 fps' };
+let mobileFileTransfer = null;
 
 let inputBound = false;
 let controlActive = false;
@@ -131,7 +154,7 @@ let mobileViewportResumeToken = 0;
 let mobileViewportResumeUntil = 0;
 
 const MOBILE_PREFS_KEY = "hi5central.viewer.mobile.v2";
-const MOBILE_PREF_DEFAULTS = { inputMode: "direct", toolbar: "auto", resolution: "auto", scale: "fit" };
+const MOBILE_PREF_DEFAULTS = { inputMode: "direct", toolbar: "auto", resolution: "auto", scale: "fit", adaptive: "on", diagnostics: "off", monitorIndex: 0 };
 let mobilePrefsStore = { devices: {}, fallback: { ...MOBILE_PREF_DEFAULTS } };
 let mobilePrefs = { ...MOBILE_PREF_DEFAULTS };
 
@@ -141,6 +164,9 @@ function normalizeMobilePrefs(value) {
   if (!['auto','always'].includes(p.toolbar)) p.toolbar = 'auto';
   if (!['auto','native','1080p','720p'].includes(p.resolution)) p.resolution = 'auto';
   if (!['fit','stretch'].includes(p.scale)) p.scale = 'fit';
+  if (!['on','off'].includes(p.adaptive)) p.adaptive = 'on';
+  if (!['on','off'].includes(p.diagnostics)) p.diagnostics = 'off';
+  p.monitorIndex = Number.isInteger(Number(p.monitorIndex)) ? Math.max(-1, Math.min(31, Number(p.monitorIndex))) : 0;
   return p;
 }
 
@@ -184,7 +210,10 @@ function saveMobilePrefs() {
     inputMode: mobileInputMode,
     toolbar: mobilePrefs.toolbar,
     resolution: mobilePrefs.resolution,
-    scale: mobilePrefs.scale
+    scale: mobilePrefs.scale,
+    adaptive: mobilePrefs.adaptive,
+    diagnostics: mobilePrefs.diagnostics,
+    monitorIndex: mobilePrefs.monitorIndex
   });
   const key = String(currentSession?.deviceId || '').trim();
   if (key) mobilePrefsStore.devices[key] = { ...mobilePrefs };
@@ -205,9 +234,11 @@ function resolvedMobileResolutionPref() {
 
 function mobileStreamProfilePayload() {
   const pref = resolvedMobileResolutionPref();
-  if (pref === '720p') return { max_width: 1280, max_height: 720, target_fps: 30, preference: pref };
-  if (pref === '1080p') return { max_width: 1920, max_height: 1080, target_fps: 30, preference: pref };
-  return { max_width: 0, max_height: 0, target_fps: 30, preference: pref };
+  const adaptive = isMobileViewerSurface() && mobilePrefs.adaptive === 'on' ? mobileAdaptiveState : { targetFps: 30, targetBitrateKbps: 8000 };
+  const base = { target_fps: adaptive.targetFps, target_bitrate_kbps: adaptive.targetBitrateKbps, preference: pref };
+  if (pref === '720p') return { ...base, max_width: 1280, max_height: 720 };
+  if (pref === '1080p') return { ...base, max_width: 1920, max_height: 1080 };
+  return { ...base, max_width: 0, max_height: 0 };
 }
 
 function isMobileViewerSurface() {
@@ -537,6 +568,123 @@ function wakeMobileToolbar() {
   scheduleMobileToolbarHide();
 }
 
+const MOBILE_ADAPTIVE_TIERS = [
+  { bitrate: 8000, fps: 30, label: 'Native · 8 Mbps · 30 fps' },
+  { bitrate: 6000, fps: 30, label: 'Native · 6 Mbps · 30 fps' },
+  { bitrate: 4500, fps: 24, label: 'Native · 4.5 Mbps · 24 fps' },
+  { bitrate: 3200, fps: 20, label: 'Native · 3.2 Mbps · 20 fps' },
+  { bitrate: 2200, fps: 15, label: 'Native · 2.2 Mbps · 15 fps' }
+];
+
+function setMobileRecoveryStage(stage) {
+  mobileRecoveryStage = String(stage || 'Idle');
+  if (elDiagMobileRecovery) elDiagMobileRecovery.textContent = mobileRecoveryStage;
+}
+
+function setMobileQualityUi(label, quality, detail = '') {
+  if (elMobileQualityIndicator) {
+    elMobileQualityIndicator.textContent = label;
+    elMobileQualityIndicator.dataset.quality = quality || 'good';
+    elMobileQualityIndicator.title = detail || ('Connection quality: ' + label);
+    elMobileQualityIndicator.classList.toggle('visible', !!currentSession && isMobileViewerSurface());
+  }
+  if (elDiagMobileQuality) elDiagMobileQuality.textContent = detail ? label + ' · ' + detail : label;
+}
+
+function updateMobileDiagnosticsUi() {
+  const enabled = isMobileViewerSurface() && mobilePrefs.diagnostics === 'on';
+  elMobileDiagnosticsCard?.classList.toggle('visible', enabled);
+  if (elMobileDiagnosticsPref) elMobileDiagnosticsPref.value = mobilePrefs.diagnostics;
+  if (elMobileAdaptivePref) elMobileAdaptivePref.value = mobilePrefs.adaptive;
+  if (elDiagMobileProfile) elDiagMobileProfile.textContent = mobileAdaptiveState.label;
+  if (elDiagMobileViewport) {
+    const vv = window.visualViewport;
+    elDiagMobileViewport.textContent = mobileViewZoom.toFixed(2) + '× · ' + Math.round(vv?.width || innerWidth) + '×' + Math.round(vv?.height || innerHeight);
+  }
+  if (elDiagMobileMonitor) {
+    const monitor = remoteMonitors.find((m) => Number(m.index) === Number(currentMonitorIndex));
+    elDiagMobileMonitor.textContent = monitor ? getMonitorLabel(monitor) : String(currentMonitorIndex);
+  }
+  if (elDiagMobileWakeLock) elDiagMobileWakeLock.textContent = wakeLockSentinel ? 'Active' : (wakeLockRequested ? 'Requested' : 'Inactive');
+}
+
+async function requestMobileWakeLock() {
+  if (!isMobileViewerSurface() || !currentSession || document.hidden || !('wakeLock' in navigator)) return false;
+  if (wakeLockSentinel && !wakeLockSentinel.released) return true;
+  wakeLockRequested = true;
+  updateMobileDiagnosticsUi();
+  try {
+    wakeLockSentinel = await navigator.wakeLock.request('screen');
+    wakeLockRequested = false;
+    wakeLockSentinel.addEventListener('release', () => { wakeLockSentinel = null; updateMobileDiagnosticsUi(); });
+    updateMobileDiagnosticsUi();
+    return true;
+  } catch {
+    wakeLockRequested = false;
+    wakeLockSentinel = null;
+    updateMobileDiagnosticsUi();
+    return false;
+  }
+}
+
+async function releaseMobileWakeLock() {
+  wakeLockRequested = false;
+  const sentinel = wakeLockSentinel;
+  wakeLockSentinel = null;
+  try { await sentinel?.release?.(); } catch {}
+  updateMobileDiagnosticsUi();
+}
+
+function resetMobileAdaptiveState() {
+  mobileAdaptiveState = { tier: 0, bad: 0, good: 0, lastChangeAt: 0, targetFps: 30, targetBitrateKbps: 8000, label: MOBILE_ADAPTIVE_TIERS[0].label };
+  updateMobileDiagnosticsUi();
+}
+
+function applyMobileAdaptiveTier(nextTier, reason = '') {
+  const tier = Math.max(0, Math.min(MOBILE_ADAPTIVE_TIERS.length - 1, Number(nextTier) || 0));
+  const cfg = MOBILE_ADAPTIVE_TIERS[tier];
+  if (!cfg || tier === mobileAdaptiveState.tier) return false;
+  mobileAdaptiveState.tier = tier;
+  mobileAdaptiveState.targetFps = cfg.fps;
+  mobileAdaptiveState.targetBitrateKbps = cfg.bitrate;
+  mobileAdaptiveState.label = cfg.label;
+  mobileAdaptiveState.lastChangeAt = Date.now();
+  mobileAdaptiveState.bad = 0;
+  mobileAdaptiveState.good = 0;
+  console.log('[adaptive] tier changed', { tier, reason, ...cfg });
+  updateMobileDiagnosticsUi();
+  sendViewerStreamProfile();
+  return true;
+}
+
+function observeMobileNetworkQuality({ rttMs, jitterMs, jitterBufferMs, lossRate }) {
+  if (!currentSession || !isMobileViewerSurface()) return;
+  const rtt = Number.isFinite(rttMs) ? rttMs : 0;
+  const jitter = Number.isFinite(jitterMs) ? jitterMs : 0;
+  const buffer = Number.isFinite(jitterBufferMs) ? jitterBufferMs : 0;
+  const loss = Number.isFinite(lossRate) ? lossRate : 0;
+  const severe = rtt > 350 || buffer > 220 || jitter > 80 || loss > 0.05;
+  const pressured = severe || rtt > 220 || buffer > 130 || jitter > 50 || loss > 0.025;
+  const clean = rtt > 0 && rtt < 140 && buffer < 80 && jitter < 35 && loss < 0.01;
+  const detail = Math.round(rtt || 0) + 'ms · ' + (loss * 100).toFixed(1) + '% loss';
+  const quality = severe ? 'poor' : (pressured ? 'good' : 'excellent');
+  const label = severe ? 'Poor' : (pressured ? 'Good' : 'Excellent');
+  setMobileQualityUi(label, quality, detail);
+  if (clean || !pressured) mobileLastGoodStatsAt = Date.now();
+
+  if (mobilePrefs.adaptive !== 'on') return;
+  if (pressured) { mobileAdaptiveState.bad += severe ? 2 : 1; mobileAdaptiveState.good = 0; }
+  else if (clean) { mobileAdaptiveState.good += 1; mobileAdaptiveState.bad = 0; }
+  else { mobileAdaptiveState.bad = Math.max(0, mobileAdaptiveState.bad - 1); mobileAdaptiveState.good = Math.max(0, mobileAdaptiveState.good - 1); }
+
+  const sinceChange = Date.now() - mobileAdaptiveState.lastChangeAt;
+  if (mobileAdaptiveState.bad >= 3 && sinceChange >= 8000) {
+    applyMobileAdaptiveTier(mobileAdaptiveState.tier + 1, severe ? 'severe-network-pressure' : 'network-pressure');
+  } else if (mobileAdaptiveState.good >= 10 && sinceChange >= 12000) {
+    applyMobileAdaptiveTier(mobileAdaptiveState.tier - 1, 'network-recovered');
+  }
+}
+
 function updateMobileModeUi() {
   if (elMobileInputMode) {
     elMobileInputMode.textContent = mobileInputMode === 'trackpad' ? 'Trackpad' : 'Touch';
@@ -546,10 +694,13 @@ function updateMobileModeUi() {
   elMobilePrecisionMode?.classList.toggle('active', mobilePrecisionMode);
   if (elMobileInputPref) elMobileInputPref.value = mobileInputMode;
   if (elMobileToolbarPref) elMobileToolbarPref.value = mobilePrefs.toolbar;
+  if (elMobileAdaptivePref) elMobileAdaptivePref.value = mobilePrefs.adaptive;
+  if (elMobileDiagnosticsPref) elMobileDiagnosticsPref.value = mobilePrefs.diagnostics;
   if (elRemoteResolutionPref) elRemoteResolutionPref.value = mobilePrefs.resolution;
   if (elViewerScaleMode) elViewerScaleMode.value = mobilePrefs.scale;
   if (elMobileScrollRail) elMobileScrollRail.classList.toggle('visible', !!currentSession && isMobileViewerSurface());
   updateMobileReticle();
+  updateMobileDiagnosticsUi();
 }
 
 function setMobileInputMode(mode) {
@@ -600,6 +751,23 @@ elMobileToolbarHandle?.addEventListener('click', wakeMobileToolbar);
 elBtnSettings?.addEventListener('click', () => toggleSettingsPanel());
 elSettingsClose?.addEventListener('click', () => toggleSettingsPanel(false));
 elMobileInputPref?.addEventListener('change', () => setMobileInputMode(elMobileInputPref.value));
+elMobileAdaptivePref?.addEventListener('change', () => {
+  mobilePrefs.adaptive = elMobileAdaptivePref.value === 'off' ? 'off' : 'on';
+  resetMobileAdaptiveState();
+  saveMobilePrefs();
+  sendViewerStreamProfile();
+});
+elMobileDiagnosticsPref?.addEventListener('change', () => {
+  mobilePrefs.diagnostics = elMobileDiagnosticsPref.value === 'on' ? 'on' : 'off';
+  saveMobilePrefs();
+  updateMobileDiagnosticsUi();
+});
+elMobileQualityIndicator?.addEventListener('click', () => {
+  toggleSettingsPanel(true);
+  mobilePrefs.diagnostics = 'on';
+  saveMobilePrefs();
+  updateMobileDiagnosticsUi();
+});
 elMobileToolbarPref?.addEventListener('change', () => {
   mobilePrefs.toolbar = elMobileToolbarPref.value === 'always' ? 'always' : 'auto';
   saveMobilePrefs();
@@ -617,6 +785,7 @@ elViewerScaleMode?.addEventListener('change', () => {
   applyViewerScalePreference();
 });
 
+if (new URLSearchParams(location.search).get('diagnostics') === '1') mobilePrefs.diagnostics = 'on';
 updateMobileModeUi();
 applyViewerScalePreference();
 
@@ -794,6 +963,7 @@ let currentMonitorIndex = 0;
 let monitorMenuOpen = false;
 let monitorMenuCloseTimer = null;
 let pendingMonitorIndex = null;
+let mobilePreferredMonitorApplied = false;
 let chatMessages = [];
 const chatMessageKeys = new Set();
 let chatMessageSequence = 0;
@@ -989,12 +1159,17 @@ function showStream() {
     setMobileViewControlsVisible(true);
     setMobileBottomActionsVisible(true);
     updateMobileModeUi();
+    requestMobileWakeLock();
     wakeMobileToolbar();
   }
 }
 
 function markFrameRendered() {
   const firstRenderedFrame = !hasEverRenderedFrame;
+  if (isMobileViewerSurface()) {
+    mobileRecoveryAttempts = 0;
+    if (mobileRecoveryStage !== 'Idle') setMobileRecoveryStage('Idle');
+  }
   hasEverRenderedFrame = true;
   lastFrameAtMs = Date.now();
 
@@ -1059,6 +1234,20 @@ function updateMonitorButton() {
   elBtnMonitor.disabled = remoteMonitors.length <= 1;
 }
 
+function requestMonitorSwitch(index, { persist = true } = {}) {
+  const monitorIndex = Number(index);
+  if (!ws || ws.readyState !== WebSocket.OPEN || !currentSession || !Number.isInteger(monitorIndex)) return false;
+  if (monitorIndex === currentMonitorIndex && pendingMonitorIndex == null) {
+    if (persist && isMobileViewerSurface()) { mobilePrefs.monitorIndex = monitorIndex; saveMobilePrefs(); }
+    return true;
+  }
+  pendingMonitorIndex = monitorIndex;
+  monitorSwitchUntilMs = Date.now() + MONITOR_SWITCH_GRACE_MS;
+  ws.send(JSON.stringify({ type: 'switch_monitor', session_id: currentSession.sessionId, monitor_index: monitorIndex }));
+  if (persist && isMobileViewerSurface()) { mobilePrefs.monitorIndex = monitorIndex; saveMobilePrefs(); }
+  return true;
+}
+
 function renderMonitorMenu() {
   if (!elMonitorMenu) return;
 
@@ -1084,17 +1273,7 @@ function renderMonitorMenu() {
     btn.appendChild(sub);
 
     btn.addEventListener("click", () => {
-      if (!ws || ws.readyState !== WebSocket.OPEN || !currentSession) return;
-
-      pendingMonitorIndex = monitor.index;
-      monitorSwitchUntilMs = Date.now() + MONITOR_SWITCH_GRACE_MS;
-
-      ws.send(JSON.stringify({
-        type: "switch_monitor",
-        session_id: currentSession.sessionId,
-        monitor_index: monitor.index
-      }));
-
+      requestMonitorSwitch(monitor.index, { persist: true });
       closeMonitorMenu();
     });
 
@@ -1388,6 +1567,18 @@ function setMobileFileStatus(text) {
   if (elFileMobileStatus) elFileMobileStatus.textContent = text || "";
 }
 
+function updateFileTransferUi({ visible = true, percent = 0, canCancel = true, canRetry = false } = {}) {
+  elFileTransferUi?.classList.toggle('visible', !!visible);
+  if (elFileTransferProgress) elFileTransferProgress.style.width = Math.max(0, Math.min(100, Number(percent) || 0)) + '%';
+  if (elFileTransferCancel) { elFileTransferCancel.style.display = canCancel ? '' : 'none'; elFileTransferCancel.disabled = !canCancel; }
+  if (elFileTransferRetry) { elFileTransferRetry.style.display = canRetry ? '' : 'none'; elFileTransferRetry.disabled = !canRetry; }
+}
+
+function finishFileTransferUi(status, { retry = false } = {}) {
+  setMobileFileStatus(status);
+  updateFileTransferUi({ visible: true, percent: mobileFileTransfer?.progress || 0, canCancel: false, canRetry: retry });
+}
+
 function joinRemoteFilePath(base, name) {
   base = String(base || "/");
   name = String(name || "").replace(/^[\\/]+/, "");
@@ -1432,7 +1623,9 @@ function requestBrowserDownload(entry) {
   const path = String(entry?.path || "");
   if (!path) return;
   browserDownloadPaths.add(path);
+  mobileFileTransfer = { type: 'download', entry: { ...entry }, path, progress: 0, cancelled: false };
   setMobileFileStatus(`Downloading ${entry.name || "file"}…`);
+  updateFileTransferUi({ visible: true, percent: 0, canCancel: true, canRetry: false });
   if (!sendRemoteFileRequest("remote_file_download_request", { path })) {
     browserDownloadPaths.delete(path);
     setMobileFileStatus("Could not start download.");
@@ -1442,10 +1635,14 @@ function requestBrowserDownload(entry) {
 async function uploadBrowserFiles(files) {
   const list = Array.from(files || []);
   if (!list.length) return;
+  mobileFileTransfer = { type: 'upload', files: list, progress: 0, cancelled: false, transferId: '', path: '' };
+  updateFileTransferUi({ visible: true, percent: 0, canCancel: true, canRetry: false });
   const inlineBytes = 384 * 1024;
   const chunkBytes = 48 * 1024;
   for (const file of list) {
+    if (mobileFileTransfer?.cancelled) return;
     const dest = joinRemoteFilePath(remoteFilePath, file.name);
+    if (mobileFileTransfer) mobileFileTransfer.path = dest;
     setMobileFileStatus(`Uploading ${file.name}…`);
     if (file.size <= inlineBytes) {
       const bytes = new Uint8Array(await file.arrayBuffer());
@@ -1456,6 +1653,7 @@ async function uploadBrowserFiles(files) {
       continue;
     }
     const transferId = `ul-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    if (mobileFileTransfer) mobileFileTransfer.transferId = transferId;
     if (!sendRemoteFileRequest("remote_file_upload_start", { transfer_id: transferId, path: dest, name: file.name, size: file.size })) {
       setMobileFileStatus(`Could not start upload for ${file.name}.`);
       break;
@@ -1463,6 +1661,11 @@ async function uploadBrowserFiles(files) {
     let offset = 0;
     let chunkIndex = 0;
     while (offset < file.size) {
+      if (mobileFileTransfer?.cancelled) {
+        sendRemoteFileRequest('remote_file_upload_cancel', { transfer_id: transferId, path: dest });
+        finishFileTransferUi('Upload cancelled.', { retry: true });
+        return;
+      }
       const end = Math.min(file.size, offset + chunkBytes);
       const bytes = new Uint8Array(await file.slice(offset, end).arrayBuffer());
       if (!sendRemoteFileRequest("remote_file_upload_chunk", { transfer_id: transferId, path: dest, chunk_index: chunkIndex++, offset, size: bytes.length, data: bytesToBase64(bytes) })) {
@@ -1470,7 +1673,10 @@ async function uploadBrowserFiles(files) {
         return;
       }
       offset = end;
-      setMobileFileStatus(`Uploading ${file.name}… ${Math.round(offset / file.size * 100)}%`);
+      const pct = Math.round(offset / file.size * 100);
+      if (mobileFileTransfer) mobileFileTransfer.progress = pct;
+      setMobileFileStatus(`Uploading ${file.name}… ${pct}%`);
+      updateFileTransferUi({ visible: true, percent: pct, canCancel: true, canRetry: false });
       if ((chunkIndex % 8) === 0) await new Promise(resolve => setTimeout(resolve, 0));
     }
     sendRemoteFileRequest("remote_file_upload_complete_request", { transfer_id: transferId, path: dest, size: file.size });
@@ -1685,7 +1891,7 @@ function stopStatsPoll() {
     clearInterval(transitionWatchdogTimer);
     transitionWatchdogTimer = null;
   }
-  lastStats = { tsMs: 0, bytes: 0, frames: 0, packetsLost: 0, jitterDelay: 0, jitterEmitted: 0 };
+  lastStats = { tsMs: 0, bytes: 0, frames: 0, packetsLost: 0, packetsReceived: 0, jitterDelay: 0, jitterEmitted: 0 };
   lastFramesDecoded = 0;
 }
 
@@ -1713,10 +1919,25 @@ function startTransitionWatchdog() {
       return;
     }
 
-    if (now - lastFrameAtMs > FRAME_STALL_MS) {
+    const stalledFor = now - lastFrameAtMs;
+    if (stalledFor > FRAME_STALL_MS) {
       secureDesktopLikely = true;
-      requestRemoteKeyframe("decoded-frame-stall");
-      ensureRemoteVideoPlayback("decoded-frame-stall");
+      if (stalledFor < 2400) {
+        setMobileRecoveryStage('Keyframe recovery');
+        requestRemoteKeyframe('decoded-frame-stall');
+        ensureRemoteVideoPlayback('decoded-frame-stall');
+      } else if (stalledFor < 4800) {
+        setMobileRecoveryStage('Playback recovery');
+        ensureRemoteVideoPlayback('decoded-frame-stall-extended');
+        armDecodedFrameReveal();
+        requestRemoteKeyframe('decoded-frame-stall-extended');
+      } else if (isMobileViewerSurface()) {
+        setMobileRecoveryStage('Reconnecting media');
+        scheduleMobileSessionReconnect('decoded-frame-stall');
+      } else {
+        requestRemoteKeyframe('decoded-frame-stall-long');
+        ensureRemoteVideoPlayback('decoded-frame-stall-long');
+      }
     }
   }, 250);
 }
@@ -2064,6 +2285,7 @@ function disconnect(reason, options = {}) {
   remoteMonitors = [];
   currentMonitorIndex = 0;
   pendingMonitorIndex = null;
+  mobilePreferredMonitorApplied = false;
   updateMonitorButton();
   closeMonitorMenu();
 
@@ -2074,6 +2296,8 @@ function disconnect(reason, options = {}) {
   if (elMobileScrollRail) elMobileScrollRail.classList.remove('visible');
   setMobileViewControlsVisible(false);
   setMobileBottomActionsVisible(false);
+  elMobileQualityIndicator?.classList.remove('visible');
+  releaseMobileWakeLock();
   if (mobileToolbarTimer) { clearTimeout(mobileToolbarTimer); mobileToolbarTimer = null; }
   document.body.classList.remove('mobile-toolbar-collapsed');
   mobilePanMode = false;
@@ -2081,6 +2305,9 @@ function disconnect(reason, options = {}) {
   mobileEdgeTouchIds.clear();
   mobileGestureLifecycleReset = null;
   if (mobileBrowserGestureRecoveryTimer) { clearTimeout(mobileBrowserGestureRecoveryTimer); mobileBrowserGestureRecoveryTimer = null; }
+  if (mobileReconnectTimer) { clearTimeout(mobileReconnectTimer); mobileReconnectTimer = null; }
+  mobileReconnectDeadline = 0;
+  mobileRecoveryAttempts = 0;
   resetTransitionState();
 
   if (localInputBlocked && currentSession) {
@@ -2252,6 +2479,8 @@ async function pollStatsOnce() {
   let fps = NaN;
   let framesDecoded = null;
   let packetsLost = null;
+  let packetsReceived = null;
+  let lossRate = 0;
   let jitterMs = null;
   let jitterBufferMs = null;
 
@@ -2259,6 +2488,7 @@ async function pollStatsOnce() {
     const bytesReceived = Number(inbound.bytesReceived || 0);
     framesDecoded = Number(inbound.framesDecoded || 0);
     packetsLost = Number(inbound.packetsLost || 0);
+    packetsReceived = Number(inbound.packetsReceived || 0);
     jitterMs = Number.isFinite(Number(inbound.jitter)) ? Number(inbound.jitter) * 1000 : null;
     const jitterDelay = Number(inbound.jitterBufferDelay || 0);
     const jitterEmitted = Number(inbound.jitterBufferEmittedCount || 0);
@@ -2284,6 +2514,10 @@ async function pollStatsOnce() {
 
         const dFrames = framesDecoded - lastStats.frames;
         fps = dFrames / dt;
+        const dLost = Math.max(0, packetsLost - lastStats.packetsLost);
+        const dReceived = Math.max(0, packetsReceived - lastStats.packetsReceived);
+        const dTotal = dLost + dReceived;
+        lossRate = dTotal > 0 ? dLost / dTotal : 0;
       }
     }
 
@@ -2291,6 +2525,7 @@ async function pollStatsOnce() {
     lastStats.bytes = bytesReceived;
     lastStats.frames = framesDecoded;
     lastStats.packetsLost = packetsLost;
+    lastStats.packetsReceived = packetsReceived;
     lastStats.jitterDelay = jitterDelay;
     lastStats.jitterEmitted = jitterEmitted;
   }
@@ -2310,7 +2545,8 @@ async function pollStatsOnce() {
         jitter_buffer_ms: Number.isFinite(jitterBufferMs) ? jitterBufferMs : 0,
         bitrate_kbps: Number.isFinite(bitrateKbps) ? bitrateKbps : 0,
         fps: Number.isFinite(fps) ? fps : 0,
-        packets_lost: packetsLost ?? 0
+        packets_lost: packetsLost ?? 0,
+        packet_loss_rate: lossRate
       }));
     } catch {}
   }
@@ -2335,6 +2571,8 @@ async function pollStatsOnce() {
   if (elDiagRtt) elDiagRtt.textContent = rttMs != null ? `${rttMs}ms` : "—";
   if (elDiagIceServers) elDiagIceServers.textContent = activeIceServers().map(s => Array.isArray(s.urls) ? s.urls.join(",") : s.urls).join(" | ");
 
+  observeMobileNetworkQuality({ rttMs, jitterMs, jitterBufferMs, lossRate });
+  updateMobileDiagnosticsUi();
   updateSelectedCodecFromStats();
   console.log("[stats]", { state, bitrate: brStr, fps, framesDecoded, packetsLost, rttMs });
 }
@@ -2818,6 +3056,18 @@ function bindRemoteInput() {
     }
   });
 
+  window.addEventListener('orientationchange', () => {
+    if (!isMobileViewerSurface()) return;
+    const anchor = mobileViewportStableAnchor || captureMobileViewportAnchor();
+    if (anchor) { mobileViewportStableAnchor = { ...anchor }; scheduleMobileViewportResumeRestore(anchor); }
+    setTimeout(() => { if (anchor) scheduleMobileViewportResumeRestore(anchor); }, 350);
+  });
+
+  screen.orientation?.addEventListener?.('change', () => {
+    const anchor = mobileViewportStableAnchor || captureMobileViewportAnchor();
+    if (anchor) scheduleMobileViewportResumeRestore(anchor);
+  });
+
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
       if (isMobileViewerSurface()) {
@@ -2825,18 +3075,46 @@ function bindRemoteInput() {
         if (mobileViewportResumeAnchor) mobileViewportStableAnchor = { ...mobileViewportResumeAnchor };
         resetMobileGestureForLifecycle();
       }
+      releaseMobileWakeLock();
       leaveRemoteControlMode();
     } else {
+      requestMobileWakeLock();
       ensureRemoteVideoPlayback("visibility-resume");
       armDecodedFrameReveal();
       if (isMobileViewerSurface() && mobileViewportResumeAnchor) {
         scheduleMobileViewportResumeRestore(mobileViewportResumeAnchor);
       }
+      if (currentSession?.viewerClient === 'browser' && (!ws || ws.readyState > WebSocket.OPEN)) {
+        scheduleMobileSessionReconnect('visibility-resume', { closeSocket: false });
+      }
+    }
+  });
+
+  window.addEventListener('offline', () => {
+    if (!currentSession || !isMobileViewerSurface()) return;
+    setMobileRecoveryStage('Network offline');
+    setMobileQualityUi('Offline', 'reconnecting', 'Waiting for network');
+  });
+  window.addEventListener('online', () => {
+    if (!currentSession || !isMobileViewerSurface()) return;
+    ensureRemoteVideoPlayback('network-online');
+    requestRemoteKeyframe('network-online');
+    if (!ws || ws.readyState !== WebSocket.OPEN || !pc || pc.connectionState !== 'connected') {
+      scheduleMobileSessionReconnect('network-online', { closeSocket: !!ws });
+    }
+  });
+  navigator.connection?.addEventListener?.('change', () => {
+    if (!currentSession || !isMobileViewerSurface()) return;
+    if (pc?.connectionState === 'connected') {
+      requestRemoteKeyframe('network-path-change');
+    } else {
+      scheduleMobileSessionReconnect('network-path-change', { closeSocket: !!ws });
     }
   });
 
   window.addEventListener('pagehide', () => {
     if (!isMobileViewerSurface()) return;
+    releaseMobileWakeLock();
     mobileViewportResumeAnchor = captureMobileViewportAnchor() || mobileViewportResumeAnchor;
     if (mobileViewportResumeAnchor) mobileViewportStableAnchor = { ...mobileViewportResumeAnchor };
     resetMobileGestureForLifecycle();
@@ -3307,11 +3585,19 @@ async function handleOffer(msg) {
   };
 
   pc.onicegatheringstatechange = () => console.log("[rtc] iceGatheringState:", pc.iceGatheringState);
-  pc.oniceconnectionstatechange = () => console.log("[rtc] iceConnectionState:", pc.iceConnectionState);
+  pc.oniceconnectionstatechange = () => {
+    console.log("[rtc] iceConnectionState:", pc.iceConnectionState);
+    if (pc.iceConnectionState === 'failed') scheduleMobileSessionReconnect('ice-failed');
+  };
   pc.onconnectionstatechange = () => {
     console.log("[rtc] connectionState:", pc.connectionState);
 
     if (pc.connectionState === "connected") {
+      mobileReconnectDeadline = 0;
+      mobileRecoveryAttempts = 0;
+      if (mobileReconnectTimer) { clearTimeout(mobileReconnectTimer); mobileReconnectTimer = null; }
+      setMobileRecoveryStage('Idle');
+      requestMobileWakeLock();
       ensureRemoteVideoPlayback("peer-connected");
       armDecodedFrameReveal();
       if (hasEverRenderedFrame) {
@@ -3320,6 +3606,13 @@ async function handleOffer(msg) {
       } else {
         setStatus("", "Connected · waiting for video");
       }
+    } else if (pc.connectionState === 'failed') {
+      scheduleMobileSessionReconnect('peer-failed');
+    } else if (pc.connectionState === 'disconnected' && isMobileViewerSurface()) {
+      setMobileRecoveryStage('Network interrupted');
+      setTimeout(() => {
+        if (pc?.connectionState === 'disconnected') scheduleMobileSessionReconnect('peer-disconnected');
+      }, 1400);
     }
   };
   pc.onsignalingstatechange = () => console.log("[rtc] signalingState:", pc.signalingState);
@@ -3395,9 +3688,18 @@ async function onSignalMessage(raw) {
       remoteMonitors = Array.isArray(msg.monitors) ? msg.monitors : [];
       currentMonitorIndex = Number(msg.current ?? 0);
 
+      if (isMobileViewerSurface() && !mobilePreferredMonitorApplied && remoteMonitors.length) {
+        mobilePreferredMonitorApplied = true;
+        const preferred = Number(mobilePrefs.monitorIndex);
+        if (remoteMonitors.some((m) => Number(m.index) === preferred) && preferred !== currentMonitorIndex) {
+          setTimeout(() => requestMonitorSwitch(preferred, { persist: false }), 80);
+        }
+      }
+
       if (pendingMonitorIndex != null && currentMonitorIndex === pendingMonitorIndex) {
         pendingMonitorIndex = null;
         monitorSwitchUntilMs = 0;
+        if (isMobileViewerSurface()) { mobilePrefs.monitorIndex = currentMonitorIndex; saveMobilePrefs(); }
         setStatus("online", "Streaming");
         showStream();
       }
@@ -3455,7 +3757,8 @@ async function onSignalMessage(raw) {
       if (browserDownloadPaths.has(path)) {
         browserDownloadPaths.delete(path);
         saveBrowserFile(msg.name || "download", [base64ToBytes(msg.data || "")]);
-        setMobileFileStatus(`Downloaded ${msg.name || "file"}.`);
+        if (mobileFileTransfer) mobileFileTransfer.progress = 100;
+        finishFileTransferUi(`Downloaded ${msg.name || "file"}.`, { retry: false });
         break;
       }
       const localDir = pendingRemoteDownloads.get(path);
@@ -3471,7 +3774,8 @@ async function onSignalMessage(raw) {
       const path = String(msg.path || "");
       if (msg.direction === "download" && browserDownloadPaths.has(path)) {
         browserDownloadPaths.delete(path);
-        browserChunkDownloads.set(String(msg.transfer_id || ""), { name: msg.name || "download", parts: [], received: 0, total: Number(msg.size || 0) });
+        browserChunkDownloads.set(String(msg.transfer_id || ""), { name: msg.name || "download", path, parts: [], received: 0, total: Number(msg.size || 0), cancelled: !!mobileFileTransfer?.cancelled });
+        if (mobileFileTransfer) mobileFileTransfer.transferId = String(msg.transfer_id || '');
         setMobileFileStatus(`Downloading ${msg.name || "file"}…`);
         break;
       }
@@ -3481,10 +3785,12 @@ async function onSignalMessage(raw) {
     case "file_transfer_chunk": {
       const st = browserChunkDownloads.get(String(msg.transfer_id || ""));
       if (st) {
-        st.parts.push(base64ToBytes(msg.data || ""));
+        if (!st.cancelled) st.parts.push(base64ToBytes(msg.data || ""));
         st.received += Number(msg.size || 0);
         const pct = st.total ? Math.min(100, Math.round(st.received / st.total * 100)) : 0;
+        if (mobileFileTransfer) mobileFileTransfer.progress = pct;
         setMobileFileStatus(`Downloading ${st.name}… ${pct}%`);
+        updateFileTransferUi({ visible: true, percent: pct, canCancel: true, canRetry: false });
         break;
       }
       postFileToNativeWindow(msg);
@@ -3495,8 +3801,9 @@ async function onSignalMessage(raw) {
       const st = browserChunkDownloads.get(id);
       if (st) {
         browserChunkDownloads.delete(id);
-        saveBrowserFile(st.name, st.parts);
-        setMobileFileStatus(`Downloaded ${st.name}.`);
+        if (!st.cancelled) saveBrowserFile(st.name, st.parts);
+        if (mobileFileTransfer) mobileFileTransfer.progress = 100;
+        finishFileTransferUi(st.cancelled ? 'Download cancelled.' : `Downloaded ${st.name}.`, { retry: !!st.cancelled });
         break;
       }
       postFileToNativeWindow(msg);
@@ -3506,23 +3813,36 @@ async function onSignalMessage(raw) {
       const id = String(msg.transfer_id || "");
       if (browserChunkDownloads.has(id)) {
         browserChunkDownloads.delete(id);
-        setMobileFileStatus(msg.error || "File transfer failed.");
+        finishFileTransferUi(msg.error || "File transfer failed.", { retry: true });
         break;
       }
       postFileToNativeWindow(msg);
       break;
     }
     case "remote_file_upload_complete": {
-      setMobileFileStatus("Upload complete.");
+      if (mobileFileTransfer) mobileFileTransfer.progress = 100;
+      finishFileTransferUi("Upload complete.", { retry: false });
       requestRemoteFileList(remoteFilePath || "/");
+      postFileToNativeWindow(msg);
+      break;
+    }
+    case "remote_file_upload_cancelled": {
+      finishFileTransferUi('Upload cancelled.', { retry: true });
+      break;
+    }
+    case "remote_file_upload_error": {
+      finishFileTransferUi(msg.error || 'Upload failed.', { retry: true });
+      postFileToNativeWindow(msg);
+      break;
+    }
+    case "remote_file_download_error": {
+      finishFileTransferUi(msg.error || 'Download failed.', { retry: true });
       postFileToNativeWindow(msg);
       break;
     }
     case "remote_file_delete_complete":
     case "remote_file_mkdir_complete":
     case "remote_file_rename_complete":
-    case "remote_file_download_error":
-    case "remote_file_upload_error":
     case "remote_file_delete_error":
     case "remote_file_mkdir_error":
     case "remote_file_rename_error": {
@@ -3586,6 +3906,96 @@ async function onSignalMessage(raw) {
   }
 }
 
+function teardownPeerForReconnect() {
+  stopStatsPoll();
+  remoteDescSet = false;
+  pendingRemoteIce = [];
+  if (inputDc) { try { inputDc.close(); } catch {} inputDc = null; }
+  if (inputControlDc) { try { inputControlDc.close(); } catch {} inputControlDc = null; }
+  if (mouseMoveDc) { try { mouseMoveDc.close(); } catch {} mouseMoveDc = null; }
+  if (pc) { try { pc.onconnectionstatechange = null; pc.oniceconnectionstatechange = null; pc.close(); } catch {} pc = null; }
+}
+
+function connectViewerSignaling(reason = 'initial') {
+  if (!currentSession) return false;
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return true;
+  const { sessionId, deviceId, token, wssUrl, viewerClient } = currentSession;
+  const url =
+    `${wssUrl}?session_id=${encodeURIComponent(sessionId)}` +
+    `&device_id=${encodeURIComponent(deviceId)}` +
+    (token ? `&token=${encodeURIComponent(token)}` : '') +
+    (viewerClient ? `&client=${encodeURIComponent(viewerClient)}` : '');
+  console.log('[viewer] opening signaling socket', { sessionId, deviceId, reason, attempt: mobileRecoveryAttempts });
+  const socket = new WebSocket(url);
+  ws = socket;
+  socket.onopen = () => {
+    if (ws !== socket) return;
+    setStatus('', mobileRecoveryAttempts ? 'Reconnecting…' : 'Connected');
+    setMobileRecoveryStage(mobileRecoveryAttempts ? 'Signaling restored' : 'Idle');
+  };
+  socket.onmessage = onSignalMessage;
+  socket.onerror = () => {
+    if (ws !== socket) return;
+    if (isMobileViewerSurface() && currentSession?.viewerClient === 'browser') {
+      setMobileRecoveryStage('Network interrupted');
+      scheduleMobileSessionReconnect('signaling-error');
+      return;
+    }
+    disconnect('Connection error');
+  };
+  socket.onclose = () => {
+    if (ws === socket) ws = null;
+    if (!currentSession) return;
+    if (isMobileViewerSurface() && currentSession.viewerClient === 'browser') {
+      scheduleMobileSessionReconnect('signaling-closed', { closeSocket: false });
+      return;
+    }
+    disconnect('Disconnected');
+  };
+  return true;
+}
+
+function scheduleMobileSessionReconnect(reason = 'network-recovery', { closeSocket = true } = {}) {
+  if (!currentSession || !isMobileViewerSurface() || currentSession.viewerClient !== 'browser') return false;
+  const now = Date.now();
+  if (!mobileReconnectDeadline) mobileReconnectDeadline = now + 28000;
+  if (document.hidden) {
+    setMobileRecoveryStage('Suspended · reconnect pending');
+    if (!mobileReconnectTimer) {
+      mobileReconnectTimer = setTimeout(() => { mobileReconnectTimer = null; scheduleMobileSessionReconnect('background-resume-pending', { closeSocket: false }); }, 1500);
+    }
+    return true;
+  }
+  if (now >= mobileReconnectDeadline) {
+    setMobileRecoveryStage('Recovery failed');
+    disconnect('Connection lost');
+    return false;
+  }
+  if (mobileReconnectTimer) return true;
+  mobileRecoveryAttempts += 1;
+  setMobileRecoveryStage('Reconnecting · attempt ' + mobileRecoveryAttempts);
+  setMobileQualityUi('Reconnecting', 'reconnecting', reason);
+  const anchor = captureMobileViewportAnchor() || mobileViewportStableAnchor;
+  if (anchor) mobileViewportResumeAnchor = { ...anchor };
+  teardownPeerForReconnect();
+  if (closeSocket && ws) {
+    const old = ws; ws = null;
+    try { old.onclose = null; old.onerror = null; old.close(4002, 'Mobile reconnect'); } catch {}
+  }
+  const delay = Math.min(2800, 350 + (mobileRecoveryAttempts - 1) * 550);
+  mobileReconnectTimer = setTimeout(() => {
+    mobileReconnectTimer = null;
+    if (!currentSession || document.hidden) {
+      if (currentSession) scheduleMobileSessionReconnect('resume-pending', { closeSocket: false });
+      return;
+    }
+    if (!connectViewerSignaling(reason) && Date.now() < mobileReconnectDeadline) {
+      scheduleMobileSessionReconnect(reason, { closeSocket: false });
+    }
+  }, delay);
+  return true;
+}
+
 function startSession(params) {
   console.log("[viewer] starting authorised remote session");
 
@@ -3620,6 +4030,7 @@ function startSession(params) {
 
   if (isMobileViewerSurface()) activateMobileHistoryGuard();
   loadMobilePrefsForDevice(deviceId);
+  resetMobileAdaptiveState();
 
   if (isMobileViewerSurface()) {
     setMobileToolbarCollapsed(false);
@@ -3661,28 +4072,9 @@ function startSession(params) {
   setStatus("", "Connecting…");
   showOverlay("Connecting", "Starting remote session…", { spinner: true });
 
-  const url =
-    `${wssUrl}?session_id=${encodeURIComponent(sessionId)}` +
-    `&device_id=${encodeURIComponent(deviceId)}` +
-    (token ? `&token=${encodeURIComponent(token)}` : "") +
-    (viewerClient ? `&client=${encodeURIComponent(viewerClient)}` : "");
-  console.log(`[viewer] opening signaling socket session=${sessionId} device=${deviceId}`);
-
-  ws = new WebSocket(url);
-
-  ws.onopen = () => {
-    setStatus("", "Connected");
-  };
-
-  ws.onmessage = onSignalMessage;
-
-  ws.onerror = () => {
-    disconnect("Connection error");
-  };
-
-  ws.onclose = () => {
-    disconnect("Disconnected");
-  };
+  mobileReconnectDeadline = 0;
+  mobileRecoveryAttempts = 0;
+  connectViewerSignaling('initial');
 }
 
 
@@ -3731,6 +4123,23 @@ if (elBtnChat) elBtnChat.addEventListener("click", () => toggleChatPanel(true));
 if (elFilesClose) elFilesClose.addEventListener("click", () => toggleFilesPanel(false));
 if (elChatClose) elChatClose.addEventListener("click", () => toggleChatPanel(false));
 if (elFileRefresh) elFileRefresh.addEventListener("click", () => requestRemoteFileList(elFilePath?.value || "/"));
+elFileTransferCancel?.addEventListener('click', () => {
+  if (!mobileFileTransfer) return;
+  mobileFileTransfer.cancelled = true;
+  if (mobileFileTransfer.type === 'upload' && mobileFileTransfer.transferId) {
+    sendRemoteFileRequest('remote_file_upload_cancel', { transfer_id: mobileFileTransfer.transferId, path: mobileFileTransfer.path || '' });
+  } else if (mobileFileTransfer.type === 'download' && mobileFileTransfer.transferId) {
+    const st = browserChunkDownloads.get(mobileFileTransfer.transferId);
+    if (st) st.cancelled = true;
+  }
+  finishFileTransferUi((mobileFileTransfer.type === 'upload' ? 'Upload' : 'Download') + ' cancelled.', { retry: true });
+});
+elFileTransferRetry?.addEventListener('click', async () => {
+  const previous = mobileFileTransfer;
+  if (!previous) return;
+  if (previous.type === 'upload' && previous.files?.length) await uploadBrowserFiles(previous.files);
+  else if (previous.type === 'download' && previous.entry) requestBrowserDownload(previous.entry);
+});
 if (elFileUpload) elFileUpload.addEventListener("click", () => elFileUploadInput?.click());
 if (elFileUploadInput) elFileUploadInput.addEventListener("change", async () => {
   await uploadBrowserFiles(elFileUploadInput.files);
