@@ -851,16 +851,24 @@ const MOBILE_LETTER_ROWS = [
   ['a','s','d','f','g','h','j','k','l'],
   [{ label: 'Shift', modifier: 'shift', wide: true }, 'z','x','c','v','b','n','m', { label: '⌫', code: 'Backspace', key: 'Backspace', wide: true }],
   [{ label: '123', layer: 'symbols', wide: true }, { label: 'Ctrl', modifier: 'ctrl' }, { label: 'Alt', modifier: 'alt' }, { label: '⊞', action: 'start_menu' }, { label: 'Space', text: ' ', code: 'Space', space: true }, { label: 'Enter', code: 'Enter', key: 'Enter', wide: true }],
-  [{ label: 'Esc', code: 'Escape', key: 'Escape' }, { label: 'Tab', code: 'Tab', key: 'Tab' }, { label: '←', code: 'ArrowLeft', key: 'ArrowLeft' }, { label: '↑', code: 'ArrowUp', key: 'ArrowUp' }, { label: '↓', code: 'ArrowDown', key: 'ArrowDown' }, { label: '→', code: 'ArrowRight', key: 'ArrowRight' }, { label: 'Del', code: 'Delete', key: 'Delete' }]
+  [{ label: 'Esc', code: 'Escape', key: 'Escape' }, { label: 'Tab', code: 'Tab', key: 'Tab' }, { label: '←', code: 'ArrowLeft', key: 'ArrowLeft' }, { label: '↑', code: 'ArrowUp', key: 'ArrowUp' }, { label: '↓', code: 'ArrowDown', key: 'ArrowDown' }, { label: '→', code: 'ArrowRight', key: 'ArrowRight' }, { label: 'Del', code: 'Delete', key: 'Delete' }, { label: 'Fn', layer: 'function' }]
 ];
 const MOBILE_SYMBOL_ROWS = [
   ['1','2','3','4','5','6','7','8','9','0'],
-  ['-','=','[',']','\\',';','\'',',','.','/'],
+  ['`','-','=','[',']','\\',';','\'',',','.','/'],
   ['!','@','#','$','%','^','&','*','(',')'],
   [{ label: 'ABC', layer: 'letters', wide: true }, { label: 'Ctrl', modifier: 'ctrl' }, { label: 'Alt', modifier: 'alt' }, { label: '⊞', action: 'start_menu' }, { label: 'Space', text: ' ', code: 'Space', space: true }, { label: 'Enter', code: 'Enter', key: 'Enter', wide: true }],
-  [{ label: 'Esc', code: 'Escape', key: 'Escape' }, { label: 'Tab', code: 'Tab', key: 'Tab' }, { label: '←', code: 'ArrowLeft', key: 'ArrowLeft' }, { label: '↑', code: 'ArrowUp', key: 'ArrowUp' }, { label: '↓', code: 'ArrowDown', key: 'ArrowDown' }, { label: '→', code: 'ArrowRight', key: 'ArrowRight' }, { label: 'Del', code: 'Delete', key: 'Delete' }]
+  [{ label: 'Esc', code: 'Escape', key: 'Escape' }, { label: 'Tab', code: 'Tab', key: 'Tab' }, { label: '←', code: 'ArrowLeft', key: 'ArrowLeft' }, { label: '↑', code: 'ArrowUp', key: 'ArrowUp' }, { label: '↓', code: 'ArrowDown', key: 'ArrowDown' }, { label: '→', code: 'ArrowRight', key: 'ArrowRight' }, { label: 'Del', code: 'Delete', key: 'Delete' }, { label: 'Fn', layer: 'function' }]
 ];
-const SHIFTED_NUMBER_TEXT = { '1':'!', '2':'@', '3':'#', '4':'$', '5':'%', '6':'^', '7':'&', '8':'*', '9':'(', '0':')' };
+const MOBILE_FUNCTION_ROWS = [
+  [{label:'F1',code:'F1',key:'F1'},{label:'F2',code:'F2',key:'F2'},{label:'F3',code:'F3',key:'F3'},{label:'F4',code:'F4',key:'F4'},{label:'F5',code:'F5',key:'F5'},{label:'F6',code:'F6',key:'F6'}],
+  [{label:'F7',code:'F7',key:'F7'},{label:'F8',code:'F8',key:'F8'},{label:'F9',code:'F9',key:'F9'},{label:'F10',code:'F10',key:'F10'},{label:'F11',code:'F11',key:'F11'},{label:'F12',code:'F12',key:'F12'}],
+  [{label:'Home',code:'Home',key:'Home'},{label:'End',code:'End',key:'End'},{label:'PgUp',code:'PageUp',key:'PageUp'},{label:'PgDn',code:'PageDown',key:'PageDown'},{label:'Ins',code:'Insert',key:'Insert'},{label:'Del',code:'Delete',key:'Delete'}],
+  [{label:'Caps',code:'CapsLock',key:'CapsLock'},{label:'Num',code:'NumLock',key:'NumLock'},{label:'Scroll',code:'ScrollLock',key:'ScrollLock'},{label:'PrtSc',code:'PrintScreen',key:'PrintScreen'},{label:'Pause',code:'Pause',key:'Pause'},{label:'Menu',code:'ContextMenu',key:'ContextMenu'}],
+  [{label:'ABC',layer:'letters',wide:true},{label:'123',layer:'symbols',wide:true},{label:'Ctrl',modifier:'ctrl'},{label:'Alt',modifier:'alt'},{label:'Shift',modifier:'shift'},{label:'⊞',action:'start_menu'},{label:'Enter',code:'Enter',key:'Enter',wide:true}]
+];
+const SHIFTED_NUMBER_TEXT = {"0":")","1":"!","2":"@","3":"#","4":"$","5":"%","6":"^","7":"&","8":"*","9":"("};
+const SHIFTED_PUNCTUATION_TEXT = {"`":"~","-":"_","=":"+","[":"{","]":"}","\\":"|",";":":","'":"\"",",":"<",".":">","/":"?"};
 
 function keyboardCodeForText(text) {
   if (/^[a-z]$/i.test(text)) return 'Key' + text.toUpperCase();
@@ -913,6 +921,7 @@ function sendMobileKeyCombo(def) {
     if (shift) {
       if (/^[a-z]$/i.test(text)) text = text.toUpperCase();
       else if (SHIFTED_NUMBER_TEXT[text]) text = SHIFTED_NUMBER_TEXT[text];
+      else if (SHIFTED_PUNCTUATION_TEXT[text]) text = SHIFTED_PUNCTUATION_TEXT[text];
     }
     sendInput('text_input', { code, key: text, text, repeat: false }, true);
   } else if (code) {
@@ -947,7 +956,7 @@ function handleMobileKeyboardKey(def) {
 function renderMobileKeyboard() {
   if (!elMobileKeyboardRows) return;
   elMobileKeyboardRows.innerHTML = '';
-  const rows = mobileKeyboardLayer === 'symbols' ? MOBILE_SYMBOL_ROWS : MOBILE_LETTER_ROWS;
+  const rows = mobileKeyboardLayer === 'symbols' ? MOBILE_SYMBOL_ROWS : (mobileKeyboardLayer === 'function' ? MOBILE_FUNCTION_ROWS : MOBILE_LETTER_ROWS);
   for (const rowDefs of rows) {
     const row = document.createElement('div');
     row.className = 'remote-keyboard-row';

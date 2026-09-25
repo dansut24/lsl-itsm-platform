@@ -58,7 +58,9 @@ expect(remote.includes("previousActive.agentWs.off('message', previousActive.rel
 expect(renderer.includes("getModifierState?.('AltGraph')"), 'AltGraph-aware printable-key handling is missing.')
 expect(renderer.includes('commandModified'), 'Printable keys with Ctrl/Alt/Meta must use physical key semantics.')
 expect(renderer.includes("'ArrowUp'") || renderer.includes('ArrowUp'), 'Mobile keyboard/navigation key support is missing.')
+for (const key of ['F12','Home','End','PageUp','PageDown','Insert','PrintScreen','Pause','ContextMenu']) expect(renderer.includes(key), `Mobile Fn keyboard is missing ${key}.`)
 expect(renderer.includes('sendMobileTextEntry'), 'Mobile block text-entry path is missing.')
+expect(renderer.includes('SHIFTED_PUNCTUATION_TEXT') && renderer.includes('SHIFTED_PUNCTUATION_TEXT[text]'), 'Mobile shifted punctuation mapping is incomplete.')
 
 // Secure desktop / UI continuity --------------------------------------------
 for (const state of ['secure_desktop_entering','secure_desktop_ready','desktop_handoff_entering','desktop_handoff_ready']) {
