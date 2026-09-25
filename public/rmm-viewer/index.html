@@ -551,6 +551,7 @@
     #mobile-quality-indicator[data-quality="excellent"] { border-color:rgba(52,211,153,.55); }
     #mobile-quality-indicator[data-quality="good"] { border-color:rgba(99,102,241,.55); }
     #mobile-quality-indicator[data-quality="poor"], #mobile-quality-indicator[data-quality="reconnecting"] { border-color:rgba(251,191,36,.65); }
+    #mobile-quality-indicator::before, #mobile-toolbar-handle::before { content:''; position:absolute; inset:-8px; border-radius:inherit; }
     #mobile-diagnostics-card { display:none; }
     #mobile-diagnostics-card.visible { display:block; }
 
