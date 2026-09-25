@@ -136,6 +136,7 @@ let mobileReconnectDeadline = 0;
 let mobileDisconnectProbeTimer = null;
 let mobileTransportProbeTimer = null;
 let mobileReconnectCooldownUntil = 0;
+let mobileEndpointRestartUntil = 0;
 let mobileLastGoodStatsAt = 0;
 let mobileQualityState = { current: 'good', candidate: null, count: 0, changedAt: 0, samples: [] };
 let mobileAdaptiveState = { tier: 0, bad: 0, good: 0, lastChangeAt: Date.now(), targetFps: 30, targetBitrateKbps: 8000, label: 'Native · 8 Mbps · 30 fps' };
@@ -2357,6 +2358,7 @@ function disconnect(reason, options = {}) {
   clearMobileTransportProbe();
   mobileReconnectDeadline = 0;
   mobileReconnectCooldownUntil = 0;
+  mobileEndpointRestartUntil = 0;
   mobileRecoveryAttempts = 0;
   resetTransitionState();
 
@@ -3290,7 +3292,9 @@ function bindRemoteInput() {
       }
     }
 
-    if (isPrintableKey(ev)) {
+    const altGraph = !!ev.getModifierState?.('AltGraph');
+    const commandModified = !!(ev.ctrlKey || ev.altKey || ev.metaKey);
+    if (isPrintableKey(ev) && (!commandModified || altGraph)) {
       sendInput("text_input", {
         code: ev.code,
         key: ev.key,
@@ -3477,6 +3481,8 @@ async function handleOffer(msg) {
   const offerSdp = msg?.sdp;
   if (!offerSdp) return;
 
+  if (pc) teardownPeerForReconnect();
+  mobileEndpointRestartUntil = 0;
   logSdpCodecSummary("remote offer", offerSdp);
 
   setStatus("", "Negotiating…");
@@ -3727,6 +3733,28 @@ async function onSignalMessage(raw) {
     case "viewer_connected":
       break;
 
+    case "agent_reconnecting": {
+      const graceMs = Math.max(10000, Number(msg.grace_ms || 0) || 240000);
+      mobileEndpointRestartUntil = Date.now() + graceMs;
+      clearMobileTransportProbe();
+      if (mobileReconnectTimer) { clearTimeout(mobileReconnectTimer); mobileReconnectTimer = null; }
+      mobileReconnectDeadline = 0;
+      setMobileRecoveryStage('Waiting for endpoint');
+      setMobileQualityUi('Reconnecting', 'reconnecting', 'Endpoint restarting');
+      setStatus('', 'Waiting for endpoint…');
+      teardownPeerForReconnect();
+      break;
+    }
+
+    case "agent_reconnected": {
+      mobileEndpointRestartUntil = 0;
+      mobileQualityState = { current: 'good', candidate: null, count: 0, changedAt: Date.now(), samples: [] };
+      setMobileRecoveryStage('Endpoint returned · negotiating');
+      setMobileQualityUi('Measuring', 'good', 'Endpoint returned');
+      setStatus('', 'Endpoint returned · reconnecting…');
+      break;
+    }
+
     case "session_config": {
       if (currentSession) {
         currentSession.iceServers = normalizeIceServers(msg.ice_servers || msg.iceServers || []);
@@ -3975,6 +4003,7 @@ function clearMobileTransportProbe() {
 
 function scheduleMobileTransportHealthProbe(reason = 'transport-probe', delayMs = 3500) {
   if (!currentSession || !isMobileViewerSurface() || currentSession.viewerClient !== 'browser') return false;
+  if (mobileEndpointRestartUntil > Date.now()) return false;
   if (mobileTransportProbeTimer) clearTimeout(mobileTransportProbeTimer);
   const cooldownRemaining = Math.max(0, mobileReconnectCooldownUntil - Date.now());
   const waitMs = Math.max(delayMs, Math.min(8000, cooldownRemaining));
@@ -4064,6 +4093,7 @@ function connectViewerSignaling(reason = 'initial') {
 
 function scheduleMobileSessionReconnect(reason = 'network-recovery', { closeSocket = true } = {}) {
   if (!currentSession || !isMobileViewerSurface() || currentSession.viewerClient !== 'browser') return false;
+  if (mobileEndpointRestartUntil > Date.now()) return false;
   if (String(reason).includes('frame-stall')) return false;
   const now = Date.now();
   if (!mobileReconnectDeadline) mobileReconnectDeadline = now + 28000;

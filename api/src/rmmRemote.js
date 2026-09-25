@@ -4,7 +4,7 @@ import { WebSocketServer } from 'ws'
 import { hasPermission } from './access.js'
 import { deployment, originMatchesTenant, tenantUrls } from './deploymentConfig.js'
 import { pool } from './db.js'
-import { agentSocketForDevice } from './rmmAgent.js'
+import { agentSocketForDevice, subscribeAgentConnections } from './rmmAgent.js'
 import { recordRmmActivity } from './rmmActivity.js'
 import { resolveSession } from './session.js'
 
@@ -14,8 +14,10 @@ const VIEWER_WS_URL = process.env.VIEWER_WS_URL || `wss://rmm.${ROOT_DOMAIN}/vie
 const TURN_HOST = process.env.TURN_HOST || `turn.${ROOT_DOMAIN}`
 const TURN_SHARED_SECRET_FILE = process.env.TURN_SHARED_SECRET_FILE || '/run/secrets/turn_shared_secret'
 const SESSION_TTL_SECONDS = 15 * 60
+const ACTIVE_RECONNECT_TTL_SECONDS = 8 * 60 * 60
 const MAX_VIEWER_PAYLOAD_BYTES = 8 * 1024 * 1024
-const BROWSER_RECONNECT_GRACE_MS = 30 * 1000
+const VIEWER_RECONNECT_GRACE_MS = 90 * 1000
+const AGENT_RESTART_GRACE_MS = 4 * 60 * 1000
 const activeViewerSessions = new Map()
 
 const VIEWER_MESSAGE_TYPES = new Set([
@@ -312,28 +314,35 @@ export function attachRmmViewerWebSocket(server) {
   wss.on('connection', async (viewerWs) => {
     const remote = viewerWs.hi5RemoteSession
     const sessionId = String(remote.id)
-    const agentWs = agentSocketForDevice(remote.agent_device_id)
-    if (!agentWs || agentWs.readyState !== 1) {
-      await pool.query(
-        `UPDATE rmm_remote_sessions SET status='failed',ended_at=now(),end_reason='agent_offline',updated_at=now() WHERE id=$1`,
-        [remote.id],
-      ).catch(() => {})
-      safeSend(viewerWs, { type: 'viewer_error', session_id: sessionId, error: 'Agent offline' })
-      viewerWs.close(1013, 'Agent offline')
-      return
-    }
+    let agentWs = agentSocketForDevice(remote.agent_device_id)
+    if (agentWs?.readyState !== 1) agentWs = null
 
     const ice = iceConfiguration(sessionId)
     await pool.query(
-      `UPDATE rmm_remote_sessions SET status='viewer_connected',viewer_connected_at=now(),last_activity_at=now(),updated_at=now() WHERE id=$1`,
-      [remote.id],
+      `UPDATE rmm_remote_sessions
+          SET status='viewer_connected',viewer_connected_at=COALESCE(viewer_connected_at,now()),last_activity_at=now(),
+              expires_at=GREATEST(expires_at, now() + ($2::text || ' seconds')::interval),updated_at=now()
+        WHERE id=$1`,
+      [remote.id, ACTIVE_RECONNECT_TTL_SECONDS],
     ).catch(() => {})
     const previousActive = activeViewerSessions.get(sessionId)
     if (previousActive?.cleanupTimer) clearTimeout(previousActive.cleanupTimer)
+    if (previousActive?.agentRestartTimer) clearTimeout(previousActive.agentRestartTimer)
+    if (previousActive?.agentWs && previousActive?.relayFromAgent) {
+      try { previousActive.agentWs.off('message', previousActive.relayFromAgent) } catch {}
+    }
+    if (previousActive) { previousActive.finalized = true; previousActive.agentWs = null }
     if (previousActive?.viewerWs && previousActive.viewerWs !== viewerWs) {
       try { previousActive.viewerWs.close(4001, 'Viewer superseded') } catch {}
     }
-    activeViewerSessions.set(sessionId, { viewerWs, agentWs, tenantId: remote.tenant_id, cleanupTimer: null })
+    const active = {
+      viewerWs, agentWs: null, tenantId: remote.tenant_id, agentDeviceId: String(remote.agent_device_id),
+      cleanupTimer: null, agentRestartTimer: null, relayFromAgent: null,
+      mode: remote.mode, technicianName: clean(remote.technician_name || remote.technician_email) || 'Hi5Central technician',
+      iceAgent: ice.agent, finalized: false, onAgentConnected: null, onAgentDisconnected: null, finalize: null,
+      agentDisconnectedAt: 0,
+    }
+    activeViewerSessions.set(sessionId, active)
 
     const relayFromAgent = (buffer) => {
       const text = Buffer.isBuffer(buffer) ? buffer.toString('utf8') : String(buffer)
@@ -377,10 +386,32 @@ export function attachRmmViewerWebSocket(server) {
           })
         }).catch(() => {})
       } else {
-        pool.query(`UPDATE rmm_remote_sessions SET last_activity_at=now(),updated_at=now() WHERE id=$1`, [remote.id]).catch(() => {})
+        pool.query(`UPDATE rmm_remote_sessions SET last_activity_at=now(),expires_at=GREATEST(expires_at,now() + interval '8 hours'),updated_at=now() WHERE id=$1`, [remote.id]).catch(() => {})
       }
     }
-    agentWs.on('message', relayFromAgent)
+    active.relayFromAgent = relayFromAgent
+
+    const detachAgentSocket = () => {
+      if (active.agentWs && active.relayFromAgent) {
+        try { active.agentWs.off('message', active.relayFromAgent) } catch {}
+      }
+      active.agentWs = null
+    }
+
+    const bindAgentSocket = (nextAgentWs, { restarted = false } = {}) => {
+      if (!nextAgentWs || nextAgentWs.readyState !== 1 || active.finalized) return false
+      detachAgentSocket()
+      if (active.agentRestartTimer) { clearTimeout(active.agentRestartTimer); active.agentRestartTimer = null }
+      active.agentWs = nextAgentWs
+      nextAgentWs.on('message', relayFromAgent)
+      if (restarted) safeSend(active.viewerWs, { type: 'agent_reconnected', session_id: sessionId })
+      const sent = safeSend(nextAgentWs, {
+        type: 'start_webrtc', session_id: sessionId, mode: remote.mode,
+        technician_name: active.technicianName, iceServers: active.iceAgent,
+      })
+      if (sent) safeSend(active.viewerWs, { type: 'start_webrtc_sent', session_id: sessionId, restarted })
+      return sent
+    }
 
     let explicitViewerClose = false
     viewerWs.on('message', (buffer) => {
@@ -400,19 +431,25 @@ export function attachRmmViewerWebSocket(server) {
       }
       payload.session_id = sessionId
       delete payload.sessionId
-      if (!safeSend(agentWs, payload)) {
-        safeSend(viewerWs, { type: 'viewer_error', session_id: sessionId, error: 'Agent connection unavailable' })
+      if (!safeSend(active.agentWs, payload)) {
+        safeSend(viewerWs, { type: 'agent_reconnecting', session_id: sessionId, grace_ms: AGENT_RESTART_GRACE_MS })
       }
-      pool.query(`UPDATE rmm_remote_sessions SET last_activity_at=now(),updated_at=now() WHERE id=$1`, [remote.id]).catch(() => {})
+      pool.query(`UPDATE rmm_remote_sessions SET last_activity_at=now(),expires_at=GREATEST(expires_at,now() + interval '8 hours'),updated_at=now() WHERE id=$1`, [remote.id]).catch(() => {})
     })
 
     let disconnectHandled = false
     const finalizeCleanup = (reason = 'viewer_disconnected') => {
-      const active = activeViewerSessions.get(sessionId)
-      if (active?.viewerWs && active.viewerWs !== viewerWs) return
-      if (active?.cleanupTimer) clearTimeout(active.cleanupTimer)
+      const currentActive = activeViewerSessions.get(sessionId)
+      if (currentActive?.viewerWs && currentActive.viewerWs !== viewerWs) return
+      const boundAgentWs = currentActive?.agentWs || agentWs
+      if (currentActive?.cleanupTimer) clearTimeout(currentActive.cleanupTimer)
+      if (currentActive) {
+        currentActive.finalized = true
+        if (currentActive.agentRestartTimer) clearTimeout(currentActive.agentRestartTimer)
+      }
+      safeSend(boundAgentWs, { type: 'viewer_disconnected', session_id: sessionId })
+      detachAgentSocket()
       activeViewerSessions.delete(sessionId)
-      safeSend(agentWs, { type: 'viewer_disconnected', session_id: sessionId })
       pool.query(
         `UPDATE rmm_remote_sessions
             SET status=CASE WHEN status IN ('ended','expired') THEN status ELSE 'ended' END,
@@ -441,32 +478,90 @@ export function attachRmmViewerWebSocket(server) {
     const cleanup = (reason = 'viewer_disconnected') => {
       if (disconnectHandled) return
       disconnectHandled = true
-      agentWs.off('message', relayFromAgent)
-      const active = activeViewerSessions.get(sessionId)
-      if (active?.viewerWs !== viewerWs) return
-      if (remote.viewer_client !== 'browser' || explicitViewerClose) { finalizeCleanup(reason); return }
+      detachAgentSocket()
+      const latestActive = activeViewerSessions.get(sessionId)
+      if (latestActive?.viewerWs !== viewerWs) return
+      if (explicitViewerClose) { finalizeCleanup(reason); return }
       const cleanupTimer = setTimeout(() => {
         const latest = activeViewerSessions.get(sessionId)
         if (latest?.cleanupTimer !== cleanupTimer || latest?.viewerWs) return
         finalizeCleanup(reason)
-      }, BROWSER_RECONNECT_GRACE_MS)
-      activeViewerSessions.set(sessionId, { viewerWs: null, agentWs, tenantId: remote.tenant_id, cleanupTimer })
-      pool.query(`UPDATE rmm_remote_sessions SET last_activity_at=now(),updated_at=now() WHERE id=$1`, [remote.id]).catch(() => {})
+      }, VIEWER_RECONNECT_GRACE_MS)
+      active.viewerWs = null
+      active.cleanupTimer = cleanupTimer
+      activeViewerSessions.set(sessionId, active)
+      pool.query(`UPDATE rmm_remote_sessions SET last_activity_at=now(),expires_at=GREATEST(expires_at,now() + interval '8 hours'),updated_at=now() WHERE id=$1`, [remote.id]).catch(() => {})
     }
     viewerWs.once('close', () => cleanup('viewer_disconnected'))
     viewerWs.once('error', () => cleanup('viewer_error'))
 
+    active.finalize = finalizeCleanup
+    active.onAgentConnected = (nextWs) => {
+      if (active.finalized || !active.viewerWs || active.viewerWs.readyState !== 1) return
+      const disconnectedAt = active.agentDisconnectedAt
+      active.agentDisconnectedAt = 0
+      const rebound = bindAgentSocket(nextWs, { restarted: true })
+      if (rebound && disconnectedAt) {
+        const interruptedSeconds = Math.max(0, Math.round((Date.now() - disconnectedAt) / 1000))
+        recordRmmActivity({
+          tenantId: remote.tenant_id, agentDeviceId: remote.agent_device_id, inventoryId: remote.inventory_id,
+          actorUserId: remote.created_by_user_id, actorType: 'system', actorLabel: 'SYSTEM',
+          eventType: 'remote.transport_recovered', category: 'remote',
+          summary: 'SYSTEM: remote session recovered after endpoint reconnect',
+          detail: 'The existing remote session resumed after ' + interruptedSeconds + ' seconds without creating a new technician session.',
+          outcome: 'success', severity: 'info', remoteSessionId: remote.id,
+          metadata: { mode: remote.mode, viewerClient: remote.viewer_client, interruptionSeconds: interruptedSeconds, reason: 'agent_reconnected' },
+        }).catch(() => {})
+      }
+    }
+    active.onAgentDisconnected = (closedWs) => {
+      if (active.finalized || active.agentWs !== closedWs) return
+      detachAgentSocket()
+      if (!active.agentDisconnectedAt) {
+        active.agentDisconnectedAt = Date.now()
+        recordRmmActivity({
+          tenantId: remote.tenant_id, agentDeviceId: remote.agent_device_id, inventoryId: remote.inventory_id,
+          actorUserId: remote.created_by_user_id, actorType: 'system', actorLabel: 'SYSTEM',
+          eventType: 'remote.transport_interrupted', category: 'remote',
+          summary: 'SYSTEM: remote session interrupted while endpoint reconnects',
+          detail: 'The Viewer remains authorised and will automatically resume if the same Agent returns within the restart grace period.',
+          outcome: 'pending', severity: 'warning', remoteSessionId: remote.id,
+          metadata: { mode: remote.mode, viewerClient: remote.viewer_client, reason: 'agent_disconnected', graceMs: AGENT_RESTART_GRACE_MS },
+        }).catch(() => {})
+      }
+      safeSend(active.viewerWs, { type: 'agent_reconnecting', session_id: sessionId, grace_ms: AGENT_RESTART_GRACE_MS })
+      if (active.agentRestartTimer) clearTimeout(active.agentRestartTimer)
+      active.agentRestartTimer = setTimeout(() => {
+        if (active.finalized || active.agentWs?.readyState === 1) return
+        safeSend(active.viewerWs, { type: 'viewer_error', session_id: sessionId, error: 'Endpoint did not return after restart.' })
+        finalizeCleanup('agent_restart_timeout')
+      }, AGENT_RESTART_GRACE_MS)
+      pool.query(`UPDATE rmm_remote_sessions SET last_activity_at=now(),expires_at=GREATEST(expires_at,now() + interval '8 hours'),updated_at=now() WHERE id=$1`, [remote.id]).catch(() => {})
+    }
+
     safeSend(viewerWs, { type: 'viewer_connected', session_id: sessionId })
     safeSend(viewerWs, { type: 'session_config', session_id: sessionId, mode: remote.mode, ice_servers: ice.viewer })
-    safeSend(agentWs, {
-      type: 'start_webrtc',
-      session_id: sessionId,
-      mode: remote.mode,
-      technician_name: clean(remote.technician_name || remote.technician_email) || 'Hi5Central technician',
-      iceServers: ice.agent,
-    })
-    safeSend(viewerWs, { type: 'start_webrtc_sent', session_id: sessionId })
+    if (agentWs) bindAgentSocket(agentWs)
+    else {
+      safeSend(viewerWs, { type: 'agent_reconnecting', session_id: sessionId, grace_ms: AGENT_RESTART_GRACE_MS })
+      active.agentRestartTimer = setTimeout(() => {
+        if (active.finalized || active.agentWs?.readyState === 1) return
+        safeSend(active.viewerWs, { type: 'viewer_error', session_id: sessionId, error: 'Endpoint did not return after restart.' })
+        finalizeCleanup('agent_restart_timeout')
+      }, AGENT_RESTART_GRACE_MS)
+    }
   })
+
+  const unsubscribeAgentConnections = subscribeAgentConnections(({ type, agent, ws }) => {
+    const deviceId = String(agent?.id || '')
+    if (!deviceId) return
+    for (const active of activeViewerSessions.values()) {
+      if (active.agentDeviceId !== deviceId || active.finalized) continue
+      if (type === 'connected') active.onAgentConnected?.(ws)
+      else if (type === 'disconnected') active.onAgentDisconnected?.(ws)
+    }
+  })
+  wss.on('close', () => unsubscribeAgentConnections())
 
   return wss
 }

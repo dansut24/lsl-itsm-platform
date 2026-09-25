@@ -1,0 +1,39 @@
+name: RMM Viewer contract
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "public/rmm-viewer/**"
+      - "api/src/rmmRemote.js"
+      - "api/src/rmmAgent.js"
+      - "scripts/check-rmm-viewer-contract.mjs"
+      - "package.json"
+      - ".github/workflows/rmm-viewer-contract.yml"
+  pull_request:
+    paths:
+      - "public/rmm-viewer/**"
+      - "api/src/rmmRemote.js"
+      - "api/src/rmmAgent.js"
+      - "scripts/check-rmm-viewer-contract.mjs"
+      - "package.json"
+      - ".github/workflows/rmm-viewer-contract.yml"
+
+jobs:
+  rmm-viewer-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Use Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Validate remote Viewer contracts
+        run: node scripts/check-rmm-viewer-contract.mjs
+      - name: Parse Viewer and remote API sources
+        run: |
+          node --check public/rmm-viewer/renderer.js
+          node --check public/rmm-viewer/browser.js
+          node --check api/src/rmmRemote.js
+          node --check api/src/rmmAgent.js

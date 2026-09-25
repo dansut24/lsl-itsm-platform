@@ -920,6 +920,7 @@ export function registerRmmAgentRoutes(app) {
 
 const liveAgentSockets = new Map()
 const agentMessageSubscribers = new Map()
+const agentConnectionSubscribers = new Set()
 
 export function agentSocketForDevice(deviceId) {
   return liveAgentSockets.get(String(deviceId)) || null
@@ -933,6 +934,18 @@ export function sendAgentMessage(deviceId, payload) {
     return true
   } catch {
     return false
+  }
+}
+
+export function subscribeAgentConnections(handler) {
+  if (typeof handler !== 'function') return () => {}
+  agentConnectionSubscribers.add(handler)
+  return () => agentConnectionSubscribers.delete(handler)
+}
+
+function notifyAgentConnectionSubscribers(event) {
+  for (const handler of [...agentConnectionSubscribers]) {
+    try { handler(event) } catch {}
   }
 }
 
@@ -972,6 +985,7 @@ export function attachRmmAgentWebSocket(server) {
   wss.on('connection', async (ws) => {
     const agent = ws.hi5Agent
     liveAgentSockets.set(String(agent.id), ws)
+    notifyAgentConnectionSubscribers({ type: 'connected', agent, ws })
     await pool.query(
       `UPDATE rmm_agent_devices SET websocket_status='Connected',websocket_connected_at=now(),last_authenticated_at=now(),updated_at=now() WHERE id=$1`,
       [agent.id],
@@ -1023,7 +1037,15 @@ export function attachRmmAgentWebSocket(server) {
     })
 
     ws.on('close', () => {
-      if (liveAgentSockets.get(String(agent.id)) === ws) liveAgentSockets.delete(String(agent.id))
+      const wasCurrentSocket = liveAgentSockets.get(String(agent.id)) === ws
+      if (wasCurrentSocket) {
+        liveAgentSockets.delete(String(agent.id))
+        notifyAgentConnectionSubscribers({ type: 'disconnected', agent, ws })
+      } else {
+        // A replacement Agent socket is already authoritative. Never let the
+        // superseded socket mark the device offline or cancel work.
+        return
+      }
       pool.query(
         `UPDATE rmm_agent_devices SET websocket_status='Disconnected',websocket_disconnected_at=now(),updated_at=now() WHERE id=$1`,
         [agent.id],
