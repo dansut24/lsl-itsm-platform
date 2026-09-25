@@ -36,6 +36,13 @@ function clean(value = '') { return String(value ?? '').trim() }
 function lower(value = '') { return clean(value).toLowerCase() }
 function object(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {} }
 function array(value) { return Array.isArray(value) ? value : [] }
+function vulnerabilityIdentityLimited(value) {
+  const audit = object(value)
+  const state = clean(audit.state)
+  if (state === 'no_published_identity') return true
+  if (state !== 'needs_review') return false
+  return !clean(audit.error) && clean(audit.method) !== 'transient_identity_source_error'
+}
 function stableJson(value) {
   if (Array.isArray(value)) return '[' + value.map(stableJson).join(',') + ']'
   if (value && typeof value === 'object') {
@@ -437,7 +444,7 @@ async function catalogueRows(tenantId) {
       : officialWinget
     const vulnerabilityCovered = clean(identityAudit.state) === 'covered'
       && Number(row.vulnerability_identity_count || 0) > 0
-    const vulnerabilityLimited = clean(identityAudit.state) === 'no_published_identity'
+    const vulnerabilityLimited = vulnerabilityIdentityLimited(identityAudit)
     const historyLimited = clean(sourceLiveMetadata.baselinePreparationState) === 'previous_stable_installer_unavailable'
       && clean(sourceLiveMetadata.baselinePreparationTargetVersion) === clean(row.target_version)
     const targetVersion = clean(row.target_version)
@@ -512,8 +519,13 @@ async function catalogueRows(tenantId) {
             previousVersion: clean(sourceLiveMetadata.baselinePreparationPreviousVersion),
           } : null,
           vulnerabilityIdentity: vulnerabilityLimited ? {
-            state: 'no_published_identity',
-            note: clean(sourceMetadata.vulnerabilityIdentityNote),
+            state: clean(identityAudit.state) === 'no_published_identity' ? 'no_published_identity' : 'identity_unresolved',
+            auditState: clean(identityAudit.state),
+            method: clean(identityAudit.method),
+            note: clean(identityAudit.dispositionNote || sourceMetadata.vulnerabilityIdentityNote)
+              || (clean(identityAudit.state) === 'needs_review'
+                ? 'No unambiguous authoritative vulnerability identity is currently available; NVD/CVE/EPSS coverage remains limited until identity resolution succeeds.'
+                : ''),
           } : null,
         },
         source: {
@@ -710,6 +722,7 @@ async function qualificationLabPayload(tenantId, catalogueId) {
     && currentRelease?.sha256Verified
     && currentRelease?.signatureVerified)
   const vulnerabilityCovered=clean(identityAudit.state)==='covered' && identityResult.rows.length>0
+  const vulnerabilityLimited=vulnerabilityIdentityLimited(identityAudit)
   const cleanPassed=evidence.cleanInstallVerified===true
     && clean(evidence.cleanInstallVersion)===clean(app.target_version)
   const uninstallPassed=evidence.uninstallVerified===true && cleanPassed
@@ -767,6 +780,10 @@ async function qualificationLabPayload(tenantId, catalogueId) {
     },
     vulnerability:{
       state:vulnerabilityCovered?'covered':clean(identityAudit.state || 'needs_review'),
+      limited:vulnerabilityLimited,
+      limitationState:vulnerabilityLimited
+        ? (clean(identityAudit.state)==='no_published_identity'?'no_published_identity':'identity_unresolved')
+        : '',
       checkedAt:clean(identityAudit.checkedAt),
       method:clean(identityAudit.method),
       resolvedSource:clean(identityAudit.resolvedSource),
@@ -852,7 +869,7 @@ async function qualificationLabPayload(tenantId, catalogueId) {
     },
     layers:[
       {id:'source',label:'Source & trust',state:sourceHealthy && currentArtifactReady?'passed':sourceHealthy?'pending':'attention'},
-      {id:'vulnerability',label:'Vulnerability identity',state:unsupportedCapabilities.has('vulnerability_coverage')?'limited':vulnerabilityCovered?'passed':clean(identityAudit.state)==='no_published_identity'?'limited':'attention'},
+      {id:'vulnerability',label:'Vulnerability identity',state:unsupportedCapabilities.has('vulnerability_coverage')?'limited':vulnerabilityCovered?'passed':vulnerabilityLimited?'limited':'attention'},
       {id:'clean',label:'Install / verify / uninstall',state:unsupportedCapabilities.has('clean_install') || unsupportedCapabilities.has('uninstall')?'limited':cleanPassed && uninstallPassed?'passed':queueLayerState(cleanQueue)},
       {id:'history',label:'Previous stable',state:previousReady?'passed':previousPending?'pending':previousUnavailable?'unavailable':'missing'},
       {id:'upgrade',label:'Patch upgrade',state:unsupportedCapabilities.has('upgrade')?'limited':['queued','running','cleanup_pending','cleanup_running','review_required'].includes(clean(upgradeQueue?.state))

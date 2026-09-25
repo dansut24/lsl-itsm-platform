@@ -3085,7 +3085,17 @@ export async function promoteAutomaticAdmissionReady({ limit = 12 } = {}) {
                    WHERE vi.catalogue_id=c.id AND vi.enabled=true
                 )
               ) AS vulnerability_covered,
-              (c.source_metadata->'vulnerabilityIdentityAudit'->>'state'='no_published_identity') AS vulnerability_limited,
+              COALESCE(c.source_metadata->'vulnerabilityIdentityAudit'->>'state','') AS vulnerability_audit_state,
+              COALESCE(c.source_metadata->'vulnerabilityIdentityAudit'->>'method','') AS vulnerability_audit_method,
+              COALESCE(c.source_metadata->'vulnerabilityIdentityAudit'->>'error','') AS vulnerability_audit_error,
+              (
+                c.source_metadata->'vulnerabilityIdentityAudit'->>'state'='no_published_identity'
+                OR (
+                  c.source_metadata->'vulnerabilityIdentityAudit'->>'state'='needs_review'
+                  AND COALESCE(c.source_metadata->'vulnerabilityIdentityAudit'->>'error','')=''
+                  AND COALESCE(c.source_metadata->'vulnerabilityIdentityAudit'->>'method','')<>'transient_identity_source_error'
+                )
+              ) AS vulnerability_limited,
               (
                 s.metadata->>'baselinePreparationState'='previous_stable_installer_unavailable'
                 AND s.metadata->>'baselinePreparationTargetVersion'=c.target_version
@@ -3181,7 +3191,8 @@ export async function promoteAutomaticAdmissionReady({ limit = 12 } = {}) {
                 END,
                 'vulnerabilityCoverage',CASE
                   WHEN vulnerability_covered THEN 'covered'
-                  WHEN vulnerability_limited THEN 'no_published_identity'
+                  WHEN vulnerability_limited AND vulnerability_audit_state='no_published_identity' THEN 'no_published_identity'
+                  WHEN vulnerability_limited THEN 'identity_unresolved'
                   ELSE 'pending'
                 END
               ) AS capabilities,
@@ -3192,8 +3203,21 @@ export async function promoteAutomaticAdmissionReady({ limit = 12 } = {}) {
                   'previousVersion',COALESCE(source_live_metadata->>'baselinePreparationPreviousVersion','')
                 ) ELSE NULL END,
                 'vulnerabilityIdentity',CASE WHEN vulnerability_limited THEN jsonb_build_object(
-                  'state','no_published_identity',
-                  'note',COALESCE(source_metadata->>'vulnerabilityIdentityNote','')
+                  'state',CASE
+                    WHEN vulnerability_audit_state='no_published_identity' THEN 'no_published_identity'
+                    ELSE 'identity_unresolved'
+                  END,
+                  'auditState',vulnerability_audit_state,
+                  'method',vulnerability_audit_method,
+                  'note',COALESCE(
+                    NULLIF(source_metadata->'vulnerabilityIdentityAudit'->>'dispositionNote',''),
+                    NULLIF(source_metadata->>'vulnerabilityIdentityNote',''),
+                    CASE
+                      WHEN vulnerability_audit_state='needs_review'
+                        THEN 'No unambiguous authoritative vulnerability identity is currently available; NVD/CVE/EPSS coverage remains limited until identity resolution succeeds.'
+                      ELSE ''
+                    END
+                  )
                 ) ELSE NULL END
               )) AS limitations
          FROM candidates
@@ -3209,7 +3233,11 @@ export async function promoteAutomaticAdmissionReady({ limit = 12 } = {}) {
                     THEN 'Automatically admitted after trusted source, artifact, clean-install, uninstall, upgrade, rollback and vulnerability-identity qualification.'
                   ELSE c.qualification_notes
                 END
-              ELSE 'Qualified with limited capabilities. Available safety checks passed; upstream limitations are retained in qualification evidence.'
+              ELSE CASE
+                WHEN ready.vulnerability_limited
+                  THEN 'Qualified with limited vulnerability coverage. Software lifecycle qualification passed, but no unambiguous authoritative NVD/CVE identity is currently available; EPSS-backed risk coverage is therefore limited until identity resolution succeeds.'
+                ELSE 'Qualified with limited capabilities. Available safety checks passed; upstream limitations are retained in qualification evidence.'
+              END
             END,
             qualification_evidence=c.qualification_evidence || jsonb_build_object(
               'automaticAdmissionVerified',true,
