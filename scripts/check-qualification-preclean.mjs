@@ -19,6 +19,9 @@ expect(source.includes('uninstallReason: cleanupReason'), 'Qualification pre-cle
 expect(source.includes('catalogue_qualification_preclean'), 'Qualification pre-clean jobs must be auditable separately from normal cleanup.')
 expect(source.includes("installerTechnology: 'office_odt_sfx'"), 'Microsoft 365 qualification uninstall must use the Office Deployment Tool transport.')
 expect(source.includes("intent: 'uninstall'"), 'Office Click-to-Run qualification cleanup must declare uninstall intent.')
+expect(source.includes("'  <Remove All=\"FALSE\">'"), 'Office Click-to-Run uninstall must target only the selected Office product.')
+expect(source.includes('`    <Product ID="${productId}" />`'), 'Office Click-to-Run product uninstall must omit Language so ODT removes every installed language for that product.')
+expect(!source.includes('`      <Language ID="${language}" />`'), 'Office Click-to-Run product uninstall must not be reduced to one installed language.')
 expect(source.includes('expectAbsent: true'), 'Office Click-to-Run uninstall must verify product absence.')
 expect(source.includes('officeClickToRunUninstall'), 'Qualification must gate Office uninstall on PatchHost capability.')
 

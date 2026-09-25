@@ -590,16 +590,13 @@ async function qualificationUninstallJobSpec(queue, item) {
     return { error: 'qualification_office_c2r_product_id_missing', officeOdt: true }
   }
 
-  const language = clean(item?.name).match(/-\s*([a-z]{2}-[a-z]{2})\s*$/i)?.[1] || 'MatchOS'
   const installedVersion = clean(item?.version || row.target_version)
   const responseFile = {
     fileName: 'microsoft-365-remove.xml',
     content: [
       '<Configuration>',
-      '  <Remove>',
-      `    <Product ID="${productId}">`,
-      `      <Language ID="${language}" />`,
-      '    </Product>',
+      '  <Remove All="FALSE">',
+      `    <Product ID="${productId}" />`,
       '  </Remove>',
       '  <Display Level="None" AcceptEULA="TRUE" />',
       '</Configuration>',
