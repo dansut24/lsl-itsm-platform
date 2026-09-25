@@ -605,13 +605,14 @@ function NetworkAdaptersPanel({ device }) {
       const inventorySpeed = Number(adapter.speed_bps)
       const linkSpeed = Number(live.transmit_link_speed_bps || live.receive_link_speed_bps || (inventorySpeed > 1_000_000_000_000 ? 0 : inventorySpeed))
       const history = live.history || []
-      return <article className={String(adapter.status).toLowerCase() === 'up' ? 'is-up' : 'is-down'} key={name}>
-        <div className="rmm-adapter-heading"><span><Network size={17} /></span><div><strong>{name}</strong><small>{adapter.description || type} · {adapter.mac || adapter.mac_address || 'MAC not reported'}</small></div><StatusPill tone={String(adapter.status).toLowerCase() === 'up' ? 'healthy' : 'neutral'}>{adapter.status || 'Unknown'}</StatusPill></div>
-        <div className="rmm-adapter-metrics"><span><small>IPv4</small><strong>{ipv4 || 'Not assigned'}</strong></span><span><small>Link</small><strong>{formatLinkSpeed(linkSpeed)}</strong></span><span><small>Receive</small><strong>{live.rx == null ? 'Measuring…' : formatTrafficRate(live.rx)}</strong></span><span><small>Send</small><strong>{live.tx == null ? 'Measuring…' : formatTrafficRate(live.tx)}</strong></span></div>
-        <div className="rmm-network-graph" aria-label={'Live receive and send throughput for ' + name}>
+      const adapterIsUp = String(adapter.status).toLowerCase() === 'up'
+      return <article className={adapterIsUp ? 'is-up' : 'is-down'} key={name}>
+        <div className="rmm-adapter-heading"><span><Network size={17} /></span><div><strong>{name}</strong><small>{adapter.description || type} · {adapter.mac || adapter.mac_address || 'MAC not reported'}</small></div><StatusPill tone={adapterIsUp ? 'healthy' : 'neutral'}>{adapter.status || 'Unknown'}</StatusPill></div>
+        <div className="rmm-adapter-metrics"><span><small>IPv4</small><strong>{ipv4 || 'Not assigned'}</strong></span><span><small>Link</small><strong>{formatLinkSpeed(linkSpeed)}</strong></span><span><small>Receive</small><strong>{adapterIsUp ? (live.rx == null ? 'Measuring…' : formatTrafficRate(live.rx)) : 'Inactive'}</strong></span><span><small>Send</small><strong>{adapterIsUp ? (live.tx == null ? 'Measuring…' : formatTrafficRate(live.tx)) : 'Inactive'}</strong></span></div>
+        {adapterIsUp && <div className="rmm-network-graph" aria-label={'Live receive and send throughput for ' + name}>
           {history.length > 1 ? <svg viewBox="0 0 320 74" preserveAspectRatio="none" role="img"><polyline className="rx" points={networkLinePoints(history, 'rx')} /><polyline className="tx" points={networkLinePoints(history, 'tx')} /></svg> : <span>Waiting for enough live samples…</span>}
           <div><span className="rx">Receive</span><span className="tx">Send</span><small>Last {Math.min(60, history.length * 2)}s</small></div>
-        </div>
+        </div>}
       </article>
     })}</div>
     {!adapters.length && <div className="rmm-empty compact"><Network size={22} /><strong>No network adapters reported</strong><span>Refresh device inventory after the Agent reconnects.</span></div>}
