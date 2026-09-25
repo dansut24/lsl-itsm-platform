@@ -617,6 +617,84 @@ async function dispatchUninstall(queue, runner, item) {
   return { dispatched: true, queued: delivery !== 'websocket', jobId: job.id }
 }
 
+
+async function dispatchPrecleanUninstall(queue, runner, item) {
+  const liveSocket = agentSocketForDevice(runner.agent_device_id)
+  const canPush = Boolean(liveSocket && liveSocket.readyState === 1)
+  const payload = {
+    name: clean(item?.name),
+    registry_key: clean(item?.registry_key),
+    scope: clean(item?.scope),
+    user_profile: clean(item?.user_profile),
+  }
+  if (!payload.name && !payload.registry_key) {
+    await markReview(queue.id, 'qualification_preclean_identity_missing', { stage: 'preclean' })
+    return { dispatched: false }
+  }
+
+  const inserted = await pool.query(
+    `INSERT INTO rmm_agent_jobs
+      (tenant_id,agent_device_id,job_type,payload,initiated_by,initiated_by_label,request_metadata)
+     VALUES ($1,$2,'software.uninstall',$3::jsonb,'system','Catalogue qualification pre-clean',$4::jsonb)
+     RETURNING id,status,created_at`,
+    [
+      runner.tenant_id,
+      runner.agent_device_id,
+      JSON.stringify(payload),
+      JSON.stringify({
+        source: 'catalogue_qualification_preclean',
+        qualification_queue_id: queue.id,
+        catalogue_id: queue.catalogue_id,
+      }),
+    ],
+  )
+  const job = inserted.rows[0]
+  let delivery = 'queued_agent_channel'
+
+  if (canPush) {
+    const claimed = await pool.query(
+      `UPDATE rmm_agent_jobs SET status='claimed',claimed_at=now(),updated_at=now()
+        WHERE id=$1 AND status='queued' RETURNING id`,
+      [job.id],
+    )
+    if (claimed.rowCount) {
+      const pushed = sendAgentMessage(runner.agent_device_id, {
+        type: 'job_execute',
+        job: { id: job.id, job_type: 'software.uninstall', payload, created_at: job.created_at },
+      })
+      if (pushed) {
+        delivery = 'websocket'
+      } else {
+        await pool.query(
+          `UPDATE rmm_agent_jobs
+              SET status='queued',claimed_at=NULL,error_message='',updated_at=now()
+            WHERE id=$1 AND status='claimed'`,
+          [job.id],
+        )
+      }
+    }
+  }
+
+  await pool.query(
+    `UPDATE rmm_software_qualification_queue
+        SET state='cleanup_running',runner_agent_device_id=$2,cleanup_job_id=$3,last_error='',
+            started_at=COALESCE(started_at,now()),completed_at=NULL,
+            evidence=evidence || $4::jsonb,updated_at=now()
+      WHERE id=$1`,
+    [queue.id, runner.agent_device_id, job.id, JSON.stringify({
+      stage: 'preclean_running',
+      cleanupPhase: 'preclean',
+      precleanDispatchedAt: new Date().toISOString(),
+      precleanDelivery: delivery,
+      precleanName: payload.name,
+      precleanRegistryKey: payload.registry_key,
+      precleanVersion: clean(item?.version),
+      precleanScope: clean(item?.scope),
+    })],
+  )
+  return { dispatched: true, queued: delivery !== 'websocket', jobId: job.id }
+}
+
 async function dispatchRollbackUninstall(queue, runner, item, stage) {
   const liveSocket = agentSocketForDevice(runner.agent_device_id)
   const canPush = Boolean(liveSocket && liveSocket.readyState === 1)
@@ -1024,8 +1102,27 @@ async function dispatchCleanInstall(queue, runner) {
     )
     return { dispatched: false, blocked: true, reason: 'runner_contaminated_by_prior_qualification', contaminants }
   }
-  if (installedMatches(runner.source_payload, current).length) {
-    await markReview(queue.id, 'qualification_runner_not_clean', { stage: 'pre_install' })
+  const preinstalled = installedMatches(runner.source_payload, current)
+  if (preinstalled.length) {
+    const manualQualification = object(current.evidence).manualRequalification === true
+    if (manualQualification) {
+      const target = preinstalled[preinstalled.length - 1]
+      const preclean = await dispatchPrecleanUninstall(current, runner, target)
+      return {
+        dispatched: false,
+        blocked: !preclean.dispatched,
+        reason: preclean.dispatched ? 'qualification_preclean_running' : 'qualification_preclean_dispatch_failed',
+        preclean,
+      }
+    }
+    await markReview(queue.id, 'qualification_runner_not_clean', {
+      stage: 'pre_install',
+      installed: preinstalled.map((item) => ({
+        name: clean(item?.name),
+        version: clean(item?.version),
+        registryKey: clean(item?.registry_key),
+      })),
+    })
     return { dispatched: false }
   }
 
@@ -2299,6 +2396,61 @@ async function reconcileQueueRow(queue, runner) {
       return { id: current.id, state: 'review_required' }
     }
     return { id: current.id, state: current.state }
+  }
+
+  if (current.state === 'cleanup_running' && clean(object(current.evidence).cleanupPhase) === 'preclean') {
+    const cleanupResult = await pool.query(
+      `SELECT status,result,error_message,completed_at FROM rmm_agent_jobs WHERE id=$1 LIMIT 1`,
+      [current.cleanup_job_id],
+    )
+    const cleanup = cleanupResult.rows[0]
+    if (!cleanup || ['queued', 'claimed'].includes(clean(cleanup.status))) {
+      return { id: current.id, state: current.state }
+    }
+
+    const failure = terminalJobFailure(cleanup)
+    if (failure || clean(cleanup.status) !== 'completed') {
+      await markReview(current.id, failure || 'qualification_preclean_uninstall_failed', {
+        stage: 'preclean',
+        cleanupJobId: current.cleanup_job_id,
+      })
+      return { id: current.id, state: 'review_required' }
+    }
+
+    if (!runner || clean(current.runner_agent_device_id) !== clean(runner.agent_device_id)) {
+      return { id: current.id, state: current.state }
+    }
+
+    const remaining = installedMatches(runner.source_payload, current)
+    if (remaining.length) {
+      const completedAt = Date.parse(clean(cleanup.completed_at))
+      if (Number.isFinite(completedAt) && Date.now() - completedAt > 10 * 60 * 1000) {
+        await markReview(current.id, 'qualification_preclean_residue_detected', {
+          stage: 'preclean',
+          remaining: remaining.map((item) => ({
+            name: clean(item?.name),
+            version: clean(item?.version),
+            registryKey: clean(item?.registry_key),
+          })),
+        })
+        return { id: current.id, state: 'review_required' }
+      }
+      return { id: current.id, state: current.state }
+    }
+
+    await pool.query(
+      `UPDATE rmm_software_qualification_queue
+          SET state='queued',runner_agent_device_id=NULL,cleanup_job_id=NULL,last_error='',
+              started_at=NULL,completed_at=NULL,
+              evidence=(evidence - 'cleanupPhase') || $2::jsonb,updated_at=now()
+        WHERE id=$1`,
+      [current.id, JSON.stringify({
+        stage: 'preclean_verified',
+        precleanVerifiedAt: new Date().toISOString(),
+        precleanUninstallCompletedAt: cleanup.completed_at || new Date().toISOString(),
+      })],
+    )
+    return { id: current.id, state: 'queued', precleanVerified: true }
   }
 
   if (current.state === 'cleanup_running') {
