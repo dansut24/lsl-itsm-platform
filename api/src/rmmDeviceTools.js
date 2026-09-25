@@ -80,8 +80,8 @@ function payloadForAction(type, body = {}) {
     return { path }
   }
   if (type === 'registry.list') {
-    const path = clean(payload.path || 'HKLM:\\').slice(0, 2048) || 'HKLM:\\'
-    if (!/^HK(?:LM|CU|CR|U|CC):\\/i.test(path)) throw new Error('A valid registry path is required.')
+    const path = clean(payload.path).slice(0, 2048)
+    if (!/^HK(?:LM|CU|CR|U|CC):\\/i.test(path)) throw new Error('Select a registry hive before reading registry data.')
     return { path }
   }
   if (type === 'events.list') {
@@ -128,7 +128,51 @@ async function managedAgent(tenantId, agentDeviceId) {
   return result.rows[0] || null
 }
 
+function requestAgentProbe(deviceId, requestType, responseType, timeoutMs = 4000) {
+  const requestId = randomUUID()
+  return new Promise((resolve, reject) => {
+    let settled = false
+    let timer = null
+    const finish = (error, payload) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      unsubscribe()
+      if (error) reject(error)
+      else resolve(payload)
+    }
+    const unsubscribe = subscribeAgentMessages(deviceId, (payload) => {
+      if (clean(payload?.type) !== responseType) return
+      if (clean(payload?.request_id || payload?.requestId) !== requestId) return
+      finish(null, payload)
+    })
+    timer = setTimeout(() => finish(new Error('The device did not return live network statistics in time.')), timeoutMs)
+    if (!sendAgentMessage(deviceId, { type: requestType, request_id: requestId })) {
+      finish(new Error('The device went offline before live network statistics could be requested.'))
+    }
+  })
+}
+
 export function registerRmmDeviceToolRoutes(app) {
+  app.get('/api/v1/rmm/devices/:agentDeviceId/network-stats', async (c) => {
+    const auth = await requireDeviceView(c)
+    if (auth.error) return auth.error
+    const device = await managedAgent(auth.session.tenant_id, c.req.param('agentDeviceId'))
+    if (!device) return c.json({ error: 'Managed Agent not found for this device.' }, 404)
+    if (!versionAtLeast(device.agent_version, '0.1.148')) return c.json({ error: 'Agent 0.1.148 or newer is required for live network throughput.', upgradeRequired: true }, 426)
+    const socket = agentSocketForDevice(device.id)
+    if (!socket || socket.readyState !== 1) return c.json({ error: 'This device is offline.', offline: true }, 409)
+    try {
+      const payload = await requestAgentProbe(device.id, 'network_stats_request', 'network_stats_response', 4500)
+      return c.json({
+        collectedAt: payload.collected_at || payload.collectedAt || null,
+        unixMs: payload.unix_ms || payload.unixMs || Date.now(),
+        adapters: Array.isArray(payload.adapters) ? payload.adapters : [],
+      })
+    } catch (error) {
+      return c.json({ error: error?.message || 'Unable to read live network statistics.' }, 504)
+    }
+  })
   app.post('/api/v1/rmm/devices/:agentDeviceId/actions', async (c) => {
     const auth = await requireDeviceControl(c)
     if (auth.error) return auth.error

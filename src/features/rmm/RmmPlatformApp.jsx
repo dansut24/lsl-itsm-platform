@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity,
   AlertTriangle,
@@ -330,7 +330,39 @@ function DeviceMetric({ icon: Icon, label, value, suffix = '%', tone }) {
 }
 
 function DeviceProperty({ label, value, detail }) {
-  return <div><span>{label}</span><strong>{value || 'Not reported'}</strong>{detail && <small>{detail}</small>}</div>
+  const reported = value !== null && value !== undefined && value !== ''
+  return <div><span>{label}</span><strong>{reported ? value : 'Not reported'}</strong>{detail && <small>{detail}</small>}</div>
+}
+
+function formatLinkSpeed(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number) || number <= 0 || number > 1_000_000_000_000) return 'Not reported'
+  if (number >= 1_000_000_000) return (number / 1_000_000_000).toFixed(number >= 10_000_000_000 ? 0 : 1).replace(/\.0$/, '') + ' Gbps'
+  if (number >= 1_000_000) return (number / 1_000_000).toFixed(number >= 100_000_000 ? 0 : 1).replace(/\.0$/, '') + ' Mbps'
+  if (number >= 1_000) return (number / 1_000).toFixed(1).replace(/\.0$/, '') + ' Kbps'
+  return Math.round(number) + ' bps'
+}
+
+function formatTrafficRate(bytesPerSecond) {
+  const value = Number(bytesPerSecond) * 8
+  if (!Number.isFinite(value) || value < 0) return '—'
+  if (value >= 1_000_000_000) return (value / 1_000_000_000).toFixed(2).replace(/0+$/, '').replace(/\.$/, '') + ' Gbps'
+  if (value >= 1_000_000) return (value / 1_000_000).toFixed(1).replace(/\.0$/, '') + ' Mbps'
+  if (value >= 1_000) return (value / 1_000).toFixed(0) + ' Kbps'
+  return Math.round(value) + ' bps'
+}
+
+function networkLinePoints(samples, key) {
+  if (!samples?.length) return ''
+  const width = 320
+  const height = 68
+  const values = samples.map((sample) => Math.max(0, Number(sample[key]) || 0))
+  const ceiling = Math.max(1, ...samples.flatMap((sample) => [Number(sample.rx) || 0, Number(sample.tx) || 0]))
+  return values.map((value, index) => {
+    const x = samples.length <= 1 ? width : (index / (samples.length - 1)) * width
+    const y = height - (value / ceiling) * (height - 6) - 3
+    return x.toFixed(1) + ',' + y.toFixed(1)
+  }).join(' ')
 }
 
 function AgentMaintenance({ device }) {
@@ -434,8 +466,8 @@ function DeviceOverview({ device, deviceAlerts, monitoringResolution, relatedTic
             <DeviceProperty label="Manufacturer / model" value={`${device.manufacturer} ${device.model}`} detail={device.serial} />
             <DeviceProperty label="Operating system" value={device.os} detail={`${device.edition || ''}${device.osBuild ? ` · build ${device.osBuild}` : ''}`} />
             <DeviceProperty label="Processor" value={device.processor} />
-            <DeviceProperty label="Memory" value={`${device.ramGb} GB`} />
-            <DeviceProperty label="Storage" value={`${device.storageGb} GB`} detail={`${device.storageFreeGb} GB free`} />
+            <DeviceProperty label="Memory" value={device.ramGb == null ? null : `${device.ramGb} GB`} detail={device.memoryUsedBytes && device.memoryTotalBytes ? `${(device.memoryUsedBytes / (1024 ** 3)).toFixed(1)} GB used · ${device.memory == null ? 'usage not reported' : device.memory + '%'}` : (device.memory == null ? '' : device.memory + '% used')} />
+            <DeviceProperty label="Storage" value={device.storageGb == null ? null : `${device.storageGb} GB`} detail={device.storageFreeGb == null ? '' : `${device.storageFreeGb} GB free`} />
             <DeviceProperty label="Site" value={device.site} />
             <DeviceProperty label="Device group" value={device.group} detail={device.policy} />
           </div>
@@ -506,11 +538,90 @@ function DeviceOverview({ device, deviceAlerts, monitoringResolution, relatedTic
   )
 }
 
+function NetworkAdaptersPanel({ device }) {
+  const apiBase = window.__HI5_API_BASE__ || deploymentConfig().apiUrl
+  const previousRef = useRef(new Map())
+  const [liveByName, setLiveByName] = useState({})
+  const [liveState, setLiveState] = useState(deviceIsOnline(device) ? 'Measuring live throughput…' : 'Device offline')
+
+  useEffect(() => {
+    let active = true
+    let timer = null
+    previousRef.current = new Map()
+    setLiveByName({})
+    if (!deviceIsOnline(device) || !device.agentDeviceId) { setLiveState('Device offline'); return undefined }
+
+    const poll = async () => {
+      try {
+        const response = await fetch(apiBase + '/api/v1/rmm/devices/' + encodeURIComponent(device.agentDeviceId) + '/network-stats', { credentials: 'include', cache: 'no-store' })
+        const payload = await response.json().catch(() => ({}))
+        if (!active) return
+        if (response.status === 426) { setLiveState('Upgrade the Agent to enable live throughput graphs.'); return }
+        if (!response.ok) throw new Error(payload.error || 'Live network statistics unavailable.')
+        const sampleMs = Number(payload.unixMs || Date.now())
+        setLiveByName((current) => {
+          const next = { ...current }
+          for (const adapter of payload.adapters || []) {
+            const name = String(adapter.name || adapter.description || '').trim()
+            if (!name) continue
+            const key = name.toLowerCase()
+            const previous = previousRef.current.get(key)
+            let rx = null
+            let tx = null
+            if (previous && sampleMs > previous.at) {
+              const seconds = (sampleMs - previous.at) / 1000
+              rx = Math.max(0, (Number(adapter.receive_bytes || 0) - previous.rxBytes) / seconds)
+              tx = Math.max(0, (Number(adapter.send_bytes || 0) - previous.txBytes) / seconds)
+            }
+            previousRef.current.set(key, { at: sampleMs, rxBytes: Number(adapter.receive_bytes || 0), txBytes: Number(adapter.send_bytes || 0) })
+            const before = next[key] || {}
+            const history = rx == null || tx == null ? (before.history || []) : [...(before.history || []), { at: sampleMs, rx, tx }].slice(-30)
+            next[key] = { ...adapter, rx, tx, history }
+          }
+          return next
+        })
+        setLiveState('Live · updates every 2 seconds')
+        timer = window.setTimeout(poll, 2000)
+      } catch (error) {
+        if (!active) return
+        setLiveState(error?.message || 'Live network statistics unavailable.')
+        timer = window.setTimeout(poll, 5000)
+      }
+    }
+    poll()
+    return () => { active = false; if (timer) window.clearTimeout(timer) }
+  }, [apiBase, device.agentDeviceId, device.status, device.agent])
+
+  const adapters = [...(device.networkAdapters || [])].sort((left, right) => (String(right.status).toLowerCase() === 'up') - (String(left.status).toLowerCase() === 'up'))
+  return <section className="rmm-card rmm-network-adapters-card">
+    <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Interfaces</span><h2>Network adapters</h2></div><small>{liveState}</small></div>
+    <div className="rmm-adapter-list">{adapters.map((adapter) => {
+      const name = adapter.name || adapter.adapter || adapter.description || 'Network adapter'
+      const live = liveByName[String(name).toLowerCase()] || {}
+      const ipv4 = Array.isArray(adapter.ipv4) ? adapter.ipv4.find((value) => value && !String(value).startsWith('169.254.')) || adapter.ipv4[0] : adapter.address
+      const type = adapter.connection_type || adapter.connection || adapter.type || 'Network'
+      const inventorySpeed = Number(adapter.speed_bps)
+      const linkSpeed = Number(live.transmit_link_speed_bps || live.receive_link_speed_bps || (inventorySpeed > 1_000_000_000_000 ? 0 : inventorySpeed))
+      const history = live.history || []
+      return <article className={String(adapter.status).toLowerCase() === 'up' ? 'is-up' : 'is-down'} key={name}>
+        <div className="rmm-adapter-heading"><span><Network size={17} /></span><div><strong>{name}</strong><small>{adapter.description || type} · {adapter.mac || adapter.mac_address || 'MAC not reported'}</small></div><StatusPill tone={String(adapter.status).toLowerCase() === 'up' ? 'healthy' : 'neutral'}>{adapter.status || 'Unknown'}</StatusPill></div>
+        <div className="rmm-adapter-metrics"><span><small>IPv4</small><strong>{ipv4 || 'Not assigned'}</strong></span><span><small>Link</small><strong>{formatLinkSpeed(linkSpeed)}</strong></span><span><small>Receive</small><strong>{live.rx == null ? 'Measuring…' : formatTrafficRate(live.rx)}</strong></span><span><small>Send</small><strong>{live.tx == null ? 'Measuring…' : formatTrafficRate(live.tx)}</strong></span></div>
+        <div className="rmm-network-graph" aria-label={'Live receive and send throughput for ' + name}>
+          {history.length > 1 ? <svg viewBox="0 0 320 74" preserveAspectRatio="none" role="img"><polyline className="rx" points={networkLinePoints(history, 'rx')} /><polyline className="tx" points={networkLinePoints(history, 'tx')} /></svg> : <span>Waiting for enough live samples…</span>}
+          <div><span className="rx">Receive</span><span className="tx">Send</span><small>Last {Math.min(60, history.length * 2)}s</small></div>
+        </div>
+      </article>
+    })}</div>
+    {!adapters.length && <div className="rmm-empty compact"><Network size={22} /><strong>No network adapters reported</strong><span>Refresh device inventory after the Agent reconnects.</span></div>}
+  </section>
+}
+
 function DeviceHardware({ device }) {
+  const memoryDetail = device.memoryUsedBytes && device.memoryTotalBytes ? (device.memoryUsedBytes / (1024 ** 3)).toFixed(1) + ' GB used · ' + (device.memory == null ? 'usage not reported' : device.memory + '%') : (device.memory == null ? '' : device.memory + '% used')
   return (
     <div className="rmm-device-section-grid">
-      <section className="rmm-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">System</span><h2>Hardware inventory</h2></div></div><div className="rmm-property-grid detailed"><DeviceProperty label="Manufacturer" value={device.manufacturer} /><DeviceProperty label="Model" value={device.model} /><DeviceProperty label="Serial number" value={device.serial} /><DeviceProperty label="BIOS / firmware" value={device.bios} /><DeviceProperty label="Processor" value={device.processor} /><DeviceProperty label="Installed RAM" value={`${device.ramGb} GB`} /><DeviceProperty label="Storage capacity" value={`${device.storageGb} GB`} detail={`${device.storageFreeGb} GB available`} /><DeviceProperty label="Warranty" value={device.warranty} /></div></section>
-      <section className="rmm-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">Interfaces</span><h2>Network adapters</h2></div></div><div className="rmm-adapter-list">{(device.networkAdapters || []).map((adapter) => <article key={adapter.name}><span><Network size={17} /></span><div><strong>{adapter.name}</strong><small>{adapter.type} · {adapter.mac}</small></div><div><strong>{adapter.address}</strong><StatusPill>{adapter.status}</StatusPill></div></article>)}</div></section>
+      <section className="rmm-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">System</span><h2>Hardware inventory</h2></div></div><div className="rmm-property-grid detailed"><DeviceProperty label="Manufacturer" value={device.manufacturer} /><DeviceProperty label="Model" value={device.model} /><DeviceProperty label="Serial number" value={device.serial} /><DeviceProperty label="BIOS / firmware" value={device.bios} /><DeviceProperty label="Processor" value={device.processor} /><DeviceProperty label="Installed RAM" value={device.ramGb == null ? null : device.ramGb + ' GB'} detail={memoryDetail} /><DeviceProperty label="Storage capacity" value={device.storageGb == null ? null : device.storageGb + ' GB'} detail={device.storageFreeGb == null ? '' : device.storageFreeGb + ' GB available'} /><DeviceProperty label="Warranty" value={device.warranty} /></div></section>
+      <NetworkAdaptersPanel device={device} />
     </div>
   )
 }

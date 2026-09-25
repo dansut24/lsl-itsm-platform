@@ -752,6 +752,8 @@ export function registerMicrosoftRoutes(app) {
               COALESCE(self_agent.id,agent_match.agent_id) AS agent_device_id,
               COALESCE(self_agent.cpu_percent,agent_match.cpu_percent) AS agent_cpu_percent,
               COALESCE(self_agent.memory_used_percent,agent_match.memory_used_percent) AS agent_memory_used_percent,
+              COALESCE(self_agent.memory_total_bytes,agent_match.memory_total_bytes) AS agent_memory_total_bytes,
+              COALESCE(self_agent.memory_used_bytes,agent_match.memory_used_bytes) AS agent_memory_used_bytes,
               COALESCE(self_agent.disk_used_percent,agent_match.disk_used_percent) AS agent_disk_used_percent,
               COALESCE(self_agent.uptime_seconds,agent_match.uptime_seconds) AS agent_uptime_seconds,
               COALESCE(self_agent.active_user,agent_match.active_user) AS agent_active_user,
@@ -771,7 +773,7 @@ export function registerMicrosoftRoutes(app) {
        LEFT JOIN tenant_microsoft_connections mc ON mc.id=d.microsoft_connection_id
        LEFT JOIN rmm_agent_devices self_agent ON self_agent.inventory_id=d.id AND self_agent.disabled_at IS NULL
        LEFT JOIN LATERAL (
-         SELECT a.reference,ad.id AS agent_id,ad.cpu_percent,ad.memory_used_percent,ad.disk_used_percent,ad.uptime_seconds,ad.active_user,ad.service_status,ad.websocket_status,ad.agent_version,ad.last_telemetry_at,a.source_payload AS agent_inventory_payload,
+         SELECT a.reference,ad.id AS agent_id,ad.cpu_percent,ad.memory_used_percent,ad.memory_total_bytes,ad.memory_used_bytes,ad.disk_used_percent,ad.uptime_seconds,ad.active_user,ad.service_status,ad.websocket_status,ad.agent_version,ad.last_telemetry_at,a.source_payload AS agent_inventory_payload,
                 CASE
                   WHEN NULLIF(trim(d.directory_device_id),'') IS NOT NULL AND lower(trim(a.directory_device_id))=lower(trim(d.directory_device_id)) THEN 'directory_device_id'
                   ELSE 'serial_number'

@@ -515,6 +515,36 @@ button.rmm-table-row { width: 100%; border: 0; text-align: left; cursor: pointer
 .rmm-adapter-list article > div:last-child { justify-items: end; }
 .rmm-adapter-list strong { overflow: hidden; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
 .rmm-adapter-list small { color: var(--rmm-muted); font-size: 7px; }
+.rmm-network-adapters-card .rmm-card-heading > small { color: var(--rmm-muted); font-size: 7px; font-weight: 750; }
+.rmm-network-adapters-card .rmm-adapter-list { gap: 10px; padding: 0 12px 12px; }
+.rmm-network-adapters-card .rmm-adapter-list article { display: grid; grid-template-columns: 1fr; gap: 10px; border: 1px solid var(--rmm-border); border-radius: 10px; padding: 11px; background: var(--rmm-surface); }
+.rmm-network-adapters-card .rmm-adapter-list article:first-child { border-top: 1px solid var(--rmm-border); }
+.rmm-network-adapters-card .rmm-adapter-list article.is-down { opacity: .72; }
+.rmm-adapter-heading { min-width: 0; display: grid; grid-template-columns: 31px minmax(0,1fr) auto; align-items: center; gap: 9px; }
+.rmm-adapter-heading > span:first-child { width: 31px; height: 31px; display: grid; place-items: center; border-radius: 8px; background: var(--rmm-soft); color: var(--rmm-accent); }
+.rmm-adapter-heading > div { min-width: 0; display: grid; gap: 2px; }
+.rmm-adapter-heading strong { overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.rmm-adapter-heading small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rmm-adapter-metrics { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 6px; }
+.rmm-adapter-metrics > span { min-width: 0; display: grid; gap: 2px; border-radius: 8px; padding: 8px; background: var(--rmm-soft); }
+.rmm-adapter-metrics small { font-size: 6px; text-transform: uppercase; letter-spacing: .05em; }
+.rmm-adapter-metrics strong { font-size: 8px; }
+.rmm-network-graph { min-height: 104px; display: grid; grid-template-rows: 72px auto; gap: 5px; border-radius: 8px; padding: 8px; background: var(--rmm-soft); }
+.rmm-network-graph > span { display: grid; place-items: center; color: var(--rmm-muted); font-size: 7px; }
+.rmm-network-graph svg { width: 100%; height: 72px; overflow: visible; }
+.rmm-network-graph polyline { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.rmm-network-graph polyline.rx { stroke: var(--rmm-accent); }
+.rmm-network-graph polyline.tx { stroke: #7a64d8; }
+.rmm-network-graph > div { display: flex; align-items: center; gap: 10px; color: var(--rmm-muted); font-size: 6px; }
+.rmm-network-graph > div span::before { content: ''; width: 8px; height: 2px; display: inline-block; margin-right: 4px; vertical-align: middle; border-radius: 9px; background: currentColor; }
+.rmm-network-graph > div .rx { color: var(--rmm-accent); }
+.rmm-network-graph > div .tx { color: #7a64d8; }
+.rmm-network-graph > div small { margin-left: auto; }
+@media (max-width: 560px) {
+  .rmm-adapter-metrics { grid-template-columns: 1fr 1fr; }
+  .rmm-network-adapters-card .rmm-card-heading { align-items: flex-start; }
+}
+
 
 .rmm-device-section-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; padding: 14px; }
 .rmm-device-section-heading h2 { margin: 3px 0 3px; font-size: 12px; }

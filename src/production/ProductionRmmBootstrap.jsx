@@ -22,6 +22,8 @@ function deviceToRmm(row) {
   const hasAgent = Boolean(row.agent_device_id)
   const compliant = String(row.compliance_state || '').toLowerCase() === 'compliant'
   const uptimeSeconds = row.agent_uptime_seconds == null ? null : Number(row.agent_uptime_seconds)
+  const memoryTotal = Number(row.agent_memory_total_bytes || row.memory_bytes || summary.total_memory_bytes || inventory.memory?.total_bytes || 0)
+  const memoryUsed = Number(row.agent_memory_used_bytes || inventory.memory?.used_bytes || 0)
   const uptime = uptimeSeconds == null ? 'Not reported' : uptimeSeconds >= 86400 ? `${Math.floor(uptimeSeconds / 86400)}d ${Math.floor((uptimeSeconds % 86400) / 3600)}h` : `${Math.floor(uptimeSeconds / 3600)}h ${Math.floor((uptimeSeconds % 3600) / 60)}m`
   return {
     id: row.reference, agentDeviceId: row.agent_device_id || '', rmmReference: row.rmm_reference || '', rmmMatchMethod: row.rmm_match_method || '',
@@ -36,7 +38,7 @@ function deviceToRmm(row) {
     manufacturer: row.manufacturer || summary.manufacturer || 'Unknown', model: row.model || summary.model || 'Unknown', serial: row.serial_number || summary.serial_number || 'Not reported', processor: inventory.cpu?.name || 'Not reported',
     lastSeen: row.agent_last_telemetry_at ? new Date(row.agent_last_telemetry_at).toLocaleString() : (row.source_last_sync_at ? new Date(row.source_last_sync_at).toLocaleString() : 'Not reported'), uptime, lastBoot: inventory.os?.last_boot || 'Not reported',
     managedSince: row.enrolled_at ? new Date(row.enrolled_at).toLocaleDateString() : 'Not reported', agent: hasAgent ? (row.agent_version ? `Hi5Central ${row.agent_version}` : 'Hi5Central Agent') : (row.management_agent || 'Intune'), agentChannel: hasAgent ? 'Stable' : 'Microsoft',
-    storageGb: total ? Math.round(total / (1024 ** 3)) : null, storageFreeGb: free ? Math.round(free / (1024 ** 3)) : null, ramGb: row.memory_bytes ? Math.round(Number(row.memory_bytes) / (1024 ** 3)) : (inventory.memory?.total_bytes ? Math.round(Number(inventory.memory.total_bytes) / (1024 ** 3)) : null),
+    storageGb: total ? Math.round(total / (1024 ** 3)) : null, storageFreeGb: free ? Math.round(free / (1024 ** 3)) : null, ramGb: memoryTotal > 0 ? Math.round(memoryTotal / (1024 ** 3)) : null, memoryTotalBytes: memoryTotal || null, memoryUsedBytes: memoryUsed || null,
     security: { encryptionState: security.bitlocker_status === 'On' ? 'Protected' : (row.is_encrypted ? 'Protected' : 'Not reported'), encryption: security.bitlocker_status === 'On' ? 'BitLocker enabled' : (row.is_encrypted ? 'Intune reports encrypted' : 'Not reported'), avState: security.defender_enabled === true ? 'Enabled' : security.defender_enabled === false ? 'Disabled' : 'Not reported', av: security.defender_realtime_enabled === true ? 'Real-time protection enabled' : 'Not reported', firewall: security.firewall_enabled === true ? 'Enabled' : security.firewall_enabled === false ? 'Disabled' : 'Not reported', secureBoot: security.secure_boot || 'Not reported', edrState: 'Not reported', edr: 'Not reported', tpm: security.tpm_present === true ? 'Present' : 'Not reported' },
     tags: [row.source === 'intune' ? 'Intune' : null, hasAgent ? 'Hi5Central Agent' : null, row.source_connection_name, row.compliance_state].filter(Boolean),
     installedSoftware: software.map((app) => ({

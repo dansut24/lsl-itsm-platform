@@ -475,21 +475,23 @@ function parentRegistryPath(path) {
 }
 
 function RegistryTool({ device }) {
-  const initialPath = 'HKLM:\\'
-  const initialCacheKey = `registry:${device.agentDeviceId}:${initialPath}`
-  const cachedInitial = cachedToolValue(initialCacheKey, 30000)
-  const [path, setPath] = useState(initialPath)
-  const [data, setData] = useState(() => cachedInitial || { subkeys: [], values: [] })
-  const [state, setState] = useState(cachedInitial ? 'Showing recent registry data · refreshing…' : '')
+  const hives = [
+    ['HKLM:\\', 'HKEY_LOCAL_MACHINE', 'Machine-wide Windows and application settings'],
+    ['HKCU:\\', 'HKEY_CURRENT_USER', 'Settings for the Agent service user context'],
+    ['HKCR:\\', 'HKEY_CLASSES_ROOT', 'File associations and COM registrations'],
+    ['HKU:\\', 'HKEY_USERS', 'Loaded user registry profiles'],
+    ['HKCC:\\', 'HKEY_CURRENT_CONFIG', 'Current hardware profile settings'],
+  ]
+  const [path, setPath] = useState('')
+  const [data, setData] = useState({ subkeys: [], values: [] })
+  const [state, setState] = useState('Select a registry hive')
   const [busy, setBusy] = useState(false)
 
-  async function load(nextPath = path) {
+  async function load(nextPath) {
+    if (!nextPath) return
     const cacheKey = `registry:${device.agentDeviceId}:${nextPath}`
     const cached = cachedToolValue(cacheKey, 30000)
-    if (cached) {
-      setData(cached)
-      setPath(nextPath)
-    }
+    if (cached) { setData(cached); setPath(nextPath) }
     setBusy(true); setState(cached ? 'Refreshing registry…' : 'Reading registry…')
     try {
       const job = await runAction(device, 'registry.list', { path: nextPath })
@@ -501,7 +503,24 @@ function RegistryTool({ device }) {
       setState('Registry loaded')
     } catch (error) { setState(error.message) } finally { setBusy(false) }
   }
-  useEffect(() => { load('HKLM:\\') }, [device.agentDeviceId])
+
+  useEffect(() => {
+    setPath('')
+    setData({ subkeys: [], values: [] })
+    setState('Select a registry hive')
+    setBusy(false)
+  }, [device.agentDeviceId])
+
+  function showHives() {
+    setPath('')
+    setData({ subkeys: [], values: [] })
+    setState('Select a registry hive')
+  }
+  function goBack() {
+    const normalized = String(path || '').replace(/\\+$/, '')
+    if (!normalized || /^HK(?:LM|CU|CR|U|CC):$/i.test(normalized)) { showHives(); return }
+    load(parentRegistryPath(path))
+  }
 
   async function mutation(type, payload, confirmText) {
     if (confirmText && !window.confirm(confirmText)) return
@@ -509,11 +528,16 @@ function RegistryTool({ device }) {
     try {
       const job = await runAction(device, type, payload)
       if (job.status !== 'completed') throw new Error(job.error_message || job.result?.error || 'Registry action failed.')
-      await load(type === 'registry.delete_key' ? parentRegistryPath(payload.path) : path)
+      if (type === 'registry.delete_key') {
+        const parent = parentRegistryPath(payload.path)
+        if (/^HK(?:LM|CU|CR|U|CC):\\?$/i.test(parent)) await load(parent)
+        else await load(parent)
+      } else await load(path)
     } catch (error) { setState(error.message) } finally { setBusy(false) }
   }
 
   function createKey() {
+    if (!path) return
     const name = window.prompt('New registry key name')
     if (name) mutation('registry.create_key', { path, name })
   }
@@ -522,13 +546,15 @@ function RegistryTool({ device }) {
     if (value != null) mutation('registry.set_value', { path, name: row.name, value, kind: row.kind || 'String' })
   }
 
-  return <div className="rmm-registry-tool">
-    <div className="rmm-files-toolbar"><button onClick={() => load(parentRegistryPath(path))} type="button"><ArrowLeft size={15} /></button><input value={path} onChange={(event) => setPath(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') load(event.currentTarget.value) }} /><button onClick={() => load(path)} type="button"><RefreshCw size={15} /></button><button onClick={createKey} type="button"><FolderPlus size={15} /> New key</button></div>
-    <div className="rmm-registry-layout">
+  return <div className={'rmm-registry-tool ' + (!path ? 'is-hive-picker' : '')}>
+    <div className="rmm-files-toolbar">
+      {path ? <><button onClick={goBack} title="Back" type="button"><ArrowLeft size={15} /></button><button onClick={showHives} title="Registry hives" type="button"><Settings2 size={15} /> Hives</button><input value={path} onChange={(event) => setPath(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') load(event.currentTarget.value) }} /><button onClick={() => load(path)} type="button"><RefreshCw size={15} /></button><button onClick={createKey} type="button"><FolderPlus size={15} /> New key</button></> : <span className="rmm-registry-picker-title"><Settings2 size={16} /><strong>Select a registry hive</strong><small>No registry data is read until you choose a hive.</small></span>}
+    </div>
+    {!path ? <div className="rmm-registry-hive-picker">{hives.map(([root, label, description]) => <button key={root} onClick={() => load(root)} type="button"><span><Folder size={18} /></span><strong>{label}</strong><small>{description}</small><code>{root}</code><ChevronRight size={15} /></button>)}</div> : <div className="rmm-registry-layout">
       <section><header>Subkeys</header>{busy && !data.subkeys.length && !data.values.length ? <ToolLoadingRows columns={2} count={7} /> : data.subkeys.map((row) => <div className="rmm-registry-row" key={row.name}><button onClick={() => load(path.replace(/\\+$/, '') + '\\' + row.name)} type="button"><Folder size={14} /><span>{row.name}</span></button><button className="danger" onClick={() => mutation('registry.delete_key', { path: path.replace(/\\+$/, '') + '\\' + row.name }, 'Delete registry key ' + row.name + ' and all of its contents?')} type="button"><Trash2 size={13} /></button></div>)}</section>
       <section><header>Values</header>{busy && !data.subkeys.length && !data.values.length ? <ToolLoadingRows columns={3} count={7} /> : data.values.map((row) => <div className="rmm-registry-value" key={row.name}><button onClick={() => editValue(row)} type="button"><strong>{row.name || '(Default)'}</strong><small>{row.kind || 'String'}</small><span>{row.value}</span></button><button className="danger" onClick={() => mutation('registry.delete_value', { path, name: row.name }, 'Delete registry value ' + row.name + '?')} type="button"><Trash2 size={13} /></button></div>)}</section>
-    </div>
-    <div className="rmm-tool-footer-status">{busy ? 'Working…' : state}<span>{data.subkeys.length} keys · {data.values.length} values</span></div>
+    </div>}
+    <div className="rmm-tool-footer-status">{busy ? 'Working…' : state}{path && <span>{data.subkeys.length} keys · {data.values.length} values</span>}</div>
   </div>
 }
 
@@ -540,10 +566,40 @@ function StorageTool({ device }) {
   }) : <Empty>No disk inventory has been reported by this device yet.</Empty>}</div>
 }
 
+function windowsSessionState(value) {
+  const labels = ['Active','Connected','Connect query','Shadow','Disconnected','Idle','Listen','Reset','Down','Initialising']
+  const index = Number(value)
+  return Number.isInteger(index) && labels[index] ? labels[index] : String(value ?? 'Unknown')
+}
+
 function SessionsTool({ device }) {
   const info = device.inventory?.sessions || {}
   const sessions = Array.isArray(info.sessions) ? info.sessions : []
-  return <div className="rmm-static-tool"><div className="rmm-tool-summary-grid"><span><small>Console user</small><strong>{info.console_user || 'Not reported'}</strong></span><span><small>Last user</small><strong>{info.last_logged_in_user || 'Not reported'}</strong></span><span><small>RDP sessions</small><strong>{info.rdp_sessions ?? 'Not reported'}</strong></span></div><div className="rmm-tool-table-head sessions"><span>User</span><span>Session</span><span>Station</span><span>State</span></div><div className="rmm-tool-table-body">{sessions.map((row) => <div className="rmm-tool-table-row sessions" key={row.id}><span><strong>{row.user || 'System / no user'}</strong></span><span>{row.id}</span><span>{row.station || '—'}</span><span>{String(row.state)}</span></div>)}</div>{!sessions.length && <Empty>No Windows session inventory has been reported.</Empty>}</div>
+  const localInfo = device.inventory?.local_users || {}
+  const users = Array.isArray(localInfo.users) ? localInfo.users : []
+  const admins = Array.isArray(device.inventory?.security?.local_admins) ? device.inventory.security.local_admins : []
+  const adminNames = new Set(admins.flatMap((admin) => {
+    const full = String(admin.name || '').toLowerCase()
+    const leaf = full.split('\\').pop()
+    return [full, leaf].filter(Boolean)
+  }))
+  const localUserCount = localInfo.count ?? (users.length || null)
+  const adminCount = device.inventory?.security?.local_admin_count ?? admins.length
+  const isAdmin = (user) => Boolean(user.is_admin || adminNames.has(String(user.name || '').toLowerCase()))
+
+  return <div className="rmm-static-tool rmm-users-sessions-tool">
+    <div className="rmm-tool-summary-grid sessions-summary"><span><small>Console user</small><strong>{info.console_user || 'Not reported'}</strong></span><span><small>Local users</small><strong>{localUserCount ?? 'Awaiting Agent inventory'}</strong></span><span><small>Local admins</small><strong>{adminCount ?? 'Not reported'}</strong></span><span><small>RDP sessions</small><strong>{info.rdp_sessions ?? 'Not reported'}</strong></span></div>
+
+    <section className="rmm-account-section"><header><div><strong>Local users</strong><small>Windows accounts defined on this endpoint</small></div><span>{users.length || '—'}</span></header>
+      {users.length ? <div className="rmm-account-grid">{users.map((user) => <article key={user.sid || user.name}><div className="rmm-account-title"><span><Users size={16} /></span><div><strong>{user.name || 'Unnamed account'}</strong><small>{user.full_name || user.description || user.sid || 'Local account'}</small></div><StatusPill tone={user.enabled === false ? 'neutral' : 'healthy'}>{user.enabled === false ? 'Disabled' : 'Enabled'}</StatusPill></div><div className="rmm-account-meta"><span><small>Role</small><strong>{isAdmin(user) ? 'Administrator' : 'Standard user'}</strong></span><span><small>Last logon</small><strong>{user.last_logon ? new Date(user.last_logon).toLocaleString() : 'Not reported'}</strong></span><span><small>SID</small><strong title={user.sid || ''}>{user.sid || 'Not reported'}</strong></span></div></article>)}</div> : <Empty>Local-user inventory will appear after the updated Agent reports its next inventory snapshot.</Empty>}
+    </section>
+
+    <section className="rmm-account-section"><header><div><strong>Local administrators</strong><small>Members of the endpoint Administrators group</small></div><span>{admins.length}</span></header>
+      {admins.length ? <div className="rmm-admin-list">{admins.map((admin, index) => <article key={(admin.name || 'admin') + index}><span><Users size={15} /></span><div><strong>{admin.name || 'Unknown principal'}</strong><small>{[admin.object_class, admin.principal_source].filter(Boolean).join(' · ') || 'Administrator'}</small></div><StatusPill tone="warning">Admin</StatusPill></article>)}</div> : <Empty>No local administrator membership has been reported.</Empty>}
+    </section>
+
+    <section className="rmm-account-section"><header><div><strong>Interactive sessions</strong><small>Console, Remote Desktop and Windows session state</small></div><span>{sessions.length}</span></header><div className="rmm-tool-table-head sessions"><span>User</span><span>Session</span><span>Station</span><span>State</span></div><div className="rmm-tool-table-body">{sessions.map((row) => <div className="rmm-tool-table-row sessions" key={row.id}><span><strong>{row.user || 'System / no user'}</strong></span><span>{row.id}</span><span>{row.station || '—'}</span><span>{windowsSessionState(row.state)}</span></div>)}</div>{!sessions.length && <Empty>No Windows session inventory has been reported.</Empty>}</section>
+  </div>
 }
 
 function EventsTool({ device }) {
