@@ -1924,23 +1924,14 @@ function startTransitionWatchdog() {
 
     const stalledFor = now - lastFrameAtMs;
     if (stalledFor > FRAME_STALL_MS) {
+      // The Agent intentionally skips unchanged desktop frames. A static screen
+      // can therefore have no decoded frames for an arbitrary period while the
+      // WebRTC transport is completely healthy. Never escalate frame age alone
+      // into a session reconnect; only ICE/signaling/network state may do that.
       secureDesktopLikely = true;
-      if (stalledFor < 2400) {
-        setMobileRecoveryStage('Keyframe recovery');
-        requestRemoteKeyframe('decoded-frame-stall');
-        ensureRemoteVideoPlayback('decoded-frame-stall');
-      } else if (stalledFor < 4800) {
-        setMobileRecoveryStage('Playback recovery');
-        ensureRemoteVideoPlayback('decoded-frame-stall-extended');
-        armDecodedFrameReveal();
-        requestRemoteKeyframe('decoded-frame-stall-extended');
-      } else if (isMobileViewerSurface()) {
-        setMobileRecoveryStage('Reconnecting media');
-        scheduleMobileSessionReconnect('decoded-frame-stall');
-      } else {
-        requestRemoteKeyframe('decoded-frame-stall-long');
-        ensureRemoteVideoPlayback('decoded-frame-stall-long');
-      }
+      requestRemoteKeyframe('decoded-frame-stall');
+      ensureRemoteVideoPlayback('decoded-frame-stall');
+      if (stalledFor > 2400) armDecodedFrameReveal();
     }
   }, 250);
 }
@@ -3935,6 +3926,20 @@ function connectViewerSignaling(reason = 'initial') {
     if (ws !== socket) return;
     setStatus('', mobileRecoveryAttempts ? 'Reconnecting…' : 'Connected');
     setMobileRecoveryStage(mobileRecoveryAttempts ? 'Signaling restored' : 'Idle');
+    if (mobileRecoveryAttempts > 0) {
+      const attempt = mobileRecoveryAttempts;
+      window.setTimeout(() => {
+        if (!currentSession || ws !== socket || document.hidden) return;
+        if (mobileRecoveryAttempts !== attempt) return;
+        if (pc?.connectionState === 'connected') return;
+        if (mobileReconnectDeadline && Date.now() >= mobileReconnectDeadline) {
+          setMobileRecoveryStage('Recovery failed');
+          disconnect('Connection lost');
+          return;
+        }
+        scheduleMobileSessionReconnect('media-negotiation-timeout');
+      }, 8000);
+    }
   };
   socket.onmessage = onSignalMessage;
   socket.onerror = () => {
@@ -3960,6 +3965,7 @@ function connectViewerSignaling(reason = 'initial') {
 
 function scheduleMobileSessionReconnect(reason = 'network-recovery', { closeSocket = true } = {}) {
   if (!currentSession || !isMobileViewerSurface() || currentSession.viewerClient !== 'browser') return false;
+  if (String(reason).includes('frame-stall')) return false;
   const now = Date.now();
   if (!mobileReconnectDeadline) mobileReconnectDeadline = now + 28000;
   if (document.hidden) {
