@@ -150,6 +150,7 @@ async function supersedePriorTechnicianRemoteSessions({ tenantId, agentDeviceId,
         AND mode=$4
         AND status IN ('created','viewer_connected','active')
         AND ended_at IS NULL
+        AND expires_at>now()
       ORDER BY created_at ASC`,
     [tenantId, String(agentDeviceId), userId, mode],
   )
