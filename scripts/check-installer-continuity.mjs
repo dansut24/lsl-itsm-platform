@@ -16,6 +16,7 @@ expect(enrichment.includes('rankWindowsInstallerAssets') && enrichment.includes(
 expect(vendorIntel.includes('githubInstallerContinuityCandidates') && vendorIntel.includes('installers: installerContinuityCandidates'), 'GitHub vendor releases must retain signed/checksummed MSI/EXE continuity alternatives.')
 expect(patching.includes('inventoryInstallerTechnology') && patching.includes('installedInstallerTechnology'), 'Patch planning must infer the installed installer technology from inventory.')
 expect(patching.includes('continuityInstallerForVendor') && patching.includes('installerContinuitySelected'), 'Patch planning must select a same-technology vendor asset when available.')
+expect(patching.includes('targetVersionInstalledForCatalogue') && patching.includes("'older_version_present'"), 'A target-version sibling must suppress repeat patching of an older residual registration.')
 expect(patching.includes('Installer technology migration required') && patching.includes('installerTechnologyMigrationRequired: true'), 'Unqualified EXE/MSI technology changes must be blocked explicitly.')
 expect(patching.includes("fallbackProvider: vendorDirect && fallbackPackageId && !continuitySensitiveUpdate ? 'winget' : ''"), 'Continuity-sensitive vendor updates must not fall back to an uncontrolled WinGet technology change.')
 

@@ -984,6 +984,20 @@ function classifyInstallation(app, catalogue) {
   }
 }
 
+function targetVersionInstalledForCatalogue(items, catalogue) {
+  const targetVersion = clean(catalogue?.target_version)
+  if (!targetVersion) return false
+  return items.some((item) => {
+    if (!identityPhraseMatches(item?.name, catalogue?.name_pattern)
+      || !identityPhraseMatches(item?.publisher, catalogue?.publisher_pattern)) return false
+    const comparison = compareVersions(
+      normalizeCatalogueVersion(item?.version, catalogue, 'installed'),
+      targetVersion,
+    )
+    return comparison != null && comparison >= 0
+  })
+}
+
 function targetProductCodeInstalled(items, catalogue) {
   const verification = object(catalogue?.verification)
   if (clean(verification.method) !== 'uninstall_registry') return false
@@ -1149,12 +1163,15 @@ function buildSoftware(devices, catalogue, observations = []) {
     const items = softwareItems(device)
     for (const app of items) {
       const state = classifyInstallation(app, catalogue)
-      if (state.catalogue && targetProductCodeInstalled(items, state.catalogue)) {
+      if (state.catalogue && (
+        targetVersionInstalledForCatalogue(items, state.catalogue)
+        || targetProductCodeInstalled(items, state.catalogue)
+      )) {
         const verification = object(state.catalogue.verification)
         const targetCode = lower(verification.productCode)
         const appCode = lower(app?.registry_key)
         const comparison = compareVersions(normalizeCatalogueVersion(app?.version, state.catalogue, 'installed'), state.targetVersion)
-        state.patchStatus = appCode === targetCode || (comparison != null && comparison >= 0)
+        state.patchStatus = (targetCode && appCode === targetCode) || (comparison != null && comparison >= 0)
           ? 'current'
           : 'older_version_present'
       }
