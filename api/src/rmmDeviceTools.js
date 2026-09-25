@@ -159,7 +159,7 @@ export function registerRmmDeviceToolRoutes(app) {
     if (auth.error) return auth.error
     const device = await managedAgent(auth.session.tenant_id, c.req.param('agentDeviceId'))
     if (!device) return c.json({ error: 'Managed Agent not found for this device.' }, 404)
-    if (!versionAtLeast(device.agent_version, '0.1.148')) return c.json({ error: 'Agent 0.1.148 or newer is required for live network throughput.', upgradeRequired: true }, 426)
+    if (!versionAtLeast(device.agent_version, '0.1.149')) return c.json({ error: 'Agent 0.1.149 or newer is required for live network throughput.', upgradeRequired: true }, 426)
     const socket = agentSocketForDevice(device.id)
     if (!socket || socket.readyState !== 1) return c.json({ error: 'This device is offline.', offline: true }, 409)
     try {

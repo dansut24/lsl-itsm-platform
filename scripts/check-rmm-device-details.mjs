@@ -20,6 +20,7 @@ expect(platform.includes('device.memoryUsedBytes') && platform.includes('Install
 // Network cards use inventory identity plus non-persisted live counters.
 expect(toolApi.includes("'/api/v1/rmm/devices/:agentDeviceId/network-stats'"), 'Live network-stats endpoint is missing.')
 expect(toolApi.includes("network_stats_request") && toolApi.includes('requestAgentProbe'), 'Network stats must use the lightweight Agent message probe, not persisted jobs.')
+expect(toolApi.includes("versionAtLeast(device.agent_version, '0.1.149')"), 'Live network probe must be gated to the first Agent release that implements it.')
 expect(platform.includes('function NetworkAdaptersPanel') && platform.includes('updates every 2 seconds'), 'Network adapter live graph is missing.')
 expect(platform.includes('receive_link_speed_bps') && platform.includes('transmit_link_speed_bps'), 'Network adapter current link speeds are missing.')
 
