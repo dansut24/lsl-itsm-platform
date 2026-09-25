@@ -865,3 +865,149 @@
   .rmm-account-meta > span:last-child { grid-column: 1 / -1; }
   .rmm-users-sessions-tool { padding: 10px; }
 }
+
+/* Mobile embedded tools: contain inline overflow and use native-width cards. */
+@media (max-width: 900px) {
+  .rmm-device-section.is-tools,
+  .rmm-device-tool-workspace.is-embedded,
+  .rmm-device-tool-workspace.is-embedded .rmm-device-tool-body,
+  .rmm-device-tool-workspace.is-embedded .rmm-device-tool-body > main,
+  .rmm-device-tool-workspace.is-embedded .rmm-live-list-tool,
+  .rmm-device-tool-workspace.is-embedded .rmm-files-tool,
+  .rmm-device-tool-workspace.is-embedded .rmm-registry-tool,
+  .rmm-device-tool-workspace.is-embedded .rmm-static-tool,
+  .rmm-device-tool-workspace.is-embedded .rmm-storage-tool,
+  .rmm-device-tool-workspace.is-embedded .rmm-users-sessions-tool,
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-launcher {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+
+  .rmm-device-section.is-tools,
+  .rmm-device-tool-workspace.is-embedded {
+    overflow-x: clip;
+    contain: inline-size;
+  }
+
+  .rmm-device-tool-workspace.is-embedded .rmm-device-tool-body,
+  .rmm-device-tool-workspace.is-embedded .rmm-device-tool-body > main,
+  .rmm-device-tool-workspace.is-embedded .rmm-live-list-tool,
+  .rmm-device-tool-workspace.is-embedded .rmm-files-tool,
+  .rmm-device-tool-workspace.is-embedded .rmm-static-tool,
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-commandbar,
+  .rmm-device-tool-workspace.is-embedded .rmm-files-toolbar,
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-footer-status,
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-body {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-commandbar,
+  .rmm-device-tool-workspace.is-embedded .rmm-files-toolbar,
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-footer-status {
+    flex-wrap: wrap;
+  }
+
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-search,
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-footer-status .rmm-tool-search {
+    min-width: 0;
+    width: 100%;
+    flex: 1 1 100%;
+  }
+
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-head,
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row,
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-loading-rows {
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 640px) {
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-head {
+    display: none;
+  }
+
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-body {
+    width: 100%;
+    overflow: visible;
+  }
+
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row {
+    width: 100%;
+    min-width: 0;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px 10px;
+    margin: 0;
+    border-bottom: 1px solid var(--rmm-border);
+    padding: 11px 12px;
+  }
+
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row > span,
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row > button {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row > span:first-child,
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row > button:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row > span::before {
+    display: block;
+    margin-bottom: 2px;
+    color: var(--rmm-muted);
+    font-size: 7px;
+    font-weight: 900;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row.processes > span:nth-child(2)::before { content: 'PID'; }
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row.processes > span:nth-child(3)::before { content: 'CPU time'; }
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row.processes > span:nth-child(4)::before { content: 'Memory'; }
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row.processes > span:nth-child(5)::before { content: 'Threads'; }
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row.processes > span:last-child { grid-column: 1 / -1; justify-content: flex-start; }
+
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row.services > span:nth-child(2)::before { content: 'Status'; }
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row.services > span:nth-child(3)::before { content: 'Startup'; }
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row.services > span:nth-child(4)::before { content: 'Account'; }
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row.services > span:nth-child(4),
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row.services > span:last-child { grid-column: 1 / -1; }
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row.services > span:last-child { justify-content: flex-start; }
+
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row.files > span:nth-child(2)::before { content: 'Type'; }
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row.files > span:nth-child(3)::before { content: 'Size'; }
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row.files > span:nth-child(4)::before { content: 'Modified'; }
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row.files > span:nth-child(4),
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row.files > span:last-child { grid-column: 1 / -1; }
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row.files > span:last-child { justify-content: flex-start; }
+
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row.sessions > span:nth-child(2)::before { content: 'Session'; }
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row.sessions > span:nth-child(3)::before { content: 'Station'; }
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row.sessions > span:nth-child(4)::before { content: 'State'; }
+
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row.events > span:nth-child(1)::before { content: 'Level'; }
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row.events > span:nth-child(2)::before { content: 'Date & time'; }
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row.events > span:nth-child(3)::before { content: 'Source'; }
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row.events > span:nth-child(4)::before { content: 'Event ID'; }
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row.events > span:nth-child(5)::before { content: 'Message'; }
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-table-row.events > span:nth-child(5) {
+    grid-column: 1 / -1;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+  }
+
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-loading-rows {
+    min-width: 0;
+    width: 100%;
+  }
+  .rmm-device-tool-workspace.is-embedded .rmm-tool-loading-rows > div {
+    min-width: 0;
+    grid-template-columns: 1fr 1fr !important;
+  }
+}

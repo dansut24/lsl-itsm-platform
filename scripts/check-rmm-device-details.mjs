@@ -35,6 +35,8 @@ expect(tools.includes('device.inventory?.security?.local_admins'), 'Users & Sess
 
 // Mobile embedded tools belong to page flow rather than a fixed mini viewport.
 expect(toolCss.includes('.rmm-device-tool-workspace.is-embedded {\n    height: auto;') && toolCss.includes('overflow-y: visible;'), 'Embedded mobile tools must allow page-owned vertical scrolling.')
+expect(toolCss.includes('contain: inline-size;') && toolCss.includes('overflow-x: clip;'), 'Embedded mobile tools must not widen or horizontally pan the Device Details page.')
+expect(toolCss.includes('.rmm-device-tool-workspace.is-embedded .rmm-tool-table-head {\n    display: none;') && toolCss.includes('grid-template-columns: repeat(2, minmax(0, 1fr)) !important;'), 'Phone tool tables must collapse to viewport-width cards instead of desktop-width horizontal tables.')
 expect(activity.includes('window.setInterval(() => load(true), 5000)'), 'Device Activity must live-refresh silently while its tab is open.')
 
 if (failures.length) {
