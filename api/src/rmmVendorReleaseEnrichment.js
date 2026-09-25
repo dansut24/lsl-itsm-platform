@@ -102,14 +102,21 @@ function checksumAssetScore(name = '') {
   return -Infinity
 }
 
-export function selectWindowsInstallerAsset(assets = [], productName = '') {
+export function rankWindowsInstallerAssets(assets = [], productName = '', preferredInstallerType = '') {
+  const preferred = lower(preferredInstallerType)
   return assets
     .map((asset) => {
       const assessment = installerAssetAssessment(asset?.name, productName, assets)
-      return { ...asset, score: assessment.score, selectionReason: assessment.reason }
+      const type = lower(asset?.name).endsWith('.msi') ? 'msi' : lower(asset?.name).endsWith('.exe') ? 'exe' : ''
+      const continuityBonus = preferred && type === preferred ? 1000 : 0
+      return { ...asset, installerType: type, score: assessment.score + continuityBonus, selectionReason: continuityBonus ? 'installer_continuity_' + type : assessment.reason }
     })
     .filter((asset) => Number.isFinite(asset.score))
-    .sort((a, b) => b.score - a.score || clean(a.name).localeCompare(clean(b.name)))[0] || null
+    .sort((a, b) => b.score - a.score || clean(a.name).localeCompare(clean(b.name)))
+}
+
+export function selectWindowsInstallerAsset(assets = [], productName = '', preferredInstallerType = '') {
+  return rankWindowsInstallerAssets(assets, productName, preferredInstallerType)[0] || null
 }
 
 export function classifyWindowsReleaseAssets(assets = []) {
@@ -162,6 +169,7 @@ export async function discoverGithubWindowsInstaller(repository, tag, productNam
   const assets = await githubExpandedAssets(repository, tag)
   return {
     installer: selectWindowsInstallerAsset(assets, productName),
+    installers: rankWindowsInstallerAssets(assets, productName),
     checksum: selectChecksumAsset(assets),
     assetsSeen: assets.length,
   }

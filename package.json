@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --configLoader native",
-    "build": "npm run check:production-runtime && npm run check:rmm-viewer && npm run check:rmm-device-details && vite build --configLoader native",
+    "build": "npm run check:production-runtime && npm run check:rmm-viewer && npm run check:rmm-device-details && npm run check:installer-continuity && vite build --configLoader native",
     "lint": "oxlint",
     "check:responsive": "node scripts/check-responsive-contract.mjs",
     "check:deployment": "node scripts/check-deployment-portability.mjs",
@@ -14,7 +14,8 @@
     "check:production-runtime": "node scripts/check-production-runtime-boundary.mjs",
     "preview": "vite preview --configLoader native",
     "check:rmm-viewer": "node scripts/check-rmm-viewer-contract.mjs",
-    "check:rmm-device-details": "node scripts/check-rmm-device-details.mjs"
+    "check:rmm-device-details": "node scripts/check-rmm-device-details.mjs",
+    "check:installer-continuity": "node scripts/check-installer-continuity.mjs"
   },
   "dependencies": {
     "@tanstack/react-table": "^9.2.4",

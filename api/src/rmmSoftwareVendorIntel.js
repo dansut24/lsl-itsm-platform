@@ -28,6 +28,7 @@ import {
   classifyGithubReleaseBacklog,
   discoverGithubWindowsInstaller,
   runVendorArtifactQualification,
+  rankWindowsInstallerAssets,
   selectChecksumAsset,
   selectWindowsInstallerAsset,
   vendorReleaseTrustProfile,
@@ -576,6 +577,33 @@ export function jetbrainsVendorBuild(sourceKey, version, installerUrl) {
   return match[2]+match[3]+'.'+match[4]+'.'+match[5]
 }
 
+async function githubInstallerContinuityCandidates(assets = [], productName = '', checksum = null) {
+  const ranked = Array.isArray(assets) ? assets : []
+  const candidates = []
+  const seenTypes = new Set()
+  for (const asset of ranked) {
+    const installerType = clean(asset?.installerType || detectInstallerType(asset?.name)).toLowerCase()
+    if (!['msi', 'exe'].includes(installerType) || seenTypes.has(installerType)) continue
+    const rawUrl = clean(asset?.browser_download_url)
+    if (!rawUrl || !checksum?.browser_download_url) continue
+    const installerUrl = (await publicHttpsUrl(rawUrl)).toString()
+    const installerSha256 = normalizedSha256(
+      await publishedChecksum(checksum.browser_download_url, clean(asset?.name)).catch(() => ''),
+    )
+    if (!installerSha256) continue
+    seenTypes.add(installerType)
+    candidates.push({
+      name: clean(asset?.name),
+      url: installerUrl,
+      sha256: installerSha256,
+      installerType,
+      installerTechnology: installerType === 'msi' ? 'msi' : 'generic',
+      selectionReason: clean(asset?.selectionReason),
+    })
+  }
+  return candidates
+}
+
 async function syncGenericConfigured(sourceKey, state) {
   const b = await binding(sourceKey)
   if (!b) return null
@@ -590,6 +618,7 @@ async function syncGenericConfigured(sourceKey, state) {
   let verificationProductCode = ''
   let verificationVendorBuild = ''
   let selectedAssetReason = ''
+  let installerContinuityCandidates = []
   let payload = {}
 
   if (state.source_type === 'winget_manifest') {
@@ -635,6 +664,11 @@ async function syncGenericConfigured(sourceKey, state) {
       if (installer && checksum) {
         installerSha256 = await publishedChecksum(checksum.browser_download_url, installer.name).catch(() => '')
       }
+      installerContinuityCandidates = await githubInstallerContinuityCandidates(
+        discovery.installers,
+        b.canonical_name,
+        checksum,
+      )
       resolvedInstallerType = detectInstallerType(installer?.name, resolvedInstallerType)
       payload = { github: {
         tag_name: lightweight.tag,
@@ -645,6 +679,7 @@ async function syncGenericConfigured(sourceKey, state) {
         selectedAsset: clean(installer?.name),
         selectedAssetReason,
         checksumAsset: clean(checksum?.name),
+        installers: installerContinuityCandidates,
       } }
     } else {
       const release = clean(config.releaseTagPattern)
@@ -667,6 +702,11 @@ async function syncGenericConfigured(sourceKey, state) {
       if (installer && checksum) {
         installerSha256 = await publishedChecksum(checksum.browser_download_url, installer.name).catch(() => '')
       }
+      installerContinuityCandidates = await githubInstallerContinuityCandidates(
+        rankWindowsInstallerAssets(assets, b.canonical_name),
+        b.canonical_name,
+        checksum,
+      )
       resolvedInstallerType = detectInstallerType(installer?.name, resolvedInstallerType)
       payload = { github: {
         id: release?.id,
@@ -676,6 +716,8 @@ async function syncGenericConfigured(sourceKey, state) {
         releaseTagPattern: clean(config.releaseTagPattern),
         selectedAsset: clean(installer?.name),
         selectedAssetReason,
+        checksumAsset: clean(checksum?.name),
+        installers: installerContinuityCandidates,
       } }
     }
   } else if (state.source_type === 'gitlab_releases') {
@@ -1331,6 +1373,10 @@ async function syncGenericConfigured(sourceKey, state) {
       releaseUrl,
       selectedAsset: selectedAssetName,
       selectedAssetReason,
+      installerContinuity: installerContinuityCandidates.length ? {
+        availableTypes: [...new Set(installerContinuityCandidates.map((item) => clean(item.installerType)).filter(Boolean))],
+        candidates: installerContinuityCandidates.map((item) => ({ name: item.name, installerType: item.installerType })),
+      } : {},
       automaticVendorRelease: true,
       hasWingetFallback: Boolean(wingetPackageId),
       wingetPackageId: clean(config.wingetPackageId),

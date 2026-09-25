@@ -1925,6 +1925,46 @@ async function patchDeploymentRows(tenantId) {
   return result.rows
 }
 
+function installerTechnologyFamily(value = '') {
+  const technology = lower(value)
+  if (!technology) return ''
+  if (technology === 'msi' || technology === 'windows_installer') return 'msi'
+  if (['exe', 'inno', 'nullsoft', 'nsis', 'burn', 'installshield', 'squirrel', 'install4j', 'generic'].includes(technology)) return 'exe'
+  return ''
+}
+
+function inventoryInstallerTechnology(item = {}) {
+  const uninstall = lower(item?.uninstall_string || item?.quiet_uninstall_string)
+  const registryKey = clean(item?.registry_key)
+  if (/\bmsiexec(?:\.exe)?\b/i.test(uninstall) || /^\{[0-9a-f-]{36}\}$/i.test(registryKey)) return 'msi'
+  if (/\.exe(?:"|\s|$)/i.test(clean(item?.uninstall_string || item?.quiet_uninstall_string))) return 'exe'
+  return ''
+}
+
+function installedInstallerTechnology(installed = null) {
+  if (!installed) return ''
+  const direct = inventoryInstallerTechnology(installed)
+  if (direct) return direct
+  const technologies = [...new Set(array(installed.matchingInstances)
+    .map((item) => installerTechnologyFamily(item?.installerTechnology) || inventoryInstallerTechnology(item))
+    .filter(Boolean))]
+  return technologies.length === 1 ? technologies[0] : ''
+}
+
+function continuityInstallerForVendor(vendor = null, installedTechnology = '') {
+  const wanted = installerTechnologyFamily(installedTechnology)
+  if (!vendor || !wanted) return null
+  const github = object(object(vendor.source_payload).github)
+  const candidates = array(github.installers)
+  return candidates.find((candidate) => {
+    const family = installerTechnologyFamily(candidate?.installerTechnology || candidate?.installerType)
+    return family === wanted
+      && /^https:\/\//i.test(clean(candidate?.url))
+      && /^[a-f0-9]{64}$/i.test(clean(candidate?.sha256))
+      && ['msi', 'exe'].includes(lower(candidate?.installerType))
+  }) || null
+}
+
 function installedSoftwareForCatalogue(sourcePayload, catalogue) {
   const matches = array(object(sourcePayload).software?.items)
     .filter((item) => identityPhraseMatches(item?.name, catalogue.name_pattern)
@@ -1946,6 +1986,8 @@ function installedSoftwareForCatalogue(sourcePayload, catalogue) {
       scope: clean(item?.scope),
       registryKey: clean(item?.registry_key),
       uninstallString: clean(item?.uninstall_string),
+      quietUninstallString: clean(item?.quiet_uninstall_string),
+      installerTechnology: inventoryInstallerTechnology(item),
     })),
   }
 }
@@ -2106,7 +2148,7 @@ export async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId, op
   } else {
     const release = await pool.query(
       `SELECT r.source_key,r.version,r.release_date,r.installer_url,r.installer_sha256,r.installer_type,r.source_priority,
-              r.asset_health_state,r.asset_last_checked_at,r.asset_http_status,r.asset_health_error,
+              r.source_payload,r.asset_health_state,r.asset_last_checked_at,r.asset_http_status,r.asset_health_error,
               COALESCE(NULLIF(r.trust_state,''),NULLIF(b.metadata->>'trustState',''),'') AS trust_state,
               COALESCE(NULLIF(b.metadata->>'expectedSigner',''),NULLIF(r.source_payload->>'expectedSigner',''),NULLIF(s.metadata->>'expectedSigner',''),'') AS expected_signer,
               COALESCE(NULLIF(b.metadata->>'deploymentMode',''),NULLIF(r.source_payload->>'deploymentMode',''),'winget_preferred') AS deployment_mode,
@@ -2130,13 +2172,46 @@ export async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId, op
   }
 
   const deploymentMode = clean(vendor?.deployment_mode || sourceMetadata.deploymentMode || (row.provider === 'winget' ? 'winget_preferred' : ''))
-  const vendorDirect = vendor
+  let effectiveVendor = vendor
+  let vendorDirect = Boolean(vendor
     && deploymentMode === 'vendor_direct'
     && clean(vendor.trust_state) === 'direct_ready'
     && clean(vendor.asset_health_state) !== 'dead'
     && /^https:\/\//i.test(clean(vendor.installer_url))
     && /^[a-f0-9]{64}$/i.test(clean(vendor.installer_sha256))
-    && clean(vendor.expected_signer || row.publisher)
+    && clean(vendor.expected_signer || row.publisher))
+
+  const installedTechnology = intent === 'update' ? installedInstallerTechnology(installed) : ''
+  let selectedTechnology = vendorDirect
+    ? installerTechnologyFamily(vendor?.installer_technology || vendor?.installer_type)
+    : ''
+  let continuitySelected = false
+
+  if (vendorDirect && installedTechnology && selectedTechnology && installedTechnology !== selectedTechnology) {
+    const continuity = continuityInstallerForVendor(vendor, installedTechnology)
+    if (!continuity) {
+      return {
+        error: 'Installer technology migration required: this endpoint has a '
+          + installedTechnology.toUpperCase() + ' installation, but the approved target is '
+          + selectedTechnology.toUpperCase()
+          + '. Hi5Central will not silently cross installer technologies without a qualified migration path.',
+        status: 409,
+        providerBlocked: true,
+        installerTechnologyMigrationRequired: true,
+        installedInstallerTechnology: installedTechnology,
+        targetInstallerTechnology: selectedTechnology,
+      }
+    }
+    effectiveVendor = {
+      ...vendor,
+      installer_url: clean(continuity.url),
+      installer_sha256: clean(continuity.sha256),
+      installer_type: clean(continuity.installerType),
+      installer_technology: clean(continuity.installerTechnology || (lower(continuity.installerType) === 'msi' ? 'msi' : 'generic')),
+    }
+    selectedTechnology = installedTechnology
+    continuitySelected = true
+  }
 
   const globalWingetFallback = wingetFallbackReady
     ? clean(vendor?.winget_package_id || sourceMetadata.wingetPackageId)
@@ -2149,11 +2224,17 @@ export async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId, op
   }
   const executionPackageId = vendorDirect ? (fallbackPackageId || clean(row.provider_package_id)) : fallbackPackageId
   const provider = vendorDirect ? 'vendor_direct' : 'winget'
+  const continuitySensitiveUpdate = intent === 'update' && Boolean(installedTechnology)
 
   return {
     device: row,
     installed,
     provider,
+    installerContinuity: {
+      installedTechnology,
+      targetTechnology: selectedTechnology,
+      continuitySelected,
+    },
     manifest: {
       protocolVersion: 1,
       action: 'software.install',
@@ -2165,15 +2246,18 @@ export async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId, op
       installedVersion,
       targetVersion,
       provider,
-      vendorSource: vendorDirect ? clean(vendor.source_key) : '',
-      downloadUrl: vendorDirect ? clean(vendor.installer_url) : '',
-      sha256: vendorDirect ? clean(vendor.installer_sha256).toUpperCase() : '',
-      installerType: vendorDirect ? clean(vendor.installer_type || row.installer_type) : '',
-      installerTechnology: vendorDirect ? clean(vendor.installer_technology) : '',
+      vendorSource: vendorDirect ? clean(effectiveVendor?.source_key) : '',
+      downloadUrl: vendorDirect ? clean(effectiveVendor?.installer_url) : '',
+      sha256: vendorDirect ? clean(effectiveVendor?.installer_sha256).toUpperCase() : '',
+      installerType: vendorDirect ? clean(effectiveVendor?.installer_type || row.installer_type) : '',
+      installerTechnology: vendorDirect ? clean(effectiveVendor?.installer_technology || effectiveVendor?.installer_type) : '',
+      installedInstallerTechnology: installedTechnology,
+      installerContinuitySelected: continuitySelected,
+      allowGenericStrategyFallback: continuitySelected && clean(effectiveVendor?.installer_type).toLowerCase() === 'exe',
       installArguments: clean(object(row.execution).installArguments),
       responseFile: normalizedVendorResponseFile(object(row.execution).responseFile),
-      expectedSigner: clean(vendor?.expected_signer || row.publisher),
-      fallbackProvider: vendorDirect && fallbackPackageId ? 'winget' : '',
+      expectedSigner: clean(effectiveVendor?.expected_signer || row.publisher),
+      fallbackProvider: vendorDirect && fallbackPackageId && !continuitySensitiveUpdate ? 'winget' : '',
       verification: {
         ...object(row.verification),
         method: clean(object(row.verification).method || object(row.verification).provider || 'winget'),
@@ -2431,6 +2515,9 @@ async function bulkSoftwarePatchPlan(tenantId, agentDeviceId, mode = 'selected_c
         capabilityMissing: Boolean(plan.capabilityMissing),
         current: Boolean(plan.current),
         providerBlocked: Boolean(plan.providerBlocked),
+        installerTechnologyMigrationRequired: Boolean(plan.installerTechnologyMigrationRequired),
+        installedInstallerTechnology: clean(plan.installedInstallerTechnology),
+        targetInstallerTechnology: clean(plan.targetInstallerTechnology),
         ignored: Boolean(plan.ignored),
       })
     } else {
@@ -2880,7 +2967,7 @@ export function registerRmmPatchingRoutes(app) {
     }
 
     const plan = await softwarePatchPlan(auth.session.tenant_id, agentDeviceId, catalogueId)
-    if (plan.error) return c.json({ error: plan.error, offline: plan.offline, capabilityMissing: plan.capabilityMissing, current: plan.current, providerBlocked: plan.providerBlocked }, plan.status || 400)
+    if (plan.error) return c.json({ error: plan.error, offline: plan.offline, capabilityMissing: plan.capabilityMissing, current: plan.current, providerBlocked: plan.providerBlocked, installerTechnologyMigrationRequired: plan.installerTechnologyMigrationRequired, installedInstallerTechnology: plan.installedInstallerTechnology, targetInstallerTechnology: plan.targetInstallerTechnology }, plan.status || 400)
 
     const dispatched = await createAndDispatchSoftwarePatch(auth.session, plan)
     if (!dispatched.dispatched) {
