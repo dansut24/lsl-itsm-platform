@@ -1496,7 +1496,8 @@ async function syncEdge() {
   const stable = (Array.isArray(products) ? products : []).find((item) => clean(item?.Product).toLowerCase() === 'stable')
   const releases = (Array.isArray(stable?.Releases) ? stable.Releases : [])
     .filter((item) => clean(item?.Platform) === 'Windows' && clean(item?.Architecture).toLowerCase() === 'x64')
-    .sort((a, z) => Date.parse(z?.PublishedTime || 0) - Date.parse(a?.PublishedTime || 0))
+    .sort((a, z) => compareVersionValues(clean(z?.ProductVersion), clean(a?.ProductVersion))
+      || Date.parse(z?.PublishedTime || 0) - Date.parse(a?.PublishedTime || 0))
   const latest = releases[0]
   if (!latest?.ProductVersion) throw new Error('Edge enterprise feed returned no Stable Windows x64 release')
   const msi = (Array.isArray(latest.Artifacts) ? latest.Artifacts : []).find((item) => clean(item?.ArtifactName).toLowerCase() === 'msi')

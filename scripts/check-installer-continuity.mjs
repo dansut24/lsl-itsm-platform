@@ -14,6 +14,7 @@ const enrichment = fs.readFileSync('api/src/rmmVendorReleaseEnrichment.js', 'utf
 
 expect(enrichment.includes('rankWindowsInstallerAssets') && enrichment.includes('installer_continuity_'), 'Vendor asset ranking must support installer-type continuity.')
 expect(vendorIntel.includes('githubInstallerContinuityCandidates') && vendorIntel.includes('installers: installerContinuityCandidates'), 'GitHub vendor releases must retain signed/checksummed MSI/EXE continuity alternatives.')
+expect(vendorIntel.includes("compareVersionValues(clean(z?.ProductVersion), clean(a?.ProductVersion))"), 'Microsoft Edge Stable selection must prefer the highest stable version, not merely the newest publication timestamp.')
 expect(patching.includes('inventoryInstallerTechnology') && patching.includes('installedInstallerTechnology'), 'Patch planning must infer the installed installer technology from inventory.')
 expect(patching.includes('continuityInstallerForVendor') && patching.includes('installerContinuitySelected'), 'Patch planning must select a same-technology vendor asset when available.')
 expect(patching.includes('targetVersionInstalledForCatalogue') && patching.includes("'older_version_present'"), 'A target-version sibling must suppress repeat patching of an older residual registration.')
