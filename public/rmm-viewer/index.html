@@ -22,6 +22,12 @@
       --overlay-strong: rgba(5, 7, 11, 0.92);
     }
 
+    html, body {
+      overscroll-behavior: none;
+      overscroll-behavior-x: none;
+      -webkit-overflow-scrolling: auto;
+    }
+
     body {
       background: var(--bg);
       color: var(--text);
@@ -242,6 +248,8 @@
       flex: 1;
       position: relative;
       overflow: hidden;
+      overscroll-behavior: none;
+      overscroll-behavior-x: none;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -617,7 +625,7 @@
       }
       #chat-input { min-width: 0; font-size: 16px; min-height: 44px; }
       #chat-send { min-width: 68px; min-height: 44px; touch-action: manipulation; }
-      #main { min-height: 0; padding-bottom: 0; }
+      #main { min-height: 0; padding-bottom: 0; touch-action: none; overscroll-behavior: none; }
       #remote-video, #remote-image { object-fit: contain; }
       body.mobile-toolbar-collapsed #topbar {
         transform: translateY(calc(-100% - 8px));

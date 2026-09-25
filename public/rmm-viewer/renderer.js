@@ -162,6 +162,12 @@ let mobilePrecisionMode = false;
 let mobileToolbarTimer = null;
 let mobileLastTap = null;
 let mobileClipboardRequestPending = false;
+let mobileGestureLifecycleReset = null;
+let mobileBrowserGestureRecoveryTimer = null;
+let mobileHistoryGuardActive = false;
+let mobileHistoryGuardReleasing = false;
+const mobileHistoryGuardId = 'hi5-' + Math.random().toString(36).slice(2);
+const mobileEdgeTouchIds = new Set();
 let mobileTrackpadCursor = { x_norm: 0.5, y_norm: 0.5 };
 
 function loadMobilePrefsForDevice(deviceId) {
@@ -341,6 +347,44 @@ function scheduleMobileViewportResumeRestore(anchor = mobileViewportResumeAnchor
   for (const delay of [70, 180, 380, 750, 1200]) setTimeout(restore, delay);
 }
 
+function activateMobileHistoryGuard() {
+  if (mobileHistoryGuardActive || !isMobileViewerSurface()) return;
+  try {
+    history.pushState({ ...(history.state || {}), hi5ViewerGuard: mobileHistoryGuardId }, '', location.href);
+    mobileHistoryGuardActive = true;
+  } catch {}
+}
+
+function releaseMobileHistoryGuard() {
+  if (!mobileHistoryGuardActive) return;
+  const isOurGuard = history.state?.hi5ViewerGuard === mobileHistoryGuardId;
+  mobileHistoryGuardActive = false;
+  if (!isOurGuard) return;
+  mobileHistoryGuardReleasing = true;
+  try { history.back(); } catch { mobileHistoryGuardReleasing = false; }
+}
+
+function recoverMobileViewerFromBrowserGesture(reason = 'browser-gesture') {
+  if (!currentSession || !isMobileViewerSurface()) return;
+  const anchor = captureMobileViewportAnchor() || mobileViewportStableAnchor || mobileViewportResumeAnchor;
+  if (anchor) {
+    mobileViewportStableAnchor = { ...anchor };
+    mobileViewportResumeAnchor = { ...anchor };
+  }
+  try { mobileGestureLifecycleReset?.(); } catch {}
+  leaveRemoteControlMode();
+  mobileEdgeTouchIds.clear();
+  if (mobileBrowserGestureRecoveryTimer) clearTimeout(mobileBrowserGestureRecoveryTimer);
+  mobileBrowserGestureRecoveryTimer = setTimeout(() => {
+    mobileBrowserGestureRecoveryTimer = null;
+    if (!currentSession || document.hidden) return;
+    ensureRemoteVideoPlayback(reason);
+    armDecodedFrameReveal();
+    requestRemoteKeyframe(reason);
+    if (anchor) scheduleMobileViewportResumeRestore(anchor);
+  }, 40);
+}
+
 function handleMobileViewportGeometryChange() {
   if (!isMobileViewerSurface() || document.hidden) return;
   if (mobileViewportResumeAnchor && performance.now() < mobileViewportResumeUntil) {
@@ -363,6 +407,45 @@ window.visualViewport?.addEventListener('scroll', handleMobileViewportGeometryCh
 window.addEventListener('pageshow', () => {
   if (mobileViewportResumeAnchor) scheduleMobileViewportResumeRestore(mobileViewportResumeAnchor);
 });
+
+function isMobileRemoteCanvasTarget(target) {
+  const el = target instanceof Element ? target : null;
+  if (!el || !currentSession || !isMobileViewerSurface()) return false;
+  if (el.closest('#mobile-bottom-actions, #mobile-view-controls, #mobile-keyboard, #topbar, #files-panel, #chat-panel, #settings-panel')) return false;
+  return el === elMain || el === elVideo || !!el.closest('#main');
+}
+
+// iOS Safari can reserve a left-edge touch for interactive browser history
+// navigation before Pointer Events fully settle. A non-passive TouchEvent
+// guard at capture phase prevents that native horizontal navigation only when
+// the active remote canvas owns the gesture. Controls/panels keep normal touch.
+document.addEventListener('touchstart', (ev) => {
+  if (!isMobileRemoteCanvasTarget(ev.target)) return;
+  let blocked = false;
+  for (const touch of Array.from(ev.changedTouches || [])) {
+    const x = Number(touch.clientX || 0);
+    if (x <= 34 || x >= Math.max(0, window.innerWidth - 34)) {
+      mobileEdgeTouchIds.add(touch.identifier);
+      blocked = true;
+    }
+  }
+  if (blocked && ev.cancelable) ev.preventDefault();
+}, { capture: true, passive: false });
+
+document.addEventListener('touchmove', (ev) => {
+  if (!currentSession || !isMobileViewerSurface()) return;
+  const touches = Array.from(ev.changedTouches || []);
+  if (touches.some((touch) => mobileEdgeTouchIds.has(touch.identifier)) && ev.cancelable) ev.preventDefault();
+}, { capture: true, passive: false });
+
+const clearMobileEdgeTouches = (ev) => {
+  for (const touch of Array.from(ev.changedTouches || [])) mobileEdgeTouchIds.delete(touch.identifier);
+};
+document.addEventListener('touchend', clearMobileEdgeTouches, { capture: true, passive: true });
+document.addEventListener('touchcancel', (ev) => {
+  clearMobileEdgeTouches(ev);
+  if (currentSession && isMobileViewerSurface()) recoverMobileViewerFromBrowserGesture('touchcancel-recovery');
+}, { capture: true, passive: true });
 
 function showMobileTouchContact(clientX, clientY) {
   if (!isMobileViewerSurface()) return;
@@ -1995,6 +2078,9 @@ function disconnect(reason, options = {}) {
   document.body.classList.remove('mobile-toolbar-collapsed');
   mobilePanMode = false;
   mobilePrecisionMode = false;
+  mobileEdgeTouchIds.clear();
+  mobileGestureLifecycleReset = null;
+  if (mobileBrowserGestureRecoveryTimer) { clearTimeout(mobileBrowserGestureRecoveryTimer); mobileBrowserGestureRecoveryTimer = null; }
   resetTransitionState();
 
   if (localInputBlocked && currentSession) {
@@ -2058,6 +2144,8 @@ function disconnect(reason, options = {}) {
   if (elBtnCad) elBtnCad.disabled = true;
   if (elDeviceLabel) elDeviceLabel.textContent = "";
   currentSession = null;
+
+  if (!silent) releaseMobileHistoryGuard();
 
   setStatus("", reason || "Disconnected");
   showOverlay(
@@ -2646,6 +2734,7 @@ function bindRemoteInput() {
     }
     hideMobilePrecisionLoupe();
   };
+  mobileGestureLifecycleReset = resetMobileGestureForLifecycle;
 
   const finishMobilePointer=(ev,cancelled)=>{
     const point=mobilePointers.get(ev.pointerId);
@@ -2679,7 +2768,10 @@ function bindRemoteInput() {
   };
 
   gestureSurface?.addEventListener('pointerup',(ev)=>finishMobilePointer(ev,false),{passive:false});
-  gestureSurface?.addEventListener('pointercancel',(ev)=>finishMobilePointer(ev,true),{passive:false});
+  gestureSurface?.addEventListener('pointercancel',(ev)=>{
+    finishMobilePointer(ev,true);
+    recoverMobileViewerFromBrowserGesture('pointercancel-recovery');
+  },{passive:false});
 
   // Dedicated edge scroll zone: one-finger vertical swipe always means remote
   // wheel input, so scrolling never competes with pinch or direct touch.
@@ -2719,7 +2811,11 @@ function bindRemoteInput() {
       sendShortcut("alt_tab_end");
       remoteAltTabActive = false;
     }
-    leaveRemoteControlMode();
+    if (currentSession && isMobileViewerSurface() && !document.hidden) {
+      recoverMobileViewerFromBrowserGesture('window-blur-recovery');
+    } else {
+      leaveRemoteControlMode();
+    }
   });
 
   document.addEventListener("visibilitychange", () => {
@@ -2744,6 +2840,20 @@ function bindRemoteInput() {
     mobileViewportResumeAnchor = captureMobileViewportAnchor() || mobileViewportResumeAnchor;
     if (mobileViewportResumeAnchor) mobileViewportStableAnchor = { ...mobileViewportResumeAnchor };
     resetMobileGestureForLifecycle();
+  });
+
+  window.addEventListener('popstate', () => {
+    if (mobileHistoryGuardReleasing) {
+      mobileHistoryGuardReleasing = false;
+      return;
+    }
+    if (!currentSession || !isMobileViewerSurface() || !mobileHistoryGuardActive) return;
+    recoverMobileViewerFromBrowserGesture('history-pop-recovery');
+    // Re-arm the same-page guard so a completed Safari swipe cannot leave the
+    // live session. This does not affect normal navigation after disconnect.
+    try {
+      history.pushState({ ...(history.state || {}), hi5ViewerGuard: mobileHistoryGuardId }, '', location.href);
+    } catch {}
   });
 
   document.addEventListener("pointerdown", () => {
@@ -3508,6 +3618,7 @@ function startSession(params) {
     launchMode
   };
 
+  if (isMobileViewerSurface()) activateMobileHistoryGuard();
   loadMobilePrefsForDevice(deviceId);
 
   if (isMobileViewerSurface()) {
