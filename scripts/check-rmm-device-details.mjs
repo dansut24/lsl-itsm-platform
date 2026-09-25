@@ -7,6 +7,7 @@ const tools = read('src/features/rmm/RmmDeviceTools.jsx')
 const toolCss = read('src/features/rmm/RmmDeviceTools.css')
 const deviceApi = read('api/src/microsoftIntegration.js')
 const toolApi = read('api/src/rmmDeviceTools.js')
+const activity = read('src/features/rmm/RmmActivityViews.jsx')
 
 const failures = []
 const expect = (value, message) => { if (!value) failures.push(message) }
@@ -33,6 +34,7 @@ expect(tools.includes('device.inventory?.security?.local_admins'), 'Users & Sess
 
 // Mobile embedded tools belong to page flow rather than a fixed mini viewport.
 expect(toolCss.includes('.rmm-device-tool-workspace.is-embedded {\n    height: auto;') && toolCss.includes('overflow-y: visible;'), 'Embedded mobile tools must allow page-owned vertical scrolling.')
+expect(activity.includes('window.setInterval(() => load(true), 5000)'), 'Device Activity must live-refresh silently while its tab is open.')
 
 if (failures.length) {
   console.error('RMM Device Details contract check failed:')

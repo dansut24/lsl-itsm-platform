@@ -198,6 +198,9 @@ export function DeviceActivityTimeline({ device }) {
   useEffect(() => {
     const cached = !category && device?.agentDeviceId ? historyCacheGet('activity:' + device.agentDeviceId) : null
     load(Boolean(cached))
+    if (!device?.agentDeviceId) return undefined
+    const timer = window.setInterval(() => load(true), 5000)
+    return () => window.clearInterval(timer)
   }, [device?.agentDeviceId, category])
 
   return <section className="rmm-audit-card">
