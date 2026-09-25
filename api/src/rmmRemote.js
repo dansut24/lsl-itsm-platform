@@ -139,6 +139,62 @@ function nativeLaunchUrl(payload) {
   return `hi5central-viewer://connect?${query.toString()}`
 }
 
+
+async function supersedePriorTechnicianRemoteSessions({ tenantId, agentDeviceId, userId, mode, liveAgentWs }) {
+  const prior = await pool.query(
+    `SELECT id
+       FROM rmm_remote_sessions
+      WHERE tenant_id=$1
+        AND agent_device_id::text=$2
+        AND created_by_user_id=$3
+        AND mode=$4
+        AND status IN ('created','viewer_connected','active')
+        AND ended_at IS NULL
+      ORDER BY created_at ASC`,
+    [tenantId, String(agentDeviceId), userId, mode],
+  )
+
+  for (const row of prior.rows) {
+    const priorSessionId = String(row.id)
+    const live = activeViewerSessions.get(priorSessionId)
+    if (live?.viewerWs) {
+      safeSend(live.viewerWs, {
+        type: 'session_terminated',
+        session_id: priorSessionId,
+        reason: 'superseded_by_new_session',
+      })
+      try { live.viewerWs.close(4000, 'Superseded by new session') } catch {}
+    }
+
+    if (live?.finalize) {
+      live.finalize('superseded_by_new_session')
+      continue
+    }
+
+    if (live?.cleanupTimer) clearTimeout(live.cleanupTimer)
+    if (live?.agentRestartTimer) clearTimeout(live.agentRestartTimer)
+    if (live?.agentWs && live?.relayFromAgent) {
+      try { live.agentWs.off('message', live.relayFromAgent) } catch {}
+    }
+    if (live) live.finalized = true
+    activeViewerSessions.delete(priorSessionId)
+    safeSend(live?.agentWs || liveAgentWs, {
+      type: 'end_session',
+      session_id: priorSessionId,
+      reason: 'superseded_by_new_session',
+    })
+    await pool.query(
+      `UPDATE rmm_remote_sessions
+          SET status='ended',
+              ended_at=COALESCE(ended_at,now()),
+              end_reason=COALESCE(end_reason,'superseded_by_new_session'),
+              updated_at=now()
+        WHERE id=$1 AND ended_at IS NULL`,
+      [priorSessionId],
+    ).catch(() => {})
+  }
+}
+
 export function registerRmmRemoteRoutes(app) {
   app.post('/api/v1/rmm/remote-sessions', async (c) => {
     const auth = await requireRemoteAccess(c)
@@ -152,6 +208,19 @@ export function registerRmmRemoteRoutes(app) {
     const mode = clean(body.mode).toLowerCase() === 'backstage' ? 'backstage' : 'console'
     const modeError = ensureSessionModeAccess(c, auth.session, mode)
     if (modeError) return modeError
+
+    // A technician starting a new same-device/same-mode session is an explicit
+    // replacement of their prior session. Tear the previous Agent/WebRTC
+    // session down before issuing the new launch token so an abandoned browser
+    // tab cannot occupy the capture/input pipeline during reconnect grace.
+    await supersedePriorTechnicianRemoteSessions({
+      tenantId: auth.session.tenant_id,
+      agentDeviceId: agent.id,
+      userId: auth.session.user_id,
+      mode,
+      liveAgentWs: liveSocket,
+    })
+
     const viewerClient = viewerClientForRequest(c, body.viewerClient)
     const sessionId = randomUUID()
     const token = randomSecret('h5v')

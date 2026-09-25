@@ -40,6 +40,10 @@ expect(!remote.includes("requestedClient !== 'browser' || !isPortableUserAgent(r
 // Launch/bootstrap safety ----------------------------------------------------
 expect(browser.includes('startWhenReady'), 'Browser Viewer must wait for renderer readiness before launching.')
 expect(browser.indexOf('window.hi5RemoteViewer.start(launch)') < browser.indexOf('window.history.replaceState'), 'Launch fragment must only be removed after Viewer start accepts it.')
+expect(browser.includes('navigator.sendBeacon') && browser.includes("'/terminate'"), 'Browser Viewer tab close must reliably terminate the remote session outside WebSocket unload semantics.')
+expect(browser.includes("window.addEventListener('pagehide'") && browser.includes("window.addEventListener('beforeunload'"), 'Browser Viewer must terminate on mobile pagehide and desktop beforeunload.')
+expect(browser.includes('keepalive: true'), 'Browser Viewer tab-close HTTP fallback must use keepalive.')
+expect(remote.includes('supersedePriorTechnicianRemoteSessions') && remote.includes('superseded_by_new_session'), 'Starting a replacement remote session must tear down the prior same-technician Agent/WebRTC session first.')
 const initialUiMarker = renderer.indexOf('// Initial mobile UI rendering must happen after monitor/session state is')
 expect(initialUiMarker > renderer.indexOf('let remoteMonitors = []') && renderer.indexOf('updateMobileModeUi();', initialUiMarker) > initialUiMarker, 'Mobile UI must not render diagnostics before monitor state initialises.')
 

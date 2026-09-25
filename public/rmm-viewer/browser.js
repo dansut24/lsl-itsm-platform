@@ -47,7 +47,38 @@
   };
   startWhenReady();
 
-  window.addEventListener('beforeunload', () => {
+  let pageExitSignaled = false;
+  const terminateViewerSession = () => {
+    if (pageExitSignaled) return;
+    pageExitSignaled = true;
+    const path = '/api/v1/rmm/remote-sessions/' + encodeURIComponent(launch.session_id) + '/terminate';
+    let queued = false;
+    try {
+      if (navigator.sendBeacon) {
+        queued = navigator.sendBeacon(path, new Blob(['{}'], { type: 'application/json' }));
+      }
+    } catch {}
+    if (!queued) {
+      try {
+        fetch(path, {
+          method: 'POST',
+          credentials: 'include',
+          keepalive: true,
+          headers: { 'content-type': 'application/json' },
+          body: '{}',
+        }).catch(() => {});
+      } catch {}
+    }
+  };
+
+  const handlePageExit = () => {
+    // WebSocket frames queued during unload are not guaranteed to leave the
+    // browser. Tell the authenticated API explicitly so the Agent/WebRTC
+    // session is torn down immediately rather than entering reconnect grace.
+    terminateViewerSession();
     try { window.hi5RemoteViewer?.disconnect(); } catch {}
-  }, { once: true });
+  };
+
+  window.addEventListener('pagehide', handlePageExit, { once: true });
+  window.addEventListener('beforeunload', handlePageExit, { once: true });
 })();
