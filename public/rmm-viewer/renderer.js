@@ -133,8 +133,12 @@ let mobileRecoveryStage = 'Idle';
 let mobileRecoveryAttempts = 0;
 let mobileReconnectTimer = null;
 let mobileReconnectDeadline = 0;
+let mobileDisconnectProbeTimer = null;
+let mobileTransportProbeTimer = null;
+let mobileReconnectCooldownUntil = 0;
 let mobileLastGoodStatsAt = 0;
-let mobileAdaptiveState = { tier: 0, bad: 0, good: 0, lastChangeAt: 0, targetFps: 30, targetBitrateKbps: 8000, label: 'Native · 8 Mbps · 30 fps' };
+let mobileQualityState = { current: 'good', candidate: null, count: 0, changedAt: 0, samples: [] };
+let mobileAdaptiveState = { tier: 0, bad: 0, good: 0, lastChangeAt: Date.now(), targetFps: 30, targetBitrateKbps: 8000, label: 'Native · 8 Mbps · 30 fps' };
 let mobileFileTransfer = null;
 
 let inputBound = false;
@@ -636,7 +640,8 @@ async function releaseMobileWakeLock() {
 }
 
 function resetMobileAdaptiveState() {
-  mobileAdaptiveState = { tier: 0, bad: 0, good: 0, lastChangeAt: 0, targetFps: 30, targetBitrateKbps: 8000, label: MOBILE_ADAPTIVE_TIERS[0].label };
+  mobileAdaptiveState = { tier: 0, bad: 0, good: 0, lastChangeAt: Date.now(), targetFps: 30, targetBitrateKbps: 8000, label: MOBILE_ADAPTIVE_TIERS[0].label };
+  mobileQualityState = { current: 'good', candidate: null, count: 0, changedAt: Date.now(), samples: [] };
   updateMobileDiagnosticsUi();
 }
 
@@ -657,31 +662,80 @@ function applyMobileAdaptiveTier(nextTier, reason = '') {
   return true;
 }
 
-function observeMobileNetworkQuality({ rttMs, jitterMs, jitterBufferMs, lossRate }) {
+function median(values) {
+  const nums = values.filter(Number.isFinite).sort((a, b) => a - b);
+  if (!nums.length) return 0;
+  const mid = Math.floor(nums.length / 2);
+  return nums.length % 2 ? nums[mid] : (nums[mid - 1] + nums[mid]) / 2;
+}
+
+function observeMobileNetworkQuality({ rttMs, jitterMs, jitterBufferMs, lossRate, packetCount = 0, packetsLostDelta = 0 }) {
   if (!currentSession || !isMobileViewerSurface()) return;
-  const rtt = Number.isFinite(rttMs) ? rttMs : 0;
-  const jitter = Number.isFinite(jitterMs) ? jitterMs : 0;
-  const buffer = Number.isFinite(jitterBufferMs) ? jitterBufferMs : 0;
-  const loss = Number.isFinite(lossRate) ? lossRate : 0;
-  const severe = rtt > 350 || buffer > 220 || jitter > 80 || loss > 0.05;
-  const pressured = severe || rtt > 220 || buffer > 130 || jitter > 50 || loss > 0.025;
-  const clean = rtt > 0 && rtt < 140 && buffer < 80 && jitter < 35 && loss < 0.01;
-  const detail = Math.round(rtt || 0) + 'ms · ' + (loss * 100).toFixed(1) + '% loss';
-  const quality = severe ? 'poor' : (pressured ? 'good' : 'excellent');
-  const label = severe ? 'Poor' : (pressured ? 'Good' : 'Excellent');
-  setMobileQualityUi(label, quality, detail);
-  if (clean || !pressured) mobileLastGoodStatsAt = Date.now();
+  const sample = {
+    at: Date.now(),
+    rtt: Number.isFinite(rttMs) && rttMs > 0 ? rttMs : null,
+    jitter: Number.isFinite(jitterMs) && jitterMs >= 0 ? jitterMs : null,
+    buffer: Number.isFinite(jitterBufferMs) && jitterBufferMs >= 0 ? jitterBufferMs : null,
+    packetCount: Math.max(0, Number(packetCount) || 0),
+    packetsLost: Math.max(0, Number(packetsLostDelta) || 0),
+    loss: Number.isFinite(lossRate) ? Math.max(0, lossRate) : 0
+  };
+  mobileQualityState.samples.push(sample);
+  if (mobileQualityState.samples.length > 10) mobileQualityState.samples.shift();
+
+  const samples = mobileQualityState.samples;
+  if (samples.length < 4) {
+    setMobileQualityUi('Measuring', 'good', 'Collecting stable network samples');
+    return;
+  }
+
+  const rtt = median(samples.map((x) => x.rtt));
+  const jitter = median(samples.map((x) => x.jitter));
+  const buffer = median(samples.map((x) => x.buffer));
+  const packetTotal = samples.reduce((sum, x) => sum + x.packetCount, 0);
+  const lostTotal = samples.reduce((sum, x) => sum + x.packetsLost, 0);
+  // Packet loss is only trustworthy when enough RTP packets were observed. A
+  // mostly static desktop may emit only a few packets per second, where one lost
+  // packet would otherwise create a meaningless double-digit percentage.
+  const loss = packetTotal >= 120 ? lostTotal / packetTotal : 0;
+
+  const poor = rtt >= 350 || buffer >= 240 || jitter >= 90 || (packetTotal >= 120 && loss >= 0.04);
+  const excellent = rtt > 0 && rtt < 140 && buffer < 90 && jitter < 35 && (packetTotal < 120 || loss < 0.008);
+  const observed = poor ? 'poor' : (excellent ? 'excellent' : 'good');
+
+  if (observed === mobileQualityState.current) {
+    mobileQualityState.candidate = null;
+    mobileQualityState.count = 0;
+  } else {
+    if (mobileQualityState.candidate === observed) mobileQualityState.count += 1;
+    else { mobileQualityState.candidate = observed; mobileQualityState.count = 1; }
+    const needed = observed === 'poor' ? 3 : (observed === 'excellent' ? 5 : 3);
+    if (mobileQualityState.count >= needed && Date.now() - mobileQualityState.changedAt >= 4000) {
+      mobileQualityState.current = observed;
+      mobileQualityState.changedAt = Date.now();
+      mobileQualityState.candidate = null;
+      mobileQualityState.count = 0;
+    }
+  }
+
+  const current = mobileQualityState.current;
+  const label = current === 'poor' ? 'Poor' : (current === 'excellent' ? 'Excellent' : 'Good');
+  const detail = Math.round(rtt || 0) + 'ms · ' + (loss * 100).toFixed(1) + '% loss · 10s window';
+  setMobileQualityUi(label, current, detail);
+  if (current !== 'poor') mobileLastGoodStatsAt = Date.now();
 
   if (mobilePrefs.adaptive !== 'on') return;
-  if (pressured) { mobileAdaptiveState.bad += severe ? 2 : 1; mobileAdaptiveState.good = 0; }
-  else if (clean) { mobileAdaptiveState.good += 1; mobileAdaptiveState.bad = 0; }
+  // Only sustained Poor quality can reduce the stream. "Good" is considered
+  // healthy and must not lower bitrate/FPS due to ordinary Wi-Fi variance.
+  if (current === 'poor') { mobileAdaptiveState.bad += 1; mobileAdaptiveState.good = 0; }
+  else if (current === 'excellent') { mobileAdaptiveState.good += 1; mobileAdaptiveState.bad = 0; }
   else { mobileAdaptiveState.bad = Math.max(0, mobileAdaptiveState.bad - 1); mobileAdaptiveState.good = Math.max(0, mobileAdaptiveState.good - 1); }
 
   const sinceChange = Date.now() - mobileAdaptiveState.lastChangeAt;
-  if (mobileAdaptiveState.bad >= 3 && sinceChange >= 8000) {
-    applyMobileAdaptiveTier(mobileAdaptiveState.tier + 1, severe ? 'severe-network-pressure' : 'network-pressure');
-  } else if (mobileAdaptiveState.good >= 10 && sinceChange >= 12000) {
-    applyMobileAdaptiveTier(mobileAdaptiveState.tier - 1, 'network-recovered');
+  if (mobileAdaptiveState.bad >= 5 && sinceChange >= 15000) {
+    applyMobileAdaptiveTier(mobileAdaptiveState.tier + 1, 'sustained-poor-network');
+  } else if (mobileAdaptiveState.good >= 12 && sinceChange >= 15000) {
+    applyMobileAdaptiveTier(mobileAdaptiveState.tier - 1, 'sustained-network-recovery');
   }
 }
 
@@ -2300,7 +2354,9 @@ function disconnect(reason, options = {}) {
   mobileGestureLifecycleReset = null;
   if (mobileBrowserGestureRecoveryTimer) { clearTimeout(mobileBrowserGestureRecoveryTimer); mobileBrowserGestureRecoveryTimer = null; }
   if (mobileReconnectTimer) { clearTimeout(mobileReconnectTimer); mobileReconnectTimer = null; }
+  clearMobileTransportProbe();
   mobileReconnectDeadline = 0;
+  mobileReconnectCooldownUntil = 0;
   mobileRecoveryAttempts = 0;
   resetTransitionState();
 
@@ -2475,6 +2531,8 @@ async function pollStatsOnce() {
   let packetsLost = null;
   let packetsReceived = null;
   let lossRate = 0;
+  let packetSampleCount = 0;
+  let packetsLostDelta = 0;
   let jitterMs = null;
   let jitterBufferMs = null;
 
@@ -2511,6 +2569,8 @@ async function pollStatsOnce() {
         const dLost = Math.max(0, packetsLost - lastStats.packetsLost);
         const dReceived = Math.max(0, packetsReceived - lastStats.packetsReceived);
         const dTotal = dLost + dReceived;
+        packetsLostDelta = dLost;
+        packetSampleCount = dTotal;
         lossRate = dTotal > 0 ? dLost / dTotal : 0;
       }
     }
@@ -2565,7 +2625,7 @@ async function pollStatsOnce() {
   if (elDiagRtt) elDiagRtt.textContent = rttMs != null ? `${rttMs}ms` : "—";
   if (elDiagIceServers) elDiagIceServers.textContent = activeIceServers().map(s => Array.isArray(s.urls) ? s.urls.join(",") : s.urls).join(" | ");
 
-  observeMobileNetworkQuality({ rttMs, jitterMs, jitterBufferMs, lossRate });
+  observeMobileNetworkQuality({ rttMs, jitterMs, jitterBufferMs, lossRate, packetCount: packetSampleCount, packetsLostDelta });
   updateMobileDiagnosticsUi();
   updateSelectedCodecFromStats();
   console.log("[stats]", { state, bitrate: brStr, fps, framesDecoded, packetsLost, rttMs });
@@ -3091,19 +3151,21 @@ function bindRemoteInput() {
   });
   window.addEventListener('online', () => {
     if (!currentSession || !isMobileViewerSurface()) return;
+    setMobileRecoveryStage('Network restored · checking path');
     ensureRemoteVideoPlayback('network-online');
     requestRemoteKeyframe('network-online');
-    if (!ws || ws.readyState !== WebSocket.OPEN || !pc || pc.connectionState !== 'connected') {
-      scheduleMobileSessionReconnect('network-online', { closeSocket: !!ws });
+    if (pc?.connectionState !== 'connected' || ws?.readyState !== WebSocket.OPEN) {
+      scheduleMobileTransportHealthProbe('network-online', 3000);
     }
   });
   navigator.connection?.addEventListener?.('change', () => {
     if (!currentSession || !isMobileViewerSurface()) return;
-    if (pc?.connectionState === 'connected') {
+    if (pc?.connectionState === 'connected' && ws?.readyState === WebSocket.OPEN) {
       requestRemoteKeyframe('network-path-change');
-    } else {
-      scheduleMobileSessionReconnect('network-path-change', { closeSocket: !!ws });
+      return;
     }
+    setMobileRecoveryStage('Network path changed · checking');
+    scheduleMobileTransportHealthProbe('network-path-change', 3500);
   });
 
   window.addEventListener('pagehide', () => {
@@ -3587,9 +3649,16 @@ async function handleOffer(msg) {
     console.log("[rtc] connectionState:", pc.connectionState);
 
     if (pc.connectionState === "connected") {
+      const recovered = mobileRecoveryAttempts > 0 || mobileRecoveryStage !== 'Idle' || mobileReconnectDeadline > 0;
       mobileReconnectDeadline = 0;
       mobileRecoveryAttempts = 0;
+      clearMobileTransportProbe();
       if (mobileReconnectTimer) { clearTimeout(mobileReconnectTimer); mobileReconnectTimer = null; }
+      if (recovered) {
+        mobileReconnectCooldownUntil = Date.now() + 10000;
+        mobileQualityState = { current: 'good', candidate: null, count: 0, changedAt: Date.now(), samples: [] };
+        setMobileQualityUi('Measuring', 'good', 'Connection restored · stabilising measurements');
+      }
       setMobileRecoveryStage('Idle');
       requestMobileWakeLock();
       ensureRemoteVideoPlayback("peer-connected");
@@ -3601,12 +3670,11 @@ async function handleOffer(msg) {
         setStatus("", "Connected · waiting for video");
       }
     } else if (pc.connectionState === 'failed') {
+      clearMobileTransportProbe();
       scheduleMobileSessionReconnect('peer-failed');
     } else if (pc.connectionState === 'disconnected' && isMobileViewerSurface()) {
-      setMobileRecoveryStage('Network interrupted');
-      setTimeout(() => {
-        if (pc?.connectionState === 'disconnected') scheduleMobileSessionReconnect('peer-disconnected');
-      }, 1400);
+      setMobileRecoveryStage('Network interrupted · checking path');
+      scheduleMobileTransportHealthProbe('peer-disconnected', 3500);
     }
   };
   pc.onsignalingstatechange = () => console.log("[rtc] signalingState:", pc.signalingState);
@@ -3900,7 +3968,38 @@ async function onSignalMessage(raw) {
   }
 }
 
+function clearMobileTransportProbe() {
+  if (mobileDisconnectProbeTimer) { clearTimeout(mobileDisconnectProbeTimer); mobileDisconnectProbeTimer = null; }
+  if (mobileTransportProbeTimer) { clearTimeout(mobileTransportProbeTimer); mobileTransportProbeTimer = null; }
+}
+
+function scheduleMobileTransportHealthProbe(reason = 'transport-probe', delayMs = 3500) {
+  if (!currentSession || !isMobileViewerSurface() || currentSession.viewerClient !== 'browser') return false;
+  if (mobileTransportProbeTimer) clearTimeout(mobileTransportProbeTimer);
+  const cooldownRemaining = Math.max(0, mobileReconnectCooldownUntil - Date.now());
+  const waitMs = Math.max(delayMs, Math.min(8000, cooldownRemaining));
+  mobileTransportProbeTimer = setTimeout(() => {
+    mobileTransportProbeTimer = null;
+    if (!currentSession || document.hidden) return;
+    const peerState = pc?.connectionState || '';
+    const socketOpen = ws?.readyState === WebSocket.OPEN;
+    if (peerState === 'connected' && socketOpen) {
+      setMobileRecoveryStage('Idle');
+      return;
+    }
+    if (peerState === 'connecting' || pc?.iceConnectionState === 'checking') {
+      scheduleMobileTransportHealthProbe(reason, 2500);
+      return;
+    }
+    if (!socketOpen || peerState === 'failed' || peerState === 'disconnected' || !pc) {
+      scheduleMobileSessionReconnect(reason, { closeSocket: !!ws });
+    }
+  }, waitMs);
+  return true;
+}
+
 function teardownPeerForReconnect() {
+  clearMobileTransportProbe();
   stopStatsPoll();
   remoteDescSet = false;
   pendingRemoteIce = [];
