@@ -786,8 +786,6 @@ elViewerScaleMode?.addEventListener('change', () => {
 });
 
 if (new URLSearchParams(location.search).get('diagnostics') === '1') mobilePrefs.diagnostics = 'on';
-updateMobileModeUi();
-applyViewerScalePreference();
 
 let mobileKeyboardOpen = false;
 let mobileKeyboardLayer = 'letters';
@@ -969,6 +967,11 @@ const chatMessageKeys = new Set();
 let chatMessageSequence = 0;
 let remoteFileEntries = [];
 let remoteFilePath = "/";
+
+// Initial mobile UI rendering must happen after monitor/session state is
+// initialised. updateMobileDiagnosticsUi() reads these values.
+updateMobileModeUi();
+applyViewerScalePreference();
 
 /* transition state */
 let hasEverRenderedFrame = false;
