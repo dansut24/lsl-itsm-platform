@@ -14,6 +14,8 @@ expect(source.includes('manualRequalification === true'), 'Automatic qualificati
 expect(source.includes("cleanupPhase: 'preclean'"), 'Qualification pre-clean must have an explicit reconciliation phase.')
 expect(source.includes('precleanVerifiedAt'), 'Qualification must verify target absence before beginning the clean install.')
 expect(source.includes('qualification_preclean_residue_detected'), 'Qualification pre-clean must fail safely if the target remains installed.')
+expect(source.includes('qualification_preclean_reboot_required'), 'Qualification pre-clean must preserve reboot-required failures instead of collapsing them to failed.')
+expect(source.includes('uninstallReason: cleanupReason'), 'Qualification pre-clean must preserve the Agent uninstall reason in evidence.')
 expect(source.includes('catalogue_qualification_preclean'), 'Qualification pre-clean jobs must be auditable separately from normal cleanup.')
 
 if (failures) process.exit(1)

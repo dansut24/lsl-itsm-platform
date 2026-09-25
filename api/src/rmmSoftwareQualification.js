@@ -2408,11 +2408,22 @@ async function reconcileQueueRow(queue, runner) {
       return { id: current.id, state: current.state }
     }
 
+    const cleanupPayload = object(cleanup.result)
+    const cleanupParsed = object(cleanupPayload.parsed)
+    const cleanupReason = clean(cleanupPayload.reason || cleanupParsed.reason)
+    const rebootRequired = cleanupPayload.reboot_required === true || cleanupParsed.reboot_required === true
     const failure = terminalJobFailure(cleanup)
     if (failure || clean(cleanup.status) !== 'completed') {
-      await markReview(current.id, failure || 'qualification_preclean_uninstall_failed', {
+      const precleanError = rebootRequired
+        ? 'qualification_preclean_reboot_required'
+        : cleanupReason
+          ? 'qualification_preclean_' + cleanupReason
+          : failure || 'qualification_preclean_uninstall_failed'
+      await markReview(current.id, precleanError, {
         stage: 'preclean',
         cleanupJobId: current.cleanup_job_id,
+        uninstallReason: cleanupReason,
+        rebootRequired,
       })
       return { id: current.id, state: 'review_required' }
     }
