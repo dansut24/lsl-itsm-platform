@@ -61,6 +61,18 @@ expect(
     ui.includes('<small>Artifact hash</small>'),
   'Qualification UI must label expected/published evidence separately from verified evidence.',
 )
+expect(
+  vendorIntel.includes("WHEN source_revision IS DISTINCT FROM $4 THEN") &&
+    vendorIntel.includes("qualification_version=CASE WHEN source_revision IS DISTINCT FROM $4 THEN '' ELSE qualification_version END") &&
+    vendorIntel.includes("qualified_at=CASE WHEN source_revision IS DISTINCT FROM $4 THEN NULL ELSE qualified_at END"),
+  'A target-version change must invalidate carried-forward qualification status metadata.',
+)
+expect(
+  enrichment.includes("c.qualification_state IN ('qualified','qualified_limited')") &&
+    enrichment.includes("THEN 'deployment_candidate'") &&
+    enrichment.includes("endpoint artifact signature/hash inspection is pending"),
+  'Qualified states must fall back to deployment candidate while the current artifact is unverified.',
+)
 
 if (failures) process.exit(1)
 console.log('Artifact trust scoping contract check passed.')

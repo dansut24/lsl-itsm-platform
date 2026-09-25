@@ -276,12 +276,21 @@ async function upsertRelease({
                     END
                   ),
                 qualification_state=CASE
-                  WHEN qualification_state IN ('qualified','qualified_limited','blocked') THEN qualification_state
+                  WHEN qualification_state='blocked' THEN qualification_state
+                  WHEN source_revision IS DISTINCT FROM $4 THEN
+                    CASE
+                      WHEN COALESCE($14::jsonb->>'trustState','') IN ('rejected','signer_review_required','installer_review_required')
+                        THEN 'intelligence_only'
+                      ELSE 'deployment_candidate'
+                    END
+                  WHEN qualification_state IN ('qualified','qualified_limited') THEN qualification_state
                   WHEN source_revision=$4 AND source_metadata->>'trustState'='direct_ready' THEN 'deployment_candidate'
                   WHEN source_revision=$4
                     AND source_metadata->>'trustState' IN ('rejected','signer_review_required','installer_review_required') THEN 'intelligence_only'
                   ELSE $15
                 END,
+                qualification_version=CASE WHEN source_revision IS DISTINCT FROM $4 THEN '' ELSE qualification_version END,
+                qualified_at=CASE WHEN source_revision IS DISTINCT FROM $4 THEN NULL ELSE qualified_at END,
                 qualification_evidence=(
                   CASE WHEN source_revision IS DISTINCT FROM $4 THEN
                     qualification_evidence

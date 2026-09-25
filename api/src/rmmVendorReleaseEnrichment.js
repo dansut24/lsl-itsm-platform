@@ -771,7 +771,34 @@ async function reconcileDirectReadyCatalogue() {
               'installerTechnology',COALESCE(NULLIF(b.metadata->>'installerTechnology',''),NULLIF(r.source_payload->>'installerTechnology',''),NULLIF(r.trust_evidence->>'installerTechnology',''),''),
               'artifactHashProvenance',COALESCE(NULLIF(r.source_payload->>'artifactHashProvenance',''),NULLIF(r.trust_evidence->>'hashProvenance',''),'endpoint_pinned_sha256')
             ),
-            qualification_state=CASE WHEN c.qualification_state IN ('qualified','qualified_limited','blocked') THEN c.qualification_state ELSE 'deployment_candidate' END,
+            qualification_state=CASE
+              WHEN c.qualification_state='blocked' THEN c.qualification_state
+              WHEN NOT (
+                COALESCE((r.trust_evidence->>'signatureVerified')::boolean,false)
+                AND COALESCE(r.trust_evidence->>'sha256','') ~* '^[a-f0-9]{64}$'
+                AND upper(r.trust_evidence->>'sha256')=upper(r.installer_sha256)
+              ) THEN 'deployment_candidate'
+              WHEN c.qualification_state IN ('qualified','qualified_limited') THEN c.qualification_state
+              ELSE 'deployment_candidate'
+            END,
+            qualification_version=CASE
+              WHEN c.qualification_state<>'blocked'
+               AND NOT (
+                 COALESCE((r.trust_evidence->>'signatureVerified')::boolean,false)
+                 AND COALESCE(r.trust_evidence->>'sha256','') ~* '^[a-f0-9]{64}$'
+                 AND upper(r.trust_evidence->>'sha256')=upper(r.installer_sha256)
+               ) THEN ''
+              ELSE c.qualification_version
+            END,
+            qualified_at=CASE
+              WHEN c.qualification_state<>'blocked'
+               AND NOT (
+                 COALESCE((r.trust_evidence->>'signatureVerified')::boolean,false)
+                 AND COALESCE(r.trust_evidence->>'sha256','') ~* '^[a-f0-9]{64}$'
+                 AND upper(r.trust_evidence->>'sha256')=upper(r.installer_sha256)
+               ) THEN NULL
+              ELSE c.qualified_at
+            END,
             qualification_evidence=c.qualification_evidence || jsonb_build_object(
               'source','vendor_release_trust_reconciliation',
               'vendorReleaseId',r.id,
@@ -785,12 +812,13 @@ async function reconcileDirectReadyCatalogue() {
               'signer',COALESCE(r.trust_evidence->>'signer','')
             ),
             qualification_notes=CASE
+              WHEN NOT (
+                COALESCE((r.trust_evidence->>'signatureVerified')::boolean,false)
+                AND COALESCE(r.trust_evidence->>'sha256','') ~* '^[a-f0-9]{64}$'
+                AND upper(r.trust_evidence->>'sha256')=upper(r.installer_sha256)
+              ) THEN 'Trusted release metadata is available; endpoint artifact signature/hash inspection is pending.'
               WHEN c.qualification_notes<>'' THEN c.qualification_notes
-              WHEN COALESCE((r.trust_evidence->>'signatureVerified')::boolean,false)
-               AND COALESCE(r.trust_evidence->>'sha256','') ~* '^[a-f0-9]{64}$'
-               AND upper(r.trust_evidence->>'sha256')=upper(r.installer_sha256)
-                THEN 'Deployment-ready vendor artifact reconciled from verified release trust evidence.'
-              ELSE 'Trusted release metadata is available; endpoint artifact signature/hash inspection is pending.'
+              ELSE 'Deployment-ready vendor artifact reconciled from verified release trust evidence.'
             END,
             updated_at=now()
        FROM rmm_software_vendor_releases r
@@ -817,7 +845,15 @@ async function reconcileDirectReadyCatalogue() {
                    AND upper(r.trust_evidence->>'sha256')=upper(r.installer_sha256)
                     THEN 'true'
                   ELSE 'false'
-                END)
+                END
+          OR (
+            c.qualification_state IN ('qualified','qualified_limited')
+            AND NOT (
+              COALESCE((r.trust_evidence->>'signatureVerified')::boolean,false)
+              AND COALESCE(r.trust_evidence->>'sha256','') ~* '^[a-f0-9]{64}$'
+              AND upper(r.trust_evidence->>'sha256')=upper(r.installer_sha256)
+            )
+          ))
      RETURNING c.id,c.canonical_name,c.target_version`)
   await pool.query(
     `UPDATE rmm_software_vendor_bindings b
