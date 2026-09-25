@@ -639,6 +639,9 @@ async function qualificationLabPayload(tenantId, catalogueId) {
   ])
 
   const evidence=object(app.qualification_evidence)
+  const qualificationLimitations=object(evidence.qualificationLimitations)
+  const manualLimitation=object(qualificationLimitations.manual)
+  const unsupportedCapabilities=new Set(array(manualLimitation.unsupportedCapabilities).map((value)=>clean(value)).filter(Boolean))
   const catalogueSource=object(app.source_metadata)
   const sourceLive=object(app.source_metadata_live)
   const identityAudit=object(catalogueSource.vulnerabilityIdentityAudit)
@@ -790,24 +793,24 @@ async function qualificationLabPayload(tenantId, catalogueId) {
     },
     tests:{
       cleanInstall:{
-        state:cleanPassed?'passed':queueLayerState(cleanQueue),
+        state:unsupportedCapabilities.has('clean_install')?'unsupported':cleanPassed?'passed':queueLayerState(cleanQueue),
         version:clean(evidence.cleanInstallVersion),
         verifiedAt:clean(evidence.cleanInstallVerifiedAt),
         error:clean(cleanQueue?.lastError),
         queue:cleanQueue,
       },
       verification:{
-        state:cleanPassed?'passed':cleanPassed===false && clean(cleanQueue?.state)==='review_required'?'review_required':'pending',
+        state:unsupportedCapabilities.has('clean_install')?'unsupported':cleanPassed?'passed':cleanPassed===false && clean(cleanQueue?.state)==='review_required'?'review_required':'pending',
         version:clean(evidence.cleanInstallVersion),
       },
       uninstall:{
-        state:uninstallPassed?'passed':queueLayerState(cleanQueue,'not_tested'),
+        state:unsupportedCapabilities.has('uninstall')?'unsupported':uninstallPassed?'passed':queueLayerState(cleanQueue,'not_tested'),
         verifiedAt:clean(evidence.uninstallVerifiedAt),
         residueCleanupVerified:evidence.residueCleanupVerified===true,
         error:clean(cleanQueue?.lastError),
       },
       upgrade:{
-        state:['queued','running','cleanup_pending','cleanup_running','review_required'].includes(clean(upgradeQueue?.state))
+        state:unsupportedCapabilities.has('upgrade')?'unsupported':['queued','running','cleanup_pending','cleanup_running','review_required'].includes(clean(upgradeQueue?.state))
           ? clean(upgradeQueue.state)
           : upgradePassed && detectionPassed?'passed'
             :upgradePassed?'legacy_pass'
@@ -823,12 +826,12 @@ async function qualificationLabPayload(tenantId, catalogueId) {
         queue:upgradeQueue,
       },
       rollback:{
-        state:['queued','running','cleanup_pending','cleanup_running','review_required'].includes(clean(rollbackQueue?.state))
+        state:unsupportedCapabilities.has('rollback')?'unsupported':['queued','running','cleanup_pending','cleanup_running','review_required'].includes(clean(rollbackQueue?.state))
           ? clean(rollbackQueue.state)
           : rollbackPassed?'passed'
             :previousUnavailable?'unavailable'
             :queueLayerState(rollbackQueue),
-        supported:!previousUnavailable,
+        supported:!previousUnavailable && !unsupportedCapabilities.has('rollback'),
         fromVersion:clean(evidence.rollbackFromVersion || app.target_version),
         previousVersion:clean(evidence.rollbackPreviousVersion || previousReady?.version || previousPending?.version),
         restoredVersion:clean(evidence.rollbackRestoredVersion),
@@ -849,24 +852,24 @@ async function qualificationLabPayload(tenantId, catalogueId) {
     },
     layers:[
       {id:'source',label:'Source & trust',state:sourceHealthy && currentArtifactReady?'passed':sourceHealthy?'pending':'attention'},
-      {id:'vulnerability',label:'Vulnerability identity',state:vulnerabilityCovered?'passed':clean(identityAudit.state)==='no_published_identity'?'limited':'attention'},
-      {id:'clean',label:'Install / verify / uninstall',state:cleanPassed && uninstallPassed?'passed':queueLayerState(cleanQueue)},
+      {id:'vulnerability',label:'Vulnerability identity',state:unsupportedCapabilities.has('vulnerability_coverage')?'limited':vulnerabilityCovered?'passed':clean(identityAudit.state)==='no_published_identity'?'limited':'attention'},
+      {id:'clean',label:'Install / verify / uninstall',state:unsupportedCapabilities.has('clean_install') || unsupportedCapabilities.has('uninstall')?'limited':cleanPassed && uninstallPassed?'passed':queueLayerState(cleanQueue)},
       {id:'history',label:'Previous stable',state:previousReady?'passed':previousPending?'pending':previousUnavailable?'unavailable':'missing'},
-      {id:'upgrade',label:'Patch upgrade',state:['queued','running','cleanup_pending','cleanup_running','review_required'].includes(clean(upgradeQueue?.state))
+      {id:'upgrade',label:'Patch upgrade',state:unsupportedCapabilities.has('upgrade')?'limited':['queued','running','cleanup_pending','cleanup_running','review_required'].includes(clean(upgradeQueue?.state))
         ? clean(upgradeQueue.state)
         : upgradePassed && detectionPassed?'passed':upgradePassed?'legacy_pass':previousUnavailable?'unavailable':queueLayerState(upgradeQueue)},
-      {id:'rollback',label:'Rollback',state:['queued','running','cleanup_pending','cleanup_running','review_required'].includes(clean(rollbackQueue?.state))
+      {id:'rollback',label:'Rollback',state:unsupportedCapabilities.has('rollback')?'limited':['queued','running','cleanup_pending','cleanup_running','review_required'].includes(clean(rollbackQueue?.state))
         ? clean(rollbackQueue.state)
         : rollbackPassed?'passed':previousUnavailable?'unavailable':queueLayerState(rollbackQueue)},
     ],
     actions:{
       canRevalidate:Boolean(globalVendor && app.source_key),
       canPreparePrevious:Boolean(globalVendor && ['github_releases','winget_manifest','vendor_json','vendor_html'].includes(clean(app.source_type)) && !previousReady),
-      canRunClean:Boolean(globalVendor && sourceHealthy && currentArtifactReady),
-      canRunUpgrade:Boolean(globalVendor && cleanPassed && uninstallPassed && currentArtifactReady && previousReady),
-      canRunFull:Boolean(globalVendor && sourceHealthy && currentArtifactReady),
-      canRunRollback:Boolean(globalVendor && cleanPassed && uninstallPassed && upgradePassed && detectionPassed && currentArtifactReady && previousReady),
-      rollbackAvailable:Boolean(globalVendor && cleanPassed && uninstallPassed && upgradePassed && detectionPassed && currentArtifactReady && previousReady),
+      canRunClean:Boolean(globalVendor && sourceHealthy && currentArtifactReady && !unsupportedCapabilities.has('clean_install') && !unsupportedCapabilities.has('uninstall')),
+      canRunUpgrade:Boolean(globalVendor && cleanPassed && uninstallPassed && currentArtifactReady && previousReady && !unsupportedCapabilities.has('upgrade')),
+      canRunFull:Boolean(globalVendor && sourceHealthy && currentArtifactReady && unsupportedCapabilities.size===0),
+      canRunRollback:Boolean(globalVendor && cleanPassed && uninstallPassed && upgradePassed && detectionPassed && currentArtifactReady && previousReady && !unsupportedCapabilities.has('rollback')),
+      rollbackAvailable:Boolean(globalVendor && cleanPassed && uninstallPassed && upgradePassed && detectionPassed && currentArtifactReady && previousReady && !unsupportedCapabilities.has('rollback')),
     },
     recentJobs:jobResult.rows.map((job)=>({
       id:job.id,
@@ -3167,11 +3170,111 @@ export function registerRmmPatchingRoutes(app) {
       result=await queueRollbackQualification(catalogueId)
     } else if(action==='prepare_previous') {
       result=await prepareQualificationBaselineForCatalogue(catalogueId)
+    } else if(action==='mark_limited') {
+      const allowedCapabilities=new Set(['clean_install','uninstall','upgrade','rollback','vulnerability_coverage'])
+      const unsupportedCapabilities=[...new Set((Array.isArray(body.unsupportedCapabilities)?body.unsupportedCapabilities:[])
+        .map((value)=>clean(value))
+        .filter((value)=>allowedCapabilities.has(value)))]
+      const reason=clean(body.reason).slice(0,1000)
+      if(!unsupportedCapabilities.length) return c.json({error:'Select at least one unsupported capability.'},400)
+      if(reason.length<8) return c.json({error:'Enter a clear reason for the limited qualification.'},400)
+      const current=before.releases?.current
+      const trusted=before.source?.state==='healthy'
+        && before.application?.trustState==='direct_ready'
+        && current?.sha256Verified===true
+        && current?.signatureVerified===true
+      if(!trusted) return c.json({error:'Limited qualification still requires a healthy trusted source and a verified current installer artifact.'},409)
+
+      const capabilityState=(key,testState,verifiedValue='verified')=>unsupportedCapabilities.includes(key)
+        ? 'unsupported'
+        : testState==='passed' ? verifiedValue : 'available'
+      const capabilities={
+        cleanInstall:capabilityState('clean_install',before.tests?.cleanInstall?.state),
+        uninstall:capabilityState('uninstall',before.tests?.uninstall?.state),
+        upgrade:capabilityState('upgrade',before.tests?.upgrade?.state),
+        rollback:capabilityState('rollback',before.tests?.rollback?.state),
+        vulnerabilityCoverage:unsupportedCapabilities.includes('vulnerability_coverage')
+          ? 'unsupported'
+          : before.vulnerability?.state==='covered'
+            ? 'covered'
+            : before.vulnerability?.state==='no_published_identity' ? 'limited' : 'pending',
+      }
+      const limitation={
+        state:'declared',
+        reason,
+        unsupportedCapabilities,
+        recordedAt:new Date().toISOString(),
+        recordedByUserId:auth.session.user_id,
+        recordedBy:clean(auth.session.name || auth.session.email || 'Technician').slice(0,255),
+      }
+      await withTransaction(async(client)=>{
+        await client.query(
+          `UPDATE rmm_software_catalogue
+              SET qualification_state='qualified_limited',
+                  qualification_version=target_version,
+                  qualified_at=now(),
+                  qualification_notes=$2,
+                  qualification_evidence=qualification_evidence || jsonb_build_object(
+                    'manualLimitedQualification',true,
+                    'manualLimitedQualifiedAt',now(),
+                    'qualificationCapabilities',$3::jsonb,
+                    'qualificationLimitations',jsonb_build_object('manual',$4::jsonb)
+                  ),
+                  updated_by_user_id=$5,
+                  updated_at=now()
+            WHERE id=$1`,
+          [catalogueId,'Limited qualification: '+reason,JSON.stringify(capabilities),JSON.stringify(limitation),auth.session.user_id],
+        )
+        await client.query(
+          `UPDATE rmm_software_qualification_queue
+              SET state='cancelled',
+                  last_error='limited_capability_declared',
+                  completed_at=now(),
+                  evidence=evidence || jsonb_build_object(
+                    'limitedCapabilityDeclared',true,
+                    'limitedCapabilityReason',$2::text,
+                    'limitedUnsupportedCapabilities',$3::jsonb
+                  ),
+                  updated_at=now()
+            WHERE catalogue_id=$1
+              AND state IN ('queued','review_required')`,
+          [catalogueId,reason,JSON.stringify(unsupportedCapabilities)],
+        )
+      })
+      result={limited:true,state:'qualified_limited',unsupportedCapabilities,reason,capabilities}
+    } else if(action==='clear_limited') {
+      if(before.application?.qualificationState!=='qualified_limited') {
+        return c.json({error:'This application is not currently marked as limited.'},409)
+      }
+      await pool.query(
+        `UPDATE rmm_software_catalogue
+            SET qualification_state='deployment_candidate',
+                qualification_version='',
+                qualified_at=NULL,
+                qualification_notes='Limited qualification removed; lifecycle qualification is required again.',
+                qualification_evidence=(qualification_evidence
+                  - 'manualLimitedQualification'
+                  - 'manualLimitedQualifiedAt'
+                  - 'qualificationCapabilities'
+                  - 'qualificationLimitations')
+                  || jsonb_build_object('manualLimitedQualificationClearedAt',now()),
+                updated_by_user_id=$2,
+                updated_at=now()
+          WHERE id=$1`,
+        [catalogueId,auth.session.user_id],
+      )
+      result={cleared:true,state:'deployment_candidate'}
     } else {
       return c.json({error:'Unsupported qualification action.'},400)
     }
 
-    const accepted = action==='prepare_previous' ? result?.prepared===true : result?.queued===true
+    const accepted = action==='prepare_previous'
+      ? result?.prepared===true
+      : action==='mark_limited'
+        ? result?.limited===true
+        : action==='clear_limited'
+          ? result?.cleared===true
+          : result?.queued===true
     const lab=await qualificationLabPayload(auth.session.tenant_id,catalogueId)
     if(!accepted) {
       return c.json({
@@ -3186,6 +3289,8 @@ export function registerRmmPatchingRoutes(app) {
       upgrade:'Started versioned upgrade qualification',
       rollback:'Started rollback qualification',
       prepare_previous:'Prepared previous stable release for qualification',
+      mark_limited:'Marked catalogue qualification as limited capabilities',
+      clear_limited:'Returned limited catalogue qualification to deployment candidate',
     }
     await audit(
       auth.session,

@@ -71,10 +71,10 @@ export function loadSoftwareQualificationLab(catalogueId) {
   return request('/api/v1/rmm/software-catalogue/' + encodeURIComponent(catalogueId) + '/qualification-lab')
 }
 
-export function runSoftwareQualificationAction(catalogueId, action) {
+export function runSoftwareQualificationAction(catalogueId, action, options = {}) {
   return request('/api/v1/rmm/software-catalogue/' + encodeURIComponent(catalogueId) + '/qualification-lab/action', {
     method: 'POST',
-    body: JSON.stringify({ action }),
+    body: JSON.stringify({ action, ...options }),
   })
 }
 

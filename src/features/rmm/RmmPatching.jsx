@@ -123,7 +123,7 @@ function qualificationTone(state) {
 function readinessTone(state) {
   if (['ready', 'healthy', 'verified', 'passed', 'covered'].includes(state)) return 'healthy'
   if (['attention', 'blocked', 'failed', 'review_required'].includes(state)) return 'critical'
-  if (['missing', 'legacy_pass', 'unavailable', 'limited', 'no_published_identity'].includes(state)) return 'warning'
+  if (['missing', 'legacy_pass', 'unavailable', 'limited', 'unsupported', 'no_published_identity'].includes(state)) return 'warning'
   if (['queued', 'not_tested', 'pending', 'cancelled', 'not_implemented'].includes(state)) return 'neutral'
   return 'running'
 }
@@ -651,7 +651,27 @@ function QualificationWorkspace({
   onEdit,
   onRevalidate,
   onRefresh,
+  onMarkLimited,
+  onClearLimited,
 }) {
+  const manualLimitation = lab?.application?.qualificationLimitations?.manual || {}
+  const limitationKey = [
+    item?.id || '',
+    manualLimitation.reason || '',
+    ...(Array.isArray(manualLimitation.unsupportedCapabilities) ? manualLimitation.unsupportedCapabilities : []),
+  ].join('|')
+  const [limitEditorOpen, setLimitEditorOpen] = useState(false)
+  const [limitReason, setLimitReason] = useState('')
+  const [limitUnsupported, setLimitUnsupported] = useState(['uninstall', 'rollback'])
+  useEffect(() => {
+    const existing = Array.isArray(manualLimitation.unsupportedCapabilities)
+      ? manualLimitation.unsupportedCapabilities
+      : []
+    setLimitReason(manualLimitation.reason || '')
+    setLimitUnsupported(existing.length ? existing : ['uninstall', 'rollback'])
+    setLimitEditorOpen(false)
+  }, [limitationKey])
+
   if (!item) return <div className="rmm-qualification-empty"><PackageCheck size={20} /><strong>Select an application</strong><span>Open one catalogue application to inspect and run its qualification layers.</span></div>
   if (loading && !lab) return <div className="rmm-qualification-empty"><Clock3 size={20} /><strong>Loading qualification workspace…</strong><span>Reading release, trust and runner evidence.</span></div>
   if (!lab) return <div className="rmm-qualification-empty"><AlertTriangle size={20} /><strong>Qualification details unavailable</strong><span>Refresh this application to retry.</span></div>
@@ -704,7 +724,9 @@ function QualificationWorkspace({
       <AlertTriangle size={17} />
       <div>
         <strong>Qualified — limited capabilities</strong>
-        <span>Every available qualification check passed. Upstream limitations remain explicit and are not treated as successful tests.</span>
+        <span>{manualLimitation.state === 'declared'
+          ? 'A technician has explicitly limited unsupported lifecycle operations. Supported operations remain available; unsupported operations are not treated as successful tests.'
+          : 'Every available qualification check passed. Upstream limitations remain explicit and are not treated as successful tests.'}</span>
         <div className="rmm-qualification-capability-grid">
           <span><small>Clean install</small><b>{readinessLabel(capabilities.cleanInstall || 'verified')}</b></span>
           <span><small>Uninstall</small><b>{readinessLabel(capabilities.uninstall || 'verified')}</b></span>
@@ -714,6 +736,7 @@ function QualificationWorkspace({
         </div>
         {limitations.historicalInstaller && <p>Historical installer: {readinessLabel(limitations.historicalInstaller.state)}{limitations.historicalInstaller.previousVersion ? ' · ' + limitations.historicalInstaller.previousVersion : ''}{limitations.historicalInstaller.reason ? ' · ' + readinessLabel(limitations.historicalInstaller.reason) : ''}</p>}
         {limitations.vulnerabilityIdentity && <p>Vulnerability identity: {readinessLabel(limitations.vulnerabilityIdentity.state)}{limitations.vulnerabilityIdentity.note ? ' · ' + limitations.vulnerabilityIdentity.note : ''}</p>}
+        {manualLimitation.state === 'declared' && <p><strong>Declared limitation:</strong> {(manualLimitation.unsupportedCapabilities || []).map(readinessLabel).join(', ')} · {manualLimitation.reason}</p>}
       </div>
     </div>}
 
@@ -725,8 +748,43 @@ function QualificationWorkspace({
       {actionButton('upgrade', actions.canRunUpgrade, 'Run upgrade test', RefreshCw, 'Clean install/uninstall and a trusted previous release must pass first.')}
       {actionButton('rollback', actions.canRunRollback, 'Run rollback test', RotateCcw, 'A clean cycle, current upgrade proof, update_available detection and a trusted previous release must pass first.')}
       {actionButton('full', actions.canRunFull, 'Run full qualification', ShieldCheck, 'Current source and artifact trust must be ready first.')}
+      <button disabled={Boolean(busyAction)} onClick={() => setLimitEditorOpen((open) => !open)} type="button"><AlertTriangle size={14} /> {lab.application?.qualificationState === 'qualified_limited' ? 'Edit limitations' : 'Mark limited'}</button>
+      {lab.application?.qualificationState === 'qualified_limited' && manualLimitation.state === 'declared' && <button disabled={Boolean(busyAction)} onClick={onClearLimited} type="button"><RotateCcw size={14} /> Return to candidate</button>}
       <button disabled={Boolean(busyAction) || loading} onClick={onRefresh} type="button"><RefreshCw size={14} /> Refresh</button>
     </div>
+
+    {limitEditorOpen && <div className="rmm-qualification-limit-editor">
+      <div><strong>Limited capability declaration</strong><span>Use this only when a vendor or operating-system restriction makes part of the normal lifecycle genuinely unsupported. Source and installer trust are still required.</span></div>
+      <div className="capabilities">
+        {[
+          ['clean_install', 'Clean install'],
+          ['uninstall', 'Uninstall'],
+          ['upgrade', 'Upgrade'],
+          ['rollback', 'Rollback'],
+          ['vulnerability_coverage', 'Vulnerability coverage'],
+        ].map(([value, label]) => <label key={value}><input
+          checked={limitUnsupported.includes(value)}
+          onChange={(event) => setLimitUnsupported((current) => event.target.checked
+            ? [...new Set([...current, value])]
+            : current.filter((item) => item !== value))}
+          type="checkbox"
+        /><span>{label}</span></label>)}
+      </div>
+      <label className="reason">Reason<textarea
+        maxLength={1000}
+        onChange={(event) => setLimitReason(event.target.value)}
+        placeholder="e.g. Windows-integrated component; vendor/OS blocks reliable removal."
+        rows={3}
+        value={limitReason}
+      /></label>
+      <div className="actions">
+        <button disabled={Boolean(busyAction)} onClick={() => setLimitEditorOpen(false)} type="button">Cancel</button>
+        <button className="rmm-primary" disabled={Boolean(busyAction) || !limitUnsupported.length || limitReason.trim().length < 8} onClick={async () => {
+          const saved = await onMarkLimited(limitUnsupported, limitReason.trim())
+          if (saved) setLimitEditorOpen(false)
+        }} type="button">{busyAction === 'mark_limited' ? 'Saving…' : 'Save limited qualification'}</button>
+      </div>
+    </div>}
 
     <div className="rmm-qualification-layers">
       {(lab.layers || []).map((layer) => {
@@ -1293,6 +1351,45 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
     }
   }
 
+  async function markQualificationLimited(unsupportedCapabilities, reason) {
+    if (!catalogueMaintenanceId || qualificationAction) return false
+    setQualificationAction('mark_limited')
+    setError('')
+    try {
+      const result = await runSoftwareQualificationAction(catalogueMaintenanceId, 'mark_limited', {
+        unsupportedCapabilities,
+        reason,
+      })
+      if (result.bundle) setBundle(result.bundle)
+      if (result.lab) setQualificationLab(result.lab)
+      return true
+    } catch (requestError) {
+      if (requestError?.data?.bundle) setBundle(requestError.data.bundle)
+      if (requestError?.data?.lab) setQualificationLab(requestError.data.lab)
+      setError(requestError?.message || 'Unable to mark this application as limited.')
+      return false
+    } finally {
+      setQualificationAction('')
+    }
+  }
+
+  async function clearQualificationLimited() {
+    if (!catalogueMaintenanceId || qualificationAction) return
+    setQualificationAction('clear_limited')
+    setError('')
+    try {
+      const result = await runSoftwareQualificationAction(catalogueMaintenanceId, 'clear_limited')
+      if (result.bundle) setBundle(result.bundle)
+      if (result.lab) setQualificationLab(result.lab)
+    } catch (requestError) {
+      if (requestError?.data?.bundle) setBundle(requestError.data.bundle)
+      if (requestError?.data?.lab) setQualificationLab(requestError.data.lab)
+      setError(requestError?.message || 'Unable to remove limited qualification.')
+    } finally {
+      setQualificationAction('')
+    }
+  }
+
   async function refreshQualificationWorkspace() {
     if (!catalogueMaintenanceId || qualificationLabLoading) return
     setQualificationLabLoading(true)
@@ -1589,6 +1686,8 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
           onEdit={() => selectedCatalogueMaintenanceApp && setValidationApp(selectedCatalogueMaintenanceApp)}
           onRevalidate={() => selectedCatalogueMaintenanceApp && revalidateApplication(selectedCatalogueMaintenanceApp)}
           onRefresh={refreshQualificationWorkspace}
+          onMarkLimited={markQualificationLimited}
+          onClearLimited={clearQualificationLimited}
         />
       </section>
       <div className="rmm-catalogue-install-card">
