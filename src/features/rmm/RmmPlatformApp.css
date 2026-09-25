@@ -1490,3 +1490,125 @@ button.rmm-table-row { width: 100%; border: 0; text-align: left; cursor: pointer
     padding:0 8px;
   }
 }
+
+
+/* Device Software/Patching mobile cards ----------------------------------- */
+@media (max-width: 640px) {
+  .rmm-device-software-card,
+  .rmm-device-app-patching-card,
+  .rmm-device-windows-patching-card {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: clip;
+    contain: inline-size;
+  }
+
+  .rmm-device-software-card .rmm-device-section-heading,
+  .rmm-device-app-patching-card .rmm-device-section-heading,
+  .rmm-device-windows-patching-card .rmm-device-section-heading {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+
+  .rmm-device-app-patching-card .rmm-device-section-heading > .rmm-row-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .rmm-device-app-patching-card .rmm-device-section-heading > .rmm-row-actions button {
+    width: 100%;
+    min-height: 40px;
+    justify-content: center;
+  }
+
+  .rmm-device-software-table,
+  .rmm-device-patch-table {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow: visible;
+  }
+
+  .rmm-device-software-table .rmm-table-head,
+  .rmm-device-patch-table .rmm-table-head {
+    display: none;
+  }
+
+  .rmm-device-software-table .rmm-table-row,
+  .rmm-device-patch-table .rmm-table-row {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 9px 10px;
+    padding: 12px;
+  }
+
+  .rmm-device-software-table .rmm-table-row > span,
+  .rmm-device-patch-table .rmm-table-row > span {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .rmm-device-software-table .rmm-table-row > span::before,
+  .rmm-device-patch-table .rmm-table-row > span::before {
+    display: block;
+    margin-bottom: 2px;
+    color: var(--rmm-muted);
+    font-size: 7px;
+    font-weight: 900;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+
+  .rmm-device-software-table .rmm-table-row > span:first-child { grid-column: 1 / -1; }
+  .rmm-device-software-table .rmm-table-row > span:nth-child(2)::before { content: 'Version'; }
+  .rmm-device-software-table .rmm-table-row > span:nth-child(3)::before { content: 'Publisher'; }
+  .rmm-device-software-table .rmm-table-row > span:nth-child(4)::before { content: 'Installed'; }
+  .rmm-device-software-table .rmm-table-row > span:nth-child(5) { grid-column: 1 / -1; }
+  .rmm-device-software-table .rmm-table-row > span:nth-child(5)::before { content: 'Removal'; }
+  .rmm-device-software-table .rmm-software-uninstall {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .rmm-app-patch-table .rmm-table-row > span:nth-child(1) { grid-column: 1 / -1; }
+  .rmm-app-patch-table .rmm-table-row > span:nth-child(1)::before { content: 'Select'; }
+  .rmm-app-patch-table .rmm-table-row > span:nth-child(2) { grid-column: 1 / -1; }
+  .rmm-app-patch-table .rmm-table-row > span:nth-child(3)::before { content: 'Version'; }
+  .rmm-app-patch-table .rmm-table-row > span:nth-child(4)::before { content: 'Provider / trust'; }
+  .rmm-app-patch-table .rmm-table-row > span:nth-child(5) { grid-column: 1 / -1; }
+  .rmm-app-patch-table .rmm-table-row > span:nth-child(5)::before { content: 'Vulnerabilities'; }
+  .rmm-app-patch-table .rmm-table-row > span:nth-child(6) { grid-column: 1 / -1; }
+  .rmm-app-patch-table .rmm-table-row > span:nth-child(6)::before { content: 'Actions'; }
+  .rmm-app-patch-table .rmm-table-row > span:nth-child(6) .rmm-row-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .rmm-app-patch-table .rmm-table-row > span:nth-child(6) .rmm-row-actions button {
+    width: 100%;
+    min-height: 38px;
+    justify-content: center;
+  }
+
+  .rmm-device-windows-patching-card .rmm-device-patch-table .rmm-table-row > span:nth-child(1) { grid-column: 1 / -1; }
+  .rmm-device-windows-patching-card .rmm-device-patch-table .rmm-table-row > span:nth-child(2) { grid-column: 1 / -1; }
+  .rmm-device-windows-patching-card .rmm-device-patch-table .rmm-table-row > span:nth-child(2)::before { content: 'Categories'; }
+  .rmm-device-windows-patching-card .rmm-device-patch-table .rmm-table-row > span:nth-child(3)::before { content: 'Severity'; }
+  .rmm-device-windows-patching-card .rmm-device-patch-table .rmm-table-row > span:nth-child(4)::before { content: 'Downloaded'; }
+  .rmm-device-windows-patching-card .rmm-device-patch-table .rmm-table-row > span:nth-child(5)::before { content: 'Mandatory'; }
+  .rmm-device-windows-patching-card .rmm-device-patch-table .rmm-table-row > span:nth-child(6)::before { content: 'Reboot'; }
+
+  .rmm-device-inline-search {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+}
