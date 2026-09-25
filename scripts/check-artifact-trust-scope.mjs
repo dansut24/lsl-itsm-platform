@@ -73,6 +73,11 @@ expect(
     enrichment.includes("endpoint artifact signature/hash inspection is pending"),
   'Qualified states must fall back to deployment candidate while the current artifact is unverified.',
 )
+expect(
+  enrichment.includes("q.state IN ('queued','running','cleanup_pending','cleanup_running')") &&
+    enrichment.includes('if (qualificationBusy.rowCount) return []'),
+  'Artifact trust probes must yield to active or queued qualification work.',
+)
 
 if (failures) process.exit(1)
 console.log('Artifact trust scoping contract check passed.')

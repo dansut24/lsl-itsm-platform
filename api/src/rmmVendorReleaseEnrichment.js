@@ -530,6 +530,17 @@ export async function queueVendorArtifactInspections(limit = 2) {
   const runner = runners.rows[0]
   if (!runner) return []
 
+  const qualificationBusy = await pool.query(
+    `SELECT 1
+       FROM rmm_software_qualification_queue q
+       JOIN rmm_software_catalogue c ON c.id=q.catalogue_id
+      WHERE c.tenant_id IS NULL
+        AND c.status='active'
+        AND q.state IN ('queued','running','cleanup_pending','cleanup_running')
+      LIMIT 1`,
+  )
+  if (qualificationBusy.rowCount) return []
+
   const active = await pool.query(
     `SELECT count(*)::int AS count
        FROM rmm_agent_jobs
