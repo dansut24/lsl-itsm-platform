@@ -21,6 +21,11 @@ expect(renderer.includes("recoverMobileViewerFromBrowserGesture('pointercancel-r
 expect(renderer.includes('captureMobileViewportAnchor') && renderer.includes('restoreMobileViewportAnchor'), 'Viewport focal-point preservation is missing.')
 const pinchRelease = renderer.slice(renderer.indexOf('if(wasViewport){'), renderer.indexOf('resetMobileGestureWhenReleased();', renderer.indexOf('if(wasViewport){')))
 expect(pinchRelease.includes('applyMobileViewport({clamp:false})') && !pinchRelease.includes('applyMobileViewport({clamp:true})'), 'Pinch release must remain free of release-time recentering.')
+expect(renderer.includes('TOUCH_SCROLL_STEP_PX = 40'), 'Direct Touch natural-scroll step is missing or unexpectedly sensitive.')
+expect(renderer.includes('remoteTouchScrolling') && renderer.includes('verticalIntent'), 'Direct Touch one-finger vertical scroll intent is missing.')
+expect(renderer.includes("delta_y: steps * 120"), 'Mobile scrolling must emit fixed Windows wheel notches, not per-pixel wheel messages.')
+expect(renderer.includes('RAIL_SCROLL_STEP_PX = 56'), 'Trackpad fallback rail must retain reduced scroll sensitivity.')
+expect(renderer.includes("mobileInputMode === 'trackpad'") && renderer.includes('elMobileScrollRail.classList.toggle'), 'Scroll rail should be hidden in Direct Touch mode.')
 
 // Static frames and real transport recovery --------------------------------
 expect(renderer.includes('Never escalate frame age alone'), 'Static desktop frames must never trigger a full reconnect.')

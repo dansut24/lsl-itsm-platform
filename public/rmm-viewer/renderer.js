@@ -753,7 +753,7 @@ function updateMobileModeUi() {
   if (elMobileDiagnosticsPref) elMobileDiagnosticsPref.value = mobilePrefs.diagnostics;
   if (elRemoteResolutionPref) elRemoteResolutionPref.value = mobilePrefs.resolution;
   if (elViewerScaleMode) elViewerScaleMode.value = mobilePrefs.scale;
-  if (elMobileScrollRail) elMobileScrollRail.classList.toggle('visible', !!currentSession && isMobileViewerSurface());
+  if (elMobileScrollRail) elMobileScrollRail.classList.toggle('visible', !!currentSession && isMobileViewerSurface() && mobileInputMode === 'trackpad');
   updateMobileReticle();
   updateMobileDiagnosticsUi();
 }
@@ -2749,6 +2749,8 @@ function bindRemoteInput() {
   let remoteTouchStart = null;
   let remoteTouchLast = null;
   let remoteTouchDragging = false;
+  let remoteTouchScrolling = false;
+  let remoteTouchScrollAccumulator = 0;
   let remoteTouchLongPressTimer = null;
   let remoteTouchLongPressFired = false;
   let viewportGesture = null;
@@ -2758,6 +2760,9 @@ function bindRemoteInput() {
   let trackpadScroll = null;
   let scrollRailPointerId = null;
   let scrollRailLastY = 0;
+  let scrollRailAccumulator = 0;
+  const TOUCH_SCROLL_STEP_PX = 40;
+  const RAIL_SCROLL_STEP_PX = 56;
 
   if (gestureSurface && isMobileViewerSurface()) gestureSurface.style.touchAction = "none";
 
@@ -2776,6 +2781,13 @@ function bindRemoteInput() {
     x_norm: Math.max(0, Math.min(1, mobileTrackpadCursor.x_norm)),
     y_norm: Math.max(0, Math.min(1, mobileTrackpadCursor.y_norm))
   });
+  const flushTouchWheelAccumulator = (value, thresholdPx) => {
+    let steps = value > 0 ? Math.floor(value / thresholdPx) : Math.ceil(value / thresholdPx);
+    steps = Math.max(-2, Math.min(2, steps));
+    if (!steps) return value;
+    sendInput('wheel', { delta_x: 0, delta_y: steps * 120, delta_mode: 0 }, true);
+    return value - steps * thresholdPx;
+  };
 
   const sendMobileClick = (p, clientX, clientY, button = 0) => {
     const point = { x_norm: p.x_norm, y_norm: p.y_norm };
@@ -2805,6 +2817,8 @@ function bindRemoteInput() {
     remoteTouchStart = null;
     remoteTouchLast = null;
     remoteTouchDragging = false;
+    remoteTouchScrolling = false;
+    remoteTouchScrollAccumulator = 0;
     remoteTouchLongPressFired = false;
     hideMobilePrecisionLoupe();
   };
@@ -2933,6 +2947,8 @@ function bindRemoteInput() {
     remoteTouchStart={clientX:ev.clientX,clientY:ev.clientY};
     remoteTouchLast={clientX:ev.clientX,clientY:ev.clientY};
     remoteTouchDragging=false;
+    remoteTouchScrolling=false;
+    remoteTouchScrollAccumulator=0;
     remoteTouchLongPressFired=false;
 
     // Trackpad double-tap-and-hold becomes a normal Windows drag. If the
@@ -2994,6 +3010,25 @@ function bindRemoteInput() {
       updateMobileReticle(p.x_norm,p.y_norm);
       updateMobilePrecisionLoupe(p.x_norm,p.y_norm,ev.clientX,ev.clientY);
     } else {
+      const totalDx=remoteTouchStart?ev.clientX-remoteTouchStart.clientX:0;
+      const totalDy=remoteTouchStart?ev.clientY-remoteTouchStart.clientY:0;
+      const verticalIntent=Math.abs(totalDy)>Math.abs(totalDx)*1.15;
+      if(!mobilePrecisionMode&&!remoteTouchDragging&&!remoteTouchLongPressFired){
+        if(!remoteTouchScrolling&&touchTravel>12&&verticalIntent){
+          remoteTouchScrolling=true;
+          remoteTouchScrollAccumulator=0;
+          mobileLastTap=null;
+          clearRemoteLongPress();
+          hideMobilePrecisionLoupe();
+        }
+        if(remoteTouchScrolling){
+          const dy=ev.clientY-(remoteTouchLast?.clientY??ev.clientY);
+          remoteTouchScrollAccumulator+=-dy;
+          remoteTouchScrollAccumulator=flushTouchWheelAccumulator(remoteTouchScrollAccumulator,TOUCH_SCROLL_STEP_PX);
+          remoteTouchLast={clientX:ev.clientX,clientY:ev.clientY};
+          return;
+        }
+      }
       const p=getNormalizedPointer(ev);
       mobileTrackpadCursor={...p};
       moveRemoteCursorByNorm(p.x_norm,p.y_norm);
@@ -3029,7 +3064,7 @@ function bindRemoteInput() {
     }
     mobilePointers.clear();
     remoteTouchId=null; remoteTouchStart=null; remoteTouchLast=null;
-    remoteTouchDragging=false; remoteTouchLongPressFired=false;
+    remoteTouchDragging=false; remoteTouchScrolling=false; remoteTouchScrollAccumulator=0; remoteTouchLongPressFired=false;
     viewportGesture=null; viewportGestureConsumed=false; panGesture=null; trackpadScroll=null;
     if(scrollRailPointerId!=null){
       try{elMobileScrollRail?.releasePointerCapture(scrollRailPointerId);}catch{}
@@ -3051,12 +3086,12 @@ function bindRemoteInput() {
     if(wasRemote){
       clearRemoteLongPress();
       if(remoteTouchDragging){ sendInput('mouse_up',{button:0},true); }
-      else if(!cancelled&&!wasViewport&&!remoteTouchLongPressFired){
+      else if(!remoteTouchScrolling&&!cancelled&&!wasViewport&&!remoteTouchLongPressFired){
         const p=mobileInputMode==='trackpad'?currentTrackpadPoint():getNormalizedPointer(ev);
         finishMobileTap(p,ev.clientX,ev.clientY);
       }
       hideMobilePrecisionLoupe();
-      remoteTouchId=null; remoteTouchStart=null; remoteTouchLast=null; remoteTouchDragging=false; remoteTouchLongPressFired=false;
+      remoteTouchId=null; remoteTouchStart=null; remoteTouchLast=null; remoteTouchDragging=false; remoteTouchScrolling=false; remoteTouchScrollAccumulator=0; remoteTouchLongPressFired=false;
     }
 
     if(wasViewport){
@@ -3076,13 +3111,15 @@ function bindRemoteInput() {
     recoverMobileViewerFromBrowserGesture('pointercancel-recovery');
   },{passive:false});
 
-  // Dedicated edge scroll zone: one-finger vertical swipe always means remote
-  // wheel input, so scrolling never competes with pinch or direct touch.
+  // Dedicated edge scroll zone remains as a Trackpad fallback. Direct Touch
+  // now scrolls naturally with a one-finger vertical swipe anywhere on the
+  // remote surface. Accumulate finger travel before emitting fixed 120-unit
+  // Windows wheel notches so tiny movements cannot race to the page bottom.
   elMobileScrollRail?.addEventListener('pointerdown',(ev)=>{
     if(!isMobileViewerSurface()||!currentSession) return;
     cancelMobileViewportResumeRestore();
     ev.preventDefault(); ev.stopPropagation();
-    scrollRailPointerId=ev.pointerId; scrollRailLastY=ev.clientY;
+    scrollRailPointerId=ev.pointerId; scrollRailLastY=ev.clientY; scrollRailAccumulator=0;
     try{elMobileScrollRail.setPointerCapture(ev.pointerId);}catch{}
     enterRemoteControlMode();
   },{passive:false});
@@ -3091,7 +3128,8 @@ function bindRemoteInput() {
     ev.preventDefault(); ev.stopPropagation();
     const dy=ev.clientY-scrollRailLastY;
     if(Math.abs(dy)>=1){
-      sendInput('wheel',{delta_x:0,delta_y:Math.round(-dy*3.6),delta_mode:0},true);
+      scrollRailAccumulator+=-dy;
+      scrollRailAccumulator=flushTouchWheelAccumulator(scrollRailAccumulator,RAIL_SCROLL_STEP_PX);
       scrollRailLastY=ev.clientY;
       if(elMobileScrollThumb){
         const rect=elMobileScrollRail.getBoundingClientRect();
@@ -3105,6 +3143,7 @@ function bindRemoteInput() {
     ev.preventDefault(); ev.stopPropagation();
     try{elMobileScrollRail.releasePointerCapture(ev.pointerId);}catch{}
     scrollRailPointerId=null;
+    scrollRailAccumulator=0;
   };
   elMobileScrollRail?.addEventListener('pointerup',endScrollRail,{passive:false});
   elMobileScrollRail?.addEventListener('pointercancel',endScrollRail,{passive:false});
