@@ -1492,6 +1492,106 @@ button.rmm-table-row { width: 100%; border: 0; text-align: left; cursor: pointer
 }
 
 
+
+.rmm-linked-cves {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--rmm-accent);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.rmm-linked-cves strong { color: inherit; }
+.rmm-linked-cves svg { flex: 0 0 auto; }
+.rmm-linked-cves:disabled { color: var(--rmm-text); cursor: default; }
+.rmm-patch-vuln-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 145;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 22px;
+  background: rgba(5, 15, 32, .48);
+  backdrop-filter: blur(4px);
+}
+.rmm-patch-vuln-sheet {
+  width: min(860px, 100%);
+  max-height: min(780px, calc(100dvh - 44px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--rmm-border);
+  border-radius: 14px;
+  background: var(--rmm-surface);
+  color: var(--rmm-text);
+  box-shadow: 0 24px 70px rgba(7, 24, 52, .28);
+}
+.rmm-patch-vuln-sheet > header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--rmm-border);
+  padding: 18px 20px;
+  background: var(--rmm-surface);
+}
+.rmm-patch-vuln-sheet > header h2 { margin: 4px 0 3px; font-size: 20px; }
+.rmm-patch-vuln-sheet > header p { margin: 0; color: var(--rmm-muted); font-size: 9px; }
+.rmm-patch-vuln-sheet > header > button {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 1px solid var(--rmm-border);
+  border-radius: 9px;
+  background: var(--rmm-surface);
+  color: var(--rmm-muted);
+  cursor: pointer;
+}
+.rmm-patch-vuln-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  padding: 14px 16px 6px;
+}
+.rmm-patch-vuln-summary > span {
+  display: grid;
+  gap: 3px;
+  border-radius: 9px;
+  padding: 11px;
+  background: var(--rmm-soft);
+}
+.rmm-patch-vuln-summary small,
+.rmm-patch-vuln-metrics small { color: var(--rmm-muted); font-size: 7px; text-transform: uppercase; letter-spacing: .04em; }
+.rmm-patch-vuln-summary strong { font-size: 15px; }
+.rmm-patch-vuln-list { display: grid; gap: 9px; padding: 10px 16px 18px; }
+.rmm-patch-vuln-list > article {
+  display: grid;
+  gap: 11px;
+  border: 1px solid var(--rmm-border);
+  border-radius: 10px;
+  padding: 13px;
+  background: var(--rmm-surface);
+}
+.rmm-patch-vuln-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.rmm-patch-vuln-title > div { display: grid; gap: 2px; min-width: 0; }
+.rmm-patch-vuln-title strong { font-size: 12px; }
+.rmm-patch-vuln-title small { color: var(--rmm-muted); font-size: 8px; }
+.rmm-patch-vuln-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
+.rmm-patch-vuln-metrics > span { display: grid; gap: 2px; border-radius: 8px; padding: 9px; background: var(--rmm-soft); }
+.rmm-patch-vuln-metrics strong { font-size: 10px; overflow-wrap: anywhere; }
+.rmm-patch-vuln-metrics em { min-height: 1em; color: var(--rmm-muted); font-size: 7px; font-style: normal; overflow-wrap: anywhere; }
+.rmm-patch-vuln-list > article > p { margin: 0; color: var(--rmm-muted); font-size: 9px; line-height: 1.55; overflow-wrap: anywhere; }
+
 /* Device Software/Patching mobile cards ----------------------------------- */
 @media (max-width: 640px) {
   .rmm-device-software-card,
@@ -1605,6 +1705,22 @@ button.rmm-table-row { width: 100%; border: 0; text-align: left; cursor: pointer
   .rmm-device-windows-patching-card .rmm-device-patch-table .rmm-table-row > span:nth-child(4)::before { content: 'Downloaded'; }
   .rmm-device-windows-patching-card .rmm-device-patch-table .rmm-table-row > span:nth-child(5)::before { content: 'Mandatory'; }
   .rmm-device-windows-patching-card .rmm-device-patch-table .rmm-table-row > span:nth-child(6)::before { content: 'Reboot'; }
+
+  .rmm-patch-vuln-backdrop {
+    align-items: end;
+    box-sizing: border-box;
+    padding: calc(env(safe-area-inset-top) + 8px) 0 0;
+  }
+  .rmm-patch-vuln-sheet {
+    width: 100%;
+    max-height: 100%;
+    border-radius: 15px 15px 0 0;
+  }
+  .rmm-patch-vuln-sheet > header { padding: 16px 16px 14px; }
+  .rmm-patch-vuln-summary { grid-template-columns: 1fr 1fr; padding: 12px 13px 5px; }
+  .rmm-patch-vuln-list { padding: 9px 13px calc(20px + env(safe-area-inset-bottom)); }
+  .rmm-patch-vuln-metrics { grid-template-columns: 1fr 1fr; }
+  .rmm-linked-cves { min-height: 32px; }
 
   .rmm-device-inline-search {
     width: 100%;

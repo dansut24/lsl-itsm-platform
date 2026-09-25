@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   Activity,
   AlertTriangle,
@@ -741,6 +742,59 @@ function DeviceSoftware({ device }) {
   )
 }
 
+function devicePatchVulnerabilityTone(item) {
+  const exploitation = String(item?.ssvc_exploitation || '').toLowerCase()
+  const cvss = Number(item?.cvss_score || 0)
+  if (item?.kev || item?.cisa_kev || item?.cisaKev || exploitation === 'active' || cvss >= 9) return 'critical'
+  if (cvss >= 7 || exploitation === 'poc') return 'warning'
+  return 'neutral'
+}
+
+function DevicePatchVulnerabilityDetails({ detail, onClose }) {
+  if (!detail) return null
+  const row = detail.row || {}
+  const vulnerabilities = detail.vulnerabilities || []
+  const maxCvss = vulnerabilities.reduce((max, item) => Math.max(max, Number(item?.cvss_score || 0)), 0)
+  const maxEpss = vulnerabilities.reduce((max, item) => Math.max(max, Number(item?.epss_score || 0)), 0)
+  const kevCount = vulnerabilities.filter((item) => item?.kev || item?.cisa_kev || item?.cisaKev).length
+  const modal = <div className="rmm-patch-vuln-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
+    <section className="rmm-patch-vuln-sheet" role="dialog" aria-modal="true" aria-label={(row.name || 'Application') + ' linked vulnerabilities'}>
+      <header>
+        <div><span className="rmm-eyebrow">Linked vulnerabilities</span><h2>{row.name || 'Application patch'}</h2><p>{row.installedVersion || 'Unknown version'} → {row.targetVersion || row.availableVersion || 'Target version not reported'}</p></div>
+        <button onClick={onClose} type="button" aria-label="Close vulnerability details"><X size={19} /></button>
+      </header>
+      <div className="rmm-patch-vuln-summary">
+        <span><small>Linked CVEs</small><strong>{vulnerabilities.length}</strong></span>
+        <span><small>Max CVSS</small><strong>{maxCvss > 0 ? maxCvss.toFixed(1) : '—'}</strong></span>
+        <span><small>Max EPSS</small><strong>{maxEpss > 0 ? (maxEpss * 100).toFixed(1) + '%' : '—'}</strong></span>
+        <span><small>CISA KEV</small><strong>{kevCount}</strong></span>
+      </div>
+      <div className="rmm-patch-vuln-list">
+        {vulnerabilities.map((item) => {
+          const epss = item.epss_score == null ? null : Number(item.epss_score)
+          const percentile = item.epss_percentile == null ? null : Number(item.epss_percentile)
+          const exploitation = String(item.ssvc_exploitation || '').toLowerCase()
+          const remediationTarget = item.remediation_target_version || item.fixed_version || row.targetVersion || row.availableVersion || ''
+          return <article key={item.id || item.cve_id}>
+            <div className="rmm-patch-vuln-title">
+              <div><strong>{item.cve_id || 'CVE pending'}</strong><small>{item.source || 'Vulnerability intelligence'}</small></div>
+              <StatusPill tone={devicePatchVulnerabilityTone(item)}>{item.kev || item.cisa_kev || item.cisaKev ? 'CISA KEV' : item.severity || (Number(item.cvss_score || 0) >= 9 ? 'Critical' : Number(item.cvss_score || 0) >= 7 ? 'High' : 'Observed')}</StatusPill>
+            </div>
+            <div className="rmm-patch-vuln-metrics">
+              <span><small>CVSS</small><strong>{item.cvss_score ?? '—'}</strong><em>{item.cvss_version || 'Score pending'}</em></span>
+              <span><small>EPSS</small><strong>{epss == null ? '—' : (epss * 100).toFixed(1) + '%'}</strong><em>{percentile == null ? 'Percentile pending' : Math.round(percentile * 100) + 'th percentile'}</em></span>
+              <span><small>Exploitation</small><strong>{item.kev || item.cisa_kev || item.cisaKev ? 'Known exploited' : exploitation === 'active' ? 'Active' : exploitation === 'poc' ? 'PoC observed' : 'Not reported'}</strong><em>{item.known_ransomware_use ? 'Ransomware: ' + item.known_ransomware_use : ''}</em></span>
+              <span><small>Remediation</small><strong>{remediationTarget || 'No fixed version reported'}</strong><em>{String(item.remediation_state || item.status || '').replaceAll('_', ' ') || 'Observed'}</em></span>
+            </div>
+            <p>{item.summary || 'Description pending vulnerability enrichment.'}</p>
+          </article>
+        })}
+      </div>
+    </section>
+  </div>
+  return createPortal(modal, document.querySelector('.rmm-app') || document.body)
+}
+
 function DevicePatching({ device }) {
   const windowsUpdates = device.patches || []
   const online = deviceIsOnline(device)
@@ -748,6 +802,7 @@ function DevicePatching({ device }) {
   const [selected, setSelected] = useState([])
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
+  const [vulnerabilityDetail, setVulnerabilityDetail] = useState(null)
   const refresh = () => loadRmmPatching().then(setBundle).catch((error) => setMessage(error?.message || 'Patch state could not be loaded.'))
   useEffect(() => { refresh() }, [device.agentDeviceId])
   const rejections = (bundle?.devicePatchRejections || []).filter((row) => row.agent_device_id === device.agentDeviceId)
@@ -791,12 +846,13 @@ function DevicePatching({ device }) {
     <div className="rmm-device-patch-summary"><div><span><PackageCheck size={18} /></span><div><strong>{appUpdates.length}</strong><small>Application updates</small></div></div><div><span><ShieldCheck size={18} /></span><div><strong>{device.pendingPatches ?? 'Not reported'}</strong><small>Windows updates</small></div></div><div><span><Clock3 size={18} /></span><div><strong>{device.inventory?.windows_updates?.last_scan_utc ? new Date(device.inventory.windows_updates.last_scan_utc).toLocaleString() : 'Not reported'}</strong><small>Last scan</small></div></div></div>
     <section className="rmm-table-card rmm-device-app-patching-card"><div className="rmm-device-section-heading"><div><span className="rmm-eyebrow">Device-scoped patching</span><h2>Application updates</h2><p>Vendor catalogue and WinGet discovery combined for this endpoint.</p></div><div className="rmm-row-actions"><button disabled={!online || busy || !selectedRows.length} onClick={() => patch(selectedRows)} type="button">Patch selected ({selectedRows.length})</button><button className="rmm-primary" disabled={!online || busy || !appUpdates.length} onClick={() => patch(appUpdates)} type="button">Patch all</button></div></div>
     {!online && <div className="rmm-device-action-message"><WifiOff size={14} /> Offline — update state is visible but execution is disabled and no job is queued.</div>}{message && <div className="rmm-device-action-message">{message}</div>}
-    <div className="rmm-table rmm-device-patch-table rmm-app-patch-table"><div className="rmm-table-head"><span>Select</span><span>Application</span><span>Version</span><span>Provider / trust</span><span>Vulnerabilities</span><span>Action</span></div>{appUpdates.map((row) => { const id = row.catalogue?.id; const vulns = exposures.filter((v) => v.agent_device_id === device.agentDeviceId && v.catalogue_id === id); const kev = vulns.some((v) => v.cisa_kev || v.cisaKev); return <div className="rmm-table-row" key={row.inventoryId + ':' + (id || row.applicationKey)}><span><input checked={selected.includes(id)} disabled={!online || !id} onChange={(event) => setSelected((current) => event.target.checked ? [...new Set([...current, id])] : current.filter((value) => value !== id))} type="checkbox" /></span><span><strong>{row.name}</strong><small>{row.publisher || row.catalogue?.publisher || 'Publisher not reported'}</small></span><span><strong>{row.installedVersion || '—'} → {row.targetVersion || row.availableVersion || '—'}</strong></span><span><strong>{row.provider || row.catalogue?.provider || 'catalogue'}</strong><small>{row.catalogue?.qualificationState || 'qualification pending'}</small></span><span><strong>{vulns.length ? `${vulns.length} linked CVEs` : 'No linked exposure'}</strong><small>{kev ? 'CISA KEV' : ''}</small></span><span><div className="rmm-row-actions"><button disabled={!online || busy || !id} onClick={() => patch([row])} type="button">Patch</button><button disabled={busy || !id} onClick={() => ignorePatch(row)} type="button">Ignore</button></div></span></div> })}</div>
+    <div className="rmm-table rmm-device-patch-table rmm-app-patch-table"><div className="rmm-table-head"><span>Select</span><span>Application</span><span>Version</span><span>Provider / trust</span><span>Vulnerabilities</span><span>Action</span></div>{appUpdates.map((row) => { const id = row.catalogue?.id; const vulns = exposures.filter((v) => v.agent_device_id === device.agentDeviceId && v.catalogue_id === id); const kev = vulns.some((v) => v.kev || v.cisa_kev || v.cisaKev); return <div className="rmm-table-row" key={row.inventoryId + ':' + (id || row.applicationKey)}><span><input checked={selected.includes(id)} disabled={!online || !id} onChange={(event) => setSelected((current) => event.target.checked ? [...new Set([...current, id])] : current.filter((value) => value !== id))} type="checkbox" /></span><span><strong>{row.name}</strong><small>{row.publisher || row.catalogue?.publisher || 'Publisher not reported'}</small></span><span><strong>{row.installedVersion || '—'} → {row.targetVersion || row.availableVersion || '—'}</strong></span><span><strong>{row.provider || row.catalogue?.provider || 'catalogue'}</strong><small>{row.catalogue?.qualificationState || 'qualification pending'}</small></span><span><button className="rmm-linked-cves" disabled={!vulns.length} onClick={() => vulns.length && setVulnerabilityDetail({ row, vulnerabilities: vulns })} type="button"><strong>{vulns.length ? `${vulns.length} linked CVEs` : 'No linked exposure'}</strong>{vulns.length ? <ChevronRight size={13} /> : null}</button><small>{kev ? 'CISA KEV' : ''}</small></span><span><div className="rmm-row-actions"><button disabled={!online || busy || !id} onClick={() => patch([row])} type="button">Patch</button><button disabled={busy || !id} onClick={() => ignorePatch(row)} type="button">Ignore</button></div></span></div> })}</div>
     {!appUpdates.length && <div className="rmm-empty"><PackageCheck size={24} /><strong>{bundle ? 'No application updates detected' : 'Loading application patch state…'}</strong><span>Only installed software with a verified update is offered here.</span></div>}
     {ignoredUpdates.length > 0 && <div className="rmm-device-ignored-patches"><strong>Ignored on this device ({ignoredUpdates.length})</strong>{ignoredUpdates.map((row) => <div className="rmm-device-action-message" key={'ignored:' + row.catalogue?.id}><span>{row.name} · {row.targetVersion || row.availableVersion}</span><button disabled={busy} onClick={() => restorePatch(row)} type="button">Restore</button></div>)}</div>}</section>
     <section className="rmm-table-card rmm-device-windows-patching-card"><div className="rmm-device-section-heading"><div><span className="rmm-eyebrow">Windows Update</span><h2>Pending Windows updates</h2><p>Reported directly by the Windows Update Agent.</p></div></div>
     <div className="rmm-table rmm-device-patch-table"><div className="rmm-table-head"><span>Update</span><span>Categories</span><span>Severity</span><span>Downloaded</span><span>Mandatory</span><span>Reboot</span></div>{windowsUpdates.map((item, index) => <div className="rmm-table-row" key={(item.kb || []).join('-') || item.title || index}><span><strong>{item.title || 'Windows update'}</strong><small>{(item.kb || []).map((kb) => 'KB' + kb).join(', ') || 'No KB reference'}</small></span><span>{(item.categories || []).join(', ') || 'Not classified'}</span><span>{item.severity || 'Not rated'}</span><span>{item.downloaded ? 'Yes' : 'No'}</span><span>{item.mandatory ? 'Yes' : 'No'}</span><span>{item.reboot_required ? 'Required' : 'No'}</span></div>)}</div>
     {!windowsUpdates.length && <div className="rmm-empty"><ShieldCheck size={24} /><strong>No pending Windows updates reported</strong></div>}</section>
+    <DevicePatchVulnerabilityDetails detail={vulnerabilityDetail} onClose={() => setVulnerabilityDetail(null)} />
   </>
 }
 
