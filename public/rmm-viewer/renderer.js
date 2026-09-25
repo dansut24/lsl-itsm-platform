@@ -1189,14 +1189,25 @@ function showPassiveOverlay() {
 
 function showSecureBlackOverlay({ spinner = false } = {}) {
   passiveOverlayActive = false;
-  secureDesktopActive = true;
   if (hasEverRenderedFrame) {
     if (elOverlay) {
-      elOverlay.classList.remove("hidden", "passive", "secure-black", "secure-black-silent");
-      elOverlay.classList.add("silent", "transition-hold");
+      elOverlay.classList.remove("hidden");
+      setOverlayMode("transition-hold");
+    }
+    if (elOverlayTitle) elOverlayTitle.textContent = "";
+    if (elOverlaySub) elOverlaySub.textContent = "";
+    if (elSpinner) elSpinner.style.display = "none";
+    if (elErrorDetail) {
+      elErrorDetail.style.display = "none";
+      elErrorDetail.textContent = "";
     }
     if (elVideo) elVideo.classList.add("visible");
     if (elStatsBar) elStatsBar.classList.add("visible");
+    if (isMobileViewerSurface()) {
+      setMobileViewControlsVisible(true);
+      setMobileBottomActionsVisible(true);
+      applyMobileViewport({ clamp: mobileViewZoom <= 1.001 });
+    }
     hideRemoteCursor();
     return;
   }
@@ -1208,6 +1219,15 @@ function clearSecureDesktopState() {
   desktopHandoffActive = false;
   secureDesktopLikely = false;
   revealOnNextFrame = false;
+}
+
+function completeDesktopSourceTransition(reason = "desktop-source-ready") {
+  clearSecureDesktopState();
+  showStream();
+  setStatus("online", "Streaming");
+  ensureRemoteVideoPlayback(reason);
+  armDecodedFrameReveal();
+  requestRemoteKeyframe(reason);
 }
 
 function hideOverlay() {
@@ -2065,6 +2085,7 @@ function sendViewerStreamProfile() {
 function sendInput(kind, extra = {}, force = false) {
   if (!currentSession) return;
   if (!force && !controlActive) return;
+  if (!force && (secureDesktopActive || desktopHandoffActive)) return;
 
   if (kind === 'mouse_move' && sendFastMouseMove(extra)) return;
 
@@ -4001,16 +4022,12 @@ async function onSignalMessage(raw) {
       }
 
       if (state === "secure_desktop_ready") {
-        secureDesktopActive = false;
-        desktopHandoffActive = false;
-        secureDesktopLikely = false;
-        revealOnNextFrame = true;
-        setStatus("online", "Streaming");
+        completeDesktopSourceTransition("secure-desktop-ready");
         break;
       }
 
       if (state === "secure_desktop_exited") {
-        clearSecureDesktopState();
+        completeDesktopSourceTransition("secure-desktop-exited");
         break;
       }
 
@@ -4024,11 +4041,7 @@ async function onSignalMessage(raw) {
       }
 
       if (state === "desktop_handoff_ready") {
-        desktopHandoffActive = false;
-        secureDesktopActive = false;
-        secureDesktopLikely = false;
-        revealOnNextFrame = true;
-        setStatus("online", "Streaming");
+        completeDesktopSourceTransition("desktop-handoff-ready");
         break;
       }
 

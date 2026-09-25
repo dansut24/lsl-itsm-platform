@@ -99,7 +99,12 @@ expect(renderer.includes('SHIFTED_PUNCTUATION_TEXT') && renderer.includes('SHIFT
 for (const state of ['secure_desktop_entering','secure_desktop_ready','desktop_handoff_entering','desktop_handoff_ready']) {
   expect(renderer.includes(state), `Viewer is missing secure-desktop state ${state}.`)
 }
-expect(renderer.includes('revealOnNextFrame = true'), 'Secure desktop return must reveal on the next valid frame.')
+expect(renderer.includes('completeDesktopSourceTransition') && renderer.includes('showStream();'), 'Secure desktop return must release the Viewer UI immediately instead of waiting on another decoded-frame callback.')
+expect(renderer.includes('setMobileViewControlsVisible(true)') && renderer.includes('setMobileBottomActionsVisible(true)'), 'Mobile zoom and action controls must remain available during desktop-source transitions.')
+expect(renderer.includes('if (!force && (secureDesktopActive || desktopHandoffActive)) return;'), 'Remote input must be suppressed during a desktop-source transition without blocking local mobile gestures.')
+const viewerHtml = read('public/rmm-viewer/index.html')
+expect(viewerHtml.includes('#overlay.transition-hold') && viewerHtml.includes('pointer-events: none'), 'The secure-desktop transition layer must never intercept mobile pinch/zoom gestures.')
+expect(renderer.includes('elOverlayTitle.textContent = ""') && renderer.includes('elSpinner.style.display = "none"'), 'Desktop-source transition hold must clear stale Connecting UI content.')
 
 if (failures.length) {
   console.error('RMM Viewer contract check failed:')
