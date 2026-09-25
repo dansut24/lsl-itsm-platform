@@ -20,6 +20,10 @@ function runnerSupportsResponseFiles(runner) {
     && vendorDirect.responseFileTargetVersionToken === true
 }
 
+function runnerSupportsOfficeClickToRun(runner) {
+  return object(object(runner?.patch_capabilities).vendorDirect).officeClickToRun === true
+}
+
 function runnerSupportsWingetExactVersion(runner) {
   const winget = object(object(runner?.patch_capabilities).winget)
   return winget.exactVersionInstall === true
@@ -1138,6 +1142,14 @@ async function dispatchCleanInstall(queue, runner) {
     })
     return { dispatched: false, blocked: true, reason: 'qualification_response_file_capability_required' }
   }
+  if (lower(catalogue.installer_technology) === 'office_odt_sfx' && !runnerSupportsOfficeClickToRun(runner)) {
+    await markReview(queue.id, 'qualification_office_c2r_capability_required', {
+      stage: 'pre_install_office_c2r_capability',
+      requiredPatchHostVersion: '0.2.18',
+      currentPatchHostVersion: clean(object(runner.patch_capabilities).patchHostVersion || object(runner.patch_capabilities).version),
+    })
+    return { dispatched: false, blocked: true, reason: 'qualification_office_c2r_capability_required' }
+  }
   const fallbackPackageId = sourceMetadata.wingetFallbackReady === true
     ? clean(catalogue.binding_winget_package_id || sourceMetadata.wingetPackageId)
     : ''
@@ -1380,6 +1392,23 @@ async function dispatchUpgradeInstall(queue, runner, release, {
 
   const verification = object(release.release_verification || release.verification)
   const execution = object(release.release_execution || release.execution)
+  const responseFile = normalizedResponseFile(execution.responseFile)
+  if (responseFile && !runnerSupportsResponseFiles(runner)) {
+    await markReview(queue.id, 'qualification_response_file_capability_required', {
+      stage,
+      requiredPatchHostVersion: '0.2.16',
+      currentPatchHostVersion: clean(object(runner.patch_capabilities).patchHostVersion || object(runner.patch_capabilities).version),
+    })
+    return { dispatched: false, blocked: true, reason: 'qualification_response_file_capability_required' }
+  }
+  if (lower(release.installer_technology) === 'office_odt_sfx' && !runnerSupportsOfficeClickToRun(runner)) {
+    await markReview(queue.id, 'qualification_office_c2r_capability_required', {
+      stage,
+      requiredPatchHostVersion: '0.2.18',
+      currentPatchHostVersion: clean(object(runner.patch_capabilities).patchHostVersion || object(runner.patch_capabilities).version),
+    })
+    return { dispatched: false, blocked: true, reason: 'qualification_office_c2r_capability_required' }
+  }
   const targetVersion = clean(release.release_version)
   const packageId = clean(release.provider_package_id)
   const verificationMethod = clean(verification.method || verification.provider || 'uninstall_registry')

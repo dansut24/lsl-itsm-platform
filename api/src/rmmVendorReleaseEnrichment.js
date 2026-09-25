@@ -304,8 +304,12 @@ export async function reconcileVendorArtifactInspections() {
       || githubPayload.selectedAssetReason
       || metadata.selectedAssetReason,
     )
-    const installerTechnology = lower(clean(result.installerTechnology))
-    const installerTechnologyRecognized = result.installerTechnologyRecognized === true
+    const configuredInstallerTechnology = lower(clean(metadata.installerTechnology))
+    const installerTechnology = configuredInstallerTechnology === 'office_odt_sfx'
+      ? configuredInstallerTechnology
+      : lower(clean(result.installerTechnology))
+    const installerTechnologyRecognized = configuredInstallerTechnology === 'office_odt_sfx'
+      || result.installerTechnologyRecognized === true
       || ['msi','inno','nullsoft','nsis','burn','installshield','squirrel','install4j'].includes(installerTechnology)
     const curatedInstallArguments = clean(sourcePayload.installArguments || metadata.installArguments)
     const deploymentSupported = ['msi', 'exe'].includes(lower(row.installer_type))

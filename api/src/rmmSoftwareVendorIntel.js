@@ -1952,9 +1952,158 @@ async function syncMySqlConnectorOdbc() {
   })
 }
 
+async function syncMicrosoft365AppsCurrent() {
+  const b = await binding('microsoft_365_apps_current')
+  if (!b) return null
+  const config = { ...object(b.source_metadata), ...object(b.binding_metadata) }
+
+  const updatePage = (await publicHttpsUrl(b.source_url)).toString()
+  const updateHtml = await fetchPublicText(updatePage, {
+    accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+    maxBytes: 8 * 1024 * 1024,
+  })
+  const updateText = stripHtml(updateHtml)
+  const supportedMatch = updateText.match(
+    /Current Channel\s+(\d{4})\s+(\d{5}\.\d{5})\s+([A-Za-z]+\s+\d{1,2},\s+\d{4})/i,
+  ) || updateText.match(
+    /Current Channel[\s\S]{0,500}?Version\s+(\d{4})\s*\(Build\s+(\d{5}\.\d{5})\)/i,
+  )
+  if (!supportedMatch) throw new Error('Microsoft 365 Apps update history returned no Current Channel build')
+  const channelVersion = clean(supportedMatch[1])
+  const build = clean(supportedMatch[2])
+  const releaseDate = normalizedReleaseDate(supportedMatch[3])
+  const version = '16.0.' + build
+
+  const odtDownloadPage = (await publicHttpsUrl(
+    clean(config.odtDownloadPage) || 'https://www.microsoft.com/en-us/download/details.aspx?id=49117',
+  )).toString()
+  const odtHtml = await fetchPublicText(odtDownloadPage, {
+    accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+    maxBytes: 8 * 1024 * 1024,
+  })
+  const odtText = stripHtml(odtHtml)
+  const odtVersion = clean(odtText.match(/Version:\s*(16\.0\.\d+\.\d+)/i)?.[1])
+  const odtFile = clean(odtText.match(/File Name:\s*(officedeploymenttool_[0-9-]+\.exe)/i)?.[1])
+  let odtUrl = clean(odtHtml.match(
+    /https:\/\/download\.microsoft\.com\/download\/[^"'<>\s]+\/officedeploymenttool_[0-9-]+\.exe/i,
+  )?.[0]).replaceAll('&amp;', '&')
+  if (!odtVersion || !odtFile || !odtUrl) {
+    throw new Error('Microsoft Office Deployment Tool page returned no usable signed package')
+  }
+  odtUrl = (await publicHttpsUrl(odtUrl)).toString()
+  if (new URL(odtUrl).hostname.toLowerCase() !== 'download.microsoft.com') {
+    throw new Error('Microsoft Office Deployment Tool download resolved outside download.microsoft.com')
+  }
+
+  const verification = {
+    method: 'office_c2r_registry',
+    productId: clean(config.officeProductId || 'O365ProPlusRetail'),
+    displayNameContains: clean(config.namePattern || b.canonical_name),
+    publisherContains: clean(config.publisherPattern || b.publisher),
+  }
+  const expectedSigner = clean(config.expectedSigner || 'Microsoft Corporation')
+  const trust = vendorReleaseTrustProfile({
+    installerUrl: odtUrl,
+    installerSha256: '',
+    installerType: 'exe',
+    publisher: b.publisher,
+    expectedSigner,
+    verification,
+    wingetPackageId: '',
+    deploymentMode: 'vendor_direct',
+  })
+  const evidence = {
+    ...trust.evidence,
+    sourceKey: b.source_key,
+    releaseUrl: updatePage,
+    selectedAsset: odtFile,
+    selectedAssetReason: 'official_microsoft_odt_for_click_to_run',
+    officeChannel: 'Current',
+    officeChannelVersion: channelVersion,
+    officeBuild: build,
+    officeVersion: version,
+    odtVersion,
+    odtDownloadPage,
+  }
+  const installArguments = clean(config.installArguments || '/configure {HI5_RESPONSE_FILE}')
+  const responseFile = object(config.responseFile)
+
+  return upsertRelease({
+    sourceKey: b.source_key,
+    packageId: b.provider_package_id,
+    canonicalName: b.canonical_name,
+    publisher: b.publisher,
+    channel: b.channel,
+    platform: b.platform,
+    architecture: b.architecture,
+    version,
+    releaseDate,
+    installerUrl: odtUrl,
+    installerType: 'exe',
+    releaseUrl: updatePage,
+    assetName: odtFile,
+    trustState: trust.trustState,
+    trustEvidence: evidence,
+    qualificationState: trust.qualificationState,
+    qualificationEvidence: evidence,
+    qualificationNotes: trust.qualificationState === 'deployment_candidate'
+      ? 'Microsoft Current Channel is authoritative; deployment uses the signed Office Deployment Tool and Office CDN.'
+      : '',
+    sourcePriority: b.priority,
+    payload: {
+      microsoft365Apps: {
+        channel: 'Current',
+        channelVersion,
+        build,
+        version,
+        productId: verification.productId,
+        updateHistoryUrl: updatePage,
+        odtVersion,
+        odtFile,
+        odtDownloadPage,
+      },
+      releaseUrl: updatePage,
+      trustState: trust.trustState,
+      trustEvidence: evidence,
+      expectedSigner,
+      deploymentMode: trust.deploymentMode,
+      verification,
+      installerTechnology: 'office_odt_sfx',
+      installArguments,
+      responseFile,
+    },
+    catalogueProvider: 'managed',
+    verification,
+    execution: { installArguments, responseFile },
+    catalogueMetadata: {
+      namePattern: clean(config.namePattern || b.canonical_name),
+      publisherPattern: clean(config.publisherPattern || b.publisher),
+      latestSource: b.source_key,
+      sourceType: 'microsoft_365_apps',
+      deploymentMode: trust.deploymentMode,
+      expectedSigner,
+      signerBaseline: expectedSigner,
+      trustState: trust.trustState,
+      trustEvidence: evidence,
+      releaseUrl: updatePage,
+      selectedAsset: odtFile,
+      selectedAssetReason: 'official_microsoft_odt_for_click_to_run',
+      installerTechnology: 'office_odt_sfx',
+      automaticVendorRelease: true,
+      hasWingetFallback: false,
+      officeChannel: 'Current',
+      officeProductId: verification.productId,
+      odtVersion,
+      nvdVendor: clean(config.nvdVendor || 'microsoft'),
+      nvdProduct: clean(config.nvdProduct || 'office'),
+    },
+  })
+}
+
 const adapters = {
   google_chrome: syncChrome,
   microsoft_edge: syncEdge,
+  microsoft_365_apps_current: syncMicrosoft365AppsCurrent,
   mozilla_firefox: () => syncMozilla('mozilla_firefox', 'LATEST_FIREFOX_VERSION'),
   mozilla_thunderbird: () => syncMozilla('mozilla_thunderbird', 'LATEST_THUNDERBIRD_VERSION'),
   microsoft_vscode: syncVsCode,

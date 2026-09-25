@@ -1949,7 +1949,7 @@ function installerTechnologyFamily(value = '') {
   const technology = lower(value)
   if (!technology) return ''
   if (technology === 'msi' || technology === 'windows_installer') return 'msi'
-  if (['exe', 'inno', 'nullsoft', 'nsis', 'burn', 'installshield', 'squirrel', 'install4j', 'generic'].includes(technology)) return 'exe'
+  if (['exe', 'inno', 'nullsoft', 'nsis', 'burn', 'installshield', 'squirrel', 'install4j', 'office_odt_sfx', 'generic'].includes(technology)) return 'exe'
   return ''
 }
 
@@ -2052,6 +2052,22 @@ export async function softwarePatchPlan(tenantId, agentDeviceId, catalogueId, op
     return { error: 'This device has not reported PatchHost software-install capability yet.', status: 409, capabilityMissing: true }
   }
   const hostVersion = clean(capabilities.patchHostVersion || capabilities.version)
+  const catalogueInstallerTechnology = lower(
+    object(row.source_metadata).installerTechnology || row.installer_type,
+  )
+  if (catalogueInstallerTechnology === 'office_odt_sfx') {
+    const officeC2rReady = object(capabilities.vendorDirect).officeClickToRun === true
+    const officeHostComparison = compareVersions(hostVersion, '0.2.18')
+    if (!officeC2rReady || !hostVersion || officeHostComparison == null || officeHostComparison < 0) {
+      return {
+        error: 'Microsoft 365 Apps deployment requires PatchHost 0.2.18 or newer with Office Click-to-Run support.',
+        status: 409,
+        capabilityMissing: true,
+        requiredPatchHostVersion: '0.2.18',
+        requiredCapability: 'vendorDirect.officeClickToRun',
+      }
+    }
+  }
   if (intent === 'install') {
     const installHostComparison = compareVersions(hostVersion, '0.2.5')
     if (!hostVersion || installHostComparison == null || installHostComparison < 0) {
