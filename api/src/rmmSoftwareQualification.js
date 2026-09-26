@@ -3543,7 +3543,7 @@ async function dispatchEmergencyAgentControlJobs({ limit = 3 } = {}) {
   return dispatched
 }
 
-export async function runSoftwareQualificationQueue({ dispatchLimit = 1 } = {}) {
+export async function reconcileSoftwareQualificationQueue() {
   await stopOverlongQualificationJobs()
   const emergencyDispatched = await dispatchEmergencyAgentControlJobs()
   const runner = await liveQualificationRunner()
@@ -3560,8 +3560,24 @@ export async function runSoftwareQualificationQueue({ dispatchLimit = 1 } = {}) 
         ? await reconcileRollbackQueueRow(row, runner)
         : await reconcileQueueRow(row, runner))
   }
+  return {
+    runner: runner?.device_name || null,
+    runnerDeviceId: runner?.agent_device_id || null,
+    reconciled,
+    emergencyDispatched,
+    activeCount: active.rowCount,
+    dispatchAttempted: false,
+    dispatched: [],
+  }
+}
 
-  if (!runner) return { runner: null, reconciled, dispatched: [], emergencyDispatched }
+export async function runSoftwareQualificationQueue({ dispatchLimit = 1 } = {}) {
+  const reconciliation = await reconcileSoftwareQualificationQueue()
+  const runner = await liveQualificationRunner()
+  const reconciled = reconciliation.reconciled
+  const emergencyDispatched = reconciliation.emergencyDispatched
+
+  if (!runner) return { ...reconciliation, runner: null }
 
   const stillActive = await pool.query(
     `SELECT count(*)::int AS count

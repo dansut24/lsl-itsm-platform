@@ -10,6 +10,7 @@ import {
   forceQualificationCleanup,
   prioritiseSoftwareQualificationQueue,
   qualificationRunnerContaminantsForAdmin,
+  reconcileSoftwareQualificationQueue,
   retrySoftwareQualification,
   runSoftwareQualificationQueue,
   setQualificationRunnerDispatch,
@@ -372,7 +373,9 @@ export function registerPlatformAdminRoutes(app) {
         dispatchEnabled: true,
         userId: auth.session.user_id,
       })
-    } else if (action === 'tick' || action === 'reconcile') {
+    } else if (action === 'reconcile') {
+      result = await reconcileSoftwareQualificationQueue()
+    } else if (action === 'run_next') {
       result = await runSoftwareQualificationQueue({ dispatchLimit: 1 })
     } else if (action === 'cleanup_contaminants') {
       const contaminants = await qualificationRunnerContaminantsForAdmin(agentDeviceId)
@@ -424,7 +427,7 @@ export function registerPlatformAdminRoutes(app) {
         result.dispatch = await runSoftwareQualificationQueue({ dispatchLimit: 1 })
       }
     } else if (action === 'reconcile') {
-      result = await runSoftwareQualificationQueue({ dispatchLimit: 1 })
+      result = await reconcileSoftwareQualificationQueue()
     } else {
       return c.json({ error: 'Unsupported qualification queue action.' }, 400)
     }

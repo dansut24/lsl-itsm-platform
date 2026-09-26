@@ -4,6 +4,7 @@ const api = fs.readFileSync('api/src/platformAdmin.js', 'utf8')
 const index = fs.readFileSync('api/src/index.js', 'utf8')
 const surface = fs.readFileSync('src/lib/tenantSurface.js', 'utf8')
 const app = fs.readFileSync('src/features/admin/PlatformAdminApp.jsx', 'utf8')
+const qualification = fs.readFileSync('api/src/rmmSoftwareQualification.js', 'utf8')
 
 const checks = [
   [api.includes("hi5central_admin_session"), 'Platform admin must use a dedicated session cookie.'],
@@ -20,6 +21,9 @@ const checks = [
   [api.includes('/api/platform/v1/software/catalogue/:catalogueId/requeue') && api.includes('/api/platform/v1/software/catalogue/:catalogueId/revalidate'), 'Admin must expose software requeue and source revalidation controls.'],
   [app.includes('Requeue + run') && app.includes('Save validation settings') && app.includes('Cancel safely'), 'Admin UI must surface qualification and software management actions.'],
   [app.includes('Cleanup contaminant') && api.includes('cleanup_contaminants'), 'Admin must expose runner contamination cleanup without VPS SQL.'],
+  [qualification.includes('export async function reconcileSoftwareQualificationQueue()') && qualification.includes('dispatchAttempted: false'), 'Qualification must expose a reconcile-only path that never dispatches new software.'],
+  [api.includes("action === 'reconcile'") && api.includes('reconcileSoftwareQualificationQueue()') && api.includes("action === 'run_next'"), 'Admin must keep Reconcile and Run next as separate actions.'],
+  [app.includes('>Reconcile</button>') && app.includes('>Run next</button>') && app.includes('No new software was dispatched.'), 'Admin UI must clearly distinguish Reconcile from Run next.'],
 ]
 
 let failures = 0

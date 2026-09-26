@@ -193,7 +193,13 @@ function Qualification({ data, query, refresh }) {
     setBusy(runner.id);setError('');setNotice('')
     try{
       await api(`/qualification/runners/${runner.id}/action`,{method:'POST',body:JSON.stringify({action})})
-      setNotice(action==='resume'?'Runner resumed.':action==='tick'?'Runner reconciled.':'Runner will finish safe cleanup but dispatch no new software.')
+      setNotice(
+        action==='resume' ? 'Runner resumed.' :
+        action==='reconcile' ? 'Current qualification state reconciled. No new software was dispatched.' :
+        action==='run_next' ? 'Run-next requested. The next eligible queued application will dispatch if the lab is clean and idle.' :
+        action==='cleanup_contaminants' ? 'Contaminant cleanup requested.' :
+        'Runner will finish safe cleanup but dispatch no new software.'
+      )
       await refresh()
     }catch(err){setError(err.message)}finally{setBusy('')}
   }
@@ -213,7 +219,8 @@ function Qualification({ data, query, refresh }) {
       const contaminants=r.contaminants||[]
       return <article className="rmm-card h5a-runner h5a-runner-control" key={r.id}><ServerCog size={22}/><div className="h5a-runner-body"><span className="rmm-eyebrow">QUALIFICATION LAB</span><h2>{r.hostname||'Qualification lab'}</h2><p>Agent {r.agent_version||'—'} · PatchHost {r.patch_host_version||'—'}</p><div className="h5a-pill-row"><StatusPill value={r.websocket_status}/><StatusPill value={paused?'paused':'enabled'}/><StatusPill value={contaminants.length?'contaminated':'clean'}/>{r.pause_reason?<span className="h5a-runner-reason">{r.pause_reason}</span>:null}</div>{contaminants.length?<div className="h5a-contaminants"><AlertTriangle size={14}/><div><strong>{contaminants.length} contaminant{contaminants.length===1?'':'s'} detected</strong><span>{contaminants.map(x=>x.canonicalName).join(', ')}</span></div></div>:null}<div className="h5a-runner-actions">
         {paused?<button className="rmm-primary compact" disabled={busy===r.id} onClick={()=>runnerAction(r,'resume')}><Play size={13}/>Resume</button>:<><button className="rmm-secondary compact" disabled={busy===r.id} onClick={()=>runnerAction(r,'pause')}><Pause size={13}/>Pause</button><button className="rmm-secondary compact" disabled={busy===r.id} onClick={()=>runnerAction(r,'drain')}><Pause size={13}/>Drain</button></>}
-        <button className="rmm-secondary compact" disabled={busy===r.id} onClick={()=>runnerAction(r,'tick')}><RefreshCw size={13}/>Reconcile</button>
+        <button className="rmm-secondary compact" disabled={busy===r.id} onClick={()=>runnerAction(r,'reconcile')} title="Update the current qualification state only. This never starts another application."><RefreshCw size={13}/>Reconcile</button>
+        <button className="rmm-primary compact" disabled={busy===r.id||paused} onClick={()=>runnerAction(r,'run_next')} title={paused?'Resume the runner before dispatching new software.':'Explicitly dispatch the next eligible queued application.'}><Play size={13}/>Run next</button>
         {contaminants.length?<button className="rmm-secondary compact danger" disabled={busy===r.id} onClick={()=>runnerAction(r,'cleanup_contaminants')}><Wrench size={13}/>Cleanup contaminant</button>:null}
       </div></div></article>})}</div>
     <div className="rmm-card h5a-table-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">RUNNER</span><h2>Active queue</h2><p>Cancel is safe: active software is cleaned before the row is cancelled.</p></div></div><QualificationQueueTable rows={active} onAction={queueAction} busyId={busy}/></div>
