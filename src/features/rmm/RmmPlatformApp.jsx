@@ -815,11 +815,20 @@ function DevicePatching({ device }) {
     if (!online || busy || !rows.length) return
     setBusy(true); setMessage('')
     try {
-      if (rows.length === 1) await deploySoftwarePatch(device.agentDeviceId, rows[0].catalogue.id)
-      else if (rows.length === appUpdates.length) await deploySoftwarePatches(device.agentDeviceId, [], 'all_catalogue')
-      else await deploySoftwarePatches(device.agentDeviceId, rows.map((row) => row.catalogue.id))
+      let dispatched
+      if (rows.length === 1) dispatched = await deploySoftwarePatch(device.agentDeviceId, rows[0].catalogue.id)
+      else if (rows.length === appUpdates.length) dispatched = await deploySoftwarePatches(device.agentDeviceId, [], 'all_catalogue')
+      else dispatched = await deploySoftwarePatches(device.agentDeviceId, rows.map((row) => row.catalogue.id))
       setSelected([])
-      setMessage(`${rows.length} update${rows.length === 1 ? '' : 's'} dispatched. Follow progress in Jobs and Activity.`)
+      const dispatchedCount = Number(dispatched?.itemCount || (rows.length === 1 ? 1 : rows.length))
+      const skipped = [
+        ...(Array.isArray(dispatched?.rejected) ? dispatched.rejected : []),
+        ...(Array.isArray(dispatched?.ignored) ? dispatched.ignored : []),
+      ]
+      const skippedDetail = skipped[0]
+        ? ` ${skipped.length} skipped: ${skipped[0].applicationName || 'Application'} — ${skipped[0].error || skipped[0].reason || 'not eligible'}.`
+        : ''
+      setMessage(`${dispatchedCount} update${dispatchedCount === 1 ? '' : 's'} dispatched.${skippedDetail} Follow progress in Jobs and Activity.`)
     } catch (error) {
       const rejected = Array.isArray(error?.data?.rejected) ? error.data.rejected : []
       setMessage(rejected.length ? `Nothing was queued. ${rejected[0].error}` : (error?.message || 'The patch request could not be dispatched.'))

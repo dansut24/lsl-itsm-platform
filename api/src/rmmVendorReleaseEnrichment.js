@@ -1,6 +1,6 @@
 import { pool, withTransaction } from './db.js'
 import { COMMON_WINDOWS_SOFTWARE_LOWER } from './rmmCommonSoftware.js'
-import { publicHttpsUrl } from './rmmTenantVendorSources.js'
+import { githubApiHeaders, publicHttpsUrl } from './rmmTenantVendorSources.js'
 
 function clean(value = '') { return String(value ?? '').trim() }
 function lower(value = '') { return clean(value).toLowerCase() }
@@ -166,7 +166,24 @@ export async function githubExpandedAssets(repository, tag) {
 }
 
 export async function discoverGithubWindowsInstaller(repository, tag, productName = '') {
-  const assets = await githubExpandedAssets(repository, tag)
+  const [owner, repo] = clean(repository).split('/')
+  let assets = []
+  if (owner && repo && clean(tag)) {
+    try {
+      const apiUrl = await publicHttpsUrl(
+        'https://api.github.com/repos/' + owner + '/' + repo + '/releases/tags/' + encodeURIComponent(clean(tag)),
+      )
+      const response = await fetch(apiUrl, {
+        headers: githubApiHeaders(),
+        signal: AbortSignal.timeout(30_000),
+      })
+      if (response.ok) {
+        const release = await response.json()
+        assets = Array.isArray(release?.assets) ? release.assets : []
+      }
+    } catch {}
+  }
+  if (!assets.length) assets = await githubExpandedAssets(repository, tag)
   return {
     installer: selectWindowsInstallerAsset(assets, productName),
     installers: rankWindowsInstallerAssets(assets, productName),

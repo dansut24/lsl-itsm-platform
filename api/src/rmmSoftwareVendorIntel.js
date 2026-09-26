@@ -640,10 +640,13 @@ async function githubInstallerContinuityCandidates(assets = [], productName = ''
     const installerType = clean(asset?.installerType || detectInstallerType(asset?.name)).toLowerCase()
     if (!['msi', 'exe'].includes(installerType) || seenTypes.has(installerType)) continue
     const rawUrl = clean(asset?.browser_download_url)
-    if (!rawUrl || !checksum?.browser_download_url) continue
+    if (!rawUrl) continue
     const installerUrl = (await publicHttpsUrl(rawUrl)).toString()
-    const installerSha256 = normalizedSha256(
-      await publishedChecksum(checksum.browser_download_url, clean(asset?.name)).catch(() => ''),
+    const githubDigest = normalizedSha256(asset?.digest)
+    const installerSha256 = githubDigest || normalizedSha256(
+      checksum?.browser_download_url
+        ? await publishedChecksum(checksum.browser_download_url, clean(asset?.name)).catch(() => '')
+        : '',
     )
     if (!installerSha256) continue
     seenTypes.add(installerType)

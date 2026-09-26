@@ -2983,9 +2983,6 @@ export function registerRmmPatchingRoutes(app) {
     if (!preview.plans.length) {
       return c.json({ error: 'No eligible application updates remain for this device.', mode, ignored: preview.ignored, rejected: preview.rejected }, 422)
     }
-    if (mode === 'selected_catalogue' && preview.rejected.length) {
-      return c.json({ error: 'Selected patch planning failed. No patch jobs were queued.', rejected: preview.rejected, ignored: preview.ignored, plannedCount: preview.plans.length }, preview.rejected.some((item) => item.offline) ? 409 : 422)
-    }
     if (object(preview.plans[0]?.device?.patch_capabilities).softwareBulk !== true) {
       return c.json({ error: 'This endpoint Agent does not support verified bulk software patch jobs yet. Upgrade the Agent first.', capabilityMissing: true, requiredCapability: 'softwareBulk' }, 409)
     }
