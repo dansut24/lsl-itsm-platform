@@ -5,6 +5,7 @@ const index = fs.readFileSync('api/src/index.js', 'utf8')
 const surface = fs.readFileSync('src/lib/tenantSurface.js', 'utf8')
 const app = fs.readFileSync('src/features/admin/PlatformAdminApp.jsx', 'utf8')
 const qualification = fs.readFileSync('api/src/rmmSoftwareQualification.js', 'utf8')
+const vendorIntel = fs.readFileSync('api/src/rmmSoftwareVendorIntel.js', 'utf8')
 
 const checks = [
   [api.includes("hi5central_admin_session"), 'Platform admin must use a dedicated session cookie.'],
@@ -28,6 +29,8 @@ const checks = [
   [qualification.includes('export async function setSoftwareQualificationPriority') && qualification.includes('export async function pushSoftwareQualificationToTop'), 'Qualification must expose non-dispatching priority management.'],
   [qualification.includes("'adminPriorityUpdatedAt'") && !qualification.match(/setSoftwareQualificationPriority[\s\S]{0,1600}adminRunNowRequestedAt/), 'Changing queue priority must not clear retry gates or imply Run now.'],
   [api.includes("action === 'set_priority'") && api.includes("action === 'push_top'") && app.includes('>Top</button>'), 'Admin must allow queued software to be reprioritised and pushed to the top.'],
+  [qualification.includes('limit = 2000') && !qualification.includes('maxPending = 12') && !qualification.includes('safeMaxPending'), 'Automatic clean qualification must materialise the full eligible backlog instead of a rolling pending buffer.'],
+  [vendorIntel.includes('queueAutomaticCleanInstallQualifications({\n      limit: 2000,\n      allowUnresolvedVulnerability: true') && !vendorIntel.includes('maxPending: 12') && !vendorIntel.includes('maxPending: 1'), 'Qualification progression must continuously seed the full clean-install backlog.'],
 ]
 
 let failures = 0

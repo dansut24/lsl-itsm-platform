@@ -2954,20 +2954,10 @@ export async function queueCommonSoftwareQualifications({ limit = 50, allowUnres
 }
 
 export async function queueAutomaticCleanInstallQualifications({
-  limit = 8,
-  maxPending = 12,
-  allowUnresolvedVulnerability = false,
+  limit = 2000,
+  allowUnresolvedVulnerability = true,
 } = {}) {
-  const safeLimit = Math.max(1, Math.min(25, Number(limit) || 8))
-  const safeMaxPending = Math.max(1, Math.min(50, Number(maxPending) || 12))
-  const pending = await pool.query(
-    `SELECT count(*)::int AS count
-       FROM rmm_software_qualification_queue
-      WHERE test_type='clean_install'
-        AND state IN ('queued','running','cleanup_pending','cleanup_running')`,
-  )
-  const available = Math.max(0, safeMaxPending - Number(pending.rows[0]?.count || 0))
-  if (!available) return []
+  const safeLimit = Math.max(1, Math.min(5000, Number(limit) || 2000))
 
   const result = await pool.query(
     `WITH candidates AS (
@@ -3095,7 +3085,7 @@ export async function queueAutomaticCleanInstallQualifications({
        )
      )
      RETURNING id,catalogue_id,test_type,state,priority`,
-    [Math.min(safeLimit, available), Boolean(allowUnresolvedVulnerability)],
+    [safeLimit, Boolean(allowUnresolvedVulnerability)],
   )
   return result.rows
 }

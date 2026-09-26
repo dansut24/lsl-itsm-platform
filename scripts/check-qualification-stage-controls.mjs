@@ -23,9 +23,9 @@ expect(
   vendorIntel.includes('RMM_QUALIFICATION_${clean(stage).toUpperCase()}_ENABLED') &&
     vendorIntel.includes("if (rollbackEnabled) await queueAutomaticRollbackQualifications") &&
     vendorIntel.includes("if (upgradeEnabled) await queueAutomaticUpgradeQualifications") &&
-    vendorIntel.includes("...(upgradeEnabled ? ['upgrade'] : [])") &&
-    vendorIntel.includes("...(rollbackEnabled ? ['rollback'] : [])"),
-  'Qualification progression must skip disabled upgrade/rollback stages and their backlog.',
+    vendorIntel.includes('limit: 2000') &&
+    vendorIntel.includes('allowUnresolvedVulnerability: true'),
+  'Qualification progression must skip disabled upgrade/rollback dispatch while still materialising the full clean-install pending backlog.',
 )
 
 if (failures) process.exit(1)

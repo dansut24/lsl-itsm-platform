@@ -2914,48 +2914,14 @@ async function runQualificationProgressionTick() {
     if (rollbackEnabled) await queueAutomaticRollbackQualifications({ limit: 8 })
     if (upgradeEnabled) await queueAutomaticUpgradeQualifications({ limit: 8, allowCleanOnly: true })
 
-    const completionStages = [
-      ...(upgradeEnabled ? ['upgrade'] : []),
-      ...(rollbackEnabled ? ['rollback'] : []),
-    ]
-    const completionBacklog = completionStages.length
-      ? await pool.query(
-        `SELECT count(*)::int AS count
-           FROM rmm_software_qualification_queue q
-           JOIN rmm_software_catalogue c ON c.id=q.catalogue_id
-          WHERE c.tenant_id IS NULL
-            AND c.status='active'
-            AND c.qualification_state='deployment_candidate'
-            AND q.test_type=ANY($1::text[])
-            AND q.state IN ('queued','running','cleanup_pending','cleanup_running')`,
-        [completionStages],
-      )
-      : { rows: [{ count: 0 }] }
-    if (Number(completionBacklog.rows[0]?.count || 0) === 0) {
-      await queueCommonSoftwareQualifications({
-        limit: COMMON_WINDOWS_SOFTWARE_LOWER.length,
-        allowUnresolvedVulnerability: true,
-      })
-      const businessCleanBacklog = await pool.query(
-        `SELECT count(*)::int AS count
-           FROM rmm_software_qualification_queue q
-           JOIN rmm_software_catalogue c ON c.id=q.catalogue_id
-          WHERE c.tenant_id IS NULL
-            AND c.status='active'
-            AND c.qualification_state='deployment_candidate'
-            AND q.test_type='clean_install'
-            AND q.state IN ('queued','running','cleanup_pending','cleanup_running')
-            AND lower(c.canonical_name)=ANY($1::text[])`,
-        [COMMON_WINDOWS_SOFTWARE_LOWER],
-      )
-      if (Number(businessCleanBacklog.rows[0]?.count || 0) === 0) {
-        await queueAutomaticCleanInstallQualifications({
-          limit: 1,
-          maxPending: 1,
-          allowUnresolvedVulnerability: true,
-        })
-      }
-    }
+    await queueCommonSoftwareQualifications({
+      limit: COMMON_WINDOWS_SOFTWARE_LOWER.length,
+      allowUnresolvedVulnerability: true,
+    })
+    await queueAutomaticCleanInstallQualifications({
+      limit: 2000,
+      allowUnresolvedVulnerability: true,
+    })
   } catch (error) {
     console.error('RMM qualification progression tick failed', error)
   } finally {
@@ -3460,7 +3426,10 @@ export function startSoftwareVendorSyncScheduler() {
         .includes(clean(process.env.RMM_AUTOMATIC_QUALIFICATION_SEEDING_ENABLED || 'true').toLowerCase())
       if (automaticQualificationSeedingEnabled) {
         await queueCommonSoftwareQualifications({ limit: 50 })
-        await queueAutomaticCleanInstallQualifications({ limit: 8, maxPending: 12 })
+        await queueAutomaticCleanInstallQualifications({
+          limit: 2000,
+          allowUnresolvedVulnerability: true,
+        })
         await queueAutomaticUpgradeQualifications({ limit: 12 })
       }
     } catch (error) {
