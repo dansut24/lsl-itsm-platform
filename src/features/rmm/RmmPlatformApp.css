@@ -1800,6 +1800,11 @@ button.rmm-device-metric.patch:hover { border-color: color-mix(in srgb,var(--rmm
 .rmm-recovery-key-row small { overflow-wrap: anywhere; color: var(--rmm-muted); font-size: 7px; }
 .rmm-recovery-key-revealed { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0,1fr) auto auto; gap: 6px; align-items: center; }
 .rmm-recovery-key-revealed code { overflow-x: auto; border: 1px solid rgba(217,138,10,.28); border-radius: 8px; padding: 9px 10px; background: rgba(217,138,10,.07); color: var(--rmm-text); font: 800 9px/1.3 ui-monospace,SFMono-Regular,Consolas,monospace; letter-spacing: .02em; }
+.rmm-bitlocker-entra-source { border-style: dashed !important; }
+.rmm-bitlocker-entra-note { display: grid; gap: 3px; border: 1px solid rgba(217,138,10,.2); border-radius: 8px; padding: 9px; background: rgba(217,138,10,.06); }
+.rmm-bitlocker-entra-note strong { font-size: 8px; }
+.rmm-bitlocker-entra-note span { color: var(--rmm-muted); font-size: 7px; line-height: 1.45; }
+.rmm-bitlocker-entra-note code { font: 700 7px ui-monospace,SFMono-Regular,Consolas,monospace; }
 .rmm-bitlocker-escrow-callout { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 12px 12px; border: 1px solid rgba(217,138,10,.25); border-radius: 9px; padding: 10px; background: rgba(217,138,10,.07); }
 .rmm-bitlocker-escrow-callout > div { display: grid; gap: 2px; min-width: 0; }
 .rmm-bitlocker-escrow-callout strong { font-size: 8px; }
