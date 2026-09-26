@@ -31,6 +31,10 @@ expect(
     wingetFallback.includes("installArguments = ['/install', installArguments]"),
   '3Dconnexion 3DxWare must preserve the vendor-documented explicit /install action.',
 )
+expect(
+  vendorIntel.includes("lower(packageId) === '3dconnexion.3dxware.10'"),
+  '3Dconnexion vendor sync must not let stale curated arguments overwrite the corrected vendor install action.',
+)
 
 if (failures) process.exit(1)
 console.log('Installer continuity contract check passed.')

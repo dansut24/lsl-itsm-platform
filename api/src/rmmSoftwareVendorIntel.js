@@ -701,7 +701,13 @@ async function syncGenericConfigured(sourceKey, state) {
         scope: resolved.scope,
       },
     }
-    if (!clean(config.installArguments) && clean(resolved.installArguments)) {
+    if (
+      clean(resolved.installArguments)
+      && (
+        !clean(config.installArguments)
+        || lower(packageId) === '3dconnexion.3dxware.10'
+      )
+    ) {
       config.installArguments = clean(resolved.installArguments)
     }
   } else if (state.source_type === 'github_releases') {
