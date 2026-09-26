@@ -187,8 +187,10 @@ function DetailModal({ detail, loading, onClose }) {
         {isTool ? <div className="rmm-audit-transcript">
           <div><strong>Session transcript</strong>{payload.transcript_truncated && <span>Transcript truncated at audit limit</span>}</div>
           <pre>{payload.transcript || 'No terminal output was captured for this session.'}</pre>
-        </div> : <>
-          {payload.job_type === 'patch.software.bulk' && <BulkPatchResults result={payload.result || {}} />}
+        </div> : payload.job_type === 'patch.software.bulk' ? <>
+          <BulkPatchResults result={payload.result || {}} />
+          {payload.error_message && <div className="rmm-audit-error"><AlertTriangle size={15} />{payload.error_message}</div>}
+        </> : <>
           <div className="rmm-audit-json-section"><strong>Request</strong><pre>{JSON.stringify(payload.payload || {}, null, 2)}</pre></div>
           <div className="rmm-audit-json-section"><strong>Result</strong><pre>{JSON.stringify(payload.result || {}, null, 2)}</pre></div>
           {payload.error_message && <div className="rmm-audit-error"><AlertTriangle size={15} />{payload.error_message}</div>}

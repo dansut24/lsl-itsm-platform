@@ -78,6 +78,7 @@ expect(activityApi.includes("'/api/v1/rmm/activity/:eventId'"), 'Durable audit d
 
 // Bulk patching must report partial success per application instead of flattening the whole batch into failure.
 expect(activity.includes('function BulkPatchResults') && activity.includes('Completed with issues') && activity.includes('Needs old-version cleanup'), 'Bulk patch job details must show per-application success, restart, cleanup and failure outcomes.')
+expect(activity.includes("payload.job_type === 'patch.software.bulk' ? <>") && activity.includes('<BulkPatchResults result={payload.result || {}} />'), 'Bulk patch details must use technician-friendly results instead of raw Request/Result JSON.')
 expect(activityCss.includes('.rmm-bulk-result-summary') && activityCss.includes('.rmm-bulk-result-item'), 'Bulk patch visual results require summary and per-item styles.')
 expect(agentApi.includes("serverStatus: deploymentStatus") && agentApi.includes("remediationRequired") && agentApi.includes("serverSummary"), 'Bulk Agent results must be reconciled into per-item server statuses and batch summary counts.')
 expect(patchingApi.includes('evidence.upgradeVerified === true') && patchingApi.includes("return 'replace'"), 'Fully lifecycle-qualified applications must be eligible for superseded-version cleanup unless explicitly overridden.')
