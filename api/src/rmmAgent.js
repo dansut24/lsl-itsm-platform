@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { gunzipSync } from 'node:zlib'
 import { WebSocketServer } from 'ws'
 import { hasPermission } from './access.js'
 import { originMatchesTenant } from './deploymentConfig.js'
@@ -313,21 +314,61 @@ const RETAINED_DEEP_INVENTORY_FIELDS = [
   'machine_certificates','virtualization','deep_inventory_collected_at',
 ]
 
+const DEEP_SECTION_FIELDS = {
+  core_hardware: ['memory_modules','motherboard'],
+  storage: ['physical_disks'],
+  monitors: ['monitors'],
+  drivers: ['drivers','problem_devices'],
+  windows_state: ['installed_hotfixes','windows_licensing','reboot_state','startup_items'],
+  scheduled_tasks: ['scheduled_tasks'],
+  local_groups: ['local_groups'],
+  peripherals: ['printers','usb_devices'],
+  features_power: ['optional_features','power_plan'],
+  network: ['network_profiles','network_configurations','wifi_interfaces','default_routes'],
+  directory_join: ['directory_join'],
+  certificates: ['machine_certificates'],
+  virtualization: ['virtualization'],
+}
+
 function mergeRetainedDeepInventory(previousPayload, incomingPayload) {
-  if (incomingPayload?.deep_inventory_included !== false) return incomingPayload
   const previous = previousPayload && typeof previousPayload === 'object' ? previousPayload : {}
   const incoming = incomingPayload && typeof incomingPayload === 'object' ? incomingPayload : {}
   const merged = { ...incoming }
+  const retainAllMissingDeep = incomingPayload?.deep_inventory_included === false
 
-  for (const key of RETAINED_DEEP_INVENTORY_FIELDS) {
-    if (merged[key] === undefined && previous[key] !== undefined) merged[key] = previous[key]
+  const sectionStatuses = incoming.deep_inventory_sections && typeof incoming.deep_inventory_sections === 'object'
+    ? incoming.deep_inventory_sections
+    : {}
+  const failedSections = new Set(
+    Object.entries(sectionStatuses)
+      .filter(([, value]) => value && typeof value === 'object' && value.status === 'failed')
+      .map(([name]) => name),
+  )
+
+  if (retainAllMissingDeep) {
+    for (const key of RETAINED_DEEP_INVENTORY_FIELDS) {
+      if (merged[key] === undefined && previous[key] !== undefined) merged[key] = previous[key]
+    }
+  }
+
+  for (const section of failedSections) {
+    for (const key of DEEP_SECTION_FIELDS[section] || []) {
+      if (previous[key] !== undefined) merged[key] = previous[key]
+      else delete merged[key]
+    }
   }
 
   const previousNetwork = previous.network && typeof previous.network === 'object' ? previous.network : {}
   const incomingNetwork = incoming.network && typeof incoming.network === 'object' ? incoming.network : {}
   const network = { ...incomingNetwork }
   for (const key of ['configurations','wifi_interfaces','default_routes']) {
-    if (network[key] === undefined && previousNetwork[key] !== undefined) network[key] = previousNetwork[key]
+    if (retainAllMissingDeep && network[key] === undefined && previousNetwork[key] !== undefined) network[key] = previousNetwork[key]
+  }
+  if (failedSections.has('network')) {
+    for (const key of ['configurations','wifi_interfaces','default_routes']) {
+      if (previousNetwork[key] !== undefined) network[key] = previousNetwork[key]
+      else delete network[key]
+    }
   }
   if (Object.keys(network).length) merged.network = network
 
@@ -335,19 +376,32 @@ function mergeRetainedDeepInventory(previousPayload, incomingPayload) {
   const incomingSecurity = incoming.security && typeof incoming.security === 'object' ? incoming.security : {}
   const security = { ...incomingSecurity }
   for (const key of ['defender','firewall_profiles']) {
-    if (security[key] === undefined && previousSecurity[key] !== undefined) security[key] = previousSecurity[key]
+    if (retainAllMissingDeep && security[key] === undefined && previousSecurity[key] !== undefined) security[key] = previousSecurity[key]
+  }
+  if (failedSections.has('security')) {
+    for (const key of ['defender','firewall_profiles']) {
+      if (previousSecurity[key] !== undefined) security[key] = previousSecurity[key]
+      else delete security[key]
+    }
   }
   if (Object.keys(security).length) merged.security = security
 
   const previousBattery = previous.battery && typeof previous.battery === 'object' ? previous.battery : {}
   const incomingBattery = incoming.battery && typeof incoming.battery === 'object' ? incoming.battery : {}
   const battery = { ...incomingBattery }
-  for (const key of [
+  const retainedBatteryKeys = [
     'name','manufacturer','chemistry','design_capacity_mwh','full_charge_capacity_mwh',
     'health_percent','wear_percent','cycle_count','voltage_mv','rate_mw',
     'remaining_capacity_mwh','power_online','discharging',
-  ]) {
-    if (battery[key] === undefined && previousBattery[key] !== undefined) battery[key] = previousBattery[key]
+  ]
+  for (const key of retainedBatteryKeys) {
+    if (retainAllMissingDeep && battery[key] === undefined && previousBattery[key] !== undefined) battery[key] = previousBattery[key]
+  }
+  if (failedSections.has('battery')) {
+    for (const key of retainedBatteryKeys) {
+      if (previousBattery[key] !== undefined) battery[key] = previousBattery[key]
+      else delete battery[key]
+    }
   }
   if (Object.keys(battery).length) merged.battery = battery
 
@@ -1135,6 +1189,26 @@ export function attachRmmAgentWebSocket(server) {
       let payload
       try { payload = JSON.parse(text) } catch { return }
       if (!payload || typeof payload !== 'object') return
+
+      if (payload.type === 'inventory_snapshot_compressed') {
+        try {
+          if (payload.encoding !== 'gzip+base64') throw new Error('unsupported inventory compression encoding')
+          const declaredUncompressed = boundedInteger(payload.uncompressed_bytes, 1, MAX_INVENTORY_BYTES)
+          const declaredCompressed = boundedInteger(payload.compressed_bytes, 1, MAX_INVENTORY_BYTES)
+          if (!declaredUncompressed || !declaredCompressed) throw new Error('invalid compressed inventory size metadata')
+          const compressed = Buffer.from(String(payload.payload || ''), 'base64')
+          if (!compressed.length || compressed.length !== declaredCompressed) throw new Error('compressed inventory length mismatch')
+          const inflated = gunzipSync(compressed, { maxOutputLength: MAX_INVENTORY_BYTES })
+          if (inflated.length !== declaredUncompressed || inflated.length > MAX_INVENTORY_BYTES) {
+            throw new Error('decompressed inventory length mismatch')
+          }
+          payload = JSON.parse(inflated.toString('utf8'))
+          if (!payload || payload.type !== 'inventory_snapshot') throw new Error('compressed payload is not an inventory snapshot')
+        } catch (error) {
+          console.error('RMM compressed inventory decode failed', agent.id, error.message)
+          return
+        }
+      }
 
       if (payload.type === 'bitlocker_recovery_escrow') {
         if (clean(payload.device_id) && clean(payload.device_id) !== String(agent.id)) return
