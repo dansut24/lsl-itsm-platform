@@ -1193,9 +1193,14 @@ export function attachRmmAgentWebSocket(server) {
       if (payload.type === 'inventory_snapshot_compressed') {
         try {
           if (payload.encoding !== 'gzip+base64') throw new Error('unsupported inventory compression encoding')
-          const declaredUncompressed = boundedInteger(payload.uncompressed_bytes, 1, MAX_INVENTORY_BYTES)
-          const declaredCompressed = boundedInteger(payload.compressed_bytes, 1, MAX_INVENTORY_BYTES)
-          if (!declaredUncompressed || !declaredCompressed) throw new Error('invalid compressed inventory size metadata')
+          const declaredUncompressed = Number(payload.uncompressed_bytes)
+          const declaredCompressed = Number(payload.compressed_bytes)
+          if (!Number.isInteger(declaredUncompressed) || declaredUncompressed < 1 || declaredUncompressed > MAX_INVENTORY_BYTES) {
+            throw new Error('invalid uncompressed inventory size metadata')
+          }
+          if (!Number.isInteger(declaredCompressed) || declaredCompressed < 1 || declaredCompressed > MAX_INVENTORY_BYTES) {
+            throw new Error('invalid compressed inventory size metadata')
+          }
           const compressed = Buffer.from(String(payload.payload || ''), 'base64')
           if (!compressed.length || compressed.length !== declaredCompressed) throw new Error('compressed inventory length mismatch')
           const inflated = gunzipSync(compressed, { maxOutputLength: MAX_INVENTORY_BYTES })
