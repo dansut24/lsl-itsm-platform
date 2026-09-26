@@ -14,6 +14,9 @@ const activityCss = read('src/features/rmm/RmmActivityViews.css')
 const activityApi = read('api/src/rmmActivity.js')
 const agentApi = read('api/src/rmmAgent.js')
 const patchingApi = read('api/src/rmmPatching.js')
+const recoveryApi = read('api/src/rmmRecoveryKeys.js')
+const recoveryMigration = read('api/migrations/088_endpoint_intelligence_bitlocker_recovery.sql')
+const accessApi = read('api/src/access.js')
 
 const failures = []
 const expect = (value, message) => { if (!value) failures.push(message) }
@@ -39,6 +42,24 @@ expect(platform.includes('GPU & displays') && platform.includes('Battery & power
 expect(platform.includes('Plugged in · fully charged') && platform.includes('Plugged in · not actively charging') && platform.includes('On battery'), 'Battery UI must distinguish AC connection from the Windows active-charging flag.')
 expect(bootstrap.includes('cpuLogicalProcessors') && bootstrap.includes('deviceUuid') && bootstrap.includes('storageVolumes'), 'Production device mapping must retain richer hardware inventory.')
 expect(platform.includes('Scope / size') && platform.includes('softwareScopeLabel(app.scope)'), 'Software inventory must expose install scope and reported size.')
+
+// Deep endpoint intelligence must be technician-findable rather than merely stored in source_payload.
+expect(platform.includes("['windows', 'Windows', Settings]") && platform.includes('function DeviceWindows'), 'Device Details must expose a dedicated Windows intelligence tab.')
+expect(platform.includes('Physical memory modules') && platform.includes('Disks & SMART health') && platform.includes('Physical monitors') && platform.includes('USB devices'), 'Hardware must expose DIMMs, physical disk health, monitor identity and USB inventory.')
+expect(platform.includes('IP & DHCP configuration') && platform.includes('Wi-Fi interfaces') && platform.includes('Default routes'), 'Hardware/network inventory must expose DHCP/DNS, Wi-Fi and routing detail.')
+expect(platform.includes('Installed updates / KB history') && platform.includes('Installed device drivers') && platform.includes('Local user accounts') && platform.includes('Scheduled tasks') && platform.includes('Enabled optional features'), 'Windows tab must expose update, driver, account, task and optional-feature inventory.')
+expect(platform.includes('Microsoft Defender') && platform.includes('Windows Firewall profiles') && platform.includes('Machine certificates') && platform.includes('BitLockerRecoveryPanel'), 'Security tab must expose Defender, firewall, machine-certificate and BitLocker recovery detail.')
+expect(bootstrap.includes('memoryModules') && bootstrap.includes('physicalDisks') && bootstrap.includes('machineCertificates') && bootstrap.includes('directoryJoin') && bootstrap.includes('wifiInterfaces'), 'Production device mapping must preserve deep endpoint inventory.')
+
+// BitLocker recovery secrets must live outside ordinary inventory and use a privileged audited reveal path.
+expect(accessApi.includes("'rmm.security.recovery_keys.read'"), 'Recovery-key reveal permission is missing.')
+expect(recoveryMigration.includes('rmm_bitlocker_recovery_keys') && recoveryMigration.includes('recovery_password_encrypted'), 'Dedicated encrypted BitLocker recovery-key storage is missing.')
+expect(recoveryApi.includes("createCipheriv('aes-256-gcm'") && recoveryApi.includes('RMM_RECOVERY_KEY_ENCRYPTION_KEY'), 'BitLocker recovery escrow must use dedicated AES-256-GCM key material.')
+expect(recoveryApi.includes("eventType: 'bitlocker.recovery_key.revealed'") && recoveryApi.includes('reason.length < 3'), 'Recovery-key reveal must require a reason and write an audit event.')
+expect(recoveryApi.includes("Cache-Control', 'no-store, private'"), 'Recovery-key reveal responses must be non-cacheable.')
+expect(agentApi.includes('bitLockerRecoveryEscrowNeeded') && agentApi.includes("type: 'bitlocker_recovery_escrow_request'"), 'Inventory ingest must automatically request escrow for unescrowed recovery protectors.')
+expect(toolApi.includes("bitlocker-recovery/escrow") && toolApi.includes("versionAtLeast(device.agent_version, '0.1.171')"), 'Manual recovery-key escrow must be available only to the supporting Agent release.')
+expect(platform.includes('Reveal recovery key') && platform.includes('Why do you need to reveal this BitLocker recovery key?') && platform.includes('60_000'), 'Recovery-key UI must require an audited reason and automatically hide the secret.')
 
 // Network cards use inventory identity plus non-persisted live counters.
 expect(toolApi.includes("'/api/v1/rmm/devices/:agentDeviceId/network-stats'"), 'Live network-stats endpoint is missing.')
