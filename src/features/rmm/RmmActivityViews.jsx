@@ -64,11 +64,89 @@ function jobLabel(type = '') {
 }
 function outcomeTone(value = '') {
   const normalized = String(value).toLowerCase()
-  if (['success', 'completed'].includes(normalized)) return 'healthy'
-  if (['failed', 'critical'].includes(normalized)) return 'critical'
+  if (['success', 'completed', 'succeeded'].includes(normalized)) return 'healthy'
+  if (['failed', 'critical', 'verification_failed'].includes(normalized)) return 'critical'
   if (['running', 'claimed'].includes(normalized)) return 'running'
-  if (['queued', 'requested', 'warning'].includes(normalized)) return 'warning'
+  if (['queued', 'requested', 'warning', 'reboot_required', 'remediation_required', 'completed_with_issues'].includes(normalized)) return 'warning'
   return 'neutral'
+}
+function comparePatchVersions(left = '', right = '') {
+  const a = String(left).match(/\d+/g)?.map(Number) || []
+  const b = String(right).match(/\d+/g)?.map(Number) || []
+  for (let index = 0; index < Math.max(a.length, b.length, 1); index += 1) {
+    const delta = (a[index] || 0) - (b[index] || 0)
+    if (delta) return delta > 0 ? 1 : -1
+  }
+  return 0
+}
+function bulkPatchItemStatus(item = {}) {
+  if (item.serverStatus) return item.serverStatus
+  if (item.success === true) return item.rebootRequired || item.reboot_required ? 'reboot_required' : 'succeeded'
+  const target = String(item.targetVersion || item.target_version || '')
+  const versions = Array.isArray(item?.verification?.installedVersions) ? item.verification.installedVersions.map(String) : []
+  const targetObserved = target && versions.some((version) => comparePatchVersions(version, target) >= 0)
+  const superseded = target ? versions.filter((version) => comparePatchVersions(version, target) < 0) : []
+  if (targetObserved && superseded.length) return 'remediation_required'
+  if (targetObserved) return 'succeeded'
+  if (item.verificationFailed || item.verification_failed) return 'verification_failed'
+  return 'failed'
+}
+function bulkPatchSummary(result = {}) {
+  const items = Array.isArray(result.items) ? result.items : []
+  const statuses = items.map(bulkPatchItemStatus)
+  const succeeded = statuses.filter((status) => status === 'succeeded').length
+  const rebootRequired = statuses.filter((status) => status === 'reboot_required').length
+  const remediationRequired = statuses.filter((status) => status === 'remediation_required').length
+  const failed = statuses.filter((status) => ['failed', 'verification_failed'].includes(status)).length
+  const successful = succeeded + rebootRequired
+  return {
+    items, succeeded, rebootRequired, remediationRequired, failed, successful,
+    needsAttention: remediationRequired + failed,
+    label: remediationRequired + failed > 0 ? 'Completed with issues' : 'Completed',
+  }
+}
+function jobVisualStatus(job = {}) {
+  if (job.job_type !== 'patch.software.bulk') return { label: job.status || 'unknown', tone: outcomeTone(job.status) }
+  const summary = bulkPatchSummary(job.result || {})
+  if (!summary.items.length) return { label: job.status || 'unknown', tone: outcomeTone(job.status) }
+  return { label: summary.label, tone: summary.needsAttention ? 'warning' : 'healthy', summary }
+}
+function bulkItemLabel(status) {
+  if (status === 'succeeded') return 'Succeeded'
+  if (status === 'reboot_required') return 'Succeeded · Restart required'
+  if (status === 'remediation_required') return 'Needs old-version cleanup'
+  if (status === 'verification_failed') return 'Verification failed'
+  return 'Failed'
+}
+function BulkPatchResults({ result = {} }) {
+  const summary = bulkPatchSummary(result)
+  if (!summary.items.length) return null
+  return <section className="rmm-bulk-result">
+    <div className="rmm-bulk-result-summary">
+      <span><small>Succeeded</small><strong>{summary.successful}</strong></span>
+      <span><small>Restart required</small><strong>{summary.rebootRequired}</strong></span>
+      <span><small>Needs cleanup</small><strong>{summary.remediationRequired}</strong></span>
+      <span><small>Failed</small><strong>{summary.failed}</strong></span>
+    </div>
+    <div className="rmm-bulk-result-list">
+      {summary.items.map((item, index) => {
+        const status = bulkPatchItemStatus(item)
+        const tone = outcomeTone(status)
+        const Icon = tone === 'healthy' ? CheckCircle2 : tone === 'critical' ? XCircle : AlertTriangle
+        const versions = Array.isArray(item?.verification?.installedVersions) ? item.verification.installedVersions : []
+        const detail = status === 'remediation_required'
+          ? 'Target installed; older version remains: ' + versions.filter((version) => comparePatchVersions(version, item.targetVersion || item.target_version) < 0).join(', ')
+          : item.verifiedVersion
+            ? 'Verified ' + item.verifiedVersion
+            : item.error || item.agentError || ''
+        return <article className={'rmm-bulk-result-item ' + tone} key={item.catalogueId || item.packageId || index}>
+          <Icon size={16} />
+          <div><strong>{item.applicationName || item.packageId || 'Software update'}</strong><small>{item.installedVersion || '—'} → {item.targetVersion || '—'}{detail ? ' · ' + detail : ''}</small></div>
+          <span className={'rmm-audit-outcome ' + tone}>{bulkItemLabel(status)}</span>
+        </article>
+      })}
+    </div>
+  </section>
 }
 function activityIcon(category = '') {
   if (category === 'terminal') return TerminalSquare
@@ -90,6 +168,7 @@ function DetailModal({ detail, loading, onClose }) {
   if (!detail && !loading) return null
   const isTool = detail?.kind === 'tool'
   const payload = detail?.data || {}
+  const visualStatus = !isTool ? jobVisualStatus(payload) : null
   const title = isTool
     ? ((payload.shell === 'cmd' ? 'Command Prompt' : payload.shell === 'powershell' ? 'PowerShell' : payload.tool) + ' session')
     : jobLabel(payload.job_type)
@@ -98,7 +177,7 @@ function DetailModal({ detail, loading, onClose }) {
       <header><div><span className="rmm-eyebrow">RMM audit detail</span><h2>{loading ? 'Loading details…' : title}</h2></div><button onClick={onClose} type="button" aria-label="Close"><X size={18} /></button></header>
       {loading ? <SkeletonRows count={4} /> : <>
         <div className="rmm-audit-detail-grid">
-          <span><small>Status</small><strong>{payload.status || 'Completed'}</strong></span>
+          <span><small>Status</small><strong>{visualStatus?.label || payload.status || 'Completed'}</strong></span>
           <span><small>Technician</small><strong>{payload.initiated_by_label || payload.initiatedByLabel || 'SYSTEM'}</strong></span>
           <span><small>Started</small><strong>{formatWhen(payload.started_at || payload.created_at)}</strong></span>
           <span><small>Finished</small><strong>{formatWhen(payload.ended_at || payload.completed_at)}</strong></span>
@@ -109,6 +188,7 @@ function DetailModal({ detail, loading, onClose }) {
           <div><strong>Session transcript</strong>{payload.transcript_truncated && <span>Transcript truncated at audit limit</span>}</div>
           <pre>{payload.transcript || 'No terminal output was captured for this session.'}</pre>
         </div> : <>
+          {payload.job_type === 'patch.software.bulk' && <BulkPatchResults result={payload.result || {}} />}
           <div className="rmm-audit-json-section"><strong>Request</strong><pre>{JSON.stringify(payload.payload || {}, null, 2)}</pre></div>
           <div className="rmm-audit-json-section"><strong>Result</strong><pre>{JSON.stringify(payload.result || {}, null, 2)}</pre></div>
           {payload.error_message && <div className="rmm-audit-error"><AlertTriangle size={15} />{payload.error_message}</div>}
@@ -323,14 +403,18 @@ export function DeviceJobsPanel({ device }) {
     <div className="rmm-device-section-heading"><div><span className="rmm-eyebrow">Execution history</span><h2>Jobs</h2><p>Queued, running, successful and failed work for this device only.</p></div><button className="rmm-audit-refresh" onClick={() => load()} type="button"><RefreshCw size={14} /> Refresh</button></div>
     {loading ? <SkeletonRows /> : error ? <div className="rmm-audit-empty"><AlertTriangle size={22} /><strong>Jobs could not be loaded</strong><span>{error}</span></div> : jobs.length ? <div className="rmm-device-jobs">
       <div className="rmm-device-job-head"><span>Job</span><span>Status</span><span>Requested by</span><span>Started</span><span>Duration</span><span /></div>
-      {jobs.map((job) => <button className="rmm-device-job-row" key={job.id} onClick={() => setSelectedJob({ kind: 'job', data: job })} type="button">
-        <span><strong>{jobLabel(job.job_type)}</strong><small>{job.job_type}</small></span>
-        <span className={'rmm-audit-outcome ' + outcomeTone(job.status)}>{job.status}</span>
-        <span>{job.initiated_by_label || job.initiated_by || 'SYSTEM'}</span>
-        <span>{formatWhen(job.claimed_at || job.created_at)}</span>
-        <span>{durationBetween(job.claimed_at || job.created_at, job.completed_at || job.updated_at) || '—'}</span>
-        <ChevronRight size={15} />
-      </button>)}
+      {jobs.map((job) => {
+        const visual = jobVisualStatus(job)
+        const bulkSummary = visual.summary
+        return <button className="rmm-device-job-row" key={job.id} onClick={() => setSelectedJob({ kind: 'job', data: job })} type="button">
+          <span><strong>{jobLabel(job.job_type)}</strong><small>{job.job_type}</small>{bulkSummary && <small>{bulkSummary.successful} succeeded{bulkSummary.remediationRequired ? ' · ' + bulkSummary.remediationRequired + ' cleanup' : ''}{bulkSummary.failed ? ' · ' + bulkSummary.failed + ' failed' : ''}</small>}</span>
+          <span className={'rmm-audit-outcome ' + visual.tone}>{visual.label}</span>
+          <span>{job.initiated_by_label || job.initiated_by || 'SYSTEM'}</span>
+          <span>{formatWhen(job.claimed_at || job.created_at)}</span>
+          <span>{durationBetween(job.claimed_at || job.created_at, job.completed_at || job.updated_at) || '—'}</span>
+          <ChevronRight size={15} />
+        </button>
+      })}
     </div> : <div className="rmm-audit-empty"><ListChecks size={24} /><strong>No jobs for this device</strong><span>Device actions, maintenance and automation jobs will appear here.</span></div>}
     <DetailModal detail={selectedJob} loading={false} onClose={() => setSelectedJob(null)} />
   </section>

@@ -13,6 +13,7 @@ const activity = read('src/features/rmm/RmmActivityViews.jsx')
 const activityCss = read('src/features/rmm/RmmActivityViews.css')
 const activityApi = read('api/src/rmmActivity.js')
 const agentApi = read('api/src/rmmAgent.js')
+const patchingApi = read('api/src/rmmPatching.js')
 
 const failures = []
 const expect = (value, message) => { if (!value) failures.push(message) }
@@ -74,6 +75,13 @@ expect(activity.includes('window.setInterval(() => load(true), 5000)'), 'Device 
 expect(activity.includes("createPortal(modal, document.querySelector('.rmm-app') || document.body)"), 'Audit detail modal must portal outside the scrolling page so the mobile header cannot cover it.')
 expect(activityCss.includes('padding: calc(env(safe-area-inset-top) + 8px) 0 0;') && activityCss.includes('overscroll-behavior: contain;'), 'Mobile audit details must respect the safe-area top and own their scrolling.')
 expect(activityApi.includes("'/api/v1/rmm/activity/:eventId'"), 'Durable audit detail routes require a tenant-scoped activity-record endpoint.')
+
+// Bulk patching must report partial success per application instead of flattening the whole batch into failure.
+expect(activity.includes('function BulkPatchResults') && activity.includes('Completed with issues') && activity.includes('Needs old-version cleanup'), 'Bulk patch job details must show per-application success, restart, cleanup and failure outcomes.')
+expect(activityCss.includes('.rmm-bulk-result-summary') && activityCss.includes('.rmm-bulk-result-item'), 'Bulk patch visual results require summary and per-item styles.')
+expect(agentApi.includes("serverStatus: deploymentStatus") && agentApi.includes("remediationRequired") && agentApi.includes("serverSummary"), 'Bulk Agent results must be reconciled into per-item server statuses and batch summary counts.')
+expect(patchingApi.includes('evidence.upgradeVerified === true') && patchingApi.includes("return 'replace'"), 'Fully lifecycle-qualified applications must be eligible for superseded-version cleanup unless explicitly overridden.')
+expect(activityApi.includes("type === 'patch.software.bulk'") && activityApi.includes('require old-version cleanup'), 'Bulk patch activity must describe mixed outcomes without recording the whole batch as a hard failure.')
 
 // Agent upgrades must not accumulate every installer and scheduled runner forever.
 expect(agentApi.includes("Filter 'Hi5CentralAgentSetup-*.exe'") && agentApi.includes("AddHours(-6)"), 'Agent upgrade dispatch must scavenge stale downloaded installers.')

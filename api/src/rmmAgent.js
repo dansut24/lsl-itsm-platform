@@ -802,6 +802,22 @@ export function registerRmmAgentRoutes(app) {
     )
     if (!result.rowCount) return c.json({ success: false, error: 'Job not found or already completed.' }, 404)
     const completedJob = { ...result.rows[0], inventory_id: agent.inventory_id }
+    const bulkSucceededCount = Number(resultPayload.succeededCount || 0)
+    const bulkFailedCount = Number(resultPayload.failedCount || 0)
+    const bulkPartialSuccess = completedJob.job_type === 'patch.software.bulk'
+      && !success
+      && bulkSucceededCount > 0
+      && bulkFailedCount > 0
+    if (bulkPartialSuccess) {
+      await pool.query(
+        `UPDATE rmm_agent_jobs
+            SET status='completed',error_message=NULL,updated_at=now()
+          WHERE id=$1 AND tenant_id=$2`,
+        [completedJob.id, completedJob.tenant_id],
+      )
+      completedJob.status = 'completed'
+      completedJob.error_message = null
+    }
 
     if (
       ['patch.software', 'patch.software.bulk', 'patch.vendor_artifact.inspect'].includes(completedJob.job_type)
@@ -875,8 +891,11 @@ export function registerRmmAgentRoutes(app) {
       }).catch((error) => console.error('RMM patch deployment result update failed', completedJob.id, error.message))
     }
 
+    let activityResultPayload = resultPayload
     if (completedJob.job_type === 'patch.software.bulk') {
       const itemResults = Array.isArray(resultPayload.items) ? resultPayload.items : []
+      const serverItems = []
+      const serverSummary = { succeeded: 0, rebootRequired: 0, remediationRequired: 0, failed: 0 }
       await withTransaction(async (client) => {
         for (const item of itemResults) {
           const catalogueId = clean(item.catalogueId)
@@ -884,10 +903,38 @@ export function registerRmmAgentRoutes(app) {
           const itemSuccess = item.success === true
           const verificationFailed = Boolean(item.verificationFailed || item.verification_failed)
           const rebootRequired = Boolean(item.rebootRequired || item.reboot_required)
-          const deploymentStatus = itemSuccess
-            ? (rebootRequired ? 'reboot_required' : 'succeeded')
-            : (verificationFailed ? 'verification_failed' : 'failed')
-          const params = [agent.tenant_id, completedJob.id, agent.inventory_id, deploymentStatus, JSON.stringify(item)]
+          const targetVersion = clean(item.targetVersion || item.target_version)
+          const verificationVersions = Array.isArray(item?.verification?.installedVersions)
+            ? item.verification.installedVersions.map((value) => clean(value)).filter(Boolean)
+            : []
+          const targetObserved = Boolean(targetVersion)
+            && verificationVersions.some((version) => versionCompare(version, targetVersion) >= 0)
+          const supersededVersions = targetVersion
+            ? verificationVersions.filter((version) => versionCompare(version, targetVersion) < 0)
+            : []
+          const remediationRequired = !itemSuccess && verificationFailed && targetObserved && supersededVersions.length > 0
+          const lateVerified = !itemSuccess && verificationFailed && targetObserved && supersededVersions.length === 0
+          const deploymentStatus = remediationRequired
+            ? 'remediation_required'
+            : lateVerified
+              ? 'succeeded'
+              : itemSuccess
+                ? (rebootRequired ? 'reboot_required' : 'succeeded')
+                : (verificationFailed ? 'verification_failed' : 'failed')
+          if (deploymentStatus === 'succeeded') serverSummary.succeeded += 1
+          else if (deploymentStatus === 'reboot_required') serverSummary.rebootRequired += 1
+          else if (deploymentStatus === 'remediation_required') serverSummary.remediationRequired += 1
+          else serverSummary.failed += 1
+          const serverItem = {
+            ...item,
+            serverStatus: deploymentStatus,
+            patchApplied: itemSuccess || targetObserved,
+            targetObserved,
+            remediationRequired,
+            supersededVersions,
+          }
+          serverItems.push(serverItem)
+          const params = [agent.tenant_id, completedJob.id, agent.inventory_id, deploymentStatus, JSON.stringify(serverItem)]
           let identityClause = ''
           if (catalogueId) {
             params.push(catalogueId)
@@ -906,7 +953,7 @@ export function registerRmmAgentRoutes(app) {
             params,
           )
           const affectedCatalogueId = deployment.rows[0]?.catalogue_id
-          if (!itemSuccess && affectedCatalogueId) {
+          if (['failed','verification_failed'].includes(deploymentStatus) && affectedCatalogueId) {
             await client.query(
               `UPDATE rmm_vulnerability_exposures
                   SET remediation_state='available',last_seen_at=now()
@@ -916,10 +963,29 @@ export function registerRmmAgentRoutes(app) {
             )
           }
         }
+        activityResultPayload = { ...resultPayload, items: serverItems, serverSummary }
+        await client.query(
+          `UPDATE rmm_agent_jobs
+              SET result=$3::jsonb,
+                  status=CASE WHEN ($5::int+$6::int+$7::int)>0 THEN 'completed' ELSE status END,
+                  error_message=CASE WHEN ($5::int+$6::int+$7::int)>0 THEN NULL ELSE error_message END,
+                  updated_at=now()
+            WHERE id=$1 AND tenant_id=$2`,
+          [
+            completedJob.id,
+            completedJob.tenant_id,
+            JSON.stringify(activityResultPayload),
+            serverSummary.failed,
+            serverSummary.succeeded,
+            serverSummary.rebootRequired,
+            serverSummary.remediationRequired,
+          ],
+        )
       }).catch((error) => console.error('RMM bulk patch deployment result update failed', completedJob.id, error.message))
+      completedJob.result = activityResultPayload
     }
 
-    await recordJobCompletionActivity(completedJob, success, resultPayload, errorMessage).catch((error) => {
+    await recordJobCompletionActivity(completedJob, success || bulkPartialSuccess, activityResultPayload, bulkPartialSuccess ? null : errorMessage).catch((error) => {
       console.error('RMM activity job logging failed', completedJob.id, error.message)
     })
     await pool.query(`UPDATE rmm_agent_devices SET last_authenticated_at=now(),updated_at=now() WHERE id=$1`, [agent.id])

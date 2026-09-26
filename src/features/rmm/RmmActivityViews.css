@@ -261,6 +261,35 @@
 }
 .rmm-audit-detail-grid small { color: var(--rmm-muted); font-size: 8px; }
 .rmm-audit-detail-grid strong { overflow-wrap: anywhere; font-size: 10px; }
+.rmm-bulk-result { display: grid; gap: 10px; padding: 0 16px 14px; }
+.rmm-bulk-result-summary { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 8px; }
+.rmm-bulk-result-summary span {
+  display: grid;
+  gap: 3px;
+  border: 1px solid var(--rmm-border);
+  border-radius: 9px;
+  padding: 10px;
+  background: var(--rmm-soft);
+}
+.rmm-bulk-result-summary small { color: var(--rmm-muted); font-size: 8px; }
+.rmm-bulk-result-summary strong { font-size: 16px; }
+.rmm-bulk-result-list { display: grid; overflow: hidden; border: 1px solid var(--rmm-border); border-radius: 10px; }
+.rmm-bulk-result-item {
+  display: grid;
+  grid-template-columns: auto minmax(0,1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border-top: 1px solid var(--rmm-border);
+  padding: 10px 12px;
+}
+.rmm-bulk-result-item:first-child { border-top: 0; }
+.rmm-bulk-result-item > svg { color: var(--rmm-muted); }
+.rmm-bulk-result-item.healthy > svg { color: #188c61; }
+.rmm-bulk-result-item.warning > svg { color: #b27410; }
+.rmm-bulk-result-item.critical > svg { color: #c53b4f; }
+.rmm-bulk-result-item > div { min-width: 0; display: grid; gap: 2px; }
+.rmm-bulk-result-item strong { font-size: 10px; }
+.rmm-bulk-result-item small { color: var(--rmm-muted); font-size: 8px; line-height: 1.4; overflow-wrap: anywhere; }
 .rmm-audit-json-section,
 .rmm-audit-transcript { padding: 0 16px 14px; }
 .rmm-audit-json-section > strong,
@@ -343,6 +372,9 @@
     border-radius: 15px 15px 0 0;
   }
   .rmm-audit-detail-grid { grid-template-columns: 1fr 1fr; }
+  .rmm-bulk-result-summary { grid-template-columns: 1fr 1fr; }
+  .rmm-bulk-result-item { grid-template-columns: auto minmax(0,1fr); }
+  .rmm-bulk-result-item > .rmm-audit-outcome { grid-column: 2; justify-self: start; }
 }
 @media (max-width: 480px) {
   .rmm-audit-filters { grid-template-columns: 1fr; }
@@ -354,6 +386,8 @@
   .rmm-audit-outcome { grid-column: 2; justify-self: start; }
   .rmm-audit-details-button { grid-column: 2; }
   .rmm-audit-detail-grid { grid-template-columns: 1fr; }
+  .rmm-bulk-result-summary { grid-template-columns: 1fr 1fr; }
+  .rmm-bulk-result { padding-inline: 12px; }
   .rmm-audit-skeleton > div { grid-template-columns: 32px minmax(0,1fr); }
   .rmm-audit-skeleton em { display: none; }
 }

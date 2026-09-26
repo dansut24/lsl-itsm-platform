@@ -115,6 +115,33 @@ export function jobActivityDescriptor(job, success, result = {}, errorMessage = 
       metadata: { software: name, intent, installedVersion: fromVersion, targetVersion, verifiedVersion, provider, providerBlocked, result },
     }
   }
+  if (type === 'patch.software.bulk') {
+    const items = Array.isArray(result?.items) ? result.items : []
+    const serverSummary = result?.serverSummary && typeof result.serverSummary === 'object' ? result.serverSummary : {}
+    const succeeded = Number(serverSummary.succeeded ?? items.filter((item) => item?.serverStatus === 'succeeded' || item?.success === true && !item?.rebootRequired).length)
+    const rebootRequired = Number(serverSummary.rebootRequired ?? items.filter((item) => item?.serverStatus === 'reboot_required' || item?.success === true && item?.rebootRequired === true).length)
+    const remediationRequired = Number(serverSummary.remediationRequired ?? items.filter((item) => item?.serverStatus === 'remediation_required' || item?.remediationRequired === true).length)
+    const failed = Number(serverSummary.failed ?? items.filter((item) => ['failed','verification_failed'].includes(clean(item?.serverStatus)) || item?.success === false && item?.remediationRequired !== true).length)
+    const successful = succeeded + rebootRequired
+    const needsAttention = remediationRequired + failed
+    const bulkOutcome = needsAttention > 0 ? 'warning' : 'success'
+    return {
+      ...actor,
+      outcome: bulkOutcome,
+      severity: needsAttention > 0 ? 'warning' : 'info',
+      eventType: type,
+      category: 'patching',
+      summary: actor.actorLabel + ' completed software patch batch' + (needsAttention ? ' with attention required' : ''),
+      detail: [
+        successful + ' succeeded',
+        rebootRequired ? rebootRequired + ' require restart' : '',
+        remediationRequired ? remediationRequired + ' require old-version cleanup' : '',
+        failed ? failed + ' failed' : '',
+        'See details',
+      ].filter(Boolean).join(' · '),
+      metadata: { result, successful, rebootRequired, remediationRequired, failed },
+    }
+  }
   if (type === 'process.kill') {
     const name = clean(result.name) || ('PID ' + (payload.pid || '')).trim()
     return { ...common, eventType: 'process.end', category: 'process', summary: ok ? actor.actorLabel + ' ended process ' + quoted(name) : actor.actorLabel + ' failed to end process ' + quoted(name), detail: suffix, metadata: { pid: payload.pid, result } }

@@ -1294,6 +1294,12 @@ async function reconcileTerminalPatchDeployments(tenantId) {
 function sideBySidePolicy(catalogue) {
   const configured = clean(object(catalogue?.source_metadata).sideBySidePolicy)
   if (['replace','allow','require_clean'].includes(configured)) return configured
+  const evidence = object(catalogue?.qualification_evidence)
+  if (
+    evidence.upgradeVerified === true
+    && evidence.rollbackVerified === true
+    && evidence.uninstallVerified === true
+  ) return 'replace'
   return 'require_clean'
 }
 
@@ -1341,7 +1347,7 @@ async function dispatchSupersededRemediation(tenantId, deployment) {
 async function reconcileSupersededPatchDeployments(tenantId) {
   const result = await pool.query(
     `SELECT d.id,d.catalogue_id,d.inventory_id,d.agent_job_id,d.target_version,d.requested_by_user_id,
-            c.canonical_name,c.name_pattern,c.publisher_pattern,c.source_metadata,i.source_payload,a.id AS agent_device_id
+            c.canonical_name,c.name_pattern,c.publisher_pattern,c.source_metadata,c.qualification_evidence,i.source_payload,a.id AS agent_device_id
        FROM rmm_patch_deployments d JOIN rmm_software_catalogue c ON c.id=d.catalogue_id
        JOIN rmm_device_inventory i ON i.id=d.inventory_id
        JOIN rmm_agent_devices a ON a.inventory_id=i.id AND a.tenant_id=d.tenant_id AND a.disabled_at IS NULL
@@ -1360,7 +1366,7 @@ async function reconcileBulkPatchDeployments(tenantId) {
   const result = await pool.query(
     `SELECT d.id,d.catalogue_id,d.inventory_id,d.agent_job_id,d.application_name,d.target_version,d.status,d.requested_by_user_id,
             j.status AS job_status,j.result AS job_result,j.error_message,j.completed_at,
-            c.canonical_name,c.name_pattern,c.publisher_pattern,c.source_metadata,i.source_payload,a.id AS agent_device_id
+            c.canonical_name,c.name_pattern,c.publisher_pattern,c.source_metadata,c.qualification_evidence,i.source_payload,a.id AS agent_device_id
        FROM rmm_patch_deployments d
        JOIN rmm_agent_jobs j ON j.id=d.agent_job_id AND j.tenant_id=d.tenant_id
        JOIN rmm_software_catalogue c ON c.id=d.catalogue_id
@@ -1593,11 +1599,15 @@ async function devicePatchRejectionRows(tenantId) {
   return result.rows
 }
 
-async function patchBundle(tenantId) {
+export async function reconcilePatchDeployments(tenantId) {
   await reconcileBulkPatchDeployments(tenantId)
   await reconcileSupersededPatchDeployments(tenantId)
   await reconcileTerminalPatchDeployments(tenantId)
   await reconcileVendorProductCodeDeployments(tenantId)
+}
+
+async function patchBundle(tenantId) {
+  await reconcilePatchDeployments(tenantId)
   const [devices, catalogue, policies, assignments, vulnerabilities, discovery, vendorIntel, tenantVendorSources, exposureSummary, softwareVulnerabilityExposures, vulnerabilityExposureRowsData, deployments, vulnerabilityCatalogue, devicePatchRejections, qualificationQueue] = await Promise.all([
     patchDeviceRows(tenantId),
     catalogueRows(tenantId),
