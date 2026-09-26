@@ -456,6 +456,9 @@ function parseWingetInstallers(text) {
   const header = source.slice(0, marker)
   const section = source.slice(marker).replace(/^Installers:\s*\n?/i, '')
   const globalInstallerType = lower(manifestValue(header, 'InstallerType'))
+  const appsAndFeaturesInstallerType = lower(yamlScalar(
+    header.match(/^AppsAndFeaturesEntries:\s*$[\s\S]*?^\s+InstallerType:\s*(.+?)\s*$/mi)?.[1] || '',
+  ))
   const globalScope = lower(manifestValue(header, 'Scope'))
   const globalProductCode = yamlScalar(
     header.match(/^ProductCode:\s*(.+?)\s*$/mi)?.[1]
@@ -470,7 +473,10 @@ function parseWingetInstallers(text) {
     const sha256 = clean(raw.match(/^\s*InstallerSha256:\s*([A-Fa-f0-9]{64})\s*$/mi)?.[1]).toUpperCase()
     if (!url || !sha256) continue
     const architecture = lower(yamlScalar(raw.match(/^\s*-?\s*Architecture:\s*(.+?)\s*$/mi)?.[1] || ''))
-    const declaredType = lower(yamlScalar(raw.match(/^\s*InstallerType:\s*(.+?)\s*$/mi)?.[1] || globalInstallerType))
+    const declaredType = lower(yamlScalar(
+      raw.match(/^\s*InstallerType:\s*(.+?)\s*$/mi)?.[1]
+      || (globalInstallerType === 'exe' && appsAndFeaturesInstallerType ? appsAndFeaturesInstallerType : globalInstallerType),
+    ))
     const scope = lower(yamlScalar(raw.match(/^\s*Scope:\s*(.+?)\s*$/mi)?.[1] || globalScope))
     const silent = yamlScalar(raw.match(/^\s+Silent:\s*(.+?)\s*$/mi)?.[1] || globalSilent)
     const productCode = yamlScalar(raw.match(/^\s*ProductCode:\s*(.+?)\s*$/mi)?.[1] || globalProductCode)
@@ -562,6 +568,14 @@ export async function resolveWingetVendorInstaller(packageId, version = '') {
     const publishers = db.prepare(
       "SELECT DISTINCT norm_publisher FROM norm_publishers2 WHERE package=? AND norm_publisher<>'' ORDER BY norm_publisher LIMIT 6",
     ).all(pkg.rowid).map((row) => clean(row.norm_publisher)).filter(Boolean)
+    let installArguments = clean(selected.silent)
+    if (
+      lower(pkg.id) === '3dconnexion.3dxware.10'
+      && selected.installerTechnology === 'burn'
+      && !/(^|\s)\/install(?:\s|$)/i.test(installArguments)
+    ) {
+      installArguments = ['/install', installArguments].filter(Boolean).join(' ')
+    }
     return {
       ok: true,
       packageId: clean(pkg.id),
@@ -575,7 +589,7 @@ export async function resolveWingetVendorInstaller(packageId, version = '') {
       installerTechnology: selected.installerTechnology,
       architecture: selected.architecture || 'any',
       scope: selected.scope,
-      installArguments: selected.silent,
+      installArguments,
       productCode: /^\{[0-9A-Fa-f-]{36}\}$/.test(clean(selected.productCode)) ? clean(selected.productCode) : '',
       upstreamHost: new URL(selected.url).hostname,
     }

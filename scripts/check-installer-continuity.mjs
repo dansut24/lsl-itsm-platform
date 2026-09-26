@@ -11,6 +11,7 @@ function expect(condition, message) {
 const patching = fs.readFileSync('api/src/rmmPatching.js', 'utf8')
 const vendorIntel = fs.readFileSync('api/src/rmmSoftwareVendorIntel.js', 'utf8')
 const enrichment = fs.readFileSync('api/src/rmmVendorReleaseEnrichment.js', 'utf8')
+const wingetFallback = fs.readFileSync('api/src/rmmWingetFallback.js', 'utf8')
 
 expect(enrichment.includes('rankWindowsInstallerAssets') && enrichment.includes('installer_continuity_'), 'Vendor asset ranking must support installer-type continuity.')
 expect(vendorIntel.includes('githubInstallerContinuityCandidates') && vendorIntel.includes('installers: installerContinuityCandidates'), 'GitHub vendor releases must retain signed/checksummed MSI/EXE continuity alternatives.')
@@ -20,6 +21,16 @@ expect(patching.includes('continuityInstallerForVendor') && patching.includes('i
 expect(patching.includes('targetVersionInstalledForCatalogue') && patching.includes("'older_version_present'"), 'A target-version sibling must suppress repeat patching of an older residual registration.')
 expect(patching.includes('Installer technology migration required') && patching.includes('installerTechnologyMigrationRequired: true'), 'Unqualified EXE/MSI technology changes must be blocked explicitly.')
 expect(patching.includes("fallbackProvider: vendorDirect && fallbackPackageId && !continuitySensitiveUpdate ? 'winget' : ''"), 'Continuity-sensitive vendor updates must not fall back to an uncontrolled WinGet technology change.')
+expect(
+  wingetFallback.includes('appsAndFeaturesInstallerType') &&
+    wingetFallback.includes("globalInstallerType === 'exe' && appsAndFeaturesInstallerType"),
+  'WinGet EXE resolution must preserve nested AppsAndFeatures installer technology such as Burn.',
+)
+expect(
+  wingetFallback.includes("lower(pkg.id) === '3dconnexion.3dxware.10'") &&
+    wingetFallback.includes("installArguments = ['/install', installArguments]"),
+  '3Dconnexion 3DxWare must preserve the vendor-documented explicit /install action.',
+)
 
 if (failures) process.exit(1)
 console.log('Installer continuity contract check passed.')
