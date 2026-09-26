@@ -13,6 +13,8 @@ const checks = [
   [index.includes('registerPlatformAdminRoutes(app)'), 'Platform admin routes must be registered outside tenant API middleware.'],
   [surface.includes("kind: 'admin'"), 'admin.hi5central.com must resolve to the admin surface.'],
   [app.includes('Platform control plane') && app.includes('Software catalogue'), 'Admin shell must expose control-plane navigation.'],
+  [app.includes("import '../rmm/RmmPlatformApp.css'"), 'Admin must reuse the RMM platform shell styling.'],
+  [app.includes('className="rmm-app h5a-rmm-shell"') && app.includes('className="rmm-main-scroll"') && app.includes('className="rmm-page"'), 'Admin must use the RMM fixed shell with an internal vertical scroller.'],
 ]
 
 let failures = 0
