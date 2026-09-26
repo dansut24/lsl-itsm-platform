@@ -35,6 +35,11 @@ expect(
   vendorIntel.includes("lower(packageId) === '3dconnexion.3dxware.10'"),
   '3Dconnexion vendor sync must not let stale curated arguments overwrite the corrected vendor install action.',
 )
+expect(
+  vendorIntel.includes('config.installerTechnology = clean(resolved.installerTechnology || config.installerTechnology)') &&
+    vendorIntel.includes("installerTechnology: clean(config.installerTechnology || (resolvedInstallerType === 'msi' ? 'msi' : 'generic'))"),
+  'Resolved WinGet installer technology must flow into top-level vendor release and catalogue metadata.',
+)
 
 if (failures) process.exit(1)
 console.log('Installer continuity contract check passed.')

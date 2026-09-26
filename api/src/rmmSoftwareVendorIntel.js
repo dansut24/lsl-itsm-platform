@@ -685,6 +685,7 @@ async function syncGenericConfigured(sourceKey, state) {
     installerUrl = (await publicHttpsUrl(resolved.installerUrl)).toString()
     installerSha256 = normalizedSha256(resolved.installerSha256)
     resolvedInstallerType = clean(resolved.installerType)
+    config.installerTechnology = clean(resolved.installerTechnology || config.installerTechnology)
     releaseUrl = clean(resolved.manifestUrl)
     verificationProductCode = clean(resolved.productCode)
     selectedAssetReason = 'winget_manifest_upstream_installer'
@@ -1411,6 +1412,7 @@ async function syncGenericConfigured(sourceKey, state) {
       deploymentMode,
       verification,
       installArguments: clean(config.installArguments),
+      installerTechnology: clean(config.installerTechnology || (resolvedInstallerType === 'msi' ? 'msi' : 'generic')),
       responseFile: object(config.responseFile),
     },
     catalogueProvider: 'managed',
@@ -1434,6 +1436,7 @@ async function syncGenericConfigured(sourceKey, state) {
       releaseUrl,
       selectedAsset: selectedAssetName,
       selectedAssetReason,
+      installerTechnology: clean(config.installerTechnology || (resolvedInstallerType === 'msi' ? 'msi' : 'generic')),
       installerContinuity: installerContinuityCandidates.length ? {
         availableTypes: [...new Set(installerContinuityCandidates.map((item) => clean(item.installerType)).filter(Boolean))],
         candidates: installerContinuityCandidates.map((item) => ({ name: item.name, installerType: item.installerType })),
