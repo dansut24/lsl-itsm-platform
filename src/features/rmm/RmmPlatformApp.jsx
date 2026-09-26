@@ -703,7 +703,18 @@ function DeviceHardware({ device }) {
           <DeviceProperty label="Battery" value={battery.present === true || battery.battery_present === true ? 'Present' : battery.present === false || battery.battery_present === false ? 'Not present' : null} />
           <DeviceProperty label="Charge" value={battery.charge_percent != null ? Math.round(Number(battery.charge_percent)) + '%' : battery.battery_percent != null ? Math.round(Number(battery.battery_percent)) + '%' : null} />
           <DeviceProperty label="Power source" value={battery.ac_line_status} />
-          <DeviceProperty label="Charging" value={battery.charging === true ? 'Yes' : battery.charging === false ? 'No' : null} />
+          <DeviceProperty
+            label="Power state"
+            value={battery.charging === true
+              ? 'Charging'
+              : battery.ac_line_status === 'Online' && Number(battery.charge_percent ?? battery.battery_percent) >= 99
+                ? 'Plugged in · fully charged'
+                : battery.ac_line_status === 'Online'
+                  ? 'Plugged in · not actively charging'
+                  : battery.ac_line_status === 'Offline'
+                    ? 'On battery'
+                    : null}
+          />
           <DeviceProperty label="Battery health" value={battery.health} />
           <DeviceProperty label="Estimated runtime" value={battery.battery_life_seconds ? Math.round(Number(battery.battery_life_seconds) / 60) + ' minutes' : null} />
         </div>

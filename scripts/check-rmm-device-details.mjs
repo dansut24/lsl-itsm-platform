@@ -36,6 +36,7 @@ expect(activityApi.includes("requestMetadata.source) === 'device_power_action'")
 
 // Hardware/software inventory should expose useful fields the Agent already collects.
 expect(platform.includes('GPU & displays') && platform.includes('Battery & power') && platform.includes('Volumes & encryption'), 'Hardware tab must expose graphics, battery and storage inventory.')
+expect(platform.includes('Plugged in · fully charged') && platform.includes('Plugged in · not actively charging') && platform.includes('On battery'), 'Battery UI must distinguish AC connection from the Windows active-charging flag.')
 expect(bootstrap.includes('cpuLogicalProcessors') && bootstrap.includes('deviceUuid') && bootstrap.includes('storageVolumes'), 'Production device mapping must retain richer hardware inventory.')
 expect(platform.includes('Scope / size') && platform.includes('softwareScopeLabel(app.scope)'), 'Software inventory must expose install scope and reported size.')
 
