@@ -304,6 +304,56 @@ function inventoryDeltaEvents(previous = {}, current = {}) {
   return events.slice(0, 50)
 }
 
+
+const RETAINED_DEEP_INVENTORY_FIELDS = [
+  'memory_modules','motherboard','physical_disks','monitors','drivers','problem_devices',
+  'installed_hotfixes','windows_licensing','reboot_state','startup_items','scheduled_tasks',
+  'local_groups','printers','usb_devices','optional_features','power_plan','network_profiles',
+  'network_configurations','wifi_interfaces','default_routes','directory_join',
+  'machine_certificates','virtualization','deep_inventory_collected_at',
+]
+
+function mergeRetainedDeepInventory(previousPayload, incomingPayload) {
+  if (incomingPayload?.deep_inventory_included !== false) return incomingPayload
+  const previous = previousPayload && typeof previousPayload === 'object' ? previousPayload : {}
+  const incoming = incomingPayload && typeof incomingPayload === 'object' ? incomingPayload : {}
+  const merged = { ...incoming }
+
+  for (const key of RETAINED_DEEP_INVENTORY_FIELDS) {
+    if (merged[key] === undefined && previous[key] !== undefined) merged[key] = previous[key]
+  }
+
+  const previousNetwork = previous.network && typeof previous.network === 'object' ? previous.network : {}
+  const incomingNetwork = incoming.network && typeof incoming.network === 'object' ? incoming.network : {}
+  const network = { ...incomingNetwork }
+  for (const key of ['configurations','wifi_interfaces','default_routes']) {
+    if (network[key] === undefined && previousNetwork[key] !== undefined) network[key] = previousNetwork[key]
+  }
+  if (Object.keys(network).length) merged.network = network
+
+  const previousSecurity = previous.security && typeof previous.security === 'object' ? previous.security : {}
+  const incomingSecurity = incoming.security && typeof incoming.security === 'object' ? incoming.security : {}
+  const security = { ...incomingSecurity }
+  for (const key of ['defender','firewall_profiles']) {
+    if (security[key] === undefined && previousSecurity[key] !== undefined) security[key] = previousSecurity[key]
+  }
+  if (Object.keys(security).length) merged.security = security
+
+  const previousBattery = previous.battery && typeof previous.battery === 'object' ? previous.battery : {}
+  const incomingBattery = incoming.battery && typeof incoming.battery === 'object' ? incoming.battery : {}
+  const battery = { ...incomingBattery }
+  for (const key of [
+    'name','manufacturer','chemistry','design_capacity_mwh','full_charge_capacity_mwh',
+    'health_percent','wear_percent','cycle_count','voltage_mv','rate_mw',
+    'remaining_capacity_mwh','power_online','discharging',
+  ]) {
+    if (battery[key] === undefined && previousBattery[key] !== undefined) battery[key] = previousBattery[key]
+  }
+  if (Object.keys(battery).length) merged.battery = battery
+
+  return merged
+}
+
 async function ingestInventory(agent, payload) {
   const summary = payload?.summary && typeof payload.summary === 'object' ? payload.summary : {}
   const hardware = payload?.hardware && typeof payload.hardware === 'object' ? payload.hardware : {}
@@ -321,6 +371,7 @@ async function ingestInventory(agent, payload) {
     const previousPayload = previousResult.rows[0]?.source_payload && typeof previousResult.rows[0].source_payload === 'object'
       ? previousResult.rows[0].source_payload
       : {}
+    const effectivePayload = mergeRetainedDeepInventory(previousPayload, payload)
 
     await client.query(
       `UPDATE rmm_device_inventory SET
@@ -342,7 +393,7 @@ async function ingestInventory(agent, payload) {
          source_payload=$12::jsonb,
          updated_at=now()
        WHERE id=$1`,
-      [agent.inventory_id, hostname, clean(summary.operating_system || summary.os_name || os.name || 'Windows'), clean(summary.os_version || os.version), clean(hardware.manufacturer || summary.manufacturer), clean(hardware.model || summary.model), clean(hardware.serial_number || summary.serial_number), boundedInteger(memory.total_bytes ?? summary.total_memory_bytes, 0, Number.MAX_SAFE_INTEGER), storage.total, storage.free, collectedAt, JSON.stringify(payload)],
+      [agent.inventory_id, hostname, clean(summary.operating_system || summary.os_name || os.name || 'Windows'), clean(summary.os_version || os.version), clean(hardware.manufacturer || summary.manufacturer), clean(hardware.model || summary.model), clean(hardware.serial_number || summary.serial_number), boundedInteger(memory.total_bytes ?? summary.total_memory_bytes, 0, Number.MAX_SAFE_INTEGER), storage.total, storage.free, collectedAt, JSON.stringify(effectivePayload)],
     )
     await client.query(
       `UPDATE rmm_agent_devices SET
@@ -354,7 +405,7 @@ async function ingestInventory(agent, payload) {
       [agent.id, clean(agentInfo.version), collectedAt],
     )
 
-    for (const event of inventoryDeltaEvents(previousPayload, payload)) {
+    for (const event of inventoryDeltaEvents(previousPayload, effectivePayload)) {
       await recordRmmActivity({
         tenantId: agent.tenant_id,
         agentDeviceId: agent.id,
