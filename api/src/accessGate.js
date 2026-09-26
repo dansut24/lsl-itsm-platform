@@ -162,7 +162,7 @@ async function requiredAccess(c, session) {
 
   if (path.startsWith('/api/v1/integrations')) return rule([method === 'GET' ? 'integrations.view' : 'integrations.manage'])
   if (path.startsWith('/api/v1/rmm/')) {
-    if (path.includes('/remote')) return rule([], ['rmm.devices.remote'])
+    if (path.includes('/remote') || path.includes('/connect-sessions')) return rule([], ['rmm.devices.remote'])
     if (path.includes('/terminal')) return rule([], ['rmm.devices.terminal'])
     if (path.includes('/files')) return rule([], ['rmm.devices.files'])
     if (method === 'GET') return rule(['rmm.devices.view','rmm.sites.view','rmm.groups.view','rmm.policies.view'])

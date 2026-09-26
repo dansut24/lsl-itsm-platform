@@ -18,6 +18,13 @@ const ACTIVE_TTL_SECONDS = 8 * 60 * 60
 const MAX_WS_PAYLOAD_BYTES = 8 * 1024 * 1024
 const CLAIM_WINDOW_MS = 60 * 1000
 const CLAIM_ATTEMPTS_PER_WINDOW = 8
+const CONNECT_CODE_HMAC_KEY = clean(process.env.CONNECT_CODE_HMAC_KEY) || (() => {
+  const rootKey = clean(process.env.RMM_RECOVERY_KEY_ENCRYPTION_KEY)
+  return rootKey ? createHmac('sha256', rootKey).update('hi5central-connect-code-hmac-v1').digest('hex') : ''
+})()
+if (process.env.NODE_ENV === 'production' && CONNECT_CODE_HMAC_KEY.length < 32) {
+  throw new Error('Connect code HMAC key material is unavailable in production.')
+}
 
 const activeConnectHosts = new Map()
 const activeConnectViewers = new Map()
@@ -35,6 +42,10 @@ const VIEWER_RELAY_TYPES = new Set([
 
 function clean(value = '') { return String(value ?? '').trim() }
 function sha256(value = '') { return createHash('sha256').update(String(value)).digest('hex') }
+function supportCodeHash(value = '') {
+  const key = CONNECT_CODE_HMAC_KEY || 'hi5central-connect-development-only'
+  return createHmac('sha256', key).update(String(value)).digest('hex')
+}
 function randomSecret(prefix) { return `${prefix}_${randomBytes(32).toString('base64url')}` }
 function safeSend(ws, payload) {
   if (!ws || ws.readyState !== 1) return false
@@ -135,7 +146,10 @@ async function requireConnectAccess(c) {
 }
 async function connectSessionForTenant(id, tenantId) {
   const result = await pool.query(
-    `SELECT c.*,COALESCE(NULLIF(u.name,''),u.email,'Hi5Central technician') AS technician,
+    `SELECT c.id,c.tenant_id,c.created_by_user_id,c.support_code_hint,c.viewer_client,c.status,
+            c.customer_consent_at,c.claimed_at,c.host_connected_at,c.viewer_connected_at,c.started_at,c.ended_at,
+            c.expires_at,c.last_activity_at,c.end_reason,c.host_name,c.host_platform,c.host_version,c.created_at,c.updated_at,
+            COALESCE(NULLIF(u.name,''),u.email,'Hi5Central technician') AS technician,
             COALESCE(NULLIF(t.company_name,''),t.slug,'Hi5Central') AS tenant_name,t.slug AS tenant_slug
        FROM rmm_connect_sessions c
        LEFT JOIN users u ON u.id=c.created_by_user_id
@@ -193,16 +207,28 @@ export function registerRmmConnectRoutes(app) {
     const auth = await requireConnectAccess(c)
     if (auth.error) return auth.error
     await expireOldSessions()
-    const id = randomUUID()
-    const code = supportCode()
-    const normalizedCode = normalizeCode(code)
+    let id = ''
+    let code = ''
     const expiresAt = new Date(Date.now() + WAITING_TTL_SECONDS * 1000)
-    await pool.query(
-      `INSERT INTO rmm_connect_sessions
-         (id,tenant_id,created_by_user_id,support_code_hash,support_code_hint,status,expires_at,last_activity_at)
-       VALUES ($1,$2,$3,$4,$5,'waiting',$6,now())`,
-      [id, auth.session.tenant_id, auth.session.user_id, sha256(normalizedCode), normalizedCode.slice(-2), expiresAt],
-    )
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      id = randomUUID()
+      code = supportCode()
+      const normalizedCode = normalizeCode(code)
+      try {
+        await pool.query(
+          `INSERT INTO rmm_connect_sessions
+             (id,tenant_id,created_by_user_id,support_code_hash,support_code_hint,status,expires_at,last_activity_at)
+           VALUES ($1,$2,$3,$4,$5,'waiting',$6,now())`,
+          [id, auth.session.tenant_id, auth.session.user_id, supportCodeHash(normalizedCode), normalizedCode.slice(-2), expiresAt],
+        )
+        break
+      } catch (error) {
+        if (error?.code !== '23505' || attempt === 4) throw error
+        id = ''
+        code = ''
+      }
+    }
+    if (!id || !code) return c.json({ error: 'Unable to allocate a support code. Please try again.' }, 503)
     const technician = clean(auth.session.name || auth.session.email) || 'Technician'
     recordRmmActivity({
       tenantId: auth.session.tenant_id,
@@ -323,7 +349,7 @@ export function registerRmmConnectRoutes(app) {
          JOIN tenants t ON t.id=c.tenant_id
         WHERE c.support_code_hash=$1 AND c.status='waiting' AND c.expires_at>now()
         LIMIT 1`,
-      [sha256(normalizedCode)],
+      [supportCodeHash(normalizedCode)],
     )
     if (!result.rowCount) return c.json({ error: 'That support code is not valid or has expired.' }, 404)
     const row = result.rows[0]
@@ -358,7 +384,7 @@ export function registerRmmConnectRoutes(app) {
           WHERE c.support_code_hash=$1
           FOR UPDATE OF c
           LIMIT 1`,
-        [sha256(normalizedCode)],
+        [supportCodeHash(normalizedCode)],
       )
       if (!result.rowCount) {
         await client.query('ROLLBACK')

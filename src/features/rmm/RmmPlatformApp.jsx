@@ -77,7 +77,7 @@ const navigation = [
   { id: 'sites', label: 'Sites', icon: MapPin, section: 'Manage' },
   { id: 'groups', label: 'Device groups', icon: Users, section: 'Manage' },
   { id: 'alerts', label: 'Alerts', icon: AlertTriangle, section: 'Manage' },
-  { id: 'connect', label: 'Connect', icon: Cable, section: 'Operate' },
+  { id: 'connect', label: 'Connect', icon: Cable, section: 'Operate', requiresRemote: true },
   { id: 'patching', label: 'Patching', icon: ShieldCheck, section: 'Operate' },
   { id: 'software', label: 'Software', icon: PackageCheck, section: 'Operate' },
   { id: 'automation', label: 'Automation', icon: Code2, section: 'Operate' },
@@ -169,8 +169,8 @@ function securityTone(value = '') {
   return 'neutral'
 }
 
-function RmmSidebar({ activeView, canAudit = false, mobileOpen, navigate, onClose, tenantName }) {
-  const visibleNavigation = navigation.filter((item) => !item.requiresAudit || canAudit)
+function RmmSidebar({ activeView, canAudit = false, canRemote = false, mobileOpen, navigate, onClose, tenantName }) {
+  const visibleNavigation = navigation.filter((item) => (!item.requiresAudit || canAudit) && (!item.requiresRemote || canRemote))
   const sections = [...new Set(visibleNavigation.map((item) => item.section))]
   return <><button className={`rmm-sidebar-backdrop ${mobileOpen ? 'is-open' : ''}`} aria-label="Close navigation" onClick={onClose} type="button" /><aside className={`rmm-sidebar ${mobileOpen ? 'mobile-open' : ''}`}><div className="rmm-sidebar-brand"><img src={`${import.meta.env.BASE_URL}hi5central-logo.png`} alt="Hi5Central" /><div><strong>{tenantName}</strong><span>RMM</span></div><button className="rmm-mobile-close" onClick={onClose} type="button"><X size={19} /></button></div><nav className="rmm-nav">{sections.map((section) => <div className="rmm-nav-section" key={section}><span>{section}</span>{visibleNavigation.filter((item) => item.section === section).map(({ id, label, icon: Icon }) => <button className={activeView === id ? 'active' : ''} key={id} onClick={() => navigate(id)} type="button"><Icon size={17} /><span>{label}</span>{id === 'alerts' && <b>{rmmAlerts.filter((alert) => alert.status === 'Open').length}</b>}</button>)}</div>)}</nav><div className="rmm-sidebar-footer"><div><span>HC</span><div><strong>Hi5Central</strong><small>Microsoft-connected estate</small></div></div></div></aside></>
 }
@@ -1947,7 +1947,7 @@ export function RmmPlatformApp({ accent, canAudit = false, canBackstageRemote = 
   const [toast, setToast] = useState('')
   const [inventoryPreset, setInventoryPreset] = useState(null)
   const selectedDevice = devices.find((device) => device.id === selectedDeviceId)
-  const visibleActiveView = activeView === 'activity-audit' && !canAudit ? 'dashboard' : activeView
+  const visibleActiveView = (activeView === 'activity-audit' && !canAudit) || (activeView === 'connect' && !canRemote) ? 'dashboard' : activeView
 
   useEffect(() => {
     const handlePop = () => {
@@ -2030,7 +2030,7 @@ export function RmmPlatformApp({ accent, canAudit = false, canBackstageRemote = 
 
   return (
     <div className="rmm-app" data-accent={accent} data-theme={theme}>
-      <RmmSidebar activeView={visibleActiveView} canAudit={canAudit} mobileOpen={mobileOpen} navigate={navigate} onClose={() => setMobileOpen(false)} tenantName={tenantName} />
+      <RmmSidebar activeView={visibleActiveView} canAudit={canAudit} canRemote={canRemote} mobileOpen={mobileOpen} navigate={navigate} onClose={() => setMobileOpen(false)} tenantName={tenantName} />
       <div className="rmm-shell-main">
         <RmmTopbar activeView={visibleActiveView} currentUser={currentUser} navigate={navigate} onLogout={handleLogout} onMenu={() => setMobileOpen(true)} query={query} setQuery={setQuery} setTheme={setTheme} theme={theme} />
         <main className="rmm-main-scroll"><div className="rmm-page">{renderPage()}</div></main>
