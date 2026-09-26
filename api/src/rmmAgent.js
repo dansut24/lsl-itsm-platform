@@ -9,7 +9,7 @@ import { recalculateTenantVulnerabilityExposures } from './rmmVulnerabilityExpos
 import { resolveSession } from './session.js'
 
 const AGENT_DOWNLOAD_URL = 'https://downloads.hi5central.com/agent/latest/Hi5CentralAgentSetup.exe'
-const MAX_INVENTORY_BYTES = 4 * 1024 * 1024
+const MAX_INVENTORY_BYTES = 8 * 1024 * 1024
 
 function clean(value = '') { return String(value ?? '').trim() }
 function isUuid(value = '') { return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clean(value)) }
