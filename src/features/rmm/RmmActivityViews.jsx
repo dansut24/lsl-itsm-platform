@@ -148,6 +148,133 @@ function BulkPatchResults({ result = {} }) {
     </div>
   </section>
 }
+function textValue(value) {
+  if (value === null || value === undefined || value === '') return ''
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No'
+  if (typeof value === 'number') return String(value)
+  if (typeof value === 'string') return value
+  return ''
+}
+function jobDetailRows(job = {}) {
+  const type = String(job.job_type || '')
+  const request = job.payload && typeof job.payload === 'object' ? job.payload : {}
+  const result = job.result && typeof job.result === 'object' ? job.result : {}
+  const rows = []
+  const add = (label, value) => { const text = textValue(value); if (text) rows.push({ label, value: text }) }
+
+  if (type === 'patch.software') {
+    add('Application', result.applicationName || request.applicationName || request.packageId)
+    const installed = result.installedVersion || request.installedVersion
+    const target = result.targetVersion || request.targetVersion
+    if (installed || target) add('Version', (installed || 'Unknown') + ' → ' + (target || 'Unknown'))
+    add('Verified version', result.verifiedVersion)
+    add('Provider', result.provider || request.provider)
+    add('Installer', result.installerType || request.installerType)
+    add('Restart required', Boolean(result.rebootRequired || result.reboot_required))
+    if (result.verificationPassed === true) add('Verification', 'Passed')
+    else if (result.verificationFailed === true || result.verification_failed === true) add('Verification', 'Failed')
+    add('Install strategy', result.successfulStrategy)
+    return rows
+  }
+  if (type === 'software.uninstall') {
+    add('Application', result.name || request.name)
+    add('Version', result.version)
+    add('Publisher', result.publisher)
+    add('Scope', request.scope)
+    add('Result', result.status || (job.status === 'completed' ? 'Uninstalled successfully' : 'Uninstall failed'))
+    add('Restart required', Boolean(result.reboot_required || result.rebootRequired))
+    add('Reason', result.reason)
+    return rows
+  }
+  if (type === 'process.kill' || type === 'process.restart') {
+    add('Process', result.name || request.name || request.processName)
+    add('Process ID', request.processId || request.pid || result.process_id || result.pid)
+    add('Result', job.status === 'completed' ? (type === 'process.kill' ? 'Process ended' : 'Process restarted') : 'Action failed')
+    add('Exit code', result.exit_code ?? result.exitCode)
+    return rows
+  }
+  if (type.startsWith('services.')) {
+    add('Service', result.display_name || result.service_name || request.serviceName)
+    if (type === 'services.set_start_type') add('Startup type', request.startType || result.start_mode)
+    add('Result', job.status === 'completed' ? jobLabel(type) + ' completed' : jobLabel(type) + ' failed')
+    add('State', result.state || result.status)
+    return rows
+  }
+  if (type.startsWith('registry.')) {
+    add('Registry path', request.path || result.path)
+    add('Value', request.name)
+    if (request.value !== undefined && request.value !== '') add('New value', request.value)
+    add('Type', request.kind)
+    if (type === 'registry.list') {
+      if (Array.isArray(result.subkeys)) add('Subkeys returned', result.subkeys.length)
+      if (Array.isArray(result.values)) add('Values returned', result.values.length)
+    }
+    add('Result', job.status === 'completed' ? jobLabel(type) + ' completed' : jobLabel(type) + ' failed')
+    return rows
+  }
+  if (type === 'events.list') {
+    add('Event log', request.logName || result.log_name)
+    add('Level', request.level || result.level)
+    add('Events returned', result.count ?? (Array.isArray(result.events) ? result.events.length : ''))
+    add('Result', job.status === 'completed' ? 'Event log read successfully' : 'Event log read failed')
+    return rows
+  }
+  if (type === 'processes.list') {
+    add('Processes returned', result.count ?? (Array.isArray(result.processes) ? result.processes.length : ''))
+    add('Result', job.status === 'completed' ? 'Process list refreshed' : 'Process list failed')
+    return rows
+  }
+  if (type === 'services.list') {
+    add('Services returned', result.count ?? (Array.isArray(result.services) ? result.services.length : ''))
+    add('Result', job.status === 'completed' ? 'Service list refreshed' : 'Service list failed')
+    return rows
+  }
+  if (type === 'files.list') {
+    add('Path', request.path || result.path)
+    add('Items returned', result.count ?? (Array.isArray(result.items) ? result.items.length : ''))
+    add('Result', job.status === 'completed' ? 'Folder read successfully' : 'Folder read failed')
+    return rows
+  }
+  if (type === 'inventory.scan') {
+    add('Result', result.inventory_sent === true ? 'Inventory refreshed and uploaded' : (job.status === 'completed' ? 'Inventory refresh completed' : 'Inventory refresh failed'))
+    return rows
+  }
+  if (type === 'custom.command') {
+    add('Command', request.command || result.command)
+    add('Exit code', result.exit_code ?? result.exitCode)
+    if (result.duration_ms !== undefined) add('Duration', Math.round(Number(result.duration_ms) / 1000) + 's')
+    return rows
+  }
+  if (type === 'patch.vendor_artifact.inspect') {
+    add('Application', request.applicationName || request.packageId || request.name)
+    add('Version', request.targetVersion || request.version)
+    add('Result', job.status === 'completed' ? 'Installer inspection completed' : 'Installer inspection failed')
+    add('Signer', result.signer || result.subject)
+    return rows
+  }
+  if (type.startsWith('qualification.observer.')) {
+    add('Result', job.status === 'completed' ? 'Qualification observation completed' : 'Qualification observation failed')
+    return rows
+  }
+
+  add('Action', jobLabel(type))
+  add('Result', job.status === 'completed' ? 'Completed successfully' : job.status || 'Unknown')
+  return rows
+}
+function HumanJobDetails({ job = {} }) {
+  const type = String(job.job_type || '')
+  if (type === 'patch.software.bulk') return <BulkPatchResults result={job.result || {}} />
+  const rows = jobDetailRows(job)
+  const result = job.result && typeof job.result === 'object' ? job.result : {}
+  const commandOutput = type === 'custom.command' ? String(result.output || '').trim() : ''
+  return <section className="rmm-job-human-detail">
+    <div className="rmm-job-human-heading"><strong>Action details</strong><span>{jobLabel(type)}</span></div>
+    <div className="rmm-job-human-grid">
+      {rows.map((row, index) => <span key={row.label + index}><small>{row.label}</small><strong>{row.value}</strong></span>)}
+    </div>
+    {commandOutput && <div className="rmm-job-human-output"><strong>Command output</strong><pre>{commandOutput}</pre></div>}
+  </section>
+}
 function activityIcon(category = '') {
   if (category === 'terminal') return TerminalSquare
   if (category === 'remote') return Monitor
@@ -187,12 +314,8 @@ function DetailModal({ detail, loading, onClose }) {
         {isTool ? <div className="rmm-audit-transcript">
           <div><strong>Session transcript</strong>{payload.transcript_truncated && <span>Transcript truncated at audit limit</span>}</div>
           <pre>{payload.transcript || 'No terminal output was captured for this session.'}</pre>
-        </div> : payload.job_type === 'patch.software.bulk' ? <>
-          <BulkPatchResults result={payload.result || {}} />
-          {payload.error_message && <div className="rmm-audit-error"><AlertTriangle size={15} />{payload.error_message}</div>}
-        </> : <>
-          <div className="rmm-audit-json-section"><strong>Request</strong><pre>{JSON.stringify(payload.payload || {}, null, 2)}</pre></div>
-          <div className="rmm-audit-json-section"><strong>Result</strong><pre>{JSON.stringify(payload.result || {}, null, 2)}</pre></div>
+        </div> : <>
+          <HumanJobDetails job={payload} />
           {payload.error_message && <div className="rmm-audit-error"><AlertTriangle size={15} />{payload.error_message}</div>}
         </>}
       </>}

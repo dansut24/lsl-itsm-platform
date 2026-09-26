@@ -290,11 +290,48 @@
 .rmm-bulk-result-item > div { min-width: 0; display: grid; gap: 2px; }
 .rmm-bulk-result-item strong { font-size: 10px; }
 .rmm-bulk-result-item small { color: var(--rmm-muted); font-size: 8px; line-height: 1.4; overflow-wrap: anywhere; }
-.rmm-audit-json-section,
+.rmm-job-human-detail { display: grid; gap: 10px; padding: 0 16px 14px; }
+.rmm-job-human-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.rmm-job-human-heading strong { font-size: 10px; }
+.rmm-job-human-heading span { color: var(--rmm-muted); font-size: 8px; }
+.rmm-job-human-grid {
+  display: grid;
+  grid-template-columns: repeat(2,minmax(0,1fr));
+  gap: 8px;
+}
+.rmm-job-human-grid > span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border: 1px solid var(--rmm-border);
+  border-radius: 9px;
+  padding: 10px;
+  background: var(--rmm-soft);
+}
+.rmm-job-human-grid small { color: var(--rmm-muted); font-size: 8px; }
+.rmm-job-human-grid strong { overflow-wrap: anywhere; font-size: 10px; line-height: 1.4; }
+.rmm-job-human-output { display: grid; gap: 7px; }
+.rmm-job-human-output > strong { font-size: 10px; }
+.rmm-job-human-output pre {
+  max-height: 300px;
+  overflow: auto;
+  margin: 0;
+  border: 1px solid var(--rmm-border);
+  border-radius: 9px;
+  padding: 12px;
+  background: #0d131b;
+  color: #e8edf4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 10px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;
+}
 .rmm-audit-transcript { padding: 0 16px 14px; }
-.rmm-audit-json-section > strong,
 .rmm-audit-transcript > div strong { display: block; margin-bottom: 7px; font-size: 10px; }
-.rmm-audit-json-section pre,
 .rmm-audit-transcript pre {
   max-height: 360px;
   overflow: auto;
@@ -386,6 +423,9 @@
   .rmm-audit-outcome { grid-column: 2; justify-self: start; }
   .rmm-audit-details-button { grid-column: 2; }
   .rmm-audit-detail-grid { grid-template-columns: 1fr; }
+  .rmm-job-human-grid { grid-template-columns: 1fr; }
+  .rmm-job-human-detail { padding-inline: 12px; }
+  .rmm-job-human-heading { align-items: flex-start; flex-direction: column; gap: 3px; }
   .rmm-bulk-result-summary { grid-template-columns: 1fr 1fr; }
   .rmm-bulk-result { padding-inline: 12px; }
   .rmm-audit-skeleton > div { grid-template-columns: 32px minmax(0,1fr); }

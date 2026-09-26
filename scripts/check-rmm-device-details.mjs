@@ -78,8 +78,10 @@ expect(activityApi.includes("'/api/v1/rmm/activity/:eventId'"), 'Durable audit d
 
 // Bulk patching must report partial success per application instead of flattening the whole batch into failure.
 expect(activity.includes('function BulkPatchResults') && activity.includes('Completed with issues') && activity.includes('Needs old-version cleanup'), 'Bulk patch job details must show per-application success, restart, cleanup and failure outcomes.')
-expect(activity.includes("payload.job_type === 'patch.software.bulk' ? <>") && activity.includes('<BulkPatchResults result={payload.result || {}} />'), 'Bulk patch details must use technician-friendly results instead of raw Request/Result JSON.')
-expect(activityCss.includes('.rmm-bulk-result-summary') && activityCss.includes('.rmm-bulk-result-item'), 'Bulk patch visual results require summary and per-item styles.')
+expect(activity.includes('function HumanJobDetails') && activity.includes('<HumanJobDetails job={payload} />'), 'All device-job details must use technician-friendly text instead of raw structured payloads.')
+expect(!activity.includes('JSON.stringify(payload.payload') && !activity.includes('JSON.stringify(payload.result'), 'Technician activity details must never render raw Request/Result JSON.')
+expect(activity.includes("type === 'patch.software'") && activity.includes("type === 'software.uninstall'") && activity.includes("type.startsWith('services.')") && activity.includes("type.startsWith('registry.')"), 'Human job details must cover software, service and registry actions.')
+expect(activityCss.includes('.rmm-bulk-result-summary') && activityCss.includes('.rmm-bulk-result-item') && activityCss.includes('.rmm-job-human-grid'), 'Technician-friendly activity results require structured visual styles.')
 expect(agentApi.includes("serverStatus: deploymentStatus") && agentApi.includes("remediationRequired") && agentApi.includes("serverSummary"), 'Bulk Agent results must be reconciled into per-item server statuses and batch summary counts.')
 expect(patchingApi.includes('evidence.upgradeVerified === true') && patchingApi.includes("return 'replace'"), 'Fully lifecycle-qualified applications must be eligible for superseded-version cleanup unless explicitly overridden.')
 expect(activityApi.includes("type === 'patch.software.bulk'") && activityApi.includes('require old-version cleanup'), 'Bulk patch activity must describe mixed outcomes without recording the whole batch as a hard failure.')
