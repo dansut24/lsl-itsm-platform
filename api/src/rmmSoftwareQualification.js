@@ -3047,7 +3047,7 @@ export async function queueAutomaticUpgradeQualifications({ limit = 12, allowCle
           AND q.state='passed'
         WHERE c.tenant_id IS NULL
           AND c.status='active'
-          AND c.qualification_state='deployment_candidate'
+          AND c.qualification_state IN ('deployment_candidate','qualified','qualified_limited')
           AND c.source_metadata->>'deploymentMode' IN ('vendor_direct','winget_preferred')
           AND c.source_metadata->>'trustState'='direct_ready'
           AND lower(COALESCE(c.qualification_evidence->>'cleanInstallVerified','false'))='true'
@@ -3146,7 +3146,7 @@ export async function queueAutomaticRollbackQualifications({ limit = 8 } = {}) {
         AND qu.state='passed'
       WHERE c.tenant_id IS NULL
         AND c.status='active'
-        AND c.qualification_state='deployment_candidate'
+        AND c.qualification_state IN ('deployment_candidate','qualified','qualified_limited')
         AND lower(COALESCE(c.qualification_evidence->>'cleanInstallVerified','false'))='true'
         AND c.qualification_evidence->>'cleanInstallVersion'=c.target_version
         AND lower(COALESCE(c.qualification_evidence->>'uninstallVerified','false'))='true'
@@ -3287,21 +3287,7 @@ export async function promoteAutomaticAdmissionReady({ limit = 12 } = {}) {
      ready AS (
        SELECT *,
               CASE
-                WHEN clean_queue_passed
-                 AND vulnerability_covered
-                 AND NOT history_limited
-                 AND upgrade_passed
-                 AND rollback_passed
-                 AND verified_update_deployment
-                  THEN 'qualified'
-                WHEN clean_queue_passed
-                 AND (vulnerability_covered OR vulnerability_limited)
-                 AND (
-                   history_limited
-                   OR (upgrade_passed AND rollback_passed AND verified_update_deployment)
-                 )
-                 AND (history_limited OR vulnerability_limited)
-                  THEN 'qualified_limited'
+                WHEN clean_queue_passed THEN 'qualified'
                 ELSE ''
               END AS admission_state,
               jsonb_build_object(
@@ -3355,17 +3341,9 @@ export async function promoteAutomaticAdmissionReady({ limit = 12 } = {}) {
             qualification_version=c.target_version,
             qualified_at=now(),
             qualification_notes=CASE
-              WHEN ready.admission_state='qualified'
-                THEN CASE
-                  WHEN COALESCE(c.qualification_notes,'')='' OR c.qualification_state='qualified_limited'
-                    THEN 'Automatically admitted after trusted source, artifact, clean-install, uninstall, upgrade, rollback and vulnerability-identity qualification.'
-                  ELSE c.qualification_notes
-                END
-              ELSE CASE
-                WHEN ready.vulnerability_limited
-                  THEN 'Qualified with limited vulnerability coverage. Software lifecycle qualification passed, but no unambiguous authoritative NVD/CVE identity is currently available; EPSS-backed risk coverage is therefore limited until identity resolution succeeds.'
-                ELSE 'Qualified with limited capabilities. Available safety checks passed; upstream limitations are retained in qualification evidence.'
-              END
+              WHEN COALESCE(c.qualification_notes,'')='' OR c.qualification_state='qualified_limited'
+                THEN 'Automatically admitted after trusted current artifact, current-version install verification, and verified uninstall/cleanup.'
+              ELSE c.qualification_notes
             END,
             qualification_evidence=c.qualification_evidence || jsonb_build_object(
               'automaticAdmissionVerified',true,
@@ -3540,7 +3518,10 @@ export async function runSoftwareQualificationQueue({ dispatchLimit = 1 } = {}) 
         AND c.status='active'
         AND (
           c.qualification_state='deployment_candidate'
-          OR (q.test_type='rollback' AND c.qualification_state IN ('qualified','qualified_limited'))
+          OR (
+            q.test_type IN ('upgrade','rollback')
+            AND c.qualification_state IN ('qualified','qualified_limited')
+          )
         )
         AND (
           q.test_type='clean_install'
@@ -3779,10 +3760,7 @@ export async function queueUpgradeQualification(catalogueId) {
   const queue = await withTransaction(async (client) => {
     await client.query(
       `UPDATE rmm_software_catalogue
-          SET qualification_state='deployment_candidate',
-              qualification_version='',
-              qualified_at=NULL,
-              qualification_evidence=qualification_evidence
+          SET qualification_evidence=qualification_evidence
                 - 'upgradeVerified'
                 - 'upgradeFromVersion'
                 - 'upgradeVersion'

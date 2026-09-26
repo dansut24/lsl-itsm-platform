@@ -86,10 +86,13 @@ expect(
 )
 expect(
   qualification.includes("'qualification_target_version_changed'") &&
-    qualification.includes("c.qualification_evidence->>'cleanInstallVersion'=c.target_version") &&
-    qualification.includes("c.qualification_evidence->>'upgradeVersion'=c.target_version") &&
-    qualification.includes("c.qualification_evidence->>'rollbackRestoredVersion'=c.target_version"),
-  'Qualification requeue/admission paths must require lifecycle evidence for the current target.',
+    qualification.includes("c.qualification_evidence->>'cleanInstallVersion'=c.target_version"),
+  'Qualification requeue/admission paths must require current-version core install evidence.',
+)
+expect(
+  !enrichment.includes("qualification_evidence->>'upgradeVersion'<>c.target_version") &&
+    !enrichment.includes("qualification_evidence->>'rollbackRestoredVersion'<>c.target_version"),
+  'Stale optional upgrade/rollback evidence must not demote core deployment qualification.',
 )
 expect(
   vendorIntel.includes('await resetStaleQualificationQueuesForCurrentTargets({ limit: 100 })') &&
@@ -98,8 +101,8 @@ expect(
   'Qualification progression must invalidate stale target-version results before admission.',
 )
 expect(
-  enrichment.includes('Target version changed; current lifecycle qualification is required.'),
-  'Legacy qualified rows with explicit stale lifecycle versions must self-heal back to deployment candidates.',
+  enrichment.includes('Target version changed; current install/verify/uninstall qualification is required.'),
+  'Qualified rows with stale core target-version evidence must self-heal back to deployment candidates.',
 )
 
 if (failures) process.exit(1)

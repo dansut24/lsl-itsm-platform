@@ -481,30 +481,15 @@ async function catalogueRows(tenantId) {
       sourceHealthy
       && artifactVerified
       && installTestPassed
-      && uninstallTestPassed
-      && upgradeTestPassed
-      && rollbackTestPassed
-      && vulnerabilityCovered,
+      && uninstallTestPassed,
     )
-    const limitedAdmissionReady = Boolean(
-      sourceHealthy
-      && artifactVerified
-      && installTestPassed
-      && uninstallTestPassed
-      && (historyLimited || upgradeTestPassed)
-      && (historyLimited || rollbackTestPassed)
-      && (vulnerabilityCovered || vulnerabilityLimited)
-      && (historyLimited || vulnerabilityLimited),
-    )
-    const capabilityAdmissionReady = automaticAdmissionReady || limitedAdmissionReady
+    const limitedAdmissionReady = false
+    const capabilityAdmissionReady = automaticAdmissionReady
     const blockers = []
     if (!sourceHealthy) blockers.push('source_health')
     if (!artifactVerified) blockers.push('artifact_verification')
     if (!installTestPassed) blockers.push('clean_install_test')
     if (!uninstallTestPassed) blockers.push('uninstall_test')
-    if (!historyLimited && !upgradeTestPassed) blockers.push('upgrade_test')
-    if (!historyLimited && !rollbackTestPassed) blockers.push('rollback_test')
-    if (!vulnerabilityCovered && !vulnerabilityLimited) blockers.push('vulnerability_identity')
 
     return {
       ...row,
@@ -3301,7 +3286,7 @@ export function registerRmmPatchingRoutes(app) {
             SET qualification_state='deployment_candidate',
                 qualification_version='',
                 qualified_at=NULL,
-                qualification_notes='Limited qualification removed; lifecycle qualification is required again.',
+                qualification_notes='Limited qualification removed; current-version install/verify/uninstall qualification is required again.',
                 qualification_evidence=(qualification_evidence
                   - 'manualLimitedQualification'
                   - 'manualLimitedQualifiedAt'

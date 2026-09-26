@@ -322,7 +322,7 @@ function SoftwareValidationModal({ application, source, onClose, onSave, saving 
         <label>Expected Authenticode signer<input value={form.expectedSigner} onChange={(event) => update('expectedSigner', event.target.value)} /></label></>}
         <div className="rmm-validation-section-title wide">
           <strong>Install & verification</strong>
-          <span>These values are used by clean install, upgrade and rollback qualification. The installed result is verified independently from installer exit code.</span>
+          <span>These values are used by deployment qualification and optional lifecycle tests. The installed result is verified independently from installer exit code.</span>
         </div>
         <label>Verification method<select value={form.verificationMethod} onChange={(event) => update('verificationMethod', event.target.value)}><option value="winget">WinGet package identity</option><option value="uninstall_registry">Uninstall registry / MSI identity</option><option value="file_version">Installed EXE/DLL file version</option></select></label>
         {form.verificationMethod === 'winget' && <label>Verification package ID<input value={form.verificationPackageId} onChange={(event) => update('verificationPackageId', event.target.value)} placeholder="e.g. timokoessler.2FAGuard" /></label>}
@@ -744,10 +744,9 @@ function QualificationWorkspace({
       <button disabled={Boolean(busyAction)} onClick={onEdit} type="button"><Wrench size={14} /> Edit validation</button>
       <button disabled={Boolean(busyAction) || !actions.canRevalidate} onClick={onRevalidate} type="button"><RefreshCw size={14} /> Revalidate source</button>
       {actionButton('prepare_previous', actions.canPreparePrevious, 'Prepare previous release', GitBranch, lab.releases?.previousReady ? 'A trusted previous release is already retained.' : 'Automatic history discovery is not available for this source.')}
-      {actionButton('clean_cycle', actions.canRunClean, 'Run clean cycle', PackageCheck, 'Current source and artifact trust must be ready first.')}
-      {actionButton('upgrade', actions.canRunUpgrade, 'Run upgrade test', RefreshCw, 'Clean install/uninstall and a trusted previous release must pass first.')}
-      {actionButton('rollback', actions.canRunRollback, 'Run rollback test', RotateCcw, 'A clean cycle, current upgrade proof, update_available detection and a trusted previous release must pass first.')}
-      {actionButton('full', actions.canRunFull, 'Run full qualification', ShieldCheck, 'Current source and artifact trust must be ready first.')}
+      {actionButton('clean_cycle', actions.canRunClean, 'Run qualification', PackageCheck, 'Runs the deployment qualification cycle: current-version install, independent verification, then verified uninstall/cleanup.')}
+      {actionButton('upgrade', actions.canRunUpgrade, 'Run upgrade test', RefreshCw, 'Optional lifecycle evidence. Deployment qualification does not depend on this test.')}
+      {actionButton('rollback', actions.canRunRollback, 'Run rollback test', RotateCcw, 'Optional lifecycle evidence. Deployment qualification does not depend on this test.')}
       <button disabled={Boolean(busyAction)} onClick={() => setLimitEditorOpen((open) => !open)} type="button"><AlertTriangle size={14} /> {lab.application?.qualificationState === 'qualified_limited' ? 'Edit limitations' : 'Mark limited'}</button>
       {lab.application?.qualificationState === 'qualified_limited' && manualLimitation.state === 'declared' && <button disabled={Boolean(busyAction)} onClick={onClearLimited} type="button"><RotateCcw size={14} /> Return to candidate</button>}
       <button disabled={Boolean(busyAction) || loading} onClick={onRefresh} type="button"><RefreshCw size={14} /> Refresh</button>
@@ -868,7 +867,7 @@ function QualificationWorkspace({
           <small>{readinessLabel(job.status)}{job.stage ? ' · ' + readinessLabel(job.stage) : ''}{job.verifiedVersion ? ' · verified ' + job.verifiedVersion : ''}</small>
           {job.error && <em>{job.error}</em>}
         </span>)}
-        {!lab.recentJobs?.length && <span><strong>No qualification jobs yet</strong><small>Run a clean cycle or full qualification to begin.</small></span>}
+        {!lab.recentJobs?.length && <span><strong>No qualification jobs yet</strong><small>Run qualification to begin. Upgrade and rollback can be tested separately later.</small></span>}
       </div>
     </details>
   </div>
@@ -1644,11 +1643,11 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
     </nav>}
 
     {tab === 'software' && <section className="rmm-patch-panel">
-      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Software patch catalogue</span><h2>Patchability by application</h2><p>{mappedApps.length} mapped application{mappedApps.length === 1 ? '' : 's'} · {applications.length - mappedApps.length} awaiting mapping · {catalogueCandidates.length} automatically discovered package{catalogueCandidates.length === 1 ? '' : 's'} · {overview.qualifiedCatalogue || 0} qualified · {overview.automaticAdmissionReadyCatalogue || 0} automatic-admission ready · {overview.candidateCatalogue || 0} deployment candidates.</p></div></div>
+      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Software patch catalogue</span><h2>Patchability by application</h2><p>{mappedApps.length} mapped application{mappedApps.length === 1 ? '' : 's'} · {applications.length - mappedApps.length} awaiting mapping · {catalogueCandidates.length} automatically discovered package{catalogueCandidates.length === 1 ? '' : 's'} · {overview.fullyQualifiedCatalogue || 0} fully qualified · {overview.limitedQualifiedCatalogue || 0} limited · {overview.automaticAdmissionReadyCatalogue || 0} qualification-ready · {overview.candidateCatalogue || 0} deployment candidates.</p></div></div>
       <div className="rmm-vulnerability-coverage"><div><ShieldCheck size={17} /><span><strong>Catalogue vulnerability identity validation</strong><small>{vulnerabilityCatalogue.covered ?? 0} of {vulnerabilityCatalogue.total ?? catalogue.length} catalogue applications have completed source validation. NVD CPE and exact OSV identities are checked independently; endpoint exposures are still created only when that software/version is actually installed.</small></span></div><div className="stats"><span><small>NVD mapped</small><strong>{vulnerabilityCatalogue.nvd ?? 0}</strong></span><span><small>OSV mapped</small><strong>{vulnerabilityCatalogue.osv ?? 0}</strong></span><span><small>Validated</small><strong>{vulnerabilityCatalogue.covered ?? 0}</strong></span><span><small>Unchecked</small><strong>{vulnerabilityCatalogue.unchecked ?? 0}</strong></span><span><small>Mapping to validate</small><strong>{vulnerabilityCatalogue.validationPending ?? 0}</strong></span><span><small>Needs identity</small><strong>{vulnerabilityCatalogue.needsIdentity ?? 0}</strong></span><span><small>Source pending</small><strong>{vulnerabilityCatalogue.sourcePending ?? 0}</strong></span></div></div>
       {!!qualificationQueue.length && <div className="rmm-vulnerability-coverage"><div><PackageCheck size={17} /><span><strong>Automatic catalogue qualification</strong><small>One candidate at a time is clean-installed on the designated qualification runner, verified by PatchHost, uninstalled, then confirmed absent from inventory. Failures stop for review instead of retrying blindly.</small></span></div><div className="stats"><span><small>Queued</small><strong>{qualificationQueueCounts.queued || 0}</strong></span><span><small>Installing</small><strong>{qualificationQueueCounts.running || 0}</strong></span><span><small>Cleanup</small><strong>{(qualificationQueueCounts.cleanup_pending || 0) + (qualificationQueueCounts.cleanup_running || 0)}</strong></span><span><small>Passed</small><strong>{qualificationQueueCounts.passed || 0}</strong></span><span><small>Review</small><strong>{qualificationQueueCounts.review_required || 0}</strong></span></div>{!!qualificationReview.length && <div className="rmm-patch-candidate-footnote">{qualificationReview.slice(0, 5).map((item) => <span key={item.id}><strong>{item.canonical_name}</strong> · {item.target_version} · {readinessLabel(item.last_error || 'review required')}</span>)}</div>}</div>}
       {!!qualificationQueue.length && <div className="rmm-vulnerability-coverage">
-        <div><PackageCheck size={17} /><span><strong>Progress toward full qualification</strong><small>Install and removal, upgrade, and full admission are tracked separately. Review groups identify fixes that can help several applications.</small></span></div>
+        <div><PackageCheck size={17} /><span><strong>Deployment qualification and lifecycle coverage</strong><small>Current-version install, verification and clean removal determine deployment qualification. Upgrade and rollback are tracked separately as optional lifecycle evidence.</small></span></div>
         <div className="stats">
           <span><small>Install / removal passed</small><strong>{qualificationProgress.cleanInstallPassed || 0}</strong></span>
           <span><small>Upgrade passed</small><strong>{qualificationProgress.upgradePassed || 0}</strong></span>
@@ -1667,7 +1666,7 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
 
       <section className="rmm-qualification-shell">
         <div className="rmm-qualification-selector">
-          <div><Wrench size={18} /><span><strong>Catalogue qualification lab</strong><small>Inspect every admission layer and run controlled install, verify, uninstall and upgrade tests from Hi5Central.</small></span></div>
+          <div><Wrench size={18} /><span><strong>Catalogue qualification lab</strong><small>Qualify deployment with current-version install, independent verification and clean uninstall. Upgrade and rollback remain optional lifecycle tests.</small></span></div>
           <label>Application<select value={catalogueMaintenanceId} onChange={(event) => selectCatalogueMaintenance(event.target.value)}>
             <option value="">Select catalogue application</option>
             {catalogueMaintenanceItems.map((item) => <option key={item.id} value={item.id}>{item.canonicalName} · {item.targetVersion || 'No target'} · {qualificationLabel(item.qualificationState)}</option>)}

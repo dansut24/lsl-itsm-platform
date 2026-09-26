@@ -791,14 +791,6 @@ async function reconcileDirectReadyCatalogue() {
                   AND c.qualification_evidence->>'cleanInstallVersion'<>c.target_version
                 )
                 OR (
-                  COALESCE(c.qualification_evidence->>'upgradeVersion','')<>''
-                  AND c.qualification_evidence->>'upgradeVersion'<>c.target_version
-                )
-                OR (
-                  COALESCE(c.qualification_evidence->>'rollbackRestoredVersion','')<>''
-                  AND c.qualification_evidence->>'rollbackRestoredVersion'<>c.target_version
-                )
-                OR (
                   COALESCE(c.qualification_version,'')<>''
                   AND c.qualification_version<>c.target_version
                 )
@@ -825,14 +817,6 @@ async function reconcileDirectReadyCatalogue() {
                     AND c.qualification_evidence->>'cleanInstallVersion'<>c.target_version
                   )
                   OR (
-                    COALESCE(c.qualification_evidence->>'upgradeVersion','')<>''
-                    AND c.qualification_evidence->>'upgradeVersion'<>c.target_version
-                  )
-                  OR (
-                    COALESCE(c.qualification_evidence->>'rollbackRestoredVersion','')<>''
-                    AND c.qualification_evidence->>'rollbackRestoredVersion'<>c.target_version
-                  )
-                  OR (
                     COALESCE(c.qualification_version,'')<>''
                     AND c.qualification_version<>c.target_version
                   )
@@ -852,14 +836,6 @@ async function reconcileDirectReadyCatalogue() {
                   (
                     COALESCE(c.qualification_evidence->>'cleanInstallVersion','')<>''
                     AND c.qualification_evidence->>'cleanInstallVersion'<>c.target_version
-                  )
-                  OR (
-                    COALESCE(c.qualification_evidence->>'upgradeVersion','')<>''
-                    AND c.qualification_evidence->>'upgradeVersion'<>c.target_version
-                  )
-                  OR (
-                    COALESCE(c.qualification_evidence->>'rollbackRestoredVersion','')<>''
-                    AND c.qualification_evidence->>'rollbackRestoredVersion'<>c.target_version
                   )
                   OR (
                     COALESCE(c.qualification_version,'')<>''
@@ -889,19 +865,11 @@ async function reconcileDirectReadyCatalogue() {
                   AND c.qualification_evidence->>'cleanInstallVersion'<>c.target_version
                 )
                 OR (
-                  COALESCE(c.qualification_evidence->>'upgradeVersion','')<>''
-                  AND c.qualification_evidence->>'upgradeVersion'<>c.target_version
-                )
-                OR (
-                  COALESCE(c.qualification_evidence->>'rollbackRestoredVersion','')<>''
-                  AND c.qualification_evidence->>'rollbackRestoredVersion'<>c.target_version
-                )
-                OR (
                   COALESCE(c.qualification_version,'')<>''
                   AND c.qualification_version<>c.target_version
                 )
               )
-                THEN 'Target version changed; current lifecycle qualification is required.'
+                THEN 'Target version changed; current install/verify/uninstall qualification is required.'
               WHEN NOT (
                 COALESCE((r.trust_evidence->>'signatureVerified')::boolean,false)
                 AND COALESCE(r.trust_evidence->>'sha256','') ~* '^[a-f0-9]{64}$'
@@ -948,14 +916,6 @@ async function reconcileDirectReadyCatalogue() {
                 (
                   COALESCE(c.qualification_evidence->>'cleanInstallVersion','')<>''
                   AND c.qualification_evidence->>'cleanInstallVersion'<>c.target_version
-                )
-                OR (
-                  COALESCE(c.qualification_evidence->>'upgradeVersion','')<>''
-                  AND c.qualification_evidence->>'upgradeVersion'<>c.target_version
-                )
-                OR (
-                  COALESCE(c.qualification_evidence->>'rollbackRestoredVersion','')<>''
-                  AND c.qualification_evidence->>'rollbackRestoredVersion'<>c.target_version
                 )
                 OR (
                   COALESCE(c.qualification_version,'')<>''
