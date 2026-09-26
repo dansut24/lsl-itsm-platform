@@ -1324,21 +1324,21 @@ function DevicePatching({ device }) {
 
 function BitLockerRecoveryPanel({ device }) {
   const apiBase = window.__HI5_API_BASE__ || deploymentConfig().apiUrl
-  const [state, setState] = useState({ loading: true, canReveal: false, items: [] })
+  const [state, setState] = useState({ loading: true, canReveal: false, items: [], entra: { linked: false, status: 'not_linked', keys: [] } })
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
   const [revealed, setRevealed] = useState({})
 
   async function loadRecovery() {
     if (!device.agentDeviceId) {
-      setState({ loading: false, canReveal: false, items: [] })
+      setState({ loading: false, canReveal: false, items: [], entra: { linked: false, status: 'not_linked', keys: [] } })
       return
     }
     try {
       const response = await fetch(apiBase + '/api/v1/rmm/devices/' + encodeURIComponent(device.agentDeviceId) + '/bitlocker-recovery', { credentials: 'include' })
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(payload.error || 'Unable to load recovery-key status.')
-      setState({ loading: false, canReveal: Boolean(payload.canReveal), items: Array.isArray(payload.items) ? payload.items : [] })
+      setState({ loading: false, canReveal: Boolean(payload.canReveal), items: Array.isArray(payload.items) ? payload.items : [], entra: payload.entra || { linked: false, status: 'not_linked', keys: [] } })
     } catch (error) {
       setState((current) => ({ ...current, loading: false }))
       setMessage(error?.message || 'Unable to load recovery-key status.')
@@ -1348,14 +1348,14 @@ function BitLockerRecoveryPanel({ device }) {
   useEffect(() => {
     let active = true
     if (!device.agentDeviceId) {
-      setState({ loading: false, canReveal: false, items: [] })
+      setState({ loading: false, canReveal: false, items: [], entra: { linked: false, status: 'not_linked', keys: [] } })
       return () => { active = false }
     }
     fetch(apiBase + '/api/v1/rmm/devices/' + encodeURIComponent(device.agentDeviceId) + '/bitlocker-recovery', { credentials: 'include' })
       .then(async (response) => {
         const payload = await response.json().catch(() => ({}))
         if (!response.ok) throw new Error(payload.error || 'Unable to load recovery-key status.')
-        if (active) setState({ loading: false, canReveal: Boolean(payload.canReveal), items: Array.isArray(payload.items) ? payload.items : [] })
+        if (active) setState({ loading: false, canReveal: Boolean(payload.canReveal), items: Array.isArray(payload.items) ? payload.items : [], entra: payload.entra || { linked: false, status: 'not_linked', keys: [] } })
       })
       .catch((error) => { if (active) { setState((current) => ({ ...current, loading: false })); setMessage(error?.message || 'Unable to load recovery-key status.') } })
     return () => { active = false }
@@ -1409,13 +1409,45 @@ function BitLockerRecoveryPanel({ device }) {
     }
   }
 
+
+  async function revealEntra(item) {
+    if (!state.canReveal || busy) return
+    const reason = window.prompt('Why do you need to reveal this Microsoft Entra BitLocker recovery key?')
+    if (!reason || reason.trim().length < 3) return
+    const revealId = 'entra:' + item.id
+    setBusy(true); setMessage('')
+    try {
+      const response = await fetch(apiBase + '/api/v1/rmm/devices/' + encodeURIComponent(device.agentDeviceId) + '/bitlocker-recovery/entra/' + encodeURIComponent(item.id) + '/reveal', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: reason.trim() }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.error || 'Microsoft Entra recovery key could not be revealed.')
+      const password = String(payload.recoveryPassword || '')
+      setRevealed((current) => ({ ...current, [revealId]: password }))
+      window.setTimeout(() => setRevealed((current) => {
+        const next = { ...current }
+        delete next[revealId]
+        return next
+      }), 60_000)
+    } catch (error) {
+      setMessage(error?.message || 'Microsoft Entra recovery key could not be revealed.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const volumes = Array.isArray(device.bitlockerVolumes) ? device.bitlockerVolumes : []
   const activeKeys = state.items.filter((item) => item.active)
+  const entraKeys = Array.isArray(state.entra?.keys) ? state.entra.keys : []
   const hasRecoveryProtector = volumes.some((volume) => Number(volume.recovery_protector_count || 0) > 0 || volume.recovery_password_present === true)
+  const hasRecoveryBackup = activeKeys.length > 0 || entraKeys.length > 0
   return <section className="rmm-card rmm-bitlocker-recovery-card">
     <div className="rmm-card-heading">
       <div><span className="rmm-eyebrow">BitLocker</span><h2>Encryption & recovery</h2></div>
-      <StatusPill tone={activeKeys.length ? 'healthy' : hasRecoveryProtector ? 'warning' : 'neutral'}>{activeKeys.length ? 'Recovery escrowed' : hasRecoveryProtector ? 'Recovery not escrowed' : 'No recovery protector'}</StatusPill>
+      <StatusPill tone={hasRecoveryBackup ? 'healthy' : hasRecoveryProtector ? 'warning' : 'neutral'}>{hasRecoveryBackup ? 'Recovery backed up' : hasRecoveryProtector ? 'Recovery not escrowed' : 'No recovery protector'}</StatusPill>
     </div>
     <div className="rmm-bitlocker-volume-list">
       {volumes.map((volume, index) => {
@@ -1442,9 +1474,29 @@ function BitLockerRecoveryPanel({ device }) {
           </div>)}
         </article>
       })}
+      {state.entra?.linked && <article className="rmm-bitlocker-entra-source">
+        <div className="rmm-bitlocker-volume-heading">
+          <span><KeyRound size={16} /></span>
+          <div><strong>Microsoft Entra recovery backup</strong><small>{state.entra.connectionName || 'Microsoft 365'} · Device {state.entra.directoryDeviceId || 'linked'}</small></div>
+          <StatusPill tone={entraKeys.length ? 'healthy' : state.entra.status === 'permission_required' ? 'warning' : 'neutral'}>
+            {entraKeys.length ? entraKeys.length + ' key' + (entraKeys.length === 1 ? '' : 's') : state.entra.status === 'permission_required' ? 'Permission required' : state.entra.status === 'error' ? 'Lookup unavailable' : 'No keys'}
+          </StatusPill>
+        </div>
+        {state.entra.status === 'permission_required' && <div className="rmm-bitlocker-entra-note"><strong>Microsoft recovery access needs admin consent</strong><span>Add the Microsoft Graph application permission <code>BitLockerKey.Read.All</code> to the Hi5Central app registration and grant tenant admin consent. Agent escrow remains independent.</span></div>}
+        {state.entra.status === 'error' && <div className="rmm-bitlocker-entra-note"><strong>Microsoft recovery lookup failed</strong><span>{state.entra.error || 'The Microsoft connection could not return BitLocker recovery metadata.'}</span></div>}
+        {entraKeys.map((item) => {
+          const revealId = 'entra:' + item.id
+          return <div className="rmm-recovery-key-row" key={revealId}>
+            <div><strong>Recovery key backed up to Microsoft Entra</strong><small>{item.volumeType || 'Volume type not reported'} · Backed up {item.createdDateTime ? new Date(item.createdDateTime).toLocaleString() : 'date not reported'} · Key {item.id}</small></div>
+            {revealed[revealId]
+              ? <div className="rmm-recovery-key-revealed"><code>{revealed[revealId]}</code><button onClick={() => navigator.clipboard?.writeText(revealed[revealId])} type="button">Copy</button><button onClick={() => setRevealed((current) => { const next = { ...current }; delete next[revealId]; return next })} type="button">Hide</button></div>
+              : <button disabled={!state.canReveal || busy} onClick={() => revealEntra(item)} type="button">{state.canReveal ? 'Reveal Entra key' : 'Reveal restricted'}</button>}
+          </div>
+        })}
+      </article>}
     </div>
-    {!volumes.length && <div className="rmm-empty compact"><KeyRound size={22} /><strong>BitLocker inventory not reported</strong><span>Refresh inventory after the Agent reconnects.</span></div>}
-    {hasRecoveryProtector && !activeKeys.length && <div className="rmm-bitlocker-escrow-callout"><div><strong>Recovery password is not escrowed in Hi5Central</strong><span>Store it securely now so it remains available even if the endpoint cannot boot.</span></div><button disabled={!deviceIsOnline(device) || busy} onClick={requestEscrow} type="button"><KeyRound size={14} /> {busy ? 'Requesting…' : 'Escrow now'}</button></div>}
+    {!volumes.length && !state.entra?.linked && <div className="rmm-empty compact"><KeyRound size={22} /><strong>BitLocker inventory not reported</strong><span>Refresh inventory after the Agent reconnects.</span></div>}
+    {hasRecoveryProtector && !activeKeys.length && <div className="rmm-bitlocker-escrow-callout"><div><strong>{entraKeys.length ? 'Microsoft Entra recovery backup is available' : 'Recovery password is not backed up in Hi5Central'}</strong><span>{entraKeys.length ? 'You can also escrow the local recovery protector in Hi5Central for an independent recovery path.' : 'Escrow it securely now so it remains available even if the endpoint cannot boot.'}</span></div><button disabled={!deviceIsOnline(device) || busy} onClick={requestEscrow} type="button"><KeyRound size={14} /> {busy ? 'Requesting…' : entraKeys.length ? 'Also escrow in Hi5Central' : 'Escrow now'}</button></div>}
     {message && <div className="rmm-device-action-message">{message}</div>}
   </section>
 }

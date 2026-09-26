@@ -3,6 +3,10 @@ import { hasPermission } from './access.js'
 import { originMatchesTenant } from './deploymentConfig.js'
 import { pool, withTransaction } from './db.js'
 import { recordRmmActivity } from './rmmActivity.js'
+import {
+  microsoftBitLockerRecoveryKeysForInventory,
+  revealMicrosoftBitLockerRecoveryKeyForInventory,
+} from './microsoftIntegration.js'
 import { resolveSession } from './session.js'
 
 function clean(value = '', max = 2048) { return String(value ?? '').trim().slice(0, max) }
@@ -10,30 +14,22 @@ function hash(value = '') { return createHash('sha256').update(String(value)).di
 
 function recoveryEncryptionKey() {
   const dedicated = clean(process.env.RMM_RECOVERY_KEY_ENCRYPTION_KEY || '', 1024)
-  if (dedicated) {
-    let key = null
-    if (/^[0-9a-f]{64}$/i.test(dedicated)) key = Buffer.from(dedicated, 'hex')
-    else {
-      try { key = Buffer.from(dedicated, 'base64url') } catch { key = null }
-    }
-    if (!key || key.length !== 32) {
-      const error = new Error('RMM_RECOVERY_KEY_ENCRYPTION_KEY must contain exactly 32 bytes of key material.')
-      error.status = 503
-      throw error
-    }
-    return key
-  }
-
-  const root = clean(process.env.MFA_ENCRYPTION_KEY || '', 4096)
-  if (!root) {
-    const error = new Error('Recovery-key encryption root is not configured.')
+  if (!dedicated) {
+    const error = new Error('RMM recovery-key encryption is not configured.')
     error.status = 503
     throw error
   }
-  return createHash('sha256')
-    .update('hi5central:rmm:bitlocker-recovery:v1\0')
-    .update(root, 'utf8')
-    .digest()
+  let key = null
+  if (/^[0-9a-f]{64}$/i.test(dedicated)) key = Buffer.from(dedicated, 'hex')
+  else {
+    try { key = Buffer.from(dedicated, 'base64url') } catch { key = null }
+  }
+  if (!key || key.length !== 32) {
+    const error = new Error('RMM_RECOVERY_KEY_ENCRYPTION_KEY must contain exactly 32 bytes of key material.')
+    error.status = 503
+    throw error
+  }
+  return key
 }
 
 function encryptRecoveryPassword(password) {
@@ -165,8 +161,15 @@ export function registerRmmRecoveryKeyRoutes(app) {
         ORDER BY revoked_at NULLS FIRST,last_seen_at DESC`,
       [auth.session.tenant_id, device.id],
     )
+    let entra = { linked: false, status: 'not_linked', keys: [] }
+    try {
+      entra = await microsoftBitLockerRecoveryKeysForInventory(auth.session.tenant_id, device.inventory_id)
+    } catch (error) {
+      entra = { linked: true, status: 'error', keys: [], error: clean(error?.message || 'Microsoft recovery-key lookup failed.', 500) }
+    }
     return c.json({
       canReveal: hasPermission(auth.session.access, 'rmm.security.recovery_keys.read'),
+      entra,
       items: result.rows.map((row) => ({
         id: row.id,
         drive: row.drive,
@@ -228,4 +231,63 @@ export function registerRmmRecoveryKeyRoutes(app) {
     c.header('Pragma', 'no-cache')
     return c.json({ id: row.id, drive: row.drive, protectorId: row.protector_id, recoveryPassword })
   })
+
+  app.post('/api/v1/rmm/devices/:agentDeviceId/bitlocker-recovery/entra/:keyId/reveal', async (c) => {
+    const auth = await requireDeviceView(c)
+    if (auth.error) return auth.error
+    if (!hasPermission(auth.session.access, 'rmm.security.recovery_keys.read')) {
+      return c.json({ error: 'You do not have permission to reveal BitLocker recovery keys.' }, 403)
+    }
+    const device = await managedAgent(auth.session.tenant_id, c.req.param('agentDeviceId'))
+    if (!device) return c.json({ error: 'Managed Agent not found for this device.' }, 404)
+    const body = await c.req.json().catch(() => ({}))
+    const reason = clean(body.reason, 500)
+    if (reason.length < 3) return c.json({ error: 'Enter a reason for revealing this BitLocker recovery key.' }, 400)
+    let revealed
+    try {
+      revealed = await revealMicrosoftBitLockerRecoveryKeyForInventory(
+        auth.session.tenant_id,
+        device.inventory_id,
+        clean(c.req.param('keyId'), 128),
+      )
+    } catch (error) {
+      return c.json({ error: error?.message || 'Microsoft Entra recovery key could not be revealed.' }, Number(error?.status) || 502)
+    }
+    if (!validRecoveryPassword(revealed.recoveryPassword)) {
+      return c.json({ error: 'Microsoft Entra returned an invalid BitLocker recovery password.' }, 502)
+    }
+    const actorLabel = clean(auth.session.name || auth.session.email || 'Technician', 255)
+    await recordRmmActivity({
+      tenantId: auth.session.tenant_id,
+      agentDeviceId: device.id,
+      inventoryId: device.inventory_id,
+      actorUserId: auth.session.user_id,
+      actorType: 'technician',
+      actorLabel,
+      eventType: 'bitlocker.recovery_key.revealed',
+      category: 'security',
+      summary: `${actorLabel} revealed a Microsoft Entra BitLocker recovery key`,
+      detail: `Microsoft Entra · Key ${revealed.id} · Reason: ${reason}`,
+      outcome: 'success',
+      severity: 'warning',
+      metadata: {
+        recoveryKeyId: revealed.id,
+        source: 'microsoft_entra',
+        connectionName: revealed.connectionName || '',
+        deviceId: revealed.deviceId || '',
+        volumeType: revealed.volumeType || null,
+        reason,
+      },
+    }).catch(() => {})
+    c.header('Cache-Control', 'no-store, private')
+    c.header('Pragma', 'no-cache')
+    return c.json({
+      id: revealed.id,
+      source: 'microsoft_entra',
+      recoveryPassword: revealed.recoveryPassword,
+      createdDateTime: revealed.createdDateTime,
+      volumeType: revealed.volumeType,
+    })
+  })
+
 }

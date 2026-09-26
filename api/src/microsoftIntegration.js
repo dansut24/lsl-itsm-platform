@@ -76,6 +76,125 @@ async function clientCredentialToken(directoryTenantId) {
   return payload.access_token
 }
 
+async function bitLockerGraphRequest(token, path) {
+  const url = path.startsWith('http') ? path : `${GRAPH_BASE}${path}`
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/json',
+      'User-Agent': 'Hi5Central-RMM/1.0',
+      'ocp-client-name': 'Hi5Central RMM',
+      'ocp-client-version': '1.0',
+    },
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    const message = payload?.error?.message || payload?.error?.code || `Microsoft Graph request failed (${response.status}).`
+    const error = new Error(message)
+    error.status = response.status
+    error.graphCode = payload?.error?.code || ''
+    throw error
+  }
+  return payload
+}
+
+async function linkedIntuneIdentity(tenantId, agentInventoryId) {
+  const result = await pool.query(
+    `SELECT d.directory_device_id,d.microsoft_connection_id,c.directory_tenant_id,c.connection_name
+       FROM rmm_device_inventory agent
+       JOIN LATERAL (
+         SELECT candidate.*
+           FROM rmm_device_inventory candidate
+          WHERE candidate.tenant_id=agent.tenant_id
+            AND candidate.source='intune'
+            AND candidate.active=true
+            AND candidate.microsoft_connection_id IS NOT NULL
+            AND COALESCE(candidate.directory_device_id,'')<>''
+            AND (
+              (COALESCE(agent.serial_number,'')<>'' AND lower(candidate.serial_number)=lower(agent.serial_number))
+              OR lower(candidate.name)=lower(agent.name)
+            )
+          ORDER BY
+            CASE WHEN COALESCE(agent.serial_number,'')<>'' AND lower(candidate.serial_number)=lower(agent.serial_number) THEN 0 ELSE 1 END,
+            candidate.last_imported_at DESC NULLS LAST
+          LIMIT 1
+       ) d ON true
+       JOIN tenant_microsoft_connections c
+         ON c.id=d.microsoft_connection_id
+        AND c.tenant_id=agent.tenant_id
+        AND c.status='connected'
+      WHERE agent.id=$1 AND agent.tenant_id=$2
+      LIMIT 1`,
+    [agentInventoryId, tenantId],
+  )
+  return result.rows[0] || null
+}
+
+export async function microsoftBitLockerRecoveryKeysForInventory(tenantId, agentInventoryId) {
+  const identity = await linkedIntuneIdentity(tenantId, agentInventoryId)
+  if (!identity) return { linked: false, status: 'not_linked', keys: [] }
+  const token = await clientCredentialToken(identity.directory_tenant_id)
+  const query = new URL(`${GRAPH_BASE}/informationProtection/bitlocker/recoveryKeys`)
+  query.searchParams.set('$filter', `deviceId eq '${identity.directory_device_id}'`)
+  query.searchParams.set('$select', 'id,createdDateTime,deviceId,volumeType')
+  try {
+    const payload = await bitLockerGraphRequest(token, query.toString())
+    return {
+      linked: true,
+      status: 'available',
+      connectionName: identity.connection_name,
+      directoryDeviceId: identity.directory_device_id,
+      keys: (Array.isArray(payload.value) ? payload.value : []).map((item) => ({
+        id: clean(item.id),
+        createdDateTime: item.createdDateTime || null,
+        deviceId: clean(item.deviceId),
+        volumeType: item.volumeType || null,
+      })),
+    }
+  } catch (error) {
+    if ([401, 403].includes(Number(error.status))) {
+      return {
+        linked: true,
+        status: 'permission_required',
+        connectionName: identity.connection_name,
+        directoryDeviceId: identity.directory_device_id,
+        keys: [],
+      }
+    }
+    throw error
+  }
+}
+
+export async function revealMicrosoftBitLockerRecoveryKeyForInventory(tenantId, agentInventoryId, keyId) {
+  const identity = await linkedIntuneIdentity(tenantId, agentInventoryId)
+  if (!identity) {
+    const error = new Error('This endpoint is not linked to an active Microsoft Intune device.')
+    error.status = 404
+    throw error
+  }
+  const token = await clientCredentialToken(identity.directory_tenant_id)
+  const list = await microsoftBitLockerRecoveryKeysForInventory(tenantId, agentInventoryId)
+  const allowed = list.keys.some((item) => clean(item.id).toLowerCase() === clean(keyId).toLowerCase())
+  if (!allowed) {
+    const error = new Error(list.status === 'permission_required'
+      ? 'Microsoft BitLocker recovery permission has not been granted to Hi5Central.'
+      : 'Microsoft Entra recovery key was not found for this device.')
+    error.status = list.status === 'permission_required' ? 403 : 404
+    throw error
+  }
+  const query = new URL(`${GRAPH_BASE}/informationProtection/bitlocker/recoveryKeys/${encodeURIComponent(clean(keyId))}`)
+  query.searchParams.set('$select', 'id,key,createdDateTime,deviceId,volumeType')
+  const payload = await bitLockerGraphRequest(token, query.toString())
+  return {
+    id: clean(payload.id || keyId),
+    recoveryPassword: clean(payload.key),
+    createdDateTime: payload.createdDateTime || null,
+    deviceId: clean(payload.deviceId || identity.directory_device_id),
+    volumeType: payload.volumeType || null,
+    connectionName: identity.connection_name,
+  }
+}
+
 async function graphCollection(token, path) {
   const rows = []
   let url = path.startsWith('http') ? path : `${GRAPH_BASE}${path}`

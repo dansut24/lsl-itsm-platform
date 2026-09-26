@@ -60,6 +60,9 @@ expect(recoveryApi.includes("Cache-Control', 'no-store, private'"), 'Recovery-ke
 expect(agentApi.includes('bitLockerRecoveryEscrowNeeded') && agentApi.includes("type: 'bitlocker_recovery_escrow_request'") && agentApi.includes("versionCompare(agent.agent_version, '0.1.171') < 0"), 'Inventory ingest must request escrow only from Agent 0.1.171+ when a recovery protector is unescrowed.')
 expect(toolApi.includes("bitlocker-recovery/escrow") && toolApi.includes("versionAtLeast(device.agent_version, '0.1.171')"), 'Manual recovery-key escrow must be available only to the supporting Agent release.')
 expect(platform.includes('Reveal recovery key') && platform.includes('Why do you need to reveal this BitLocker recovery key?') && platform.includes('60_000'), 'Recovery-key UI must require an audited reason and automatically hide the secret.')
+expect(recoveryApi.includes('microsoftBitLockerRecoveryKeysForInventory') && recoveryApi.includes('revealMicrosoftBitLockerRecoveryKeyForInventory'), 'Recovery-key API must support Microsoft Entra backup as well as Agent escrow.')
+expect(platform.includes('Microsoft Entra recovery backup') && platform.includes('Reveal Entra key') && platform.includes('Also escrow in Hi5Central'), 'Recovery-key UI must show Microsoft Entra recovery keys and offer local escrow as an independent backup.')
+expect(platform.includes('BitLockerKey.Read.All') && platform.includes('Permission required'), 'Recovery-key UI must clearly identify missing Microsoft Graph recovery permission.')
 
 // Network cards use inventory identity plus non-persisted live counters.
 expect(toolApi.includes("'/api/v1/rmm/devices/:agentDeviceId/network-stats'"), 'Live network-stats endpoint is missing.')
