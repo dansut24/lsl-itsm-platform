@@ -2792,6 +2792,7 @@ export async function queueCommonSoftwareQualifications({ limit = 50, allowUnres
           AND s.last_success_at IS NOT NULL
           AND COALESCE(s.last_error,'')=''
           AND r.trust_state='direct_ready'
+          AND lower(COALESCE(r.source_payload->'wingetManifest'->>'scope',''))<>'user'
           AND r.installer_type IN ('msi','exe')
           AND r.installer_url LIKE 'https://%'
           AND r.installer_sha256 ~* '^[a-f0-9]{64}$'
@@ -2825,7 +2826,6 @@ export async function queueCommonSoftwareQualifications({ limit = 50, allowUnres
                  (
                    q.state='review_required'
                    AND q.last_error IN (
-                     'qualification_runner_not_clean',
                      'qualification_direct_release_not_ready',
                      'qualification_artifact_gate_failed',
                      'qualification_source_health_not_ready',
@@ -2873,7 +2873,6 @@ export async function queueCommonSoftwareQualifications({ limit = 50, allowUnres
      WHERE (
        rmm_software_qualification_queue.state='review_required'
        AND rmm_software_qualification_queue.last_error IN (
-         'qualification_runner_not_clean',
          'qualification_direct_release_not_ready',
          'qualification_artifact_gate_failed',
          'qualification_source_health_not_ready',
@@ -2940,6 +2939,7 @@ export async function queueAutomaticCleanInstallQualifications({
           AND s.last_success_at IS NOT NULL
           AND COALESCE(s.last_error,'')=''
           AND r.trust_state='direct_ready'
+          AND lower(COALESCE(r.source_payload->'wingetManifest'->>'scope',''))<>'user'
           AND r.installer_type IN ('msi','exe')
           AND r.installer_url LIKE 'https://%'
           AND r.installer_sha256 ~* '^[a-f0-9]{64}$'

@@ -24,6 +24,14 @@ expect(source.includes('`    <Product ID="${productId}" />`'), 'Office Click-to-
 expect(!source.includes('`      <Language ID="${language}" />`'), 'Office Click-to-Run product uninstall must not be reduced to one installed language.')
 expect(source.includes('expectAbsent: true'), 'Office Click-to-Run uninstall must verify product absence.')
 expect(source.includes('officeClickToRunUninstall'), 'Qualification must gate Office uninstall on PatchHost capability.')
+expect(
+  (source.match(/lower\(COALESCE\(r\.source_payload->'wingetManifest'->>'scope',''\)\)<>'user'/g) || []).length >= 2,
+  'Automatic machine qualification selectors must exclude user-only WinGet installers before queueing.',
+)
+expect(
+  (source.match(/qualification_runner_not_clean/g) || []).length === 3,
+  'Dirty-runner handling must exist only at the three review gates and must not reappear in automatic retry allowlists.',
+)
 
 if (failures) process.exit(1)
 console.log('Qualification pre-clean contract check passed.')
