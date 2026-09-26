@@ -4,6 +4,12 @@ import { verificationVersionForRelease } from './rmmSoftwareVersioning.js'
 import { COMMON_WINDOWS_SOFTWARE_LOWER } from './rmmCommonSoftware.js'
 
 function clean(value = '') { return String(value ?? '').trim() }
+
+function qualificationStageEnabled(stage) {
+  const key = `RMM_QUALIFICATION_${clean(stage).toUpperCase()}_ENABLED`
+  return !['0', 'false', 'off', 'no']
+    .includes(clean(process.env[key] ?? 'true').toLowerCase())
+}
 function lower(value = '') { return clean(value).toLowerCase() }
 function object(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {} }
 function array(value) { return Array.isArray(value) ? value : [] }
@@ -3523,6 +3529,8 @@ export async function runSoftwareQualificationQueue({ dispatchLimit = 1 } = {}) 
     return { runner: runner.device_name, reconciled, dispatched: [], emergencyDispatched }
   }
 
+  const upgradeEnabled = qualificationStageEnabled('upgrade')
+  const rollbackEnabled = qualificationStageEnabled('rollback')
   const queued = await pool.query(
     `SELECT q.id,q.catalogue_id,q.test_type,q.priority,c.canonical_name,c.target_version,c.installer_type
        FROM rmm_software_qualification_queue q
@@ -3537,7 +3545,8 @@ export async function runSoftwareQualificationQueue({ dispatchLimit = 1 } = {}) 
         AND (
           q.test_type='clean_install'
           OR (
-            q.test_type='upgrade'
+            $1::boolean
+            AND q.test_type='upgrade'
             AND EXISTS (
               SELECT 1 FROM rmm_software_qualification_queue qi
                WHERE qi.catalogue_id=q.catalogue_id
@@ -3546,7 +3555,8 @@ export async function runSoftwareQualificationQueue({ dispatchLimit = 1 } = {}) 
             )
           )
           OR (
-            q.test_type='rollback'
+            $2::boolean
+            AND q.test_type='rollback'
             AND EXISTS (
               SELECT 1 FROM rmm_software_qualification_queue qi
                WHERE qi.catalogue_id=q.catalogue_id
@@ -3563,8 +3573,12 @@ export async function runSoftwareQualificationQueue({ dispatchLimit = 1 } = {}) 
         )
       ORDER BY CASE q.test_type WHEN 'rollback' THEN 0 WHEN 'upgrade' THEN 1 ELSE 2 END,
                q.priority DESC,q.created_at
-      LIMIT $1`,
-    [Math.max(1, Math.min(3, Number(dispatchLimit) || 1))],
+      LIMIT $3`,
+    [
+      upgradeEnabled,
+      rollbackEnabled,
+      Math.max(1, Math.min(3, Number(dispatchLimit) || 1)),
+    ],
   )
   const recentMsiBusy = await pool.query(
     `SELECT 1

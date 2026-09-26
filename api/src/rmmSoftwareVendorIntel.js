@@ -35,6 +35,12 @@ import {
 } from './rmmVendorReleaseEnrichment.js'
 
 function clean(value = '') { return String(value ?? '').trim() }
+
+function qualificationStageEnabled(stage) {
+  const key = `RMM_QUALIFICATION_${clean(stage).toUpperCase()}_ENABLED`
+  return !['0', 'false', 'off', 'no']
+    .includes(clean(process.env[key] ?? 'true').toLowerCase())
+}
 function lower(value = '') { return clean(value).toLowerCase() }
 function object(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {} }
 function versionNumbers(value = '') { return clean(value).match(/\d+/g)?.map(Number) || [] }
@@ -2866,19 +2872,29 @@ async function runQualificationProgressionTick() {
   try {
     await resetStaleQualificationQueuesForCurrentTargets({ limit: 100 })
     await promoteAutomaticAdmissionReady({ limit: 50 })
-    await queueAutomaticRollbackQualifications({ limit: 8 })
-    await queueAutomaticUpgradeQualifications({ limit: 8, allowCleanOnly: true })
 
-    const completionBacklog = await pool.query(
-      `SELECT count(*)::int AS count
-         FROM rmm_software_qualification_queue q
-         JOIN rmm_software_catalogue c ON c.id=q.catalogue_id
-        WHERE c.tenant_id IS NULL
-          AND c.status='active'
-          AND c.qualification_state='deployment_candidate'
-          AND q.test_type IN ('upgrade','rollback')
-          AND q.state IN ('queued','running','cleanup_pending','cleanup_running')`,
-    )
+    const upgradeEnabled = qualificationStageEnabled('upgrade')
+    const rollbackEnabled = qualificationStageEnabled('rollback')
+    if (rollbackEnabled) await queueAutomaticRollbackQualifications({ limit: 8 })
+    if (upgradeEnabled) await queueAutomaticUpgradeQualifications({ limit: 8, allowCleanOnly: true })
+
+    const completionStages = [
+      ...(upgradeEnabled ? ['upgrade'] : []),
+      ...(rollbackEnabled ? ['rollback'] : []),
+    ]
+    const completionBacklog = completionStages.length
+      ? await pool.query(
+        `SELECT count(*)::int AS count
+           FROM rmm_software_qualification_queue q
+           JOIN rmm_software_catalogue c ON c.id=q.catalogue_id
+          WHERE c.tenant_id IS NULL
+            AND c.status='active'
+            AND c.qualification_state='deployment_candidate'
+            AND q.test_type=ANY($1::text[])
+            AND q.state IN ('queued','running','cleanup_pending','cleanup_running')`,
+        [completionStages],
+      )
+      : { rows: [{ count: 0 }] }
     if (Number(completionBacklog.rows[0]?.count || 0) === 0) {
       await queueCommonSoftwareQualifications({
         limit: COMMON_WINDOWS_SOFTWARE_LOWER.length,

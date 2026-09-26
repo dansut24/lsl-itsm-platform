@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --configLoader native",
-    "build": "npm run check:production-runtime && npm run check:rmm-viewer && npm run check:rmm-device-details && npm run check:installer-continuity && npm run check:qualification-preclean && npm run check:qualification-admission && npm run check:artifact-trust-scope && vite build --configLoader native",
+    "build": "npm run check:production-runtime && npm run check:rmm-viewer && npm run check:rmm-device-details && npm run check:installer-continuity && npm run check:qualification-preclean && npm run check:qualification-admission && npm run check:artifact-trust-scope && npm run check:qualification-stage-controls && vite build --configLoader native",
     "lint": "oxlint",
     "check:responsive": "node scripts/check-responsive-contract.mjs",
     "check:deployment": "node scripts/check-deployment-portability.mjs",
@@ -18,7 +18,8 @@
     "check:installer-continuity": "node scripts/check-installer-continuity.mjs",
     "check:qualification-preclean": "node scripts/check-qualification-preclean.mjs",
     "check:qualification-admission": "node scripts/check-qualification-admission.mjs",
-    "check:artifact-trust-scope": "node scripts/check-artifact-trust-scope.mjs"
+    "check:artifact-trust-scope": "node scripts/check-artifact-trust-scope.mjs",
+    "check:qualification-stage-controls": "node scripts/check-qualification-stage-controls.mjs"
   },
   "dependencies": {
     "@tanstack/react-table": "^9.2.4",
