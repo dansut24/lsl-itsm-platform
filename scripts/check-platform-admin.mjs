@@ -34,6 +34,12 @@ const checks = [
   [qualification.includes('installRuntimeSeconds: 600') && qualification.includes('inventoryGraceSeconds: 600') && qualification.includes('uninstallRuntimeSeconds: 480') && qualification.includes('residueCleanupSeconds: 180'), 'Qualification timing limits must remain explicit and shared with Admin.'],
   [api.includes('qualificationTiming(row)') && api.includes('deadlineLabel') && api.includes('cleanup_job_type'), 'Admin API must return phase-aware qualification timing metadata.'],
   [app.includes('function LiveQualificationTimer') && app.includes('setInterval(()=>setNow(Date.now()),1000)') && app.includes('Total elapsed') && app.includes('Current phase'), 'Admin active qualification must render a live phase timer.'],
+  [api.includes('/api/platform/v1/tenants/:id/owner-transfer') && api.includes('/api/platform/v1/tenant-owner-transfer/approve') && api.includes('sendTenantOwnerTransferApprovalEmail'), 'Admin must implement current-owner-approved tenant ownership transfers.'],
+  [api.includes("system_key IN ('owner','administrator')") && api.includes("SET role='owner'") && api.includes("SET role='admin'"), 'Owner transfer must update protected RBAC and compatibility roles together.'],
+  [app.includes("id:'billing'") && app.includes('function BillingEditor') && app.includes('monthlyPricePence'), 'Admin must expose tenant billing and commercial settings.'],
+  [api.includes('/api/platform/v1/software/catalogue/export.md') && app.includes('Export all (.md)'), 'Software catalogue must support a complete Markdown export.'],
+  [api.includes('/api/platform/v1/winget') && api.includes('/api/platform/v1/winget/sync') && app.includes("id:'winget'") && app.includes('Sync WinGet now'), 'Admin must expose the WinGet package index and manual sync controls.'],
+  [api.includes('platform_external_sync_state') && app.includes('Last successful sync'), 'WinGet sync status must persist and be visible in Admin.'],
 ]
 
 let failures = 0

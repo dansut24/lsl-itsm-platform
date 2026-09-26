@@ -18,6 +18,9 @@ import {
   setQualificationRunnerDispatch,
   setSoftwareQualificationPriority,
 } from './rmmSoftwareQualification.js'
+import { ensureDefaultRoles } from './access.js'
+import { sendTenantOwnerTransferApprovalEmail } from './mailer.js'
+import { wingetRepositorySearch } from './rmmWingetFallback.js'
 import { syncSoftwareVendorSource } from './rmmSoftwareVendorIntel.js'
 
 const COOKIE_NAME = 'hi5central_admin_session'
@@ -33,6 +36,14 @@ function normaliseEmail(value) { return clean(value, 254).toLowerCase() }
 function hash(value) { return createHash('sha256').update(String(value || '')).digest('hex') }
 function validEmail(value) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) }
 function validSlug(value) { return /^[a-z0-9][a-z0-9-]{1,46}[a-z0-9]$/.test(value) && !value.includes('--') }
+function htmlEscape(value = '') {
+  return String(value)
+    .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
+    .replaceAll('"','&quot;').replaceAll("'",'&#039;')
+}
+function mdCell(value = '') {
+  return String(value ?? '').replaceAll('|','\\|').replaceAll('\r',' ').replaceAll('\n',' ').trim()
+}
 
 function isoTime(value) {
   if (!value) return ''
@@ -265,14 +276,32 @@ export function registerPlatformAdminRoutes(app) {
               COALESCE(cs.plan_key,'custom') AS plan_key,COALESCE(cs.billing_status,'trial') AS billing_status,
               COALESCE(cs.billing_cycle,'monthly') AS billing_cycle,COALESCE(cs.currency,'GBP') AS currency,
               cs.monthly_price_pence,cs.trial_ends_at,cs.renewal_at,COALESCE(cs.notes,'') AS billing_notes,
-              count(DISTINCT m.user_id)::int AS user_count,
-              count(DISTINCT d.id)::int AS device_count
+              owner.user_id AS owner_user_id,owner.name AS owner_name,owner.email AS owner_email,
+              transfer.id AS owner_transfer_id,transfer.proposed_owner_email,
+              transfer.proposed_owner_name,transfer.created_at AS owner_transfer_requested_at,
+              transfer.expires_at AS owner_transfer_expires_at,
+              (SELECT count(*)::int FROM tenant_memberships m WHERE m.tenant_id=t.id) AS user_count,
+              (SELECT count(*)::int FROM rmm_agent_devices d WHERE d.tenant_id=t.id) AS device_count
          FROM tenants t
          JOIN tenant_settings ts ON ts.tenant_id=t.id
          LEFT JOIN tenant_commercial_settings cs ON cs.tenant_id=t.id
-         LEFT JOIN tenant_memberships m ON m.tenant_id=t.id
-         LEFT JOIN rmm_agent_devices d ON d.tenant_id=t.id
-        GROUP BY t.id,ts.tenant_id,cs.tenant_id
+         LEFT JOIN LATERAL (
+           SELECT u.id AS user_id,u.name,u.email
+             FROM tenant_memberships m
+             JOIN users u ON u.id=m.user_id
+            WHERE m.tenant_id=t.id AND m.role='owner'
+            ORDER BY m.created_at
+            LIMIT 1
+         ) owner ON true
+         LEFT JOIN LATERAL (
+           SELECT r.id,r.proposed_owner_email,pu.name AS proposed_owner_name,r.created_at,r.expires_at
+             FROM tenant_owner_transfer_requests r
+             LEFT JOIN users pu ON pu.id=r.proposed_owner_user_id
+            WHERE r.tenant_id=t.id AND r.approved_at IS NULL AND r.cancelled_at IS NULL
+              AND r.expires_at>now()
+            ORDER BY r.created_at DESC
+            LIMIT 1
+         ) transfer ON true
         ORDER BY lower(t.company_name)`,
     )
     return c.json({ items: result.rows })
@@ -387,6 +416,336 @@ export function registerPlatformAdminRoutes(app) {
       await audit(c, auth.session, 'tenant.updated', 'tenant', tenantId, { fields: Object.keys(body || {}) }, db)
     })
     return c.json({ ok: true })
+  })
+
+  app.post('/api/platform/v1/tenants/:id/owner-transfer', async (c) => {
+    const auth = await requireAdmin(c, WRITE_ROLES)
+    if (auth.error) return auth.error
+    const tenantId = clean(c.req.param('id'), 80)
+    let body = {}
+    try { body = await c.req.json() } catch {}
+    const proposedEmail = normaliseEmail(body.email)
+    if (!validEmail(proposedEmail)) return c.json({ error: 'Enter a valid email address.' }, 400)
+
+    const currentResult = await pool.query(
+      `SELECT t.id,t.company_name,u.id AS owner_user_id,u.name AS owner_name,u.email AS owner_email
+         FROM tenants t
+         JOIN tenant_memberships m ON m.tenant_id=t.id AND m.role='owner'
+         JOIN users u ON u.id=m.user_id
+        WHERE t.id=$1 LIMIT 1`,
+      [tenantId],
+    )
+    if (!currentResult.rowCount) return c.json({ error: 'Tenant owner could not be resolved.' }, 409)
+    const current = currentResult.rows[0]
+    if (normaliseEmail(current.owner_email) === proposedEmail) {
+      return c.json({ error: 'That email address is already the tenant owner.' }, 409)
+    }
+
+    const proposedResult = await pool.query(
+      `SELECT u.id,u.name,u.email,m.status
+         FROM tenant_memberships m
+         JOIN users u ON u.id=m.user_id
+        WHERE m.tenant_id=$1 AND lower(u.email)=lower($2)
+        LIMIT 1`,
+      [tenantId, proposedEmail],
+    )
+    if (!proposedResult.rowCount || proposedResult.rows[0].status !== 'active') {
+      return c.json({ error: 'The new owner must already be an active user in this tenant.' }, 409)
+    }
+    const proposed = proposedResult.rows[0]
+    const token = randomBytes(32).toString('base64url')
+    const tokenHash = hash(token)
+    const transfer = await withTransaction(async (db) => {
+      await db.query(
+        `UPDATE tenant_owner_transfer_requests
+            SET cancelled_at=COALESCE(cancelled_at,now())
+          WHERE tenant_id=$1 AND approved_at IS NULL AND cancelled_at IS NULL`,
+        [tenantId],
+      )
+      const inserted = await db.query(
+        `INSERT INTO tenant_owner_transfer_requests
+           (tenant_id,current_owner_user_id,proposed_owner_user_id,requested_by_user_id,
+            proposed_owner_email,token_hash,expires_at)
+         VALUES ($1,$2,$3,$4,$5,$6,now()+interval '24 hours')
+         RETURNING id,created_at,expires_at`,
+        [tenantId, current.owner_user_id, proposed.id, auth.session.user_id, proposedEmail, tokenHash],
+      )
+      return inserted.rows[0]
+    })
+
+    try {
+      await sendTenantOwnerTransferApprovalEmail({
+        to: current.owner_email,
+        name: current.owner_name,
+        companyName: current.company_name,
+        proposedOwnerEmail: proposedEmail,
+        token,
+        requestedBy: auth.session.name || auth.session.email,
+      })
+    } catch {
+      await pool.query(
+        'UPDATE tenant_owner_transfer_requests SET cancelled_at=now() WHERE id=$1 AND approved_at IS NULL',
+        [transfer.id],
+      ).catch(() => {})
+      return c.json({ error: 'The transfer was not created because the approval email could not be sent.' }, 503)
+    }
+
+    await audit(c, auth.session, 'tenant.owner_transfer.requested', 'tenant', tenantId, {
+      transferId: transfer.id,
+      currentOwnerEmail: current.owner_email,
+      proposedOwnerEmail: proposedEmail,
+    })
+    return c.json({
+      ok: true,
+      transfer: {
+        id: transfer.id,
+        proposedOwnerEmail: proposedEmail,
+        proposedOwnerName: proposed.name,
+        createdAt: transfer.created_at,
+        expiresAt: transfer.expires_at,
+      },
+    }, 201)
+  })
+
+  app.post('/api/platform/v1/tenants/:id/owner-transfer/cancel', async (c) => {
+    const auth = await requireAdmin(c, WRITE_ROLES)
+    if (auth.error) return auth.error
+    const tenantId = clean(c.req.param('id'), 80)
+    const result = await pool.query(
+      `UPDATE tenant_owner_transfer_requests
+          SET cancelled_at=now()
+        WHERE tenant_id=$1 AND approved_at IS NULL AND cancelled_at IS NULL
+        RETURNING id`,
+      [tenantId],
+    )
+    await audit(c, auth.session, 'tenant.owner_transfer.cancelled', 'tenant', tenantId, {
+      transferIds: result.rows.map((row) => row.id),
+    })
+    return c.json({ ok: true, cancelled: result.rowCount })
+  })
+
+  app.get('/api/platform/v1/tenant-owner-transfer/confirm', async (c) => {
+    const token = clean(c.req.query('token'), 256)
+    const transferResult = token.length >= 32
+      ? await pool.query(
+          `SELECT r.id,r.expires_at,r.approved_at,r.cancelled_at,r.proposed_owner_email,
+                  t.company_name,current_owner.name AS current_owner_name,proposed.name AS proposed_owner_name
+             FROM tenant_owner_transfer_requests r
+             JOIN tenants t ON t.id=r.tenant_id
+             JOIN users current_owner ON current_owner.id=r.current_owner_user_id
+             JOIN users proposed ON proposed.id=r.proposed_owner_user_id
+            WHERE r.token_hash=$1 LIMIT 1`,
+          [hash(token)],
+        )
+      : { rows: [] }
+    const transfer = transferResult.rows[0]
+    const invalid = !transfer || transfer.approved_at || transfer.cancelled_at
+      || new Date(transfer.expires_at).getTime() <= Date.now()
+    if (invalid) {
+      return c.html('<!doctype html><html><body style="font-family:Arial,sans-serif;padding:40px;color:#10213f"><h1>Owner transfer unavailable</h1><p>This approval link is invalid, expired, cancelled, or has already been used.</p></body></html>', 410)
+    }
+    return c.html(`<!doctype html><html><body style="margin:0;background:#f3f6fb;font-family:Arial,sans-serif;color:#10213f">
+      <main style="max-width:620px;margin:60px auto;padding:32px;background:#fff;border:1px solid #dfe6ef;border-radius:16px">
+        <div style="font-size:13px;color:#6b7890;margin-bottom:10px">HI5CENTRAL · TENANT OWNERSHIP</div>
+        <h1 style="margin:0 0 16px">Approve owner change for ${htmlEscape(transfer.company_name)}</h1>
+        <p>You are currently the owner. Hi5Central has been asked to transfer ownership to <strong>${htmlEscape(transfer.proposed_owner_name)}</strong> (${htmlEscape(transfer.proposed_owner_email)}).</p>
+        <p>Your account will remain active as an Administrator. The new owner will receive the protected Owner role.</p>
+        <form method="post" action="/api/platform/v1/tenant-owner-transfer/approve">
+          <input type="hidden" name="token" value="${htmlEscape(token)}">
+          <button type="submit" style="border:0;border-radius:10px;background:#f59e0b;color:#10213f;padding:14px 20px;font-weight:700;cursor:pointer">Approve ownership transfer</button>
+        </form>
+        <p style="font-size:13px;color:#6b7890;margin-top:24px">If you did not expect this request, close this page and contact Hi5Central support. No change occurs unless you approve.</p>
+      </main></body></html>`)
+  })
+
+  app.post('/api/platform/v1/tenant-owner-transfer/approve', async (c) => {
+    const form = await c.req.formData().catch(() => null)
+    const token = clean(form?.get('token'), 256)
+    if (token.length < 32) return c.html('<h1>Invalid approval link</h1>', 400)
+    const outcome = await withTransaction(async (db) => {
+      const result = await db.query(
+        `SELECT r.*,t.company_name,current_owner.name AS current_owner_name,
+                proposed.name AS proposed_owner_name,proposed.email AS proposed_owner_email_resolved
+           FROM tenant_owner_transfer_requests r
+           JOIN tenants t ON t.id=r.tenant_id
+           JOIN users current_owner ON current_owner.id=r.current_owner_user_id
+           JOIN users proposed ON proposed.id=r.proposed_owner_user_id
+          WHERE r.token_hash=$1 FOR UPDATE`,
+        [hash(token)],
+      )
+      if (!result.rowCount) return { error: 'invalid' }
+      const transfer = result.rows[0]
+      if (transfer.approved_at || transfer.cancelled_at || new Date(transfer.expires_at).getTime() <= Date.now()) {
+        return { error: 'expired' }
+      }
+      const currentOwner = await db.query(
+        `SELECT 1 FROM tenant_memberships
+          WHERE tenant_id=$1 AND user_id=$2 AND role='owner' AND status='active' LIMIT 1`,
+        [transfer.tenant_id, transfer.current_owner_user_id],
+      )
+      const proposedMember = await db.query(
+        `SELECT 1 FROM tenant_memberships
+          WHERE tenant_id=$1 AND user_id=$2 AND status='active' LIMIT 1`,
+        [transfer.tenant_id, transfer.proposed_owner_user_id],
+      )
+      if (!currentOwner.rowCount || !proposedMember.rowCount) return { error: 'membership_changed' }
+
+      await ensureDefaultRoles(db, transfer.tenant_id)
+      const roles = await db.query(
+        `SELECT id,system_key FROM access_roles
+          WHERE tenant_id=$1 AND system_key IN ('owner','administrator') AND active=true`,
+        [transfer.tenant_id],
+      )
+      const ownerRoleId = roles.rows.find((row) => row.system_key === 'owner')?.id
+      const adminRoleId = roles.rows.find((row) => row.system_key === 'administrator')?.id
+      if (!ownerRoleId || !adminRoleId) return { error: 'roles_unavailable' }
+
+      await db.query(
+        `UPDATE tenant_memberships SET role='admin'
+          WHERE tenant_id=$1 AND role='owner' AND user_id<>$2`,
+        [transfer.tenant_id, transfer.proposed_owner_user_id],
+      )
+      await db.query(
+        `UPDATE tenant_memberships SET role='owner'
+          WHERE tenant_id=$1 AND user_id=$2`,
+        [transfer.tenant_id, transfer.proposed_owner_user_id],
+      )
+      await db.query(
+        'DELETE FROM access_user_roles WHERE tenant_id=$1 AND role_id=$2 AND user_id<>$3',
+        [transfer.tenant_id, ownerRoleId, transfer.proposed_owner_user_id],
+      )
+      await db.query(
+        `INSERT INTO access_user_roles (tenant_id,user_id,role_id,assigned_by_user_id)
+         VALUES ($1,$2,$3,$2) ON CONFLICT DO NOTHING`,
+        [transfer.tenant_id, transfer.current_owner_user_id, adminRoleId],
+      )
+      await db.query(
+        `INSERT INTO access_user_roles (tenant_id,user_id,role_id,assigned_by_user_id)
+         VALUES ($1,$2,$3,$2) ON CONFLICT DO NOTHING`,
+        [transfer.tenant_id, transfer.proposed_owner_user_id, ownerRoleId],
+      )
+      await db.query(
+        `UPDATE tenant_owner_transfer_requests SET approved_at=now()
+          WHERE id=$1`,
+        [transfer.id],
+      )
+      await db.query(
+        `UPDATE tenant_owner_transfer_requests SET cancelled_at=now()
+          WHERE tenant_id=$1 AND id<>$2 AND approved_at IS NULL AND cancelled_at IS NULL`,
+        [transfer.tenant_id, transfer.id],
+      )
+      await db.query(
+        `UPDATE auth_sessions SET revoked_at=COALESCE(revoked_at,now()),revoked_reason=COALESCE(revoked_reason,'tenant_owner_changed')
+          WHERE tenant_id=$1 AND user_id IN ($2,$3) AND revoked_at IS NULL`,
+        [transfer.tenant_id, transfer.current_owner_user_id, transfer.proposed_owner_user_id],
+      )
+      await audit(c, { user_id: transfer.current_owner_user_id }, 'tenant.owner_transfer.approved', 'tenant', transfer.tenant_id, {
+        transferId: transfer.id,
+        previousOwnerUserId: transfer.current_owner_user_id,
+        newOwnerUserId: transfer.proposed_owner_user_id,
+        newOwnerEmail: transfer.proposed_owner_email_resolved,
+      }, db)
+      return { transfer }
+    })
+
+    if (outcome.error) {
+      return c.html('<!doctype html><html><body style="font-family:Arial,sans-serif;padding:40px;color:#10213f"><h1>Owner transfer could not be approved</h1><p>The request is no longer valid or the tenant membership changed. Ask Hi5Central to create a new request.</p></body></html>', 409)
+    }
+    return c.html(`<!doctype html><html><body style="margin:0;background:#f3f6fb;font-family:Arial,sans-serif;color:#10213f"><main style="max-width:620px;margin:60px auto;padding:32px;background:#fff;border:1px solid #dfe6ef;border-radius:16px"><div style="font-size:13px;color:#6b7890">HI5CENTRAL · TENANT OWNERSHIP</div><h1>Ownership transfer approved</h1><p><strong>${htmlEscape(outcome.transfer.proposed_owner_name)}</strong> is now the owner of ${htmlEscape(outcome.transfer.company_name)}. Your account remains active as an Administrator.</p><p style="color:#6b7890">Both accounts will be asked to sign in again so the updated permissions take effect.</p></main></body></html>`)
+  })
+
+  app.get('/api/platform/v1/software/catalogue/export.md', async (c) => {
+    const auth = await requireAdmin(c)
+    if (auth.error) return auth.error
+    const result = await pool.query(
+      `SELECT canonical_name,publisher,target_version,qualification_state,status,installer_type,
+              source_metadata->>'installerTechnology' AS installer_technology,
+              source_metadata->>'deploymentLimitation' AS deployment_limitation,
+              source_metadata->>'latestSource' AS latest_source,updated_at
+         FROM rmm_software_catalogue
+        WHERE tenant_id IS NULL
+        ORDER BY lower(canonical_name)`,
+    )
+    const generated = new Date().toISOString()
+    const lines = [
+      '# Hi5Central Software Catalogue',
+      '',
+      `Generated: ${generated}`,
+      '',
+      `Total software items: ${result.rowCount}`,
+      '',
+      '| Software | Publisher | Target version | Qualification | Status | Installer | Technology | Limitation | Source | Updated |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+      ...result.rows.map((row) => `| ${mdCell(row.canonical_name)} | ${mdCell(row.publisher)} | ${mdCell(row.target_version)} | ${mdCell(row.qualification_state)} | ${mdCell(row.status)} | ${mdCell(row.installer_type)} | ${mdCell(row.installer_technology)} | ${mdCell(row.deployment_limitation)} | ${mdCell(row.latest_source)} | ${mdCell(isoTime(row.updated_at))} |`),
+      '',
+    ]
+    const filename = `hi5central-software-catalogue-${generated.slice(0,10)}.md`
+    c.header('Content-Type', 'text/markdown; charset=utf-8')
+    c.header('Content-Disposition', `attachment; filename="${filename}"`)
+    return c.body(lines.join('\n'))
+  })
+
+  app.get('/api/platform/v1/winget', async (c) => {
+    const auth = await requireAdmin(c)
+    if (auth.error) return auth.error
+    try {
+      const result = await wingetRepositorySearch({
+        query: clean(c.req.query('q'), 160),
+        page: Number(c.req.query('page') || 1),
+        pageSize: Number(c.req.query('pageSize') || 100),
+      })
+      if (result.indexRefreshed) {
+        await pool.query(
+          `INSERT INTO platform_external_sync_state
+             (sync_key,status,completed_at,last_success_at,last_error,metadata,updated_at)
+           VALUES ('winget_repository','idle',now(),now(),'',$1::jsonb,now())
+           ON CONFLICT (sync_key) DO UPDATE SET
+             status='idle',completed_at=now(),last_success_at=now(),last_error='',
+             metadata=platform_external_sync_state.metadata || EXCLUDED.metadata,updated_at=now()`,
+          [JSON.stringify({ totalPackages: result.total, source: result.source })],
+        )
+      }
+      const syncState = await pool.query(
+        `SELECT status,started_at,completed_at,last_success_at,last_error,metadata,updated_at
+           FROM platform_external_sync_state WHERE sync_key='winget_repository' LIMIT 1`,
+      )
+      return c.json({ ...result, sync: syncState.rows[0] || null })
+    } catch (error) {
+      return c.json({ error: clean(error?.message || error) || 'Unable to read the WinGet manifest index.' }, 503)
+    }
+  })
+
+  app.post('/api/platform/v1/winget/sync', async (c) => {
+    const auth = await requireAdmin(c, CATALOGUE_ROLES)
+    if (auth.error) return auth.error
+    await pool.query(
+      `INSERT INTO platform_external_sync_state (sync_key,status,started_at,last_error,updated_at)
+       VALUES ('winget_repository','running',now(),'',now())
+       ON CONFLICT (sync_key) DO UPDATE SET status='running',started_at=now(),last_error='',updated_at=now()`,
+    )
+    try {
+      const result = await wingetRepositorySearch({ page: 1, pageSize: 10, forceRefresh: true })
+      await pool.query(
+        `UPDATE platform_external_sync_state SET status='idle',completed_at=now(),last_success_at=now(),
+                last_error='',metadata=metadata || $1::jsonb,updated_at=now()
+          WHERE sync_key='winget_repository'`,
+        [JSON.stringify({ totalPackages: result.total, source: result.source, manualSyncAt: new Date().toISOString() })],
+      )
+      await audit(c, auth.session, 'winget.repository.synced', 'external_source', 'winget_repository', {
+        totalPackages: result.total,
+        source: result.source,
+      })
+      return c.json({ ok: true, total: result.total, source: result.source, syncedAt: new Date().toISOString() })
+    } catch (error) {
+      const message = clean(error?.message || error, 1000) || 'WinGet sync failed.'
+      await pool.query(
+        `UPDATE platform_external_sync_state SET status='failed',completed_at=now(),last_error=$1,updated_at=now()
+          WHERE sync_key='winget_repository'`,
+        [message],
+      ).catch(() => {})
+      await audit(c, auth.session, 'winget.repository.sync_failed', 'external_source', 'winget_repository', { error: message }).catch(() => {})
+      return c.json({ error: message }, 503)
+    }
   })
 
   app.get('/api/platform/v1/software/catalogue', async (c) => {

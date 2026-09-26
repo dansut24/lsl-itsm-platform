@@ -143,6 +143,39 @@ export async function sendPortalActivationEmail({ to, name, companyName, token, 
   })
 }
 
+export async function sendTenantOwnerTransferApprovalEmail({
+  to, name, companyName, proposedOwnerEmail, token, requestedBy,
+}) {
+  const transporter = nodemailer.createTransport(smtpConfig())
+  const apiBase = deployment.apiUrl || deployment.appUrl || `https://${deployment.rootDomain}`
+  const approvalUrl = `${apiBase}/api/platform/v1/tenant-owner-transfer/confirm?token=${encodeURIComponent(token)}`
+  const from = process.env.SMTP_FROM || process.env.SMTP_USER
+  const requester = requestedBy ? ` by ${requestedBy}` : ''
+
+  return transporter.sendMail({
+    from,
+    to,
+    subject: `Approve the ${companyName} Hi5Central owner change`,
+    text: [
+      `Hi ${name},`,
+      '',
+      `A Hi5Central platform administrator${requester} requested that ownership of ${companyName} be transferred to ${proposedOwnerEmail}.`,
+      `Review and approve the transfer: ${approvalUrl}`,
+      '',
+      'Nothing changes unless you approve it. This link expires in 24 hours and can only be used once.',
+      'If you did not expect this request, do not approve it and contact Hi5Central support.',
+    ].join('\n'),
+    html: emailShell({
+      kicker: 'Tenant ownership approval',
+      title: `Approve the owner change for ${companyName}`,
+      body: `A Hi5Central platform administrator${escapeHtml(requester)} requested that ownership be transferred to <strong>${escapeHtml(proposedOwnerEmail)}</strong>. Nothing changes until you approve this request.`,
+      actionLabel: 'Review owner transfer',
+      actionUrl: approvalUrl,
+      footer: 'This link expires in 24 hours and can only be used once. If you did not expect this request, do not approve it and contact Hi5Central support.',
+    }),
+  })
+}
+
 export async function verifySmtpConnection() {
   const transporter = nodemailer.createTransport(smtpConfig())
   await transporter.verify()

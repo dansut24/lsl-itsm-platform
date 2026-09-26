@@ -510,3 +510,276 @@ body[data-hi5-surface='admin'] #root {
     min-width: 330px;
   }
 }
+
+/* Expanded tenant administration, billing and WinGet */
+.h5a-tenant-admin,
+.h5a-billing-editor {
+  padding: 0 16px 16px;
+}
+.h5a-tenant-facts {
+  display: grid;
+  grid-template-columns: repeat(4,minmax(0,1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.h5a-tenant-facts > span {
+  min-width: 0;
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  border: 1px solid var(--rmm-border);
+  border-radius: 9px;
+  padding: 10px;
+  background: var(--rmm-soft);
+}
+.h5a-tenant-facts > span > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--rmm-accent);
+}
+.h5a-tenant-facts > span > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.h5a-tenant-facts small,
+.h5a-owner-pending small {
+  color: var(--rmm-muted);
+  font-size: 7px;
+  font-weight: 900;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.h5a-tenant-facts strong,
+.h5a-owner-pending strong {
+  color: var(--rmm-text);
+  font-size: 9px;
+  overflow-wrap: anywhere;
+}
+.h5a-tenant-facts em {
+  color: var(--rmm-muted);
+  font-size: 8px;
+  font-style: normal;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.h5a-tenant-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 10px;
+}
+.h5a-tenant-links a {
+  border: 1px solid var(--rmm-border);
+  border-radius: 999px;
+  padding: 5px 9px;
+  background: var(--rmm-surface);
+  color: var(--rmm-accent);
+  font-size: 8px;
+  font-weight: 850;
+  text-decoration: none;
+}
+.h5a-tenant-links a:hover { background: var(--rmm-accent-soft); }
+.h5a-tenant-edit-grid,
+.h5a-billing-grid {
+  display: grid;
+  gap: 8px;
+  align-items: end;
+}
+.h5a-tenant-edit-grid {
+  grid-template-columns: minmax(190px,1.4fr) 140px auto auto auto;
+  border-top: 1px solid var(--rmm-border);
+  padding-top: 12px;
+}
+.h5a-billing-grid {
+  grid-template-columns: repeat(4,minmax(120px,1fr));
+}
+.h5a-tenant-edit-grid > label:not(.h5a-check),
+.h5a-billing-grid > label,
+.h5a-billing-notes {
+  display: grid;
+  gap: 5px;
+  color: var(--rmm-muted);
+  font-size: 8px;
+  font-weight: 850;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
+.h5a-tenant-edit-grid input,
+.h5a-tenant-edit-grid select,
+.h5a-owner-request input,
+.h5a-billing-grid input,
+.h5a-billing-grid select,
+.h5a-billing-notes textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  border: 1px solid var(--rmm-border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  background: var(--rmm-surface);
+  color: var(--rmm-text);
+  font: inherit;
+  font-size: 10px;
+  outline: none;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.h5a-tenant-edit-grid input:focus,
+.h5a-tenant-edit-grid select:focus,
+.h5a-owner-request input:focus,
+.h5a-billing-grid input:focus,
+.h5a-billing-grid select:focus,
+.h5a-billing-notes textarea:focus {
+  border-color: var(--rmm-accent);
+  box-shadow: 0 0 0 3px var(--rmm-accent-soft);
+}
+.h5a-owner-transfer {
+  display: grid;
+  grid-template-columns: minmax(240px,1fr) minmax(320px,1.2fr);
+  gap: 16px;
+  align-items: center;
+  margin-top: 12px;
+  border: 1px solid var(--rmm-border);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--rmm-soft);
+}
+.h5a-owner-transfer > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.h5a-owner-transfer > div:first-child > strong {
+  color: var(--rmm-text);
+  font-size: 10px;
+}
+.h5a-owner-transfer p {
+  margin: 2px 0 0;
+  color: var(--rmm-muted);
+  font-size: 8px;
+  line-height: 1.45;
+}
+.h5a-owner-request {
+  display: grid;
+  grid-template-columns: minmax(180px,1fr) auto;
+  gap: 7px;
+}
+.h5a-owner-pending {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, #d98a00 30%, var(--rmm-border));
+  border-radius: 9px;
+  padding: 9px;
+  background: color-mix(in srgb, #d98a00 8%, var(--rmm-surface));
+}
+.h5a-owner-pending > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.h5a-owner-pending span {
+  color: var(--rmm-muted);
+  font-size: 8px;
+  overflow-wrap: anywhere;
+}
+.h5a-billing-stack { margin-top: 14px; }
+.h5a-billing-editor { display: grid; gap: 10px; }
+.h5a-billing-notes textarea {
+  min-height: 70px;
+  resize: vertical;
+}
+.h5a-billing-editor > .rmm-primary { width: max-content; }
+.h5a-winget-summary {
+  display: grid;
+  grid-template-columns: repeat(3,minmax(0,1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.h5a-winget-summary > article {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 36px minmax(0,1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 13px;
+}
+.h5a-winget-summary > article > svg {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  padding: 9px;
+  background: var(--rmm-accent-soft);
+  color: var(--rmm-accent);
+}
+.h5a-winget-summary > article > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.h5a-winget-summary span {
+  color: var(--rmm-muted);
+  font-size: 7px;
+  font-weight: 900;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.h5a-winget-summary strong {
+  color: var(--rmm-text);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.h5a-winget-summary small {
+  color: var(--rmm-muted);
+  font-size: 8px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.h5a-winget-table code {
+  border: 1px solid var(--rmm-border);
+  border-radius: 5px;
+  padding: 2px 5px;
+  background: var(--rmm-soft);
+  color: var(--rmm-text);
+  font-size: 8px;
+}
+.h5a-pager {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px solid var(--rmm-border);
+  padding: 10px 12px;
+}
+.h5a-pager span {
+  color: var(--rmm-muted);
+  font-size: 8px;
+  font-weight: 800;
+}
+@media (max-width: 1100px) {
+  .h5a-tenant-facts { grid-template-columns: 1fr 1fr; }
+  .h5a-billing-grid { grid-template-columns: 1fr 1fr; }
+  .h5a-tenant-edit-grid { grid-template-columns: 1fr 140px auto auto; }
+  .h5a-tenant-edit-grid > button { grid-column: 1 / -1; width: max-content; }
+}
+@media (max-width: 820px) {
+  .h5a-owner-transfer { grid-template-columns: 1fr; }
+  .h5a-winget-summary { grid-template-columns: 1fr; }
+}
+@media (max-width: 760px) {
+  .h5a-tenant-admin,
+  .h5a-billing-editor { padding: 0 12px 14px; }
+  .h5a-tenant-facts,
+  .h5a-billing-grid,
+  .h5a-tenant-edit-grid { grid-template-columns: 1fr; }
+  .h5a-tenant-edit-grid > button { grid-column: auto; width: 100%; }
+  .h5a-owner-request { grid-template-columns: 1fr; }
+  .h5a-owner-pending { align-items: flex-start; flex-direction: column; }
+  .h5a-owner-pending button,
+  .h5a-owner-request button,
+  .h5a-billing-editor > .rmm-primary { width: 100%; min-height: 38px; }
+  .h5a-pager { flex-wrap: wrap; }
+}
