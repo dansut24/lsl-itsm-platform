@@ -108,6 +108,17 @@ export function resolveTenantSurface(location = window.location) {
   const rootDomain = escapeRegex(config.rootDomain)
   const rootHost = config.rootDomain.toLowerCase()
 
+  if (hostname === `admin.${rootHost}`) {
+    return {
+      kind: 'admin',
+      tenantSlug: '',
+      tenantName: 'Hi5Central',
+      canonical: true,
+      preview: false,
+      pathBased: false,
+    }
+  }
+
   if (hostname === rootHost || hostname === `www.${rootHost}`) {
     return {
       kind: 'marketing',

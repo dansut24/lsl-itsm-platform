@@ -16,6 +16,7 @@ import { ProductionFinalTaskCompletionPrompt } from './production/ProductionFina
 import { ProductionSessionBoundary } from './production/ProductionSessionBoundary.jsx'
 import { ProductionFirstLoginExperience } from './production/ProductionFirstLoginExperience.jsx'
 import { ProductionFirstLoginRouteBridge } from './production/ProductionFirstLoginRouteBridge.jsx'
+import { PlatformAdminApp } from './features/admin/PlatformAdminApp.jsx'
 import { ProductionItsmWorkspace } from './production/ProductionItsmWorkspace.jsx'
 import { ProductionKnowledgeBase } from './production/ProductionKnowledgeBase.jsx'
 import { ProductionLiveChatBadgeBridge } from './production/ProductionLiveChatBadgeBridge.jsx'
@@ -92,6 +93,7 @@ if (initialSurface.kind === 'marketing') {
 if (productionWorkspace) RootApp = productionOnboarding ? ProductionOnboardingBootstrap : ProductionWorkspaceBootstrap
 if (productionPortal) RootApp = ProductionPortalBootstrap
 if (initialSurface.kind === 'rmm') RootApp = ProductionRmmBootstrap
+if (initialSurface.kind === 'admin') RootApp = PlatformAdminApp
 
 createRoot(rootElement).render(
   <StrictMode>

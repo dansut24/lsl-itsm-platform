@@ -28,6 +28,7 @@ import {
 import { pool, withTransaction } from './db.js'
 import { sendVerificationEmail, verifySmtpConnection } from './mailer.js'
 import { registerOrganisationRoutes } from './organisation.js'
+import { registerPlatformAdminRoutes } from './platformAdmin.js'
 import { verifyPassword } from './password.js'
 import { ensureRedisConnected, redis } from './redis.js'
 import { registerSettingsRoutes } from './settings.js'
@@ -383,6 +384,7 @@ app.post('/api/v1/onboarding/complete', async (c) => {
   return c.json(sessionPayload(refreshed))
 })
 
+registerPlatformAdminRoutes(app)
 registerLicensingRoutes(app)
 registerCatalogueRoutes(app)
 registerOrganisationRoutes(app)
