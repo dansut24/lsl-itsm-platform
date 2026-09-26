@@ -14,6 +14,7 @@ import { registerRmmAutomationRoutes } from './rmmAutomation.js'
 import { registerRmmActivityRoutes } from './rmmActivity.js'
 import { attachRmmDeviceToolWebSocket, registerRmmDeviceToolRoutes } from './rmmDeviceTools.js'
 import { attachRmmViewerWebSocket, registerRmmRemoteRoutes } from './rmmRemote.js'
+import { attachRmmConnectWebSockets, registerRmmConnectRoutes } from './rmmConnect.js'
 import { registerRmmScopeRoutes } from './rmmScope.js'
 import { registerRmmPatchingRoutes } from './rmmPatching.js'
 import { registerRmmRecoveryKeyRoutes } from './rmmRecoveryKeys.js'
@@ -47,7 +48,7 @@ const port = Number(process.env.PORT || 3001)
 const marketingUrl = deployment.marketingUrl || deployment.appUrl || `https://${deployment.rootDomain}`
 
 const reservedSlugs = new Set([
-  'admin', 'api', 'app', 'auth', 'downloads', 'help', 'login', 'mail', 'portal',
+  'admin', 'api', 'app', 'auth', 'connect', 'downloads', 'help', 'login', 'mail', 'portal',
   'reseller', 'rmm', 'signup', 'smtp', 'status', 'support', 'turn', 'www',
 ])
 
@@ -396,6 +397,7 @@ registerRmmAutomationRoutes(app)
 registerRmmActivityRoutes(app)
 registerRmmDeviceToolRoutes(app)
 registerRmmRemoteRoutes(app)
+registerRmmConnectRoutes(app)
 registerRmmScopeRoutes(app)
 registerRmmPatchingRoutes(app)
 registerRmmRecoveryKeyRoutes(app)
@@ -416,6 +418,7 @@ startTenantVendorSourceScheduler()
 const server = serve({ fetch: app.fetch, hostname: '0.0.0.0', port })
 attachRmmAgentWebSocket(server)
 attachRmmViewerWebSocket(server)
+attachRmmConnectWebSockets(server)
 attachRmmDeviceToolWebSocket(server)
 console.log(`Hi5Central API listening on port ${port}`)
 

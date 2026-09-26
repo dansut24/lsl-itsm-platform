@@ -11,6 +11,7 @@ import {
   CircleGauge,
   Clock3,
   Code2,
+  Cable,
   Cpu,
   Database,
   Download,
@@ -64,6 +65,7 @@ import { RmmMonitoringPolicies } from './RmmMonitoringPolicies.jsx'
 import { RmmPatching as RmmPatchingWorkspace } from './RmmPatching.jsx'
 import { RmmAgentDeployment } from './RmmAgentDeployment.jsx'
 import { RmmAutomation } from './RmmAutomationWorkspace.jsx'
+import { RmmConnect } from './RmmConnect.jsx'
 import { DeviceActivityTimeline, DeviceJobsPanel, RmmAuditActivity, prefetchDeviceHistory } from './RmmActivityViews.jsx'
 import { detectRemoteViewerClient } from './remoteViewerClient.js'
 import { RmmDeviceToolWorkspace } from './RmmDeviceTools.jsx'
@@ -75,6 +77,7 @@ const navigation = [
   { id: 'sites', label: 'Sites', icon: MapPin, section: 'Manage' },
   { id: 'groups', label: 'Device groups', icon: Users, section: 'Manage' },
   { id: 'alerts', label: 'Alerts', icon: AlertTriangle, section: 'Manage' },
+  { id: 'connect', label: 'Connect', icon: Cable, section: 'Operate' },
   { id: 'patching', label: 'Patching', icon: ShieldCheck, section: 'Operate' },
   { id: 'software', label: 'Software', icon: PackageCheck, section: 'Operate' },
   { id: 'automation', label: 'Automation', icon: Code2, section: 'Operate' },
@@ -92,6 +95,7 @@ const pageMeta = {
   groups: ['Estate structure', 'Device groups', 'Build static and dynamic scopes for policy and deployment targeting.'],
   alerts: ['Monitoring', 'Alerts', 'Prioritise active monitoring conditions and device health exceptions.'],
   remote: ['Support', 'Remote access', 'Connect to managed endpoints using remote desktop, terminal and file tools.'],
+  connect: ['Support', 'Hi5Central Connect', 'Create one-time support codes for unmanaged Windows computers.'],
   patching: ['Maintenance', 'Patching', 'Track update compliance, maintenance rings and deployment failures.'],
   software: ['Applications', 'Software', 'Understand installed software and manage application deployments.'],
   automation: ['Automation', 'Scripts & automation', 'Run trusted scripts, recurring maintenance and remediation actions.'],
@@ -2011,6 +2015,7 @@ export function RmmPlatformApp({ accent, canAudit = false, canBackstageRemote = 
     if (activeView === 'sites') return <RmmSitesManagement devices={devices} query={query} sites={sites} onSitesChange={onSitesChange} onViewDevices={openScopedInventory} />
     if (activeView === 'groups') return <RmmDeviceGroupsManagement devices={devices} query={query} sites={sites} onViewDevices={openScopedInventory} />
     if (activeView === 'alerts') return <RmmAlerts onCreateIncident={createItsmIncident} openDevice={openDevice} query={query} />
+    if (activeView === 'connect') return <RmmConnect />
     if (activeView === 'remote') return <RmmDeviceInventory devices={devices} sites={sites} openDevice={openDevice} query={query} preset={inventoryPreset} onPresetApplied={() => setInventoryPreset(null)} />
     if (activeView === 'patching') return <RmmPatchingWorkspace devices={devices} />
     if (activeView === 'software') return <RmmSoftware devices={devices} />
