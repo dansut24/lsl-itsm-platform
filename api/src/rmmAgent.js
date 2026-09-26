@@ -149,7 +149,7 @@ export async function authenticateAgent(deviceId, deviceSecret) {
   const rawSecret = clean(deviceSecret)
   if (!id || !rawSecret) return null
   const result = await pool.query(
-    `SELECT a.id,a.tenant_id,a.inventory_id,i.reference,i.name
+    `SELECT a.id,a.tenant_id,a.inventory_id,a.agent_version,i.reference,i.name
        FROM rmm_agent_devices a
        JOIN rmm_device_inventory i ON i.id=a.inventory_id
       WHERE a.id::text=$1 AND a.secret_hash=$2 AND a.disabled_at IS NULL
@@ -1116,6 +1116,7 @@ export function attachRmmAgentWebSocket(server) {
         if (clean(payload.device_id) && clean(payload.device_id) !== String(agent.id)) return
         ingestInventory(agent, payload)
           .then(() => {
+            if (versionCompare(agent.agent_version, '0.1.171') < 0) return
             bitLockerRecoveryEscrowNeeded(agent, payload)
               .then((needed) => {
                 if (!needed || ws.readyState !== 1) return

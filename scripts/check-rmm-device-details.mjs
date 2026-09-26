@@ -57,7 +57,7 @@ expect(recoveryMigration.includes('rmm_bitlocker_recovery_keys') && recoveryMigr
 expect(recoveryApi.includes("createCipheriv('aes-256-gcm'") && recoveryApi.includes('RMM_RECOVERY_KEY_ENCRYPTION_KEY'), 'BitLocker recovery escrow must use dedicated AES-256-GCM key material.')
 expect(recoveryApi.includes("eventType: 'bitlocker.recovery_key.revealed'") && recoveryApi.includes('reason.length < 3'), 'Recovery-key reveal must require a reason and write an audit event.')
 expect(recoveryApi.includes("Cache-Control', 'no-store, private'"), 'Recovery-key reveal responses must be non-cacheable.')
-expect(agentApi.includes('bitLockerRecoveryEscrowNeeded') && agentApi.includes("type: 'bitlocker_recovery_escrow_request'"), 'Inventory ingest must automatically request escrow for unescrowed recovery protectors.')
+expect(agentApi.includes('bitLockerRecoveryEscrowNeeded') && agentApi.includes("type: 'bitlocker_recovery_escrow_request'") && agentApi.includes("versionCompare(agent.agent_version, '0.1.171') < 0"), 'Inventory ingest must request escrow only from Agent 0.1.171+ when a recovery protector is unescrowed.')
 expect(toolApi.includes("bitlocker-recovery/escrow") && toolApi.includes("versionAtLeast(device.agent_version, '0.1.171')"), 'Manual recovery-key escrow must be available only to the supporting Agent release.')
 expect(platform.includes('Reveal recovery key') && platform.includes('Why do you need to reveal this BitLocker recovery key?') && platform.includes('60_000'), 'Recovery-key UI must require an audited reason and automatically hide the secret.')
 
