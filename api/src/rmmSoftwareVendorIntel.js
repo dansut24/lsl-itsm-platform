@@ -21,7 +21,7 @@ import { recalculateAllTenantVulnerabilityExposures } from './rmmVulnerabilityEx
 import { resolvePreviousWingetVendorInstaller, resolveWingetVendorInstaller, syncAutomaticWingetFallbacks, wingetEnterpriseSeedMatches } from './rmmWingetFallback.js'
 import { importCuratedSoftwareCatalogue } from './rmmCuratedSoftwareCatalogue.js'
 import { syncEvergreenCorroboration } from './rmmEvergreenIntel.js'
-import { promoteAutomaticAdmissionReady, queueAutomaticCleanInstallQualifications, queueAutomaticRollbackQualifications, queueAutomaticUpgradeQualifications, queueCommonSoftwareQualifications, runSoftwareQualificationQueue } from './rmmSoftwareQualification.js'
+import { promoteAutomaticAdmissionReady, queueAutomaticCleanInstallQualifications, queueAutomaticRollbackQualifications, queueAutomaticUpgradeQualifications, queueCommonSoftwareQualifications, resetStaleQualificationQueuesForCurrentTargets, runSoftwareQualificationQueue } from './rmmSoftwareQualification.js'
 import { BUSINESS_ESSENTIAL_WINGET_PACKAGES, COMMON_WINDOWS_SOFTWARE_LOWER } from './rmmCommonSoftware.js'
 import { htmlHostAllowed, parseVendorHtmlReleases } from './vendorHtmlRecipe.js'
 import {
@@ -2864,6 +2864,7 @@ async function runQualificationProgressionTick() {
   if (qualificationProgressionTickActive || !catalogueQualificationPipelineEnabled()) return
   qualificationProgressionTickActive = true
   try {
+    await resetStaleQualificationQueuesForCurrentTargets({ limit: 100 })
     await promoteAutomaticAdmissionReady({ limit: 50 })
     await queueAutomaticRollbackQualifications({ limit: 8 })
     await queueAutomaticUpgradeQualifications({ limit: 8, allowCleanOnly: true })

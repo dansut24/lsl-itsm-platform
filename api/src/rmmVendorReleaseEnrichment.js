@@ -784,6 +784,25 @@ async function reconcileDirectReadyCatalogue() {
             ),
             qualification_state=CASE
               WHEN c.qualification_state='blocked' THEN c.qualification_state
+              WHEN c.qualification_state IN ('qualified','qualified_limited')
+               AND (
+                (
+                  COALESCE(c.qualification_evidence->>'cleanInstallVersion','')<>''
+                  AND c.qualification_evidence->>'cleanInstallVersion'<>c.target_version
+                )
+                OR (
+                  COALESCE(c.qualification_evidence->>'upgradeVersion','')<>''
+                  AND c.qualification_evidence->>'upgradeVersion'<>c.target_version
+                )
+                OR (
+                  COALESCE(c.qualification_evidence->>'rollbackRestoredVersion','')<>''
+                  AND c.qualification_evidence->>'rollbackRestoredVersion'<>c.target_version
+                )
+                OR (
+                  COALESCE(c.qualification_version,'')<>''
+                  AND c.qualification_version<>c.target_version
+                )
+              ) THEN 'deployment_candidate'
               WHEN NOT (
                 COALESCE((r.trust_evidence->>'signatureVerified')::boolean,false)
                 AND COALESCE(r.trust_evidence->>'sha256','') ~* '^[a-f0-9]{64}$'
@@ -794,19 +813,59 @@ async function reconcileDirectReadyCatalogue() {
             END,
             qualification_version=CASE
               WHEN c.qualification_state<>'blocked'
-               AND NOT (
-                 COALESCE((r.trust_evidence->>'signatureVerified')::boolean,false)
-                 AND COALESCE(r.trust_evidence->>'sha256','') ~* '^[a-f0-9]{64}$'
-                 AND upper(r.trust_evidence->>'sha256')=upper(r.installer_sha256)
+               AND (
+                 NOT (
+                   COALESCE((r.trust_evidence->>'signatureVerified')::boolean,false)
+                   AND COALESCE(r.trust_evidence->>'sha256','') ~* '^[a-f0-9]{64}$'
+                   AND upper(r.trust_evidence->>'sha256')=upper(r.installer_sha256)
+                 )
+                 OR (
+                  (
+                    COALESCE(c.qualification_evidence->>'cleanInstallVersion','')<>''
+                    AND c.qualification_evidence->>'cleanInstallVersion'<>c.target_version
+                  )
+                  OR (
+                    COALESCE(c.qualification_evidence->>'upgradeVersion','')<>''
+                    AND c.qualification_evidence->>'upgradeVersion'<>c.target_version
+                  )
+                  OR (
+                    COALESCE(c.qualification_evidence->>'rollbackRestoredVersion','')<>''
+                    AND c.qualification_evidence->>'rollbackRestoredVersion'<>c.target_version
+                  )
+                  OR (
+                    COALESCE(c.qualification_version,'')<>''
+                    AND c.qualification_version<>c.target_version
+                  )
+                )
                ) THEN ''
               ELSE c.qualification_version
             END,
             qualified_at=CASE
               WHEN c.qualification_state<>'blocked'
-               AND NOT (
-                 COALESCE((r.trust_evidence->>'signatureVerified')::boolean,false)
-                 AND COALESCE(r.trust_evidence->>'sha256','') ~* '^[a-f0-9]{64}$'
-                 AND upper(r.trust_evidence->>'sha256')=upper(r.installer_sha256)
+               AND (
+                 NOT (
+                   COALESCE((r.trust_evidence->>'signatureVerified')::boolean,false)
+                   AND COALESCE(r.trust_evidence->>'sha256','') ~* '^[a-f0-9]{64}$'
+                   AND upper(r.trust_evidence->>'sha256')=upper(r.installer_sha256)
+                 )
+                 OR (
+                  (
+                    COALESCE(c.qualification_evidence->>'cleanInstallVersion','')<>''
+                    AND c.qualification_evidence->>'cleanInstallVersion'<>c.target_version
+                  )
+                  OR (
+                    COALESCE(c.qualification_evidence->>'upgradeVersion','')<>''
+                    AND c.qualification_evidence->>'upgradeVersion'<>c.target_version
+                  )
+                  OR (
+                    COALESCE(c.qualification_evidence->>'rollbackRestoredVersion','')<>''
+                    AND c.qualification_evidence->>'rollbackRestoredVersion'<>c.target_version
+                  )
+                  OR (
+                    COALESCE(c.qualification_version,'')<>''
+                    AND c.qualification_version<>c.target_version
+                  )
+                )
                ) THEN NULL
               ELSE c.qualified_at
             END,
@@ -823,6 +882,26 @@ async function reconcileDirectReadyCatalogue() {
               'signer',COALESCE(r.trust_evidence->>'signer','')
             ),
             qualification_notes=CASE
+              WHEN c.qualification_state IN ('qualified','qualified_limited')
+               AND (
+                (
+                  COALESCE(c.qualification_evidence->>'cleanInstallVersion','')<>''
+                  AND c.qualification_evidence->>'cleanInstallVersion'<>c.target_version
+                )
+                OR (
+                  COALESCE(c.qualification_evidence->>'upgradeVersion','')<>''
+                  AND c.qualification_evidence->>'upgradeVersion'<>c.target_version
+                )
+                OR (
+                  COALESCE(c.qualification_evidence->>'rollbackRestoredVersion','')<>''
+                  AND c.qualification_evidence->>'rollbackRestoredVersion'<>c.target_version
+                )
+                OR (
+                  COALESCE(c.qualification_version,'')<>''
+                  AND c.qualification_version<>c.target_version
+                )
+              )
+                THEN 'Target version changed; current lifecycle qualification is required.'
               WHEN NOT (
                 COALESCE((r.trust_evidence->>'signatureVerified')::boolean,false)
                 AND COALESCE(r.trust_evidence->>'sha256','') ~* '^[a-f0-9]{64}$'
@@ -859,10 +938,30 @@ async function reconcileDirectReadyCatalogue() {
                 END
           OR (
             c.qualification_state IN ('qualified','qualified_limited')
-            AND NOT (
-              COALESCE((r.trust_evidence->>'signatureVerified')::boolean,false)
-              AND COALESCE(r.trust_evidence->>'sha256','') ~* '^[a-f0-9]{64}$'
-              AND upper(r.trust_evidence->>'sha256')=upper(r.installer_sha256)
+            AND (
+              NOT (
+                COALESCE((r.trust_evidence->>'signatureVerified')::boolean,false)
+                AND COALESCE(r.trust_evidence->>'sha256','') ~* '^[a-f0-9]{64}$'
+                AND upper(r.trust_evidence->>'sha256')=upper(r.installer_sha256)
+              )
+              OR (
+                (
+                  COALESCE(c.qualification_evidence->>'cleanInstallVersion','')<>''
+                  AND c.qualification_evidence->>'cleanInstallVersion'<>c.target_version
+                )
+                OR (
+                  COALESCE(c.qualification_evidence->>'upgradeVersion','')<>''
+                  AND c.qualification_evidence->>'upgradeVersion'<>c.target_version
+                )
+                OR (
+                  COALESCE(c.qualification_evidence->>'rollbackRestoredVersion','')<>''
+                  AND c.qualification_evidence->>'rollbackRestoredVersion'<>c.target_version
+                )
+                OR (
+                  COALESCE(c.qualification_version,'')<>''
+                  AND c.qualification_version<>c.target_version
+                )
+              )
             )
           ))
      RETURNING c.id,c.canonical_name,c.target_version`)

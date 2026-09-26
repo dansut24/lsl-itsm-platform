@@ -78,6 +78,29 @@ expect(
     enrichment.includes('if (qualificationBusy.rowCount) return []'),
   'Artifact trust probes must yield to active or queued qualification work.',
 )
+expect(
+  qualification.includes('export async function resetStaleQualificationQueuesForCurrentTargets') &&
+    qualification.includes("last_error='qualification_target_version_changed'") &&
+    qualification.includes("q.state IN ('queued','passed','review_required')"),
+  'Stale inactive qualification results must be invalidated once when the target version changes.',
+)
+expect(
+  qualification.includes("'qualification_target_version_changed'") &&
+    qualification.includes("c.qualification_evidence->>'cleanInstallVersion'=c.target_version") &&
+    qualification.includes("c.qualification_evidence->>'upgradeVersion'=c.target_version") &&
+    qualification.includes("c.qualification_evidence->>'rollbackRestoredVersion'=c.target_version"),
+  'Qualification requeue/admission paths must require lifecycle evidence for the current target.',
+)
+expect(
+  vendorIntel.includes('await resetStaleQualificationQueuesForCurrentTargets({ limit: 100 })') &&
+    vendorIntel.indexOf('await resetStaleQualificationQueuesForCurrentTargets({ limit: 100 })')
+      < vendorIntel.indexOf('await promoteAutomaticAdmissionReady({ limit: 50 })'),
+  'Qualification progression must invalidate stale target-version results before admission.',
+)
+expect(
+  enrichment.includes('Target version changed; current lifecycle qualification is required.'),
+  'Legacy qualified rows with explicit stale lifecycle versions must self-heal back to deployment candidates.',
+)
 
 if (failures) process.exit(1)
 console.log('Artifact trust scoping contract check passed.')

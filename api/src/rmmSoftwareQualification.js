@@ -2680,6 +2680,86 @@ async function reconcileQueueRow(queue, runner) {
   return { id: current.id, state: current.state }
 }
 
+export async function resetStaleQualificationQueuesForCurrentTargets({ limit = 100 } = {}) {
+  const safeLimit = Math.max(1, Math.min(500, Number(limit) || 100))
+  const result = await pool.query(
+    `WITH stale AS (
+       SELECT q.id
+         FROM rmm_software_qualification_queue q
+         JOIN rmm_software_catalogue c ON c.id=q.catalogue_id
+        WHERE c.tenant_id IS NULL
+          AND c.status='active'
+          AND c.qualification_state='deployment_candidate'
+          AND q.state IN ('queued','passed','review_required')
+          AND (
+            (
+              q.test_type='clean_install'
+              AND (
+                (
+                  COALESCE(c.qualification_evidence->>'cleanInstallVersion','')<>''
+                  AND c.qualification_evidence->>'cleanInstallVersion'<>c.target_version
+                )
+                OR (
+                  COALESCE(q.evidence->>'targetVersion','')<>''
+                  AND q.evidence->>'targetVersion'<>c.target_version
+                )
+              )
+            )
+            OR (
+              q.test_type='upgrade'
+              AND (
+                (
+                  COALESCE(c.qualification_evidence->>'upgradeVersion','')<>''
+                  AND c.qualification_evidence->>'upgradeVersion'<>c.target_version
+                )
+                OR (
+                  COALESCE(c.qualification_evidence->>'upgradePatchDetectionTargetVersion','')<>''
+                  AND c.qualification_evidence->>'upgradePatchDetectionTargetVersion'<>c.target_version
+                )
+                OR (
+                  COALESCE(q.evidence->>'targetVersion','')<>''
+                  AND q.evidence->>'targetVersion'<>c.target_version
+                )
+              )
+            )
+            OR (
+              q.test_type='rollback'
+              AND (
+                (
+                  COALESCE(c.qualification_evidence->>'rollbackRestoredVersion','')<>''
+                  AND c.qualification_evidence->>'rollbackRestoredVersion'<>c.target_version
+                )
+                OR (
+                  COALESCE(q.evidence->>'targetVersion','')<>''
+                  AND q.evidence->>'targetVersion'<>c.target_version
+                )
+              )
+            )
+          )
+        ORDER BY q.updated_at
+        LIMIT $1
+     )
+     UPDATE rmm_software_qualification_queue q
+        SET state='cancelled',
+            last_error='qualification_target_version_changed',
+            runner_agent_device_id=NULL,
+            agent_job_id=NULL,
+            deployment_id=NULL,
+            cleanup_job_id=NULL,
+            evidence=q.evidence || jsonb_build_object(
+              'targetVersionChangedAt',now()
+            ),
+            started_at=NULL,
+            completed_at=now(),
+            updated_at=now()
+       FROM stale
+      WHERE q.id=stale.id
+      RETURNING q.id,q.catalogue_id,q.test_type,q.state`,
+    [safeLimit],
+  )
+  return result.rows
+}
+
 export async function queueCommonSoftwareQualifications({ limit = 50, allowUnresolvedVulnerability = true } = {}) {
   const safeLimit = Math.max(1, Math.min(COMMON_WINDOWS_SOFTWARE_LOWER.length, Number(limit) || 50))
   const result = await pool.query(
@@ -2735,14 +2815,20 @@ export async function queueCommonSoftwareQualifications({ limit = 50, allowUnres
              WHERE q.catalogue_id=c.id
                AND q.test_type='clean_install'
                AND NOT (
-                 q.state='review_required'
-                 AND q.last_error IN (
-                   'qualification_runner_not_clean',
-                   'qualification_direct_release_not_ready',
-                   'qualification_artifact_gate_failed',
-                   'qualification_source_health_not_ready',
-                   'PatchHost did not return a result.',
-                   'telemetry HTTP status 502'
+                 (
+                   q.state='review_required'
+                   AND q.last_error IN (
+                     'qualification_runner_not_clean',
+                     'qualification_direct_release_not_ready',
+                     'qualification_artifact_gate_failed',
+                     'qualification_source_health_not_ready',
+                     'PatchHost did not return a result.',
+                     'telemetry HTTP status 502'
+                   )
+                 )
+                 OR (
+                   q.state='cancelled'
+                   AND q.last_error='qualification_target_version_changed'
                  )
                )
           )
@@ -2777,7 +2863,8 @@ export async function queueCommonSoftwareQualifications({ limit = 50, allowUnres
        started_at=NULL,
        completed_at=NULL,
        updated_at=now()
-     WHERE rmm_software_qualification_queue.state='review_required'
+     WHERE (
+       rmm_software_qualification_queue.state='review_required'
        AND rmm_software_qualification_queue.last_error IN (
          'qualification_runner_not_clean',
          'qualification_direct_release_not_ready',
@@ -2786,6 +2873,10 @@ export async function queueCommonSoftwareQualifications({ limit = 50, allowUnres
          'PatchHost did not return a result.',
          'telemetry HTTP status 502'
        )
+     ) OR (
+       rmm_software_qualification_queue.state='cancelled'
+       AND rmm_software_qualification_queue.last_error='qualification_target_version_changed'
+     )
      RETURNING id,catalogue_id,test_type,state,priority`,
     [COMMON_WINDOWS_SOFTWARE_LOWER, safeLimit, Boolean(allowUnresolvedVulnerability)],
   )
@@ -2884,7 +2975,8 @@ export async function queueAutomaticCleanInstallQualifications({
                    AND existing.last_error IN (
                      'manual_revalidation_reset',
                      'qualification_pipeline_paused_for_progression_fix',
-                     'completion_first_pipeline_superseded_clean_buffer'
+                     'completion_first_pipeline_superseded_clean_buffer',
+                     'qualification_target_version_changed'
                    )
                  )
                )
@@ -2927,7 +3019,8 @@ export async function queueAutomaticCleanInstallQualifications({
        AND rmm_software_qualification_queue.last_error IN (
          'manual_revalidation_reset',
          'qualification_pipeline_paused_for_progression_fix',
-         'completion_first_pipeline_superseded_clean_buffer'
+         'completion_first_pipeline_superseded_clean_buffer',
+         'qualification_target_version_changed'
        )
      )
      RETURNING id,catalogue_id,test_type,state,priority`,
@@ -2940,7 +3033,7 @@ export async function queueAutomaticUpgradeQualifications({ limit = 12, allowCle
   const safeLimit = Math.max(1, Math.min(50, Number(limit) || 12))
   const result = await pool.query(
     `WITH candidates AS (
-       SELECT c.id AS catalogue_id,c.canonical_name,q.priority
+       SELECT c.id AS catalogue_id,c.canonical_name,c.target_version,q.priority
          FROM rmm_software_catalogue c
          JOIN rmm_software_qualification_queue q
            ON q.catalogue_id=c.id
@@ -2951,6 +3044,9 @@ export async function queueAutomaticUpgradeQualifications({ limit = 12, allowCle
           AND c.qualification_state='deployment_candidate'
           AND c.source_metadata->>'deploymentMode' IN ('vendor_direct','winget_preferred')
           AND c.source_metadata->>'trustState'='direct_ready'
+          AND lower(COALESCE(c.qualification_evidence->>'cleanInstallVerified','false'))='true'
+          AND c.qualification_evidence->>'cleanInstallVersion'=c.target_version
+          AND lower(COALESCE(c.qualification_evidence->>'uninstallVerified','false'))='true'
           AND ($2::boolean OR COALESCE(q.evidence->>'manualQualificationMode','')<>'clean_only')
           AND EXISTS (
             SELECT 1
@@ -2983,6 +3079,7 @@ export async function queueAutomaticUpgradeQualifications({ limit = 12, allowCle
      SELECT catalogue_id,'upgrade','queued',priority,0,'',
             jsonb_build_object(
               'automaticUpgradeQualification',true,
+              'targetVersion',target_version,
               'queuedAt',now()
             ),
             now(),now()
@@ -3017,7 +3114,10 @@ export async function queueAutomaticUpgradeQualifications({ limit = 12, allowCle
        )
      ) OR (
        rmm_software_qualification_queue.state='cancelled'
-       AND rmm_software_qualification_queue.last_error='manual_revalidation_reset'
+       AND rmm_software_qualification_queue.last_error IN (
+         'manual_revalidation_reset',
+         'qualification_target_version_changed'
+       )
      )
      RETURNING id,catalogue_id,test_type,state,priority`,
     [safeLimit, Boolean(allowCleanOnly)],
@@ -3041,8 +3141,13 @@ export async function queueAutomaticRollbackQualifications({ limit = 8 } = {}) {
       WHERE c.tenant_id IS NULL
         AND c.status='active'
         AND c.qualification_state='deployment_candidate'
+        AND lower(COALESCE(c.qualification_evidence->>'cleanInstallVerified','false'))='true'
+        AND c.qualification_evidence->>'cleanInstallVersion'=c.target_version
+        AND lower(COALESCE(c.qualification_evidence->>'uninstallVerified','false'))='true'
         AND lower(COALESCE(c.qualification_evidence->>'upgradeVerified','false'))='true'
+        AND c.qualification_evidence->>'upgradeVersion'=c.target_version
         AND lower(COALESCE(c.qualification_evidence->>'upgradePatchDetectionVerified','false'))='true'
+        AND c.qualification_evidence->>'upgradePatchDetectionTargetVersion'=c.target_version
         AND NOT EXISTS (
           SELECT 1
             FROM rmm_software_qualification_queue qr
@@ -3117,6 +3222,10 @@ export async function promoteAutomaticAdmissionReady({ limit = 12 } = {}) {
                  WHERE qu.catalogue_id=c.id
                    AND qu.test_type='upgrade'
                    AND qu.state='passed'
+                   AND lower(COALESCE(c.qualification_evidence->>'upgradeVerified','false'))='true'
+                   AND c.qualification_evidence->>'upgradeVersion'=c.target_version
+                   AND lower(COALESCE(c.qualification_evidence->>'upgradePatchDetectionVerified','false'))='true'
+                   AND c.qualification_evidence->>'upgradePatchDetectionTargetVersion'=c.target_version
               ) AS upgrade_passed,
               EXISTS (
                 SELECT 1
@@ -3124,6 +3233,8 @@ export async function promoteAutomaticAdmissionReady({ limit = 12 } = {}) {
                  WHERE qrq.catalogue_id=c.id
                    AND qrq.test_type='rollback'
                    AND qrq.state='passed'
+                   AND lower(COALESCE(c.qualification_evidence->>'rollbackVerified','false'))='true'
+                   AND c.qualification_evidence->>'rollbackRestoredVersion'=c.target_version
               ) AS rollback_passed,
               EXISTS (
                 SELECT 1
@@ -3629,7 +3740,13 @@ export async function queueUpgradeQualification(catalogueId) {
   )
   const row = ready.rows[0]
   if (!row) return { queued: false, reason: 'catalogue_vendor_release_not_ready' }
-  if (clean(row.clean_state) !== 'passed') return { queued: false, reason: 'clean_install_not_passed' }
+  const cleanEvidence = object(row.qualification_evidence)
+  if (clean(row.clean_state) !== 'passed'
+    || cleanEvidence.cleanInstallVerified !== true
+    || clean(cleanEvidence.cleanInstallVersion) !== clean(row.target_version)
+    || cleanEvidence.uninstallVerified !== true) {
+    return { queued: false, reason: 'clean_install_not_passed_for_current_target' }
+  }
 
   const active = await pool.query(
     `SELECT id,test_type,state
@@ -3756,14 +3873,18 @@ export async function queueRollbackQualification(catalogueId) {
   const evidence = object(row.qualification_evidence)
   if (clean(row.clean_state) !== 'passed'
     || evidence.cleanInstallVerified !== true
+    || clean(evidence.cleanInstallVersion) !== clean(row.target_version)
     || evidence.uninstallVerified !== true) {
-    return { queued: false, reason: 'clean_install_not_passed' }
+    return { queued: false, reason: 'clean_install_not_passed_for_current_target' }
   }
-  if (clean(row.upgrade_state) !== 'passed' || evidence.upgradeVerified !== true) {
-    return { queued: false, reason: 'upgrade_not_passed' }
+  if (clean(row.upgrade_state) !== 'passed'
+    || evidence.upgradeVerified !== true
+    || clean(evidence.upgradeVersion) !== clean(row.target_version)) {
+    return { queued: false, reason: 'upgrade_not_passed_for_current_target' }
   }
-  if (evidence.upgradePatchDetectionVerified !== true) {
-    return { queued: false, reason: 'upgrade_patch_detection_not_verified' }
+  if (evidence.upgradePatchDetectionVerified !== true
+    || clean(evidence.upgradePatchDetectionTargetVersion) !== clean(row.target_version)) {
+    return { queued: false, reason: 'upgrade_patch_detection_not_verified_for_current_target' }
   }
 
   const active = await pool.query(
