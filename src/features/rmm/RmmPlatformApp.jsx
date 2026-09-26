@@ -645,11 +645,43 @@ function NetworkAdaptersPanel({ device }) {
   </section>
 }
 
+
+function InventoryTableCard({ detail = '', eyebrow = 'Inventory', empty = 'No inventory reported', items = [], columns = [], searchPlaceholder = 'Search inventory…', title }) {
+  const [search, setSearch] = useState('')
+  const [limit, setLimit] = useState(100)
+  const normalized = String(search || '').trim().toLowerCase()
+  const filtered = normalized
+    ? items.filter((item) => JSON.stringify(item || {}).toLowerCase().includes(normalized))
+    : items
+  const visible = filtered.slice(0, limit)
+  return <section className="rmm-card rmm-deep-inventory-card">
+    <div className="rmm-card-heading">
+      <div><span className="rmm-eyebrow">{eyebrow}</span><h2>{title}</h2>{detail && <small>{detail}</small>}</div>
+      <strong>{items.length}</strong>
+    </div>
+    {items.length > 8 && <label className="rmm-deep-inventory-search"><Search size={14} /><input value={search} onChange={(event) => { setSearch(event.target.value); setLimit(100) }} placeholder={searchPlaceholder} /></label>}
+    {visible.length > 0 ? <div className="rmm-deep-inventory-table" style={{ '--inventory-columns': columns.map((column) => column.width || 'minmax(120px,1fr)').join(' ') }}>
+      <div className="rmm-deep-inventory-head">{columns.map((column) => <span key={column.label}>{column.label}</span>)}</div>
+      {visible.map((item, index) => <div className="rmm-deep-inventory-row" key={(item.id || item.device_id || item.pnp_device_id || item.serial_number || item.name || item.hotfix_id || index) + ':' + index}>
+        {columns.map((column) => <span key={column.label}><strong>{column.value ? column.value(item) : (item[column.key] ?? 'Not reported')}</strong>{column.detail && <small>{column.detail(item)}</small>}</span>)}
+      </div>)}
+    </div> : <div className="rmm-empty compact"><Database size={22} /><strong>{normalized ? 'No matching inventory' : empty}</strong></div>}
+    {filtered.length > visible.length && <button className="rmm-inventory-load-more" onClick={() => setLimit((current) => current + 100)} type="button">Show more ({filtered.length - visible.length} remaining)</button>}
+  </section>
+}
+
 function DeviceHardware({ device }) {
   const memoryDetail = device.memoryUsedBytes && device.memoryTotalBytes ? (device.memoryUsedBytes / (1024 ** 3)).toFixed(1) + ' GB used · ' + (device.memory == null ? 'usage not reported' : device.memory + '%') : (device.memory == null ? '' : device.memory + '% used')
   const battery = device.battery || {}
   const gpus = Array.isArray(device.gpus) ? device.gpus : []
   const storageVolumes = Array.isArray(device.storageVolumes) ? device.storageVolumes : []
+  const memoryModules = Array.isArray(device.memoryModules) ? device.memoryModules : []
+  const physicalDisks = Array.isArray(device.physicalDisks) ? device.physicalDisks : []
+  const monitors = Array.isArray(device.monitors) ? device.monitors : []
+  const printers = Array.isArray(device.printers) ? device.printers : []
+  const usbDevices = Array.isArray(device.usbDevices) ? device.usbDevices : []
+  const motherboard = device.motherboard || {}
+  const virtualization = device.virtualization || {}
   const monitorCount = Number(device.displayInfo?.monitor_count)
   return (
     <div className="rmm-device-section-grid rmm-hardware-expanded">
@@ -664,6 +696,31 @@ function DeviceHardware({ device }) {
           <DeviceProperty label="Device UUID" value={device.deviceUuid} />
           <DeviceProperty label="BIOS / firmware" value={device.bios} />
           <DeviceProperty label="BIOS date" value={device.biosDate ? formatInventoryDate(device.biosDate) : null} />
+        </div>
+      </section>
+
+      <section className="rmm-card">
+        <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Firmware</span><h2>Motherboard & BIOS</h2></div></div>
+        <div className="rmm-property-grid detailed">
+          <DeviceProperty label="Board manufacturer" value={motherboard.manufacturer} />
+          <DeviceProperty label="Board model" value={motherboard.product} />
+          <DeviceProperty label="Board serial" value={motherboard.serial_number} />
+          <DeviceProperty label="Board version" value={motherboard.version} />
+          <DeviceProperty label="BIOS manufacturer" value={motherboard.bios_manufacturer} />
+          <DeviceProperty label="BIOS version" value={motherboard.bios_version} />
+          <DeviceProperty label="SMBIOS version" value={motherboard.smbios_version} />
+          <DeviceProperty label="Active power plan" value={device.powerPlan} />
+        </div>
+      </section>
+
+      <section className="rmm-card">
+        <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Virtualization</span><h2>Hypervisor capability</h2></div></div>
+        <div className="rmm-property-grid detailed">
+          <DeviceProperty label="Hypervisor present" value={virtualization.hypervisor_present === true ? 'Yes' : virtualization.hypervisor_present === false ? 'No' : null} />
+          <DeviceProperty label="Firmware virtualization" value={virtualization.virtualization_firmware_enabled === true ? 'Enabled' : virtualization.virtualization_firmware_enabled === false ? 'Disabled' : null} />
+          <DeviceProperty label="VM monitor extensions" value={virtualization.vm_monitor_mode_extensions === true ? 'Available' : virtualization.vm_monitor_mode_extensions === false ? 'Unavailable' : null} />
+          <DeviceProperty label="Second-level address translation" value={virtualization.second_level_address_translation === true ? 'Available' : virtualization.second_level_address_translation === false ? 'Unavailable' : null} />
+          <DeviceProperty label="DEP capability" value={virtualization.data_execution_prevention_available === true ? 'Available' : virtualization.data_execution_prevention_available === false ? 'Unavailable' : null} />
         </div>
       </section>
 
@@ -715,7 +772,13 @@ function DeviceHardware({ device }) {
                     ? 'On battery'
                     : null}
           />
-          <DeviceProperty label="Battery health" value={battery.health} />
+          <DeviceProperty label="Battery health" value={battery.health_percent != null ? Math.round(Number(battery.health_percent)) + '%' : battery.health} detail={battery.wear_percent != null ? Math.round(Number(battery.wear_percent)) + '% wear' : ''} />
+          <DeviceProperty label="Cycle count" value={battery.cycle_count} />
+          <DeviceProperty label="Design capacity" value={battery.design_capacity_mwh ? Math.round(Number(battery.design_capacity_mwh)) + ' mWh' : null} />
+          <DeviceProperty label="Full-charge capacity" value={battery.full_charge_capacity_mwh ? Math.round(Number(battery.full_charge_capacity_mwh)) + ' mWh' : null} />
+          <DeviceProperty label="Remaining capacity" value={battery.remaining_capacity_mwh ? Math.round(Number(battery.remaining_capacity_mwh)) + ' mWh' : null} />
+          <DeviceProperty label="Voltage" value={battery.voltage_mv ? Math.round(Number(battery.voltage_mv)) + ' mV' : null} />
+          <DeviceProperty label="Charge / discharge rate" value={battery.rate_mw != null ? Math.round(Number(battery.rate_mw)) + ' mW' : null} />
           <DeviceProperty label="Estimated runtime" value={battery.battery_life_seconds ? Math.round(Number(battery.battery_life_seconds) / 60) + ' minutes' : null} />
         </div>
       </section>
@@ -735,6 +798,139 @@ function DeviceHardware({ device }) {
           </article>)}
         </div>
       </section>
+
+      <InventoryTableCard
+        eyebrow="Memory"
+        title="Physical memory modules"
+        detail="Individual DIMMs reported by Windows SMBIOS/WMI."
+        items={memoryModules}
+        columns={[
+          { label: 'Slot', width: 'minmax(120px,.8fr)', value: (item) => item.device_locator || item.bank_label || 'Not reported' },
+          { label: 'Capacity', width: '100px', value: (item) => formatBytes(item.capacity_bytes) },
+          { label: 'Manufacturer', value: (item) => item.manufacturer || 'Not reported' },
+          { label: 'Part / serial', value: (item) => item.part_number || 'Not reported', detail: (item) => item.serial_number || '' },
+          { label: 'Speed', width: '110px', value: (item) => item.configured_speed_mhz ? item.configured_speed_mhz + ' MHz' : item.speed_mhz ? item.speed_mhz + ' MHz' : 'Not reported' },
+        ]}
+      />
+
+      <InventoryTableCard
+        eyebrow="Physical storage"
+        title="Disks & SMART health"
+        detail="Physical devices, firmware and reliability counters where Windows exposes them."
+        items={physicalDisks}
+        columns={[
+          { label: 'Disk', value: (item) => item.friendly_name || 'Physical disk', detail: (item) => item.serial_number || item.device_id || '' },
+          { label: 'Type / bus', width: '130px', value: (item) => [item.media_type, item.bus_type].filter(Boolean).join(' · ') || 'Not reported' },
+          { label: 'Capacity', width: '100px', value: (item) => formatBytes(item.size_bytes) },
+          { label: 'Health', width: '110px', value: (item) => item.health_status || item.operational_status || 'Not reported', detail: (item) => item.wear_percent == null ? '' : item.wear_percent + '% wear' },
+          { label: 'Temperature', width: '100px', value: (item) => item.temperature_c == null ? 'Not reported' : item.temperature_c + ' °C' },
+          { label: 'Firmware', width: '120px', value: (item) => item.firmware_version || 'Not reported' },
+        ]}
+      />
+
+      <InventoryTableCard
+        eyebrow="Displays"
+        title="Physical monitors"
+        detail="EDID identity reported by Windows monitor instrumentation."
+        items={monitors}
+        columns={[
+          { label: 'Monitor', value: (item) => item.model || item.product_code || 'Monitor', detail: (item) => item.manufacturer || '' },
+          { label: 'Serial', value: (item) => item.serial_number || 'Not reported' },
+          { label: 'Manufactured', width: '120px', value: (item) => item.manufacture_year ? 'Week ' + (item.manufacture_week || '?') + ' · ' + item.manufacture_year : 'Not reported' },
+          { label: 'State', width: '90px', value: (item) => item.active === true ? 'Active' : item.active === false ? 'Inactive' : 'Unknown' },
+        ]}
+      />
+
+      <InventoryTableCard
+        eyebrow="Peripherals"
+        title="Printers"
+        items={printers}
+        columns={[
+          { label: 'Printer', value: (item) => item.name || 'Printer', detail: (item) => item.driver_name || '' },
+          { label: 'Port', value: (item) => item.port_name || 'Not reported' },
+          { label: 'Connection', width: '110px', value: (item) => item.network ? 'Network' : 'Local' },
+          { label: 'Default', width: '90px', value: (item) => item.default ? 'Yes' : 'No' },
+        ]}
+      />
+
+      <InventoryTableCard
+        eyebrow="Peripherals"
+        title="USB devices"
+        searchPlaceholder="Search USB devices…"
+        items={usbDevices}
+        columns={[
+          { label: 'Device', value: (item) => item.name || 'USB device', detail: (item) => item.manufacturer || '' },
+          { label: 'Class', width: '120px', value: (item) => item.pnp_class || 'Not reported' },
+          { label: 'Status', width: '90px', value: (item) => item.status || 'Not reported' },
+          { label: 'Device ID', value: (item) => item.device_id || 'Not reported' },
+        ]}
+      />
+
+      <InventoryTableCard
+        eyebrow="Hardware health"
+        title="Problem devices"
+        detail="PnP devices with a non-zero Windows Config Manager error code."
+        items={device.problemDevices || []}
+        columns={[
+          { label: 'Device', value: (item) => item.name || 'Problem device', detail: (item) => item.manufacturer || '' },
+          { label: 'Class', width: '120px', value: (item) => item.pnp_class || 'Not reported' },
+          { label: 'Error', width: '100px', value: (item) => item.error_code == null ? 'Not reported' : 'Code ' + item.error_code },
+          { label: 'Status', width: '100px', value: (item) => item.status || 'Not reported' },
+          { label: 'Device ID', value: (item) => item.device_id || 'Not reported' },
+        ]}
+      />
+
+      <InventoryTableCard
+        eyebrow="Network"
+        title="Connection profiles"
+        items={device.networkProfiles || []}
+        columns={[
+          { label: 'Profile', value: (item) => item.name || 'Network', detail: (item) => item.interface_alias || '' },
+          { label: 'Category', width: '110px', value: (item) => item.network_category || 'Not reported' },
+          { label: 'IPv4', width: '110px', value: (item) => item.ipv4_connectivity || 'Not reported' },
+          { label: 'IPv6', width: '110px', value: (item) => item.ipv6_connectivity || 'Not reported' },
+        ]}
+      />
+
+      <InventoryTableCard
+        eyebrow="Network"
+        title="IP & DHCP configuration"
+        searchPlaceholder="Search adapter, address or DHCP server…"
+        items={device.networkConfigurations || []}
+        columns={[
+          { label: 'Adapter', value: (item) => item.description || 'Network adapter', detail: (item) => item.mac_address || '' },
+          { label: 'Addresses', value: (item) => Array.isArray(item.ip_addresses) && item.ip_addresses.length ? item.ip_addresses.join(', ') : 'Not reported' },
+          { label: 'DHCP', width: '110px', value: (item) => item.dhcp_enabled ? 'Enabled' : 'Static', detail: (item) => item.dhcp_server || '' },
+          { label: 'DNS', value: (item) => Array.isArray(item.dns_servers) && item.dns_servers.length ? item.dns_servers.join(', ') : 'Not reported', detail: (item) => item.dns_domain || '' },
+          { label: 'Gateway', value: (item) => Array.isArray(item.gateways) && item.gateways.length ? item.gateways.join(', ') : 'Not reported' },
+        ]}
+      />
+
+      <InventoryTableCard
+        eyebrow="Wireless"
+        title="Wi-Fi interfaces"
+        items={device.wifiInterfaces || []}
+        columns={[
+          { label: 'Interface', value: (item) => item.name || 'Wi-Fi', detail: (item) => item.state || '' },
+          { label: 'SSID', value: (item) => item.ssid || 'Not connected', detail: (item) => item.bssid || '' },
+          { label: 'Signal', width: '100px', value: (item) => item.signal || 'Not reported' },
+          { label: 'Channel / radio', value: (item) => [item.channel, item.radio_type].filter(Boolean).join(' · ') || 'Not reported' },
+          { label: 'Security', value: (item) => [item.authentication, item.cipher].filter(Boolean).join(' · ') || 'Not reported' },
+        ]}
+      />
+
+      <InventoryTableCard
+        eyebrow="Routing"
+        title="Default routes"
+        items={device.defaultRoutes || []}
+        columns={[
+          { label: 'Destination', width: '120px', value: (item) => item.destination || 'Default' },
+          { label: 'Next hop', value: (item) => item.next_hop || 'On-link' },
+          { label: 'Interface', value: (item) => item.interface_alias || 'Not reported' },
+          { label: 'Metric', width: '90px', value: (item) => item.route_metric ?? 'Not reported' },
+          { label: 'Protocol', width: '110px', value: (item) => item.protocol || 'Not reported' },
+        ]}
+      />
 
       <NetworkAdaptersPanel device={device} />
     </div>
@@ -852,6 +1048,154 @@ function DeviceSoftware({ device }) {
       {!visibleSoftware.length && <div className="rmm-empty"><Package size={24} /><strong>{search ? 'No software matches this search' : 'No software inventory'}</strong><span>{search ? 'Try another application, version or publisher.' : 'This device does not report installed application inventory.'}</span></div>}
     </section>
   )
+}
+
+function DeviceWindows({ device }) {
+  const licensing = device.windowsLicensing || {}
+  const reboot = device.rebootState || {}
+  return <div className="rmm-device-section-grid rmm-system-inventory-grid">
+    <section className="rmm-card">
+      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Windows</span><h2>Operating system state</h2></div></div>
+      <div className="rmm-property-grid detailed">
+        <DeviceProperty label="Edition" value={device.os} detail={device.version} />
+        <DeviceProperty label="Architecture" value={device.architecture} />
+        <DeviceProperty label="Windows release" value={device.osDisplayVersion} />
+        <DeviceProperty label="Installed" value={device.osInstallDate ? formatInventoryDate(device.osInstallDate) : null} />
+        <DeviceProperty label="Last boot" value={device.lastBoot} />
+        <DeviceProperty label="Active power plan" value={device.powerPlan} />
+        <DeviceProperty label="Deep inventory" value={device.deepInventoryCollectedAt ? new Date(device.deepInventoryCollectedAt).toLocaleString() : null} />
+      </div>
+    </section>
+
+    <section className="rmm-card">
+      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Activation</span><h2>Licensing & reboot</h2></div></div>
+      <div className="rmm-property-grid detailed">
+        <DeviceProperty label="Activation" value={licensing.status} detail={licensing.name || ''} />
+        <DeviceProperty label="Partial product key" value={licensing.partial_product_key ? '•••••-' + licensing.partial_product_key : null} />
+        <DeviceProperty label="Licence description" value={licensing.description} />
+        <DeviceProperty label="Pending reboot" value={reboot.pending === true ? 'Required' : reboot.pending === false ? 'No' : null} detail={Array.isArray(reboot.reasons) ? reboot.reasons.join(' · ') : ''} />
+      </div>
+    </section>
+
+    <section className="rmm-card">
+      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Identity</span><h2>Directory join</h2></div></div>
+      <div className="rmm-property-grid detailed">
+        <DeviceProperty label="Computer name" value={device.directoryJoin?.computer_name || device.name} />
+        <DeviceProperty label="AD domain joined" value={device.directoryJoin?.domain_joined === true ? 'Yes' : device.directoryJoin?.domain_joined === false ? 'No' : null} detail={device.directoryJoin?.domain || ''} />
+        <DeviceProperty label="Microsoft Entra joined" value={device.directoryJoin?.azure_ad_joined === true ? 'Yes' : device.directoryJoin?.azure_ad_joined === false ? 'No' : null} detail={device.directoryJoin?.entra_tenant_name || ''} />
+        <DeviceProperty label="Workplace joined" value={device.directoryJoin?.workplace_joined === true ? 'Yes' : device.directoryJoin?.workplace_joined === false ? 'No' : null} />
+        <DeviceProperty label="Domain role" value={device.directoryJoin?.domain_role} />
+        <DeviceProperty label="Entra device ID" value={device.directoryJoin?.entra_device_id} />
+        <DeviceProperty label="Tenant ID" value={device.directoryJoin?.entra_tenant_id} />
+        <DeviceProperty label="Workgroup" value={device.directoryJoin?.workgroup} />
+      </div>
+    </section>
+
+    <InventoryTableCard
+      eyebrow="Windows Update"
+      title="Installed updates / KB history"
+      detail="Installed Windows hotfix history reported by Get-HotFix."
+      items={device.installedHotfixes || []}
+      columns={[
+        { label: 'KB', width: '110px', value: (item) => item.hotfix_id || 'Not reported' },
+        { label: 'Description', value: (item) => item.description || 'Update' },
+        { label: 'Installed', width: '120px', value: (item) => item.installed_on || 'Not reported' },
+        { label: 'Installed by', value: (item) => item.installed_by || 'Not reported' },
+      ]}
+    />
+
+    <InventoryTableCard
+      eyebrow="Device Manager"
+      title="Problem devices"
+      detail="PnP devices with a non-zero Windows Config Manager error code."
+      items={device.problemDevices || []}
+      columns={[
+        { label: 'Device', value: (item) => item.name || 'Problem device', detail: (item) => item.manufacturer || '' },
+        { label: 'Class', width: '120px', value: (item) => item.pnp_class || 'Not reported' },
+        { label: 'Error', width: '100px', value: (item) => item.error_code == null ? 'Not reported' : 'Code ' + item.error_code },
+        { label: 'Status', width: '100px', value: (item) => item.status || 'Not reported' },
+        { label: 'Device ID', value: (item) => item.device_id || 'Not reported' },
+      ]}
+    />
+
+    <InventoryTableCard
+      eyebrow="Drivers"
+      title="Installed device drivers"
+      detail="Signed PnP driver inventory including version, date and INF identity."
+      searchPlaceholder="Search drivers, devices or INF files…"
+      items={device.drivers || []}
+      columns={[
+        { label: 'Device', value: (item) => item.device_name || 'Device', detail: (item) => item.device_class || '' },
+        { label: 'Version', width: '130px', value: (item) => item.driver_version || 'Not reported', detail: (item) => item.driver_date ? formatInventoryDate(item.driver_date) : '' },
+        { label: 'Provider', value: (item) => item.driver_provider || item.manufacturer || 'Not reported' },
+        { label: 'INF', width: '130px', value: (item) => item.inf_name || 'Not reported' },
+        { label: 'Signed', width: '90px', value: (item) => item.signed === true ? 'Yes' : item.signed === false ? 'No' : 'Unknown', detail: (item) => item.signer || '' },
+      ]}
+    />
+
+    <InventoryTableCard
+      eyebrow="Accounts"
+      title="Local user accounts"
+      searchPlaceholder="Search local users…"
+      items={device.localUsers || []}
+      columns={[
+        { label: 'User', value: (item) => item.name || 'Local user', detail: (item) => item.full_name || item.description || '' },
+        { label: 'Enabled', width: '90px', value: (item) => item.enabled === true ? 'Yes' : item.enabled === false ? 'No' : 'Unknown' },
+        { label: 'Administrator', width: '110px', value: (item) => item.is_admin === true ? 'Yes' : 'No' },
+        { label: 'Last logon', width: '150px', value: (item) => item.last_logon ? new Date(item.last_logon).toLocaleString() : 'Not reported' },
+        { label: 'Password last set', width: '150px', value: (item) => item.password_last_set ? new Date(item.password_last_set).toLocaleString() : 'Not reported' },
+        { label: 'SID', value: (item) => item.sid || 'Not reported' },
+      ]}
+    />
+
+    <InventoryTableCard
+      eyebrow="Accounts"
+      title="Local groups & membership"
+      searchPlaceholder="Search local groups or members…"
+      items={device.localGroups || []}
+      columns={[
+        { label: 'Group', value: (item) => item.name || 'Local group', detail: (item) => item.description || '' },
+        { label: 'Members', width: '110px', value: (item) => Array.isArray(item.members) ? item.members.length : 0 },
+        { label: 'Member names', value: (item) => Array.isArray(item.members) && item.members.length ? item.members.map((member) => member.name).join(', ') : 'No members reported' },
+        { label: 'SID', value: (item) => item.sid || 'Not reported' },
+      ]}
+    />
+
+    <InventoryTableCard
+      eyebrow="Startup"
+      title="Startup applications"
+      items={device.startupItems || []}
+      columns={[
+        { label: 'Name', value: (item) => item.name || 'Startup item' },
+        { label: 'Command', value: (item) => item.command || 'Not reported' },
+        { label: 'Location', value: (item) => item.location || 'Not reported' },
+        { label: 'User', width: '150px', value: (item) => item.user || 'Not reported' },
+      ]}
+    />
+
+    <InventoryTableCard
+      eyebrow="Automation"
+      title="Scheduled tasks"
+      searchPlaceholder="Search scheduled tasks…"
+      items={device.scheduledTasks || []}
+      columns={[
+        { label: 'Task', value: (item) => item.name || 'Scheduled task', detail: (item) => item.path || '' },
+        { label: 'State', width: '100px', value: (item) => item.state || 'Not reported' },
+        { label: 'Author', value: (item) => item.author || 'Not reported' },
+        { label: 'Description', value: (item) => item.description || 'Not reported' },
+      ]}
+    />
+
+    <InventoryTableCard
+      eyebrow="Windows"
+      title="Enabled optional features"
+      items={device.optionalFeatures || []}
+      columns={[
+        { label: 'Feature', value: (item) => item.name || 'Windows feature' },
+        { label: 'State', width: '120px', value: (item) => item.state || 'Enabled' },
+      ]}
+    />
+  </div>
 }
 
 function devicePatchVulnerabilityTone(item) {
@@ -977,6 +1321,134 @@ function DevicePatching({ device }) {
   </>
 }
 
+
+function BitLockerRecoveryPanel({ device }) {
+  const apiBase = window.__HI5_API_BASE__ || deploymentConfig().apiUrl
+  const [state, setState] = useState({ loading: true, canReveal: false, items: [] })
+  const [message, setMessage] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [revealed, setRevealed] = useState({})
+
+  async function loadRecovery() {
+    if (!device.agentDeviceId) {
+      setState({ loading: false, canReveal: false, items: [] })
+      return
+    }
+    try {
+      const response = await fetch(apiBase + '/api/v1/rmm/devices/' + encodeURIComponent(device.agentDeviceId) + '/bitlocker-recovery', { credentials: 'include' })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.error || 'Unable to load recovery-key status.')
+      setState({ loading: false, canReveal: Boolean(payload.canReveal), items: Array.isArray(payload.items) ? payload.items : [] })
+    } catch (error) {
+      setState((current) => ({ ...current, loading: false }))
+      setMessage(error?.message || 'Unable to load recovery-key status.')
+    }
+  }
+
+  useEffect(() => {
+    let active = true
+    if (!device.agentDeviceId) {
+      setState({ loading: false, canReveal: false, items: [] })
+      return () => { active = false }
+    }
+    fetch(apiBase + '/api/v1/rmm/devices/' + encodeURIComponent(device.agentDeviceId) + '/bitlocker-recovery', { credentials: 'include' })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(payload.error || 'Unable to load recovery-key status.')
+        if (active) setState({ loading: false, canReveal: Boolean(payload.canReveal), items: Array.isArray(payload.items) ? payload.items : [] })
+      })
+      .catch((error) => { if (active) { setState((current) => ({ ...current, loading: false })); setMessage(error?.message || 'Unable to load recovery-key status.') } })
+    return () => { active = false }
+  }, [apiBase, device.agentDeviceId])
+
+  async function requestEscrow() {
+    if (!device.agentDeviceId || busy) return
+    setBusy(true); setMessage('')
+    try {
+      const response = await fetch(apiBase + '/api/v1/rmm/devices/' + encodeURIComponent(device.agentDeviceId) + '/bitlocker-recovery/escrow', {
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}',
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.error || 'Recovery-key escrow could not be requested.')
+      setMessage('Escrow requested. Waiting for the Agent to return the recovery protector…')
+      await new Promise((resolve) => window.setTimeout(resolve, 1500))
+      await loadRecovery()
+    } catch (error) {
+      setMessage(error?.message || 'Recovery-key escrow could not be requested.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function reveal(item) {
+    if (!state.canReveal || busy) return
+    const reason = window.prompt('Why do you need to reveal this BitLocker recovery key?')
+    if (!reason || reason.trim().length < 3) return
+    setBusy(true); setMessage('')
+    try {
+      const response = await fetch(apiBase + '/api/v1/rmm/devices/' + encodeURIComponent(device.agentDeviceId) + '/bitlocker-recovery/' + encodeURIComponent(item.id) + '/reveal', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: reason.trim() }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.error || 'Recovery key could not be revealed.')
+      const password = String(payload.recoveryPassword || '')
+      setRevealed((current) => ({ ...current, [item.id]: password }))
+      window.setTimeout(() => setRevealed((current) => {
+        const next = { ...current }
+        delete next[item.id]
+        return next
+      }), 60_000)
+      await loadRecovery()
+    } catch (error) {
+      setMessage(error?.message || 'Recovery key could not be revealed.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const volumes = Array.isArray(device.bitlockerVolumes) ? device.bitlockerVolumes : []
+  const activeKeys = state.items.filter((item) => item.active)
+  const hasRecoveryProtector = volumes.some((volume) => Number(volume.recovery_protector_count || 0) > 0 || volume.recovery_password_present === true)
+  return <section className="rmm-card rmm-bitlocker-recovery-card">
+    <div className="rmm-card-heading">
+      <div><span className="rmm-eyebrow">BitLocker</span><h2>Encryption & recovery</h2></div>
+      <StatusPill tone={activeKeys.length ? 'healthy' : hasRecoveryProtector ? 'warning' : 'neutral'}>{activeKeys.length ? 'Recovery escrowed' : hasRecoveryProtector ? 'Recovery not escrowed' : 'No recovery protector'}</StatusPill>
+    </div>
+    <div className="rmm-bitlocker-volume-list">
+      {volumes.map((volume, index) => {
+        const protectors = Array.isArray(volume.key_protectors) ? volume.key_protectors : []
+        const matching = activeKeys.filter((item) => String(item.drive || '').toLowerCase() === String(volume.drive || volume.mount_point || '').toLowerCase())
+        return <article key={(volume.drive || volume.mount_point || 'volume') + ':' + index}>
+          <div className="rmm-bitlocker-volume-heading">
+            <span><HardDrive size={16} /></span>
+            <div><strong>{volume.drive || volume.mount_point || 'Volume'}</strong><small>{volume.volume_status || 'Status not reported'} · {volume.encryption_method || 'Method not reported'}</small></div>
+            <StatusPill tone={String(volume.protection_status).toLowerCase() === 'on' ? 'healthy' : 'neutral'}>{volume.protection_status || 'Unknown'}</StatusPill>
+          </div>
+          <div className="rmm-bitlocker-volume-meta">
+            <span><small>Encrypted</small><strong>{volume.encryption_percentage == null ? 'Not reported' : volume.encryption_percentage + '%'}</strong></span>
+            <span><small>Lock state</small><strong>{volume.lock_status || 'Not reported'}</strong></span>
+            <span><small>Protectors</small><strong>{volume.key_protector_count ?? protectors.length}</strong></span>
+            <span><small>Recovery protectors</small><strong>{volume.recovery_protector_count ?? protectors.filter((item) => String(item.type).toLowerCase() === 'recoverypassword').length}</strong></span>
+          </div>
+          {protectors.length > 0 && <div className="rmm-bitlocker-protectors">{protectors.map((protector, protectorIndex) => <span key={(protector.id || protector.type || 'protector') + ':' + protectorIndex}><KeyRound size={12} /><strong>{protector.type || 'Protector'}</strong><small>{protector.id || 'ID not reported'}</small></span>)}</div>}
+          {matching.map((item) => <div className="rmm-recovery-key-row" key={item.id}>
+            <div><strong>Recovery password escrowed</strong><small>Protector {item.protectorId} · Last seen {item.lastSeenAt ? new Date(item.lastSeenAt).toLocaleString() : 'Not reported'}</small></div>
+            {revealed[item.id]
+              ? <div className="rmm-recovery-key-revealed"><code>{revealed[item.id]}</code><button onClick={() => navigator.clipboard?.writeText(revealed[item.id])} type="button">Copy</button><button onClick={() => setRevealed((current) => { const next = { ...current }; delete next[item.id]; return next })} type="button">Hide</button></div>
+              : <button disabled={!state.canReveal || busy} onClick={() => reveal(item)} type="button">{state.canReveal ? 'Reveal recovery key' : 'Reveal restricted'}</button>}
+          </div>)}
+        </article>
+      })}
+    </div>
+    {!volumes.length && <div className="rmm-empty compact"><KeyRound size={22} /><strong>BitLocker inventory not reported</strong><span>Refresh inventory after the Agent reconnects.</span></div>}
+    {hasRecoveryProtector && !activeKeys.length && <div className="rmm-bitlocker-escrow-callout"><div><strong>Recovery password is not escrowed in Hi5Central</strong><span>Store it securely now so it remains available even if the endpoint cannot boot.</span></div><button disabled={!deviceIsOnline(device) || busy} onClick={requestEscrow} type="button"><KeyRound size={14} /> {busy ? 'Requesting…' : 'Escrow now'}</button></div>}
+    {message && <div className="rmm-device-action-message">{message}</div>}
+  </section>
+}
+
 function DeviceSecurity({ device }) {
   const security = device.security || {}
   const checks = [
@@ -987,7 +1459,76 @@ function DeviceSecurity({ device }) {
     ['Secure boot', security.secureBoot, 'Boot integrity'],
     ['TPM / trust', security.tpm, 'Hardware-backed trust capability'],
   ]
-  return <div className="rmm-security-grid">{checks.map(([label, state, detail]) => <article className="rmm-card" key={label}><span className={`rmm-security-card-icon ${securityTone(state)}`}><ShieldCheck size={20} /></span><span className="rmm-eyebrow">{label}</span><h2>{state || 'Not reported'}</h2><p>{detail}</p><StatusPill tone={securityTone(state)}>{securityTone(state) === 'healthy' ? 'Compliant' : securityTone(state) === 'critical' ? 'Action required' : 'Observed'}</StatusPill></article>)}</div>
+  const securityDetails = device.securityDetails || {}
+  const defender = securityDetails.defender || {}
+  const tpm = securityDetails.tpm || {}
+  const firewallProfiles = Array.isArray(securityDetails.firewall_profiles) ? securityDetails.firewall_profiles : []
+  const machineCertificates = Array.isArray(device.machineCertificates) ? device.machineCertificates : []
+  return <>
+    <div className="rmm-security-grid">{checks.map(([label, state, detail]) => <article className="rmm-card" key={label}><span className={`rmm-security-card-icon ${securityTone(state)}`}><ShieldCheck size={20} /></span><span className="rmm-eyebrow">{label}</span><h2>{state || 'Not reported'}</h2><p>{detail}</p><StatusPill tone={securityTone(state)}>{securityTone(state) === 'healthy' ? 'Compliant' : securityTone(state) === 'critical' ? 'Action required' : 'Observed'}</StatusPill></article>)}</div>
+
+    <div className="rmm-device-section-grid rmm-security-detail-grid">
+      <BitLockerRecoveryPanel device={device} />
+
+      <section className="rmm-card">
+        <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Microsoft Defender</span><h2>Antivirus detail</h2></div></div>
+        <div className="rmm-property-grid detailed">
+          <DeviceProperty label="Antivirus" value={defender.antivirus_enabled === true ? 'Enabled' : defender.antivirus_enabled === false ? 'Disabled' : null} />
+          <DeviceProperty label="Real-time protection" value={defender.realtime_protection_enabled === true ? 'Enabled' : defender.realtime_protection_enabled === false ? 'Disabled' : null} />
+          <DeviceProperty label="Behavior monitoring" value={defender.behavior_monitor_enabled === true ? 'Enabled' : defender.behavior_monitor_enabled === false ? 'Disabled' : null} />
+          <DeviceProperty label="Tamper protection" value={defender.is_tamper_protected === true ? 'Enabled' : defender.is_tamper_protected === false ? 'Disabled' : null} detail={defender.tamper_protection_source || ''} />
+          <DeviceProperty label="Engine version" value={defender.engine_version} />
+          <DeviceProperty label="Platform version" value={defender.product_version} />
+          <DeviceProperty label="Signature version" value={defender.antivirus_signature_version} detail={defender.antivirus_signature_last_updated ? 'Updated ' + new Date(defender.antivirus_signature_last_updated).toLocaleString() : ''} />
+          <DeviceProperty label="Last quick scan" value={defender.quick_scan_end ? new Date(defender.quick_scan_end).toLocaleString() : null} detail={defender.quick_scan_age_days == null ? '' : defender.quick_scan_age_days + ' days old'} />
+          <DeviceProperty label="Last full scan" value={defender.full_scan_end ? new Date(defender.full_scan_end).toLocaleString() : null} detail={defender.full_scan_age_days == null ? '' : defender.full_scan_age_days + ' days old'} />
+        </div>
+      </section>
+
+      <section className="rmm-card">
+        <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Trusted Platform Module</span><h2>TPM detail</h2></div></div>
+        <div className="rmm-property-grid detailed">
+          <DeviceProperty label="Present" value={tpm.present === true ? 'Yes' : tpm.present === false ? 'No' : null} />
+          <DeviceProperty label="Enabled" value={tpm.enabled === true ? 'Yes' : tpm.enabled === false ? 'No' : null} />
+          <DeviceProperty label="Activated" value={tpm.activated === true ? 'Yes' : tpm.activated === false ? 'No' : null} />
+          <DeviceProperty label="Owned" value={tpm.owned === true ? 'Yes' : tpm.owned === false ? 'No' : null} />
+          <DeviceProperty label="Ready" value={tpm.ready === true ? 'Yes' : tpm.ready === false ? 'No' : null} />
+          <DeviceProperty label="Specification" value={tpm.spec_version} />
+          <DeviceProperty label="Manufacturer ID" value={tpm.manufacturer_id} />
+          <DeviceProperty label="Manufacturer version" value={tpm.manufacturer_version} />
+        </div>
+      </section>
+
+      <InventoryTableCard
+        eyebrow="Firewall"
+        title="Windows Firewall profiles"
+        items={firewallProfiles}
+        columns={[
+          { label: 'Profile', value: (item) => item.name || 'Firewall profile' },
+          { label: 'Enabled', width: '90px', value: (item) => item.enabled === true ? 'Yes' : item.enabled === false ? 'No' : 'Unknown' },
+          { label: 'Inbound', width: '110px', value: (item) => item.default_inbound_action || 'Not reported' },
+          { label: 'Outbound', width: '110px', value: (item) => item.default_outbound_action || 'Not reported' },
+          { label: 'Logging', value: (item) => [item.log_allowed ? 'Allowed' : '', item.log_blocked ? 'Blocked' : ''].filter(Boolean).join(' + ') || 'Off', detail: (item) => item.log_file || '' },
+        ]}
+      />
+
+      <InventoryTableCard
+        eyebrow="Certificates"
+        title="Machine certificates"
+        detail="Public certificate metadata from LocalMachine personal/web-hosting stores. Private key material is never collected."
+        searchPlaceholder="Search certificate subject, issuer or thumbprint…"
+        items={machineCertificates}
+        columns={[
+          { label: 'Subject', value: (item) => item.subject || item.friendly_name || 'Certificate', detail: (item) => item.store || '' },
+          { label: 'Issuer', value: (item) => item.issuer || 'Not reported' },
+          { label: 'Expires', width: '130px', value: (item) => item.not_after ? formatInventoryDate(item.not_after) : 'Not reported' },
+          { label: 'Private key', width: '100px', value: (item) => item.has_private_key ? 'Present locally' : 'No' },
+          { label: 'Thumbprint', value: (item) => item.thumbprint || 'Not reported' },
+        ]}
+      />
+
+    </div>
+  </>
 }
 
 function DeviceItsm({ relatedTickets, onCreateIncident }) {
@@ -1056,6 +1597,7 @@ function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device
   const sections = [
     ['overview', 'Overview', CircleGauge],
     ['hardware', 'Hardware', Cpu],
+    ['windows', 'Windows', Settings],
     ['software', 'Software', Package],
     ['patching', 'Patching', ShieldCheck],
     ['security', 'Security', ShieldCheck],
@@ -1157,6 +1699,7 @@ function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device
 
   let content
   if (section === 'hardware') content = <DeviceHardware device={device} />
+  else if (section === 'windows') content = <DeviceWindows device={device} />
   else if (section === 'software') content = <DeviceSoftware device={device} />
   else if (section === 'patching') content = <DevicePatching device={device} />
   else if (section === 'security') content = <DeviceSecurity device={device} />

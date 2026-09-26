@@ -4,6 +4,7 @@ import { hasPermission } from './access.js'
 import { originMatchesTenant } from './deploymentConfig.js'
 import { pool, withTransaction } from './db.js'
 import { recordJobCompletionActivity, recordRmmActivity } from './rmmActivity.js'
+import { bitLockerRecoveryEscrowNeeded, ingestBitLockerRecoveryEscrow } from './rmmRecoveryKeys.js'
 import { recalculateTenantVulnerabilityExposures } from './rmmVulnerabilityExposure.js'
 import { resolveSession } from './session.js'
 
@@ -1084,6 +1085,12 @@ export function attachRmmAgentWebSocket(server) {
       try { payload = JSON.parse(text) } catch { return }
       if (!payload || typeof payload !== 'object') return
 
+      if (payload.type === 'bitlocker_recovery_escrow') {
+        if (clean(payload.device_id) && clean(payload.device_id) !== String(agent.id)) return
+        ingestBitLockerRecoveryEscrow(agent, payload).catch((error) => console.error('RMM BitLocker recovery escrow ingest failed', agent.id, error.message))
+        return
+      }
+
       const subscribers = agentMessageSubscribers.get(String(agent.id))
       if (subscribers?.size) {
         for (const handler of [...subscribers]) {
@@ -1107,7 +1114,17 @@ export function attachRmmAgentWebSocket(server) {
       }
       if (payload.type === 'inventory_snapshot') {
         if (clean(payload.device_id) && clean(payload.device_id) !== String(agent.id)) return
-        ingestInventory(agent, payload).catch((error) => console.error('RMM inventory ingest failed', agent.id, error.message))
+        ingestInventory(agent, payload)
+          .then(() => {
+            bitLockerRecoveryEscrowNeeded(agent, payload)
+              .then((needed) => {
+                if (!needed || ws.readyState !== 1) return
+                ws.send(JSON.stringify({ type: 'bitlocker_recovery_escrow_request', request_id: randomUUID() }))
+              })
+              .catch((error) => console.error('RMM BitLocker recovery escrow check failed', agent.id, error.message))
+          })
+          .catch((error) => console.error('RMM inventory ingest failed', agent.id, error.message))
+        return
       }
     })
 

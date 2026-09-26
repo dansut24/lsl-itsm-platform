@@ -95,6 +95,7 @@ const permissionCatalog = [
   ['rmm.access', 'RMM', 'Access the RMM workspace'],
   ['rmm.devices.view', 'RMM', 'View devices'],
   ['rmm.devices.control', 'RMM', 'Run device control actions'],
+  ['rmm.security.recovery_keys.read', 'RMM', 'Reveal escrowed BitLocker recovery keys'],
   ['rmm.devices.files', 'RMM', 'Use remote file management'],
   ['rmm.devices.terminal', 'RMM', 'Use remote terminal'],
   ['rmm.devices.remote', 'RMM', 'Start unattended console remote sessions'],
@@ -127,7 +128,7 @@ export const defaultRoleDefinitions = [
   { key: 'change-board', name: 'Change Board / CAB', description: 'Focused Change Advisory Board access.', permissions: ['workspace.access','itsm.changes.view','itsm.changes.cab','itsm.changes.approve','notifications.view'], systemKey: 'change-board' },
   { key: 'knowledge-publisher', name: 'Knowledge Publisher', description: 'Create, edit and publish internal and portal knowledge.', permissions: ['workspace.access','knowledge.view_internal','knowledge.create','knowledge.edit','knowledge.publish','knowledge.archive','knowledge.link'], systemKey: 'knowledge-publisher' },
   { key: 'live-chat-analyst', name: 'Live Chat Analyst', description: 'Operate Live Chat without granting wider ITSM administration.', permissions: ['workspace.access','live_chat.view','live_chat.claim','live_chat.reply','live_chat.transfer','live_chat.close','notifications.view'], systemKey: 'live-chat-analyst' },
-  { key: 'rmm-operator', name: 'RMM Operator', description: 'Operate endpoint monitoring and remote management.', permissions: ['workspace.access','rmm.access','rmm.devices.view','rmm.devices.control','rmm.devices.files','rmm.devices.terminal','rmm.devices.remote','rmm.alerts.manage','rmm.sites.view','rmm.groups.view','notifications.view'], systemKey: 'rmm-operator' },
+  { key: 'rmm-operator', name: 'RMM Operator', description: 'Operate endpoint monitoring and remote management.', permissions: ['workspace.access','rmm.access','rmm.devices.view','rmm.devices.control','rmm.security.recovery_keys.read','rmm.devices.files','rmm.devices.terminal','rmm.devices.remote','rmm.alerts.manage','rmm.sites.view','rmm.groups.view','notifications.view'], systemKey: 'rmm-operator' },
 ]
 
 function cleanPermissions(values = []) {

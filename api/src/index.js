@@ -16,6 +16,7 @@ import { attachRmmDeviceToolWebSocket, registerRmmDeviceToolRoutes } from './rmm
 import { attachRmmViewerWebSocket, registerRmmRemoteRoutes } from './rmmRemote.js'
 import { registerRmmScopeRoutes } from './rmmScope.js'
 import { registerRmmPatchingRoutes } from './rmmPatching.js'
+import { registerRmmRecoveryKeyRoutes } from './rmmRecoveryKeys.js'
 import { startRmmVulnerabilitySyncScheduler } from './rmmVulnerabilityIntel.js'
 import { startSoftwareVendorSyncScheduler } from './rmmSoftwareVendorIntel.js'
 import { startTenantVendorSourceScheduler } from './rmmTenantVendorSources.js'
@@ -397,6 +398,7 @@ registerRmmDeviceToolRoutes(app)
 registerRmmRemoteRoutes(app)
 registerRmmScopeRoutes(app)
 registerRmmPatchingRoutes(app)
+registerRmmRecoveryKeyRoutes(app)
 
 app.notFound((c) => c.json({ error: 'Not found' }, 404))
 app.onError((error, c) => {

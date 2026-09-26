@@ -173,6 +173,41 @@ export function registerRmmDeviceToolRoutes(app) {
       return c.json({ error: error?.message || 'Unable to read live network statistics.' }, 504)
     }
   })
+  app.post('/api/v1/rmm/devices/:agentDeviceId/bitlocker-recovery/escrow', async (c) => {
+    const auth = await requireDeviceControl(c)
+    if (auth.error) return auth.error
+    if (!hasPermission(auth.session.access, 'rmm.security.recovery_keys.read')) {
+      return c.json({ error: 'You do not have permission to manage BitLocker recovery keys.' }, 403)
+    }
+    const device = await managedAgent(auth.session.tenant_id, c.req.param('agentDeviceId'))
+    if (!device) return c.json({ error: 'Managed Agent not found for this device.' }, 404)
+    if (!versionAtLeast(device.agent_version, '0.1.171')) {
+      return c.json({ error: 'Agent 0.1.171 or newer is required for BitLocker recovery-key escrow.', upgradeRequired: true }, 426)
+    }
+    const socket = agentSocketForDevice(device.id)
+    if (!socket || socket.readyState !== 1) return c.json({ error: 'This device is offline. Recovery-key escrow requires a live Agent connection.', offline: true }, 409)
+    if (!sendAgentMessage(device.id, { type: 'bitlocker_recovery_escrow_request' })) {
+      return c.json({ error: 'The device went offline before recovery-key escrow could be requested.', offline: true }, 409)
+    }
+    const label = clean(auth.session.name || auth.session.email || 'Technician').slice(0, 255)
+    await recordRmmActivity({
+      tenantId: auth.session.tenant_id,
+      agentDeviceId: device.id,
+      inventoryId: device.inventory_id,
+      actorUserId: auth.session.user_id,
+      actorType: 'technician',
+      actorLabel: label,
+      eventType: 'bitlocker.recovery_key.escrow_requested',
+      category: 'security',
+      summary: label + ' requested BitLocker recovery-key escrow',
+      detail: 'The Agent was asked to escrow any RecoveryPassword protectors without adding them to normal inventory.',
+      outcome: 'requested',
+      severity: 'info',
+      metadata: {},
+    }).catch(() => {})
+    return c.json({ success: true, requested: true }, 202)
+  })
+
   app.post('/api/v1/rmm/devices/:agentDeviceId/power', async (c) => {
     const auth = await requireDeviceControl(c)
     if (auth.error) return auth.error
