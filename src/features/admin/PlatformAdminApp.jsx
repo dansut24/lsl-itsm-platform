@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Activity, Building2, Database, LogOut, Menu, Moon, PackageCheck,
-  Plus, RefreshCw, Search, ServerCog, ShieldCheck, Sun, X,
+  Activity, AlertTriangle, Ban, Building2, Database, LogOut, Menu, Moon,
+  PackageCheck, Pause, Play, Plus, RefreshCw, RotateCcw, Save, Search, ServerCog,
+  ShieldCheck, Sun, Trash2, Wrench, X,
 } from 'lucide-react'
 import { deploymentConfig } from '../../lib/deploymentConfig.js'
 import '../rmm/RmmPlatformApp.css'
@@ -165,21 +166,150 @@ function DataTable({ rows, columns }) {
   return <div className="h5a-table-wrap"><table><thead><tr>{columns.map(c=><th key={c}>{c.replaceAll('_',' ')}</th>)}</tr></thead><tbody>{rows.map((row,index)=><tr key={row.id||index}>{columns.map(c=><td key={c}>{c==='state'||c==='qualification_state'?<StatusPill value={row[c]}/>:String(row[c]??'—')}</td>)}</tr>)}</tbody></table></div>
 }
 
-function Qualification({ data, query }) {
+function QualificationQueueTable({ rows, recent = false, onAction, busyId }) {
+  if (!rows.length) return <div className="h5a-empty">No qualification rows.</div>
+  return <div className="h5a-table-wrap"><table><thead><tr>
+    <th>Software</th><th>Version</th><th>State</th><th>Attempt</th><th>Last error</th><th>Actions</th>
+  </tr></thead><tbody>{rows.map(row=><tr key={row.id}>
+    <td><strong>{row.canonical_name}</strong><small className="h5a-cell-sub">{row.test_type}</small></td>
+    <td>{row.target_version||'—'}</td><td><StatusPill value={row.state}/></td><td>{row.attempt_count??0}</td>
+    <td className="h5a-error-cell">{row.last_error||'—'}</td>
+    <td><div className="h5a-row-actions">
+      {row.state==='queued'?<button className="rmm-secondary compact" disabled={busyId===row.id} onClick={()=>onAction(row,'run_now')}><Play size={13}/>Run now</button>:null}
+      {['queued','running','cleanup_pending','cleanup_running'].includes(row.state)?<button className="rmm-secondary compact" disabled={busyId===row.id} onClick={()=>onAction(row,'cancel')}><Trash2 size={13}/>{row.state==='queued'?'Cancel':'Cancel safely'}</button>:null}
+      {['review_required','cancelled','passed'].includes(row.state)?<button className="rmm-secondary compact" disabled={busyId===row.id} onClick={()=>onAction(row,'requeue')}><RotateCcw size={13}/>Requeue</button>:null}
+      {['review_required','cancelled','cleanup_pending'].includes(row.state)?<button className="rmm-secondary compact" disabled={busyId===row.id} onClick={()=>onAction(row,'cleanup')}><Wrench size={13}/>Cleanup</button>:null}
+    </div></td>
+  </tr>)}</tbody></table></div>
+}
+
+function Qualification({ data, query, refresh }) {
+  const [busy,setBusy]=useState('')
+  const [notice,setNotice]=useState('')
+  const [error,setError]=useState('')
   const active=(data.active||[]).filter(r=>!query||r.canonical_name.toLowerCase().includes(query.toLowerCase()))
   const recent=(data.recent||[]).filter(r=>!query||r.canonical_name.toLowerCase().includes(query.toLowerCase()))
+  async function runnerAction(runner,action){
+    setBusy(runner.id);setError('');setNotice('')
+    try{
+      await api(`/qualification/runners/${runner.id}/action`,{method:'POST',body:JSON.stringify({action})})
+      setNotice(action==='resume'?'Runner resumed.':action==='tick'?'Runner reconciled.':'Runner will finish safe cleanup but dispatch no new software.')
+      await refresh()
+    }catch(err){setError(err.message)}finally{setBusy('')}
+  }
+  async function queueAction(row,action){
+    setBusy(row.id);setError('');setNotice('')
+    try{
+      await api(`/qualification/queue/${row.id}/action`,{method:'POST',body:JSON.stringify({action,runNow:true})})
+      setNotice(action==='cancel'&&row.state!=='queued'?'Safe cancellation requested; cleanup will complete before cancellation.':`${row.canonical_name}: ${action.replaceAll('_',' ')} completed.`)
+      await refresh()
+    }catch(err){setError(err.message)}finally{setBusy('')}
+  }
   return <>
     <PageHeading view="qualification"/>
-    <div className="h5a-runner-grid">{(data.runners||[]).map(r=><article className="rmm-card h5a-runner" key={r.id}><ServerCog size={22}/><div><span className="rmm-eyebrow">QUALIFICATION LAB</span><h2>{r.hostname||'Qualification lab'}</h2><p>Agent {r.agent_version||'—'} · PatchHost {r.patch_host_version||'—'}</p><div className="h5a-pill-row"><StatusPill value={r.websocket_status}/><StatusPill value={r.enabled?'enabled':'paused'}/></div></div></article>)}</div>
-    <div className="rmm-card h5a-table-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">RUNNER</span><h2>Active queue</h2></div></div><DataTable rows={active} columns={['canonical_name','target_version','state','attempt_count','last_error']}/></div>
-    <div className="rmm-card h5a-table-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">OUTCOMES</span><h2>Recent qualification results</h2></div></div><DataTable rows={recent} columns={['canonical_name','target_version','state','attempt_count','last_error']}/></div>
+    {notice?<div className="h5a-notice healthy">{notice}</div>:null}{error?<div className="h5a-page-error">{error}</div>:null}
+    <div className="h5a-runner-grid">{(data.runners||[]).map(r=>{
+      const paused=r.dispatch_enabled===false
+      const contaminants=r.contaminants||[]
+      return <article className="rmm-card h5a-runner h5a-runner-control" key={r.id}><ServerCog size={22}/><div className="h5a-runner-body"><span className="rmm-eyebrow">QUALIFICATION LAB</span><h2>{r.hostname||'Qualification lab'}</h2><p>Agent {r.agent_version||'—'} · PatchHost {r.patch_host_version||'—'}</p><div className="h5a-pill-row"><StatusPill value={r.websocket_status}/><StatusPill value={paused?'paused':'enabled'}/><StatusPill value={contaminants.length?'contaminated':'clean'}/>{r.pause_reason?<span className="h5a-runner-reason">{r.pause_reason}</span>:null}</div>{contaminants.length?<div className="h5a-contaminants"><AlertTriangle size={14}/><div><strong>{contaminants.length} contaminant{contaminants.length===1?'':'s'} detected</strong><span>{contaminants.map(x=>x.canonicalName).join(', ')}</span></div></div>:null}<div className="h5a-runner-actions">
+        {paused?<button className="rmm-primary compact" disabled={busy===r.id} onClick={()=>runnerAction(r,'resume')}><Play size={13}/>Resume</button>:<><button className="rmm-secondary compact" disabled={busy===r.id} onClick={()=>runnerAction(r,'pause')}><Pause size={13}/>Pause</button><button className="rmm-secondary compact" disabled={busy===r.id} onClick={()=>runnerAction(r,'drain')}><Pause size={13}/>Drain</button></>}
+        <button className="rmm-secondary compact" disabled={busy===r.id} onClick={()=>runnerAction(r,'tick')}><RefreshCw size={13}/>Reconcile</button>
+        {contaminants.length?<button className="rmm-secondary compact danger" disabled={busy===r.id} onClick={()=>runnerAction(r,'cleanup_contaminants')}><Wrench size={13}/>Cleanup contaminant</button>:null}
+      </div></div></article>})}</div>
+    <div className="rmm-card h5a-table-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">RUNNER</span><h2>Active queue</h2><p>Cancel is safe: active software is cleaned before the row is cancelled.</p></div></div><QualificationQueueTable rows={active} onAction={queueAction} busyId={busy}/></div>
+    <div className="rmm-card h5a-table-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">OUTCOMES</span><h2>Recent qualification results</h2></div></div><QualificationQueueTable rows={recent} recent onAction={queueAction} busyId={busy}/></div>
   </>
 }
-function Catalogue({ items, query }) {
+
+function SoftwareDetail({ catalogueId, onClose, onChanged }) {
+  const [detail,setDetail]=useState(null)
+  const [draft,setDraft]=useState(null)
+  const [busy,setBusy]=useState('')
+  const [error,setError]=useState('')
+  const [notice,setNotice]=useState('')
+  async function load(){
+    setError('')
+    try{
+      const result=await api(`/software/catalogue/${catalogueId}`)
+      setDetail(result)
+      const s=result.software
+      setDraft({
+        canonicalName:s.canonical_name||'',publisher:s.publisher||'',status:s.status||'active',
+        installArguments:s.execution?.installArguments||'',
+        installerTechnology:s.source_metadata?.installerTechnology||s.release_source_payload?.installerTechnology||'',
+        expectedSigner:s.source_metadata?.expectedSigner||s.release_source_payload?.expectedSigner||'',
+        qualificationNotes:s.qualification_notes||'',
+        deploymentLimitation:s.source_metadata?.deploymentLimitation||'',
+        verificationMethod:s.verification?.method||s.verification?.provider||'uninstall_registry',
+        productCode:s.verification?.productCode||'',displayNameContains:s.verification?.displayNameContains||'',
+        publisherContains:s.verification?.publisherContains||'',packageId:s.verification?.packageId||'',
+        filePath:s.verification?.filePath||'',versionTransform:s.verification?.versionTransform||'',
+      })
+    }catch(err){setError(err.message)}
+  }
+  useEffect(()=>{load()},[catalogueId])
+  async function action(name,request){
+    setBusy(name);setError('');setNotice('')
+    try{await request();setNotice(name+' completed.');await load();await onChanged?.()}catch(err){setError(err.message)}finally{setBusy('')}
+  }
+  if(!detail||!draft)return <section className="rmm-card h5a-software-detail"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">SOFTWARE MANAGEMENT</span><h2>Loading…</h2></div><button className="rmm-secondary compact" onClick={onClose}><X size={14}/>Close</button></div>{error?<div className="h5a-page-error">{error}</div>:null}</section>
+  const s=detail.software
+  const verification={
+    ...(s.verification||{}),method:draft.verificationMethod,productCode:draft.productCode,
+    displayNameContains:draft.displayNameContains,publisherContains:draft.publisherContains,
+    packageId:draft.packageId,filePath:draft.filePath,versionTransform:draft.versionTransform,
+  }
+  return <section className="rmm-card h5a-software-detail">
+    <div className="rmm-card-heading"><div><span className="rmm-eyebrow">SOFTWARE MANAGEMENT</span><h2>{s.canonical_name}</h2><p>{s.target_version||'No target version'} · {s.source_key||'No source'}</p></div><div className="h5a-row-actions"><StatusPill value={s.qualification_state}/><button className="rmm-secondary compact" onClick={onClose}><X size={14}/>Close</button></div></div>
+    {notice?<div className="h5a-notice healthy">{notice}</div>:null}{error?<div className="h5a-page-error">{error}</div>:null}
+    <div className="h5a-software-actions">
+      <button className="rmm-primary compact" disabled={busy} onClick={()=>action('Requeue',()=>api(`/software/catalogue/${catalogueId}/requeue`,{method:'POST',body:JSON.stringify({runNow:true})}))}><RotateCcw size={14}/>Requeue + run</button>
+      <button className="rmm-secondary compact" disabled={busy} onClick={()=>action('Source revalidation',()=>api(`/software/catalogue/${catalogueId}/revalidate`,{method:'POST',body:'{}'}))}><RefreshCw size={14}/>Revalidate source</button>
+      <button className="rmm-secondary compact" disabled={busy} onClick={()=>action(draft.status==='active'?'Disable':'Enable',()=>api(`/software/catalogue/${catalogueId}`,{method:'PATCH',body:JSON.stringify({status:draft.status==='active'?'disabled':'active'})}))}>{draft.status==='active'?<Ban size={14}/>:<Play size={14}/>} {draft.status==='active'?'Disable deployment':'Enable deployment'}</button>
+    </div>
+    <div className="h5a-detail-grid">
+      <div className="h5a-detail-section"><h3>Identity & deployment</h3>
+        <label>Canonical name<input value={draft.canonicalName} onChange={e=>setDraft({...draft,canonicalName:e.target.value})}/></label>
+        <label>Publisher<input value={draft.publisher} onChange={e=>setDraft({...draft,publisher:e.target.value})}/></label>
+        <label>Target version<input value={s.target_version||''} disabled/></label>
+        <label>Installer technology<input value={draft.installerTechnology} onChange={e=>setDraft({...draft,installerTechnology:e.target.value})}/></label>
+        <label>Install arguments<textarea value={draft.installArguments} onChange={e=>setDraft({...draft,installArguments:e.target.value})}/></label>
+        <label>Expected signer<input value={draft.expectedSigner} onChange={e=>setDraft({...draft,expectedSigner:e.target.value})}/></label>
+      </div>
+      <div className="h5a-detail-section"><h3>Verification</h3>
+        <label>Method<select value={draft.verificationMethod} onChange={e=>setDraft({...draft,verificationMethod:e.target.value})}><option value="uninstall_registry">Uninstall registry</option><option value="winget">WinGet</option><option value="file_version">File version</option></select></label>
+        <label>ProductCode<input value={draft.productCode} onChange={e=>setDraft({...draft,productCode:e.target.value})}/></label>
+        <label>Display name contains<input value={draft.displayNameContains} onChange={e=>setDraft({...draft,displayNameContains:e.target.value})}/></label>
+        <label>Publisher contains<input value={draft.publisherContains} onChange={e=>setDraft({...draft,publisherContains:e.target.value})}/></label>
+        <label>Package ID<input value={draft.packageId} onChange={e=>setDraft({...draft,packageId:e.target.value})}/></label>
+        <label>File path<input value={draft.filePath} onChange={e=>setDraft({...draft,filePath:e.target.value})}/></label>
+      </div>
+      <div className="h5a-detail-section"><h3>Qualification & limitation</h3>
+        <label>Limitation<select value={draft.deploymentLimitation} onChange={e=>setDraft({...draft,deploymentLimitation:e.target.value})}><option value="">None</option><option value="user_scope_only">User scope only</option><option value="vendor_install_failure">Vendor install failure</option><option value="vendor_install_rollback">Vendor install rollback</option><option value="response_file_required">Response file required</option><option value="reboot_prerequisite">Reboot prerequisite</option><option value="vendor_silent_uninstall_unsupported">Silent uninstall unsupported</option><option value="interactive_setup_required">Interactive setup required</option><option value="source_unavailable">Source unavailable</option><option value="architecture_unsupported">Architecture unsupported</option><option value="other">Other</option></select></label>
+        <label>Qualification notes<textarea value={draft.qualificationNotes} onChange={e=>setDraft({...draft,qualificationNotes:e.target.value})}/></label>
+        <div className="h5a-detail-facts"><span>Source health <strong>{s.source_last_error?'Error':'Healthy'}</strong></span><span>Artifact trust <strong>{s.trust_state||'—'}</strong></span><span>Installer SHA <strong>{s.installer_sha256?'Present':'Missing'}</strong></span><span>Current status <strong>{s.status}</strong></span></div>
+      </div>
+    </div>
+    <div className="h5a-detail-save">
+      <button className="rmm-primary compact" disabled={busy} onClick={()=>action('Save',()=>api(`/software/catalogue/${catalogueId}`,{method:'PATCH',body:JSON.stringify({canonicalName:draft.canonicalName,publisher:draft.publisher,installArguments:draft.installArguments,installerTechnology:draft.installerTechnology,expectedSigner:draft.expectedSigner,qualificationNotes:draft.qualificationNotes,deploymentLimitation:draft.deploymentLimitation,verification})}))}><Save size={14}/>Save validation settings</button>
+      <button className="rmm-secondary compact" disabled={busy} onClick={()=>action('Classification',()=>api(`/software/catalogue/${catalogueId}/classify`,{method:'POST',body:JSON.stringify({classification:draft.deploymentLimitation,notes:draft.qualificationNotes})}))}><AlertTriangle size={14}/>Save classification only</button>
+    </div>
+    <div className="h5a-detail-grid h5a-detail-grid--history">
+      <div className="h5a-detail-section"><h3>Qualification rows</h3><DataTable rows={detail.queues||[]} columns={['test_type','state','attempt_count','last_error','updated_at']}/></div>
+      <div className="h5a-detail-section"><h3>Recent Agent jobs</h3><DataTable rows={(detail.jobs||[]).slice(0,12)} columns={['job_type','status','error_message','created_at']}/></div>
+    </div>
+  </section>
+}
+
+function Catalogue({ items, query, refresh }) {
+  const [selected,setSelected]=useState('')
   const filtered=useMemo(()=>items.filter(item=>!query||item.canonical_name.toLowerCase().includes(query.toLowerCase())||String(item.publisher||'').toLowerCase().includes(query.toLowerCase())),[items,query])
   return <>
     <PageHeading view="catalogue"/>
-    <div className="rmm-card h5a-table-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">GLOBAL CATALOGUE</span><h2>{items.length} software entries</h2></div><span className="h5a-result-count">{filtered.length} shown</span></div><DataTable rows={filtered} columns={['canonical_name','publisher','target_version','qualification_state','installer_technology','deployment_limitation']}/></div>
+    {selected?<SoftwareDetail catalogueId={selected} onClose={()=>setSelected('')} onChanged={refresh}/>:null}
+    <div className="rmm-card h5a-table-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">GLOBAL CATALOGUE</span><h2>{items.length} software entries</h2></div><span className="h5a-result-count">{filtered.length} shown</span></div>
+      <div className="h5a-table-wrap"><table><thead><tr><th>Software</th><th>Publisher</th><th>Target</th><th>Qualification</th><th>Technology</th><th>Limitation</th><th></th></tr></thead><tbody>{filtered.map(item=><tr key={item.id}><td><strong>{item.canonical_name}</strong></td><td>{item.publisher||'—'}</td><td>{item.target_version||'—'}</td><td><StatusPill value={item.qualification_state}/></td><td>{item.installer_technology||'—'}</td><td>{item.deployment_limitation||'—'}</td><td><button className="rmm-secondary compact" onClick={()=>setSelected(item.id)}><Wrench size={13}/>Manage</button></td></tr>)}</tbody></table></div>
+    </div>
   </>
 }
 
@@ -209,8 +339,8 @@ export function PlatformAdminApp() {
   function renderPage(){
     if(view==='overview')return <Overview data={data.overview} refresh={()=>load('overview')}/>
     if(view==='tenants')return <Tenants items={data.tenants} refresh={()=>load('tenants')} query={query}/>
-    if(view==='qualification')return <Qualification data={data.qualification} query={query}/>
-    if(view==='catalogue')return <Catalogue items={data.catalogue} query={query}/>
+    if(view==='qualification')return <Qualification data={data.qualification} query={query} refresh={()=>load('qualification')}/>
+    if(view==='catalogue')return <Catalogue items={data.catalogue} query={query} refresh={()=>load('catalogue')}/>
     return <Audit items={data.audit} query={query}/>
   }
   return <div className="rmm-app h5a-rmm-shell" data-accent="amber" data-theme={theme}>

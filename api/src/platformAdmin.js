@@ -5,12 +5,23 @@ import { deployment, tenantUrls } from './deploymentConfig.js'
 import { verifyPassword } from './password.js'
 import { ensureRedisConnected } from './redis.js'
 import { requestIp, requestUserAgent } from './securityAudit.js'
+import {
+  cancelSoftwareQualificationQueue,
+  forceQualificationCleanup,
+  prioritiseSoftwareQualificationQueue,
+  qualificationRunnerContaminantsForAdmin,
+  retrySoftwareQualification,
+  runSoftwareQualificationQueue,
+  setQualificationRunnerDispatch,
+} from './rmmSoftwareQualification.js'
+import { syncSoftwareVendorSource } from './rmmSoftwareVendorIntel.js'
 
 const COOKIE_NAME = 'hi5central_admin_session'
 const SESSION_SECONDS = 60 * 60 * 12
 const ADMIN_ROLES = new Set(['owner','admin','support','catalogue','billing','read_only'])
 const WRITE_ROLES = new Set(['owner','admin'])
 const BILLING_ROLES = new Set(['owner','admin','billing'])
+const CATALOGUE_ROLES = new Set(['owner','admin','catalogue'])
 
 function clean(value, max = 500) { return String(value ?? '').trim().slice(0, max) }
 function normaliseEmail(value) { return clean(value, 254).toLowerCase() }
@@ -304,28 +315,341 @@ export function registerPlatformAdminRoutes(app) {
     if (auth.error) return auth.error
     const [runners, active, recent] = await Promise.all([
       pool.query(
-        `SELECT r.agent_device_id AS id,r.agent_device_id,r.enabled,r.updated_at,i.name AS hostname,
+        `SELECT r.agent_device_id AS id,r.agent_device_id,r.enabled,r.dispatch_enabled,
+                r.pause_reason,r.paused_at,r.updated_at,i.name AS hostname,
                 a.agent_version,a.websocket_status,a.patch_capabilities->>'patchHostVersion' AS patch_host_version,
-                a.last_telemetry_at
+                a.last_telemetry_at,a.last_inventory_at
            FROM rmm_software_vendor_qualification_runners r
            LEFT JOIN rmm_agent_devices a ON a.id=r.agent_device_id
            LEFT JOIN rmm_device_inventory i ON i.id=a.inventory_id
           ORDER BY r.updated_at DESC`,
       ),
       pool.query(
-        `SELECT q.id,c.canonical_name,c.target_version,q.test_type,q.state,q.priority,q.attempt_count,q.last_error,q.updated_at
-           FROM rmm_software_qualification_queue q JOIN rmm_software_catalogue c ON c.id=q.catalogue_id
+        `SELECT q.id,q.catalogue_id,c.canonical_name,c.target_version,q.test_type,q.state,q.priority,
+                q.attempt_count,q.last_error,q.runner_agent_device_id,q.agent_job_id,q.cleanup_job_id,
+                q.evidence,q.started_at,q.updated_at,
+                install_job.status AS agent_job_status,cleanup_job.status AS cleanup_job_status
+           FROM rmm_software_qualification_queue q
+           JOIN rmm_software_catalogue c ON c.id=q.catalogue_id
+           LEFT JOIN rmm_agent_jobs install_job ON install_job.id=q.agent_job_id
+           LEFT JOIN rmm_agent_jobs cleanup_job ON cleanup_job.id=q.cleanup_job_id
           WHERE q.state IN ('queued','running','cleanup_pending','cleanup_running')
           ORDER BY q.priority DESC,q.updated_at LIMIT 100`,
       ),
       pool.query(
-        `SELECT q.id,c.canonical_name,c.target_version,q.test_type,q.state,q.attempt_count,q.last_error,q.updated_at
-           FROM rmm_software_qualification_queue q JOIN rmm_software_catalogue c ON c.id=q.catalogue_id
+        `SELECT q.id,q.catalogue_id,c.canonical_name,c.target_version,q.test_type,q.state,q.priority,
+                q.attempt_count,q.last_error,q.runner_agent_device_id,q.agent_job_id,q.cleanup_job_id,
+                q.evidence,q.started_at,q.completed_at,q.updated_at
+           FROM rmm_software_qualification_queue q
+           JOIN rmm_software_catalogue c ON c.id=q.catalogue_id
           WHERE q.state IN ('passed','review_required','cancelled')
-          ORDER BY q.updated_at DESC LIMIT 100`,
+          ORDER BY q.updated_at DESC LIMIT 150`,
       ),
     ])
-    return c.json({ runners: runners.rows, active: active.rows, recent: recent.rows })
+    const runnerItems = await Promise.all(runners.rows.map(async (runner) => ({
+      ...runner,
+      contaminants: await qualificationRunnerContaminantsForAdmin(runner.agent_device_id),
+    })))
+    return c.json({ runners: runnerItems, active: active.rows, recent: recent.rows })
+  })
+
+  app.post('/api/platform/v1/qualification/runners/:agentDeviceId/action', async (c) => {
+    const auth = await requireAdmin(c, CATALOGUE_ROLES)
+    if (auth.error) return auth.error
+    let body = {}
+    try { body = await c.req.json() } catch {}
+    const agentDeviceId = clean(c.req.param('agentDeviceId'), 80)
+    const action = clean(body.action, 40).toLowerCase()
+    let result
+    if (action === 'pause' || action === 'drain') {
+      result = await setQualificationRunnerDispatch(agentDeviceId, {
+        dispatchEnabled: false,
+        reason: clean(body.reason, 500) || (action === 'drain' ? 'Drain requested from Hi5Central Admin' : 'Paused from Hi5Central Admin'),
+        userId: auth.session.user_id,
+      })
+    } else if (action === 'resume') {
+      result = await setQualificationRunnerDispatch(agentDeviceId, {
+        dispatchEnabled: true,
+        userId: auth.session.user_id,
+      })
+    } else if (action === 'tick' || action === 'reconcile') {
+      result = await runSoftwareQualificationQueue({ dispatchLimit: 1 })
+    } else if (action === 'cleanup_contaminants') {
+      const contaminants = await qualificationRunnerContaminantsForAdmin(agentDeviceId)
+      if (!contaminants.length) {
+        result = { ok: true, clean: true, contaminants: [] }
+      } else {
+        const contaminant = contaminants[0]
+        result = await forceQualificationCleanup(contaminant.queueId, { userId: auth.session.user_id })
+        result.contaminant = contaminant
+      }
+    } else {
+      return c.json({ error: 'Unsupported runner action.' }, 400)
+    }
+    if (!result) return c.json({ error: 'Qualification runner not found.' }, 404)
+    if (result?.ok === false) return c.json({ error: result.reason || 'Runner action could not be completed.', result }, 409)
+    await audit(c, auth.session, 'qualification.runner.' + action, 'agent_device', agentDeviceId, { result })
+    return c.json({ ok: true, result })
+  })
+
+  app.post('/api/platform/v1/qualification/queue/:queueId/action', async (c) => {
+    const auth = await requireAdmin(c, CATALOGUE_ROLES)
+    if (auth.error) return auth.error
+    let body = {}
+    try { body = await c.req.json() } catch {}
+    const queueId = clean(c.req.param('queueId'), 80)
+    const action = clean(body.action, 40).toLowerCase()
+    const current = await pool.query(
+      `SELECT q.id,q.catalogue_id,q.test_type,q.state,c.canonical_name
+         FROM rmm_software_qualification_queue q
+         JOIN rmm_software_catalogue c ON c.id=q.catalogue_id
+        WHERE q.id=$1 LIMIT 1`,
+      [queueId],
+    )
+    const row = current.rows[0]
+    if (!row) return c.json({ error: 'Qualification queue item not found.' }, 404)
+    let result
+    if (action === 'cancel') {
+      result = await cancelSoftwareQualificationQueue(queueId, { userId: auth.session.user_id })
+    } else if (action === 'cleanup') {
+      result = await forceQualificationCleanup(queueId, { userId: auth.session.user_id })
+    } else if (action === 'run_now') {
+      const prioritised = await prioritiseSoftwareQualificationQueue(queueId, { priority: body.priority || 50000 })
+      if (!prioritised) return c.json({ error: 'Only queued qualification items can be run now.' }, 409)
+      result = { prioritised, dispatch: await runSoftwareQualificationQueue({ dispatchLimit: 1 }) }
+    } else if (action === 'requeue') {
+      result = await retrySoftwareQualification(row.catalogue_id, { mode: 'clean_only' })
+      if (result.queued && body.runNow !== false) {
+        await prioritiseSoftwareQualificationQueue(result.queue?.id, { priority: body.priority || 50000 })
+        result.dispatch = await runSoftwareQualificationQueue({ dispatchLimit: 1 })
+      }
+    } else if (action === 'reconcile') {
+      result = await runSoftwareQualificationQueue({ dispatchLimit: 1 })
+    } else {
+      return c.json({ error: 'Unsupported qualification queue action.' }, 400)
+    }
+    if (result?.ok === false || result?.queued === false) {
+      return c.json({ error: result.reason || 'Qualification action could not be completed.', result }, 409)
+    }
+    await audit(c, auth.session, 'qualification.queue.' + action, 'qualification_queue', queueId, {
+      catalogueId: row.catalogue_id,
+      applicationName: row.canonical_name,
+      priorState: row.state,
+      result,
+    })
+    return c.json({ ok: true, result })
+  })
+
+  app.get('/api/platform/v1/software/catalogue/:catalogueId', async (c) => {
+    const auth = await requireAdmin(c)
+    if (auth.error) return auth.error
+    const catalogueId = clean(c.req.param('catalogueId'), 80)
+    const software = await pool.query(
+      `SELECT c.*,
+              s.source_key,s.source_type,s.source_url,s.enabled AS source_enabled,
+              s.last_success_at AS source_last_success_at,s.last_error AS source_last_error,
+              r.id AS release_id,r.version AS release_version,r.installer_url,r.installer_sha256,
+              r.installer_type AS release_installer_type,r.trust_state,r.asset_health_state,
+              r.source_payload AS release_source_payload,r.trust_evidence,
+              b.metadata AS binding_metadata
+         FROM rmm_software_catalogue c
+         LEFT JOIN rmm_software_vendor_sources s ON s.source_key=c.source_metadata->>'latestSource'
+         LEFT JOIN rmm_software_vendor_releases r
+           ON r.source_key=s.source_key AND r.provider_package_id=c.external_key AND r.version=c.target_version
+         LEFT JOIN rmm_software_vendor_bindings b
+           ON b.source_key=s.source_key AND b.provider_package_id=c.external_key AND b.enabled=true
+        WHERE c.id=$1 AND c.tenant_id IS NULL
+        ORDER BY r.source_priority DESC NULLS LAST,r.last_seen_at DESC NULLS LAST
+        LIMIT 1`,
+      [catalogueId],
+    )
+    if (!software.rowCount) return c.json({ error: 'Software catalogue entry not found.' }, 404)
+    const [queues, jobs] = await Promise.all([
+      pool.query(
+        `SELECT id,test_type,state,priority,attempt_count,runner_agent_device_id,agent_job_id,
+                cleanup_job_id,last_error,evidence,started_at,completed_at,created_at,updated_at
+           FROM rmm_software_qualification_queue
+          WHERE catalogue_id=$1 ORDER BY test_type`,
+        [catalogueId],
+      ),
+      pool.query(
+        `SELECT id,job_type,status,error_message,request_metadata,result,created_at,claimed_at,completed_at
+           FROM rmm_agent_jobs
+          WHERE request_metadata->>'catalogue_id'=$1
+             OR request_metadata->>'catalogueId'=$1
+          ORDER BY created_at DESC LIMIT 40`,
+        [catalogueId],
+      ),
+    ])
+    return c.json({ software: software.rows[0], queues: queues.rows, jobs: jobs.rows })
+  })
+
+  app.patch('/api/platform/v1/software/catalogue/:catalogueId', async (c) => {
+    const auth = await requireAdmin(c, CATALOGUE_ROLES)
+    if (auth.error) return auth.error
+    let body
+    try { body = await c.req.json() } catch { return c.json({ error: 'A valid JSON request body is required.' }, 400) }
+    const catalogueId = clean(c.req.param('catalogueId'), 80)
+    const currentResult = await pool.query(
+      `SELECT * FROM rmm_software_catalogue WHERE id=$1 AND tenant_id IS NULL LIMIT 1`,
+      [catalogueId],
+    )
+    const current = currentResult.rows[0]
+    if (!current) return c.json({ error: 'Software catalogue entry not found.' }, 404)
+    const active = await pool.query(
+      `SELECT id,state FROM rmm_software_qualification_queue
+        WHERE catalogue_id=$1 AND state IN ('running','cleanup_pending','cleanup_running') LIMIT 1`,
+      [catalogueId],
+    )
+    const touchesValidation = ['canonicalName','publisher','installArguments','installerTechnology','expectedSigner','verification']
+      .some((key) => Object.hasOwn(body || {}, key))
+    if (touchesValidation && active.rowCount) {
+      return c.json({ error: 'Finish or safely cancel the active qualification before editing validation settings.', state: active.rows[0].state }, 409)
+    }
+    const canonicalName = Object.hasOwn(body,'canonicalName') ? clean(body.canonicalName, 180) : current.canonical_name
+    const publisher = Object.hasOwn(body,'publisher') ? clean(body.publisher, 180) : current.publisher
+    const status = Object.hasOwn(body,'status') && ['active','disabled','archived'].includes(clean(body.status))
+      ? clean(body.status) : current.status
+    if (!canonicalName) return c.json({ error: 'Canonical name is required.' }, 400)
+    const execution = { ...(current.execution || {}) }
+    const verification = { ...(current.verification || {}) }
+    const sourceMetadata = { ...(current.source_metadata || {}) }
+    if (Object.hasOwn(body,'installArguments')) execution.installArguments = clean(body.installArguments, 4000)
+    if (body.verification && typeof body.verification === 'object') Object.assign(verification, body.verification)
+    if (Object.hasOwn(body,'installerTechnology')) sourceMetadata.installerTechnology = clean(body.installerTechnology, 80)
+    if (Object.hasOwn(body,'expectedSigner')) sourceMetadata.expectedSigner = clean(body.expectedSigner, 500)
+    if (Object.hasOwn(body,'deploymentLimitation')) sourceMetadata.deploymentLimitation = clean(body.deploymentLimitation, 160)
+    const qualificationNotes = Object.hasOwn(body,'qualificationNotes')
+      ? clean(body.qualificationNotes, 4000) : current.qualification_notes
+    const latestSource = clean(sourceMetadata.latestSource)
+    await withTransaction(async (db) => {
+      await db.query(
+        `UPDATE rmm_software_catalogue
+            SET canonical_name=$2,publisher=$3,status=$4,execution=$5::jsonb,verification=$6::jsonb,
+                source_metadata=$7::jsonb,qualification_notes=$8,updated_by_user_id=$9,
+                qualification_state=CASE WHEN $10::boolean AND qualification_state<>'blocked' THEN 'deployment_candidate' ELSE qualification_state END,
+                qualification_version=CASE WHEN $10::boolean THEN '' ELSE qualification_version END,
+                qualified_at=CASE WHEN $10::boolean THEN NULL ELSE qualified_at END,
+                qualification_evidence=CASE WHEN $10::boolean THEN
+                  qualification_evidence
+                    - 'cleanInstallVerified' - 'cleanInstallVersion' - 'cleanInstallVerifiedAt'
+                    - 'uninstallVerified' - 'uninstallVerifiedAt'
+                    - 'automaticAdmissionVerified' - 'automaticAdmissionState'
+                  ELSE qualification_evidence END,
+                updated_at=now()
+          WHERE id=$1`,
+        [catalogueId, canonicalName, publisher, status, JSON.stringify(execution), JSON.stringify(verification),
+          JSON.stringify(sourceMetadata), qualificationNotes, auth.session.user_id, touchesValidation],
+      )
+      if (latestSource) {
+        const bindingPatch = {
+          ...(Object.hasOwn(body,'installArguments') ? { installArguments: execution.installArguments, manualExecutionOverride: true, manualExecutionOverrideAt: new Date().toISOString() } : {}),
+          ...(Object.hasOwn(body,'installerTechnology') ? { installerTechnology: sourceMetadata.installerTechnology } : {}),
+          ...(Object.hasOwn(body,'expectedSigner') ? { expectedSigner: sourceMetadata.expectedSigner } : {}),
+          ...(body.verification ? { verificationConfig: verification } : {}),
+        }
+        if (Object.keys(bindingPatch).length) {
+          await db.query(
+            `UPDATE rmm_software_vendor_bindings
+                SET metadata=metadata || $3::jsonb
+              WHERE source_key=$1 AND provider_package_id=$2 AND enabled=true`,
+            [latestSource, current.external_key, JSON.stringify(bindingPatch)],
+          )
+          await db.query(
+            `UPDATE rmm_software_vendor_releases
+                SET source_payload=source_payload || $3::jsonb,
+                    trust_state=CASE WHEN $4::boolean THEN 'asset_candidate' ELSE trust_state END
+              WHERE source_key=$1 AND provider_package_id=$2 AND version=$5`,
+            [latestSource, current.external_key, JSON.stringify({
+              ...(Object.hasOwn(body,'installerTechnology') ? { installerTechnology: sourceMetadata.installerTechnology } : {}),
+              ...(Object.hasOwn(body,'installArguments') ? { installArguments: execution.installArguments } : {}),
+              ...(Object.hasOwn(body,'expectedSigner') ? { expectedSigner: sourceMetadata.expectedSigner } : {}),
+              ...(body.verification ? { verification } : {}),
+            }), Object.hasOwn(body,'expectedSigner'), current.target_version],
+          )
+        }
+      }
+      if (touchesValidation) {
+        await db.query(
+          `UPDATE rmm_software_qualification_queue
+              SET state='cancelled',last_error='admin_software_edit',completed_at=now(),updated_at=now()
+            WHERE catalogue_id=$1 AND state NOT IN ('running','cleanup_pending','cleanup_running')`,
+          [catalogueId],
+        )
+      }
+      await audit(c, auth.session, 'software.updated', 'software_catalogue', catalogueId, {
+        fields: Object.keys(body || {}),
+        qualificationReset: touchesValidation,
+      }, db)
+    })
+    return c.json({ ok: true, qualificationReset: touchesValidation })
+  })
+
+  app.post('/api/platform/v1/software/catalogue/:catalogueId/requeue', async (c) => {
+    const auth = await requireAdmin(c, CATALOGUE_ROLES)
+    if (auth.error) return auth.error
+    const catalogueId = clean(c.req.param('catalogueId'), 80)
+    let body = {}
+    try { body = await c.req.json() } catch {}
+    const result = await retrySoftwareQualification(catalogueId, { mode: 'clean_only' })
+    if (!result.queued) return c.json({ error: result.reason || 'Software could not be requeued.', result }, 409)
+    if (body.runNow !== false) {
+      await prioritiseSoftwareQualificationQueue(result.queue?.id, { priority: body.priority || 50000 })
+      result.dispatch = await runSoftwareQualificationQueue({ dispatchLimit: 1 })
+    }
+    await audit(c, auth.session, 'software.requeued', 'software_catalogue', catalogueId, { result })
+    return c.json({ ok: true, result })
+  })
+
+  app.post('/api/platform/v1/software/catalogue/:catalogueId/revalidate', async (c) => {
+    const auth = await requireAdmin(c, CATALOGUE_ROLES)
+    if (auth.error) return auth.error
+    const catalogueId = clean(c.req.param('catalogueId'), 80)
+    const current = await pool.query(
+      `SELECT source_metadata->>'latestSource' AS source_key,canonical_name
+         FROM rmm_software_catalogue WHERE id=$1 AND tenant_id IS NULL LIMIT 1`,
+      [catalogueId],
+    )
+    if (!current.rowCount) return c.json({ error: 'Software catalogue entry not found.' }, 404)
+    const sourceKey = clean(current.rows[0].source_key)
+    if (!sourceKey) return c.json({ error: 'This software has no vendor source to revalidate.' }, 409)
+    const result = await syncSoftwareVendorSource(sourceKey)
+    await audit(c, auth.session, 'software.source_revalidated', 'software_catalogue', catalogueId, { sourceKey, result })
+    return c.json({ ok: true, result })
+  })
+
+  app.post('/api/platform/v1/software/catalogue/:catalogueId/classify', async (c) => {
+    const auth = await requireAdmin(c, CATALOGUE_ROLES)
+    if (auth.error) return auth.error
+    let body = {}
+    try { body = await c.req.json() } catch {}
+    const catalogueId = clean(c.req.param('catalogueId'), 80)
+    const allowed = new Set([
+      '', 'user_scope_only', 'vendor_install_failure', 'vendor_install_rollback',
+      'response_file_required', 'reboot_prerequisite', 'vendor_silent_uninstall_unsupported',
+      'interactive_setup_required', 'source_unavailable', 'architecture_unsupported', 'other',
+    ])
+    const classification = clean(body.classification, 160)
+    if (!allowed.has(classification)) return c.json({ error: 'Unsupported limitation classification.' }, 400)
+    const notes = clean(body.notes, 4000)
+    const result = await pool.query(
+      `UPDATE rmm_software_catalogue
+          SET source_metadata=(source_metadata - 'deploymentLimitation') || CASE
+                WHEN $2='' THEN '{}'::jsonb
+                ELSE jsonb_build_object('deploymentLimitation',$2::text,'deploymentLimitationUpdatedAt',now())
+              END,
+              qualification_notes=CASE WHEN $3<>'' THEN $3 ELSE qualification_notes END,
+              updated_by_user_id=$4,updated_at=now()
+        WHERE id=$1 AND tenant_id IS NULL
+        RETURNING id,canonical_name,qualification_state,qualification_notes,
+                  source_metadata->>'deploymentLimitation' AS deployment_limitation`,
+      [catalogueId, classification, notes, auth.session.user_id],
+    )
+    if (!result.rowCount) return c.json({ error: 'Software catalogue entry not found.' }, 404)
+    await audit(c, auth.session, 'software.classified', 'software_catalogue', catalogueId, {
+      classification, notes,
+    })
+    return c.json({ ok: true, software: result.rows[0] })
   })
 
   app.get('/api/platform/v1/audit', async (c) => {

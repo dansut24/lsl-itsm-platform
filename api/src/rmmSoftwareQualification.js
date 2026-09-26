@@ -210,7 +210,8 @@ async function requeueWindowsInstallerBusy(queue, stage = 'install') {
 
 async function liveQualificationRunner() {
   const result = await pool.query(
-    `SELECT q.agent_device_id,a.tenant_id,a.inventory_id,a.agent_version,a.patch_capabilities,
+    `SELECT q.agent_device_id,q.dispatch_enabled,q.pause_reason,q.paused_at,
+            a.tenant_id,a.inventory_id,a.agent_version,a.patch_capabilities,
             a.websocket_status,a.last_telemetry_at,a.last_inventory_at,i.name AS device_name,i.reference AS device_reference,
             i.source_payload
        FROM rmm_software_vendor_qualification_runners q
@@ -227,6 +228,41 @@ async function liveQualificationRunner() {
       LIMIT 1`,
   )
   return result.rows[0] || null
+}
+
+export async function qualificationRunnerContaminantsForAdmin(agentDeviceId) {
+  const runner = await liveQualificationRunner()
+  if (!runner || clean(runner.agent_device_id) !== clean(agentDeviceId)) return []
+  const result = await pool.query(
+    `SELECT q.id,q.catalogue_id,q.state,q.test_type,q.evidence,
+            c.canonical_name,c.name_pattern,c.publisher_pattern,c.source_metadata
+       FROM rmm_software_qualification_queue q
+       JOIN rmm_software_catalogue c ON c.id=q.catalogue_id
+      WHERE q.runner_agent_device_id=$1
+        AND q.evidence ? 'installCompletedAt'
+        AND q.state IN ('running','cleanup_pending','cleanup_running','review_required')
+      ORDER BY q.updated_at DESC
+      LIMIT 100`,
+    [runner.agent_device_id],
+  )
+  return result.rows.flatMap((row) => {
+    const matches = installedMatches(runner.source_payload, row)
+    if (!matches.length) return []
+    return [{
+      queueId: row.id,
+      catalogueId: row.catalogue_id,
+      state: row.state,
+      testType: row.test_type,
+      canonicalName: clean(row.canonical_name),
+      installed: matches.map((item) => ({
+        name: clean(item?.name),
+        publisher: clean(item?.publisher),
+        version: clean(item?.version),
+        registryKey: clean(item?.registry_key),
+        scope: clean(item?.scope),
+      })),
+    }]
+  })
 }
 
 async function qualificationRunnerContaminants(runner, excludeQueueId = '') {
@@ -1084,6 +1120,21 @@ async function finalizeResidueCleanup(current, cleanup, { upgrade = false, rollb
       residueCleanupCompletedAt: cleanup.completed_at || new Date().toISOString(),
     })
     return { id: current.id, state: 'review_required' }
+  }
+  if (clean(evidence.residueFinalState) === 'cancelled') {
+    await pool.query(
+      `UPDATE rmm_software_qualification_queue
+          SET state='cancelled',last_error=$2,completed_at=now(),
+              evidence=evidence || $3::jsonb,updated_at=now()
+        WHERE id=$1`,
+      [current.id, clean(evidence.residueFinalError) || 'admin_cancelled_after_cleanup', JSON.stringify({
+        stage: 'cancelled',
+        residueCleanupCompletedAt: cleanup.completed_at || new Date().toISOString(),
+        residueCleanup: summary,
+        inventoryRemovalConfirmedAt: new Date().toISOString(),
+      })],
+    )
+    return { id: current.id, state: 'cancelled' }
   }
 
   const now = new Date().toISOString()
@@ -2673,11 +2724,24 @@ async function reconcileQueueRow(queue, runner) {
       return { id: current.id, state: current.state }
     }
 
-    const scopeMismatch = object(current.evidence).postInstallScopeMismatch === true
-    const timedOut = object(current.evidence).skipAfterTimeout === true
+    const currentEvidence = object(current.evidence)
+    const scopeMismatch = currentEvidence.postInstallScopeMismatch === true
+    const timedOut = currentEvidence.skipAfterTimeout === true
+    const adminCleanupOnly = currentEvidence.adminCleanupOnly === true
+    const adminCancelRequested = currentEvidence.adminCancelRequested === true
+    const finalState = (adminCleanupOnly || adminCancelRequested)
+      ? 'cancelled'
+      : (scopeMismatch || timedOut) ? 'review_required' : 'passed'
+    const finalError = adminCleanupOnly
+      ? 'admin_cleanup_completed'
+      : adminCancelRequested
+        ? 'admin_cancelled_after_cleanup'
+        : timedOut
+          ? 'qualification_runtime_limit_exceeded'
+          : scopeMismatch ? 'qualification_scope_mismatch' : ''
     const dispatched = await dispatchQualificationResidueCleanup(current, runner, {
-      finalState: (scopeMismatch || timedOut) ? 'review_required' : 'passed',
-      finalError: timedOut ? 'qualification_runtime_limit_exceeded' : scopeMismatch ? 'qualification_scope_mismatch' : '',
+      finalState,
+      finalError,
       uninstallCompletedAt: cleanup.completed_at || '',
     })
     return { id: current.id, state: dispatched.dispatched ? 'cleanup_running' : current.state }
@@ -3508,6 +3572,17 @@ export async function runSoftwareQualificationQueue({ dispatchLimit = 1 } = {}) 
     return { runner: runner.device_name, reconciled, dispatched: [], emergencyDispatched }
   }
 
+  if (runner.dispatch_enabled === false) {
+    return {
+      runner: runner.device_name,
+      paused: true,
+      pauseReason: clean(runner.pause_reason),
+      reconciled,
+      dispatched: [],
+      emergencyDispatched,
+    }
+  }
+
   const upgradeEnabled = qualificationStageEnabled('upgrade')
   const rollbackEnabled = qualificationStageEnabled('rollback')
   const queued = await pool.query(
@@ -3593,6 +3668,120 @@ export async function runSoftwareQualificationQueue({ dispatchLimit = 1 } = {}) 
     if (result.dispatched) break
   }
   return { runner: runner.device_name, reconciled, dispatched, emergencyDispatched }
+}
+
+export async function setQualificationRunnerDispatch(agentDeviceId, {
+  dispatchEnabled = true,
+  reason = '',
+  userId = null,
+} = {}) {
+  const result = await pool.query(
+    `UPDATE rmm_software_vendor_qualification_runners
+        SET enabled=true,
+            dispatch_enabled=$2,
+            pause_reason=CASE WHEN $2 THEN '' ELSE $3 END,
+            paused_at=CASE WHEN $2 THEN NULL ELSE now() END,
+            paused_by_user_id=CASE WHEN $2 THEN NULL ELSE $4::uuid END,
+            updated_at=now()
+      WHERE agent_device_id=$1
+      RETURNING agent_device_id,enabled,dispatch_enabled,pause_reason,paused_at,updated_at`,
+    [clean(agentDeviceId), Boolean(dispatchEnabled), clean(reason).slice(0, 500), userId || null],
+  )
+  return result.rows[0] || null
+}
+
+export async function cancelSoftwareQualificationQueue(queueId, { userId = null } = {}) {
+  const result = await pool.query(
+    `SELECT id,catalogue_id,test_type,state,runner_agent_device_id,evidence
+       FROM rmm_software_qualification_queue WHERE id=$1 LIMIT 1`,
+    [clean(queueId)],
+  )
+  const row = result.rows[0]
+  if (!row) return { ok: false, reason: 'qualification_queue_not_found' }
+  if (['queued','review_required','passed','cancelled'].includes(clean(row.state))) {
+    await pool.query(
+      `UPDATE rmm_software_qualification_queue
+          SET state='cancelled',last_error='admin_cancelled',
+              evidence=evidence || $2::jsonb,completed_at=now(),updated_at=now()
+        WHERE id=$1`,
+      [row.id, JSON.stringify({
+        adminCancelledAt: new Date().toISOString(),
+        adminCancelledByUserId: userId || '',
+      })],
+    )
+    return { ok: true, state: 'cancelled', immediate: true }
+  }
+  if (['running','cleanup_pending','cleanup_running'].includes(clean(row.state))) {
+    await pool.query(
+      `UPDATE rmm_software_qualification_queue
+          SET last_error='admin_cancel_requested',
+              evidence=evidence || $2::jsonb,updated_at=now()
+        WHERE id=$1`,
+      [row.id, JSON.stringify({
+        adminCancelRequested: true,
+        adminCancelRequestedAt: new Date().toISOString(),
+        adminCancelRequestedByUserId: userId || '',
+      })],
+    )
+    return { ok: true, state: row.state, immediate: false, safeCleanupRequired: true }
+  }
+  return { ok: false, reason: 'qualification_queue_state_not_cancellable', state: row.state }
+}
+
+export async function forceQualificationCleanup(queueId, { userId = null } = {}) {
+  const current = await qualificationRow(clean(queueId))
+  if (!current) return { ok: false, reason: 'qualification_queue_not_found' }
+  if (clean(current.test_type) !== 'clean_install') {
+    return { ok: false, reason: 'cleanup_only_supported_for_clean_install' }
+  }
+  const runner = await liveQualificationRunner()
+  if (!runner) return { ok: false, reason: 'qualification_runner_offline' }
+  if (current.runner_agent_device_id && clean(current.runner_agent_device_id) !== clean(runner.agent_device_id)) {
+    return { ok: false, reason: 'qualification_runner_mismatch' }
+  }
+  if (clean(current.state) === 'running') {
+    const job = await pool.query('SELECT status FROM rmm_agent_jobs WHERE id=$1 LIMIT 1', [current.agent_job_id])
+    if (job.rows[0] && ['queued','claimed'].includes(clean(job.rows[0].status))) {
+      return { ok: false, reason: 'qualification_install_still_active' }
+    }
+  }
+  const installed = installedMatches(runner.source_payload, current)
+  if (!installed.length) {
+    return { ok: false, reason: 'qualification_software_not_installed' }
+  }
+  await pool.query(
+    `UPDATE rmm_software_qualification_queue
+        SET state='cleanup_pending',runner_agent_device_id=$2,
+            cleanup_job_id=NULL,last_error='',
+            evidence=evidence || $3::jsonb,
+            completed_at=NULL,updated_at=now()
+      WHERE id=$1`,
+    [current.id, runner.agent_device_id, JSON.stringify({
+      adminCleanupOnly: true,
+      adminCleanupRequestedAt: new Date().toISOString(),
+      adminCleanupRequestedByUserId: userId || '',
+      stage: 'cleanup_pending',
+      installCompletedAt: clean(object(current.evidence).installCompletedAt) || new Date().toISOString(),
+    })],
+  )
+  const reconciled = await reconcileQueueRow({ id: current.id }, runner)
+  return { ok: true, queueId: current.id, reconciled }
+}
+
+export async function prioritiseSoftwareQualificationQueue(queueId, { priority = 50000 } = {}) {
+  const safePriority = Math.max(1, Math.min(100000, Number(priority) || 50000))
+  const result = await pool.query(
+    `UPDATE rmm_software_qualification_queue
+        SET priority=$2,
+            evidence=(evidence - 'retryNotBefore') || jsonb_build_object(
+              'adminRunNowRequestedAt',now()
+            ),
+            updated_at=now()
+      WHERE id=$1 AND state='queued'
+      RETURNING id,catalogue_id,test_type,state,priority`,
+    [clean(queueId), safePriority],
+  )
+  return result.rows[0] || null
 }
 
 export async function retrySoftwareQualification(catalogueId, { mode = 'full' } = {}) {

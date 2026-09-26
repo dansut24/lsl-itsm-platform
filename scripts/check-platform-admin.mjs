@@ -15,6 +15,11 @@ const checks = [
   [app.includes('Platform control plane') && app.includes('Software catalogue'), 'Admin shell must expose control-plane navigation.'],
   [app.includes("import '../rmm/RmmPlatformApp.css'"), 'Admin must reuse the RMM platform shell styling.'],
   [app.includes('className="rmm-app h5a-rmm-shell"') && app.includes('className="rmm-main-scroll"') && app.includes('className="rmm-page"'), 'Admin must use the RMM fixed shell with an internal vertical scroller.'],
+  [api.includes('/api/platform/v1/qualification/runners/:agentDeviceId/action') && api.includes('setQualificationRunnerDispatch'), 'Admin must expose audited runner pause/resume controls.'],
+  [api.includes('/api/platform/v1/qualification/queue/:queueId/action') && api.includes('forceQualificationCleanup') && api.includes('cancelSoftwareQualificationQueue'), 'Admin must expose safe queue cancel and cleanup controls.'],
+  [api.includes('/api/platform/v1/software/catalogue/:catalogueId/requeue') && api.includes('/api/platform/v1/software/catalogue/:catalogueId/revalidate'), 'Admin must expose software requeue and source revalidation controls.'],
+  [app.includes('Requeue + run') && app.includes('Save validation settings') && app.includes('Cancel safely'), 'Admin UI must surface qualification and software management actions.'],
+  [app.includes('Cleanup contaminant') && api.includes('cleanup_contaminants'), 'Admin must expose runner contamination cleanup without VPS SQL.'],
 ]
 
 let failures = 0

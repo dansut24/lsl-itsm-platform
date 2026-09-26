@@ -199,3 +199,178 @@ body[data-hi5-surface='admin'] #root {
   .h5a-check { min-height: 36px; }
   .h5a-table-card { overflow: hidden; }
 }
+
+.h5a-notice {
+  margin: 0 0 12px;
+  border: 1px solid var(--rmm-border);
+  border-radius: 9px;
+  padding: 10px 12px;
+  background: var(--rmm-soft);
+  color: var(--rmm-muted);
+  font-size: 9px;
+  font-weight: 750;
+}
+.h5a-notice.healthy {
+  border-color: color-mix(in srgb, #21a366 28%, var(--rmm-border));
+  background: color-mix(in srgb, #21a366 9%, var(--rmm-surface));
+  color: #218354;
+}
+.h5a-runner-control { grid-template-columns: 38px minmax(0,1fr); }
+.h5a-runner-body { min-width: 0; }
+.h5a-runner-actions,.h5a-row-actions,.h5a-software-actions,.h5a-detail-save {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.h5a-runner-actions { margin-top: 10px; }
+.h5a-runner-reason {
+  color: var(--rmm-muted);
+  font-size: 8px;
+  line-height: 1.35;
+}
+.h5a-cell-sub {
+  display: block;
+  margin-top: 2px;
+  color: var(--rmm-muted);
+  font-size: 8px;
+}
+.h5a-error-cell {
+  max-width: 320px;
+  overflow-wrap: anywhere;
+}
+.h5a-software-detail {
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+.h5a-software-actions {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--rmm-border);
+  background: var(--rmm-soft);
+}
+.h5a-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(3,minmax(0,1fr));
+  gap: 0;
+}
+.h5a-detail-section {
+  min-width: 0;
+  padding: 16px;
+  border-right: 1px solid var(--rmm-border);
+}
+.h5a-detail-section:last-child { border-right: 0; }
+.h5a-detail-section h3 {
+  margin: 0 0 12px;
+  color: var(--rmm-text);
+  font-size: 11px;
+}
+.h5a-detail-section label {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 10px;
+  color: var(--rmm-muted);
+  font-size: 8px;
+  font-weight: 850;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
+.h5a-detail-section input,
+.h5a-detail-section select,
+.h5a-detail-section textarea {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--rmm-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--rmm-surface);
+  color: var(--rmm-text);
+  font: inherit;
+  font-size: 10px;
+  text-transform: none;
+  letter-spacing: 0;
+  outline: none;
+}
+.h5a-detail-section textarea {
+  min-height: 86px;
+  resize: vertical;
+}
+.h5a-detail-section input:focus,
+.h5a-detail-section select:focus,
+.h5a-detail-section textarea:focus {
+  border-color: var(--rmm-accent);
+  box-shadow: 0 0 0 3px var(--rmm-accent-soft);
+}
+.h5a-detail-section input:disabled {
+  background: var(--rmm-soft);
+  color: var(--rmm-muted);
+}
+.h5a-detail-facts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  margin-top: 12px;
+}
+.h5a-detail-facts span {
+  display: grid;
+  gap: 2px;
+  border: 1px solid var(--rmm-border);
+  border-radius: 8px;
+  padding: 8px;
+  color: var(--rmm-muted);
+  font-size: 8px;
+}
+.h5a-detail-facts strong {
+  color: var(--rmm-text);
+  font-size: 9px;
+  overflow-wrap: anywhere;
+}
+.h5a-detail-save {
+  padding: 12px 16px;
+  border-top: 1px solid var(--rmm-border);
+  border-bottom: 1px solid var(--rmm-border);
+}
+.h5a-detail-grid--history {
+  grid-template-columns: 1fr 1fr;
+}
+.h5a-detail-grid--history .h5a-detail-section {
+  overflow: hidden;
+}
+@media (max-width: 1100px) {
+  .h5a-detail-grid { grid-template-columns: 1fr 1fr; }
+  .h5a-detail-grid > .h5a-detail-section:last-child {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--rmm-border);
+  }
+}
+@media (max-width: 760px) {
+  .h5a-detail-grid,.h5a-detail-grid--history { grid-template-columns: 1fr; }
+  .h5a-detail-section {
+    border-right: 0;
+    border-bottom: 1px solid var(--rmm-border);
+  }
+  .h5a-detail-grid > .h5a-detail-section:last-child { grid-column: auto; }
+  .h5a-row-actions button,.h5a-runner-actions button,.h5a-software-actions button { min-height: 36px; }
+}
+
+.h5a-contaminants {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  border: 1px solid color-mix(in srgb, #d98a00 28%, var(--rmm-border));
+  border-radius: 8px;
+  padding: 8px 9px;
+  background: color-mix(in srgb, #d98a00 8%, var(--rmm-surface));
+  color: #a76b00;
+}
+.h5a-contaminants > svg { flex: 0 0 auto; margin-top: 1px; }
+.h5a-contaminants div { min-width: 0; display: grid; gap: 2px; }
+.h5a-contaminants strong { font-size: 9px; }
+.h5a-contaminants span {
+  color: var(--rmm-muted);
+  font-size: 8px;
+  overflow-wrap: anywhere;
+}
+.rmm-secondary.danger {
+  border-color: color-mix(in srgb, #cf4557 35%, var(--rmm-border));
+  color: #b53145;
+}
