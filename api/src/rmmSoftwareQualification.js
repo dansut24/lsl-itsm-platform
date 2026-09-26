@@ -3800,6 +3800,54 @@ export async function prioritiseSoftwareQualificationQueue(queueId, { priority =
   return result.rows[0] || null
 }
 
+export async function setSoftwareQualificationPriority(queueId, {
+  priority = 100,
+  userId = null,
+} = {}) {
+  const safePriority = Math.max(1, Math.min(2147480000, Math.trunc(Number(priority) || 100)))
+  const result = await pool.query(
+    `UPDATE rmm_software_qualification_queue
+        SET priority=$2,
+            evidence=evidence || jsonb_build_object(
+              'adminPriorityUpdatedAt',now(),
+              'adminPriorityUpdatedByUserId',$3::text
+            ),
+            updated_at=now()
+      WHERE id=$1 AND state='queued'
+      RETURNING id,catalogue_id,test_type,state,priority,created_at,updated_at`,
+    [clean(queueId), safePriority, userId || ''],
+  )
+  return result.rows[0] || null
+}
+
+export async function pushSoftwareQualificationToTop(queueId, { userId = null } = {}) {
+  const result = await pool.query(
+    `WITH current AS (
+       SELECT id,test_type FROM rmm_software_qualification_queue
+        WHERE id=$1 AND state='queued'
+     ),
+     next_priority AS (
+       SELECT LEAST(2147480000,COALESCE(MAX(q.priority),0)+1000)::int AS priority
+         FROM rmm_software_qualification_queue q
+         JOIN current c ON c.test_type=q.test_type
+        WHERE q.state='queued'
+     )
+     UPDATE rmm_software_qualification_queue q
+        SET priority=np.priority,
+            evidence=q.evidence || jsonb_build_object(
+              'adminPriorityUpdatedAt',now(),
+              'adminPriorityUpdatedByUserId',$2::text,
+              'adminPushedToTop',true
+            ),
+            updated_at=now()
+       FROM current c,next_priority np
+      WHERE q.id=c.id
+      RETURNING q.id,q.catalogue_id,q.test_type,q.state,q.priority,q.created_at,q.updated_at`,
+    [clean(queueId), userId || ''],
+  )
+  return result.rows[0] || null
+}
+
 export async function retrySoftwareQualification(catalogueId, { mode = 'full' } = {}) {
   const qualificationMode = mode === 'clean_only' ? 'clean_only' : 'full'
   const ready = await pool.query(

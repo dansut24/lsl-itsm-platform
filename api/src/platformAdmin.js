@@ -9,11 +9,13 @@ import {
   cancelSoftwareQualificationQueue,
   forceQualificationCleanup,
   prioritiseSoftwareQualificationQueue,
+  pushSoftwareQualificationToTop,
   qualificationRunnerContaminantsForAdmin,
   reconcileSoftwareQualificationQueue,
   retrySoftwareQualification,
   runSoftwareQualificationQueue,
   setQualificationRunnerDispatch,
+  setSoftwareQualificationPriority,
 } from './rmmSoftwareQualification.js'
 import { syncSoftwareVendorSource } from './rmmSoftwareVendorIntel.js'
 
@@ -314,7 +316,7 @@ export function registerPlatformAdminRoutes(app) {
   app.get('/api/platform/v1/qualification', async (c) => {
     const auth = await requireAdmin(c)
     if (auth.error) return auth.error
-    const [runners, active, recent] = await Promise.all([
+    const [runners, active, pending, recent] = await Promise.all([
       pool.query(
         `SELECT r.agent_device_id AS id,r.agent_device_id,r.enabled,r.dispatch_enabled,
                 r.pause_reason,r.paused_at,r.updated_at,i.name AS hostname,
@@ -334,8 +336,23 @@ export function registerPlatformAdminRoutes(app) {
            JOIN rmm_software_catalogue c ON c.id=q.catalogue_id
            LEFT JOIN rmm_agent_jobs install_job ON install_job.id=q.agent_job_id
            LEFT JOIN rmm_agent_jobs cleanup_job ON cleanup_job.id=q.cleanup_job_id
-          WHERE q.state IN ('queued','running','cleanup_pending','cleanup_running')
-          ORDER BY q.priority DESC,q.updated_at LIMIT 100`,
+          WHERE q.state IN ('running','cleanup_pending','cleanup_running')
+          ORDER BY q.updated_at LIMIT 100`,
+      ),
+      pool.query(
+        `SELECT row_number() OVER (
+                  ORDER BY CASE q.test_type WHEN 'rollback' THEN 0 WHEN 'upgrade' THEN 1 ELSE 2 END,
+                           q.priority DESC,q.created_at
+                )::int AS position,
+                q.id,q.catalogue_id,c.canonical_name,c.target_version,q.test_type,q.state,q.priority,
+                q.attempt_count,q.last_error,q.runner_agent_device_id,q.evidence,
+                NULLIF(q.evidence->>'retryNotBefore','')::timestamptz AS retry_not_before,
+                q.created_at,q.updated_at
+           FROM rmm_software_qualification_queue q
+           JOIN rmm_software_catalogue c ON c.id=q.catalogue_id
+          WHERE q.state='queued'
+          ORDER BY CASE q.test_type WHEN 'rollback' THEN 0 WHEN 'upgrade' THEN 1 ELSE 2 END,
+                   q.priority DESC,q.created_at`,
       ),
       pool.query(
         `SELECT q.id,q.catalogue_id,c.canonical_name,c.target_version,q.test_type,q.state,q.priority,
@@ -351,7 +368,7 @@ export function registerPlatformAdminRoutes(app) {
       ...runner,
       contaminants: await qualificationRunnerContaminantsForAdmin(runner.agent_device_id),
     })))
-    return c.json({ runners: runnerItems, active: active.rows, recent: recent.rows })
+    return c.json({ runners: runnerItems, active: active.rows, pending: pending.rows, recent: recent.rows })
   })
 
   app.post('/api/platform/v1/qualification/runners/:agentDeviceId/action', async (c) => {
@@ -420,6 +437,15 @@ export function registerPlatformAdminRoutes(app) {
       const prioritised = await prioritiseSoftwareQualificationQueue(queueId, { priority: body.priority || 50000 })
       if (!prioritised) return c.json({ error: 'Only queued qualification items can be run now.' }, 409)
       result = { prioritised, dispatch: await runSoftwareQualificationQueue({ dispatchLimit: 1 }) }
+    } else if (action === 'set_priority') {
+      result = await setSoftwareQualificationPriority(queueId, {
+        priority: body.priority,
+        userId: auth.session.user_id,
+      })
+      if (!result) return c.json({ error: 'Only queued qualification items can have their priority changed.' }, 409)
+    } else if (action === 'push_top') {
+      result = await pushSoftwareQualificationToTop(queueId, { userId: auth.session.user_id })
+      if (!result) return c.json({ error: 'Only queued qualification items can be moved to the top.' }, 409)
     } else if (action === 'requeue') {
       result = await retrySoftwareQualification(row.catalogue_id, { mode: 'clean_only' })
       if (result.queued && body.runNow !== false) {

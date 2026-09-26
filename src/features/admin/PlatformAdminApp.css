@@ -374,3 +374,58 @@ body[data-hi5-surface='admin'] #root {
   border-color: color-mix(in srgb, #cf4557 35%, var(--rmm-border));
   color: #b53145;
 }
+
+.h5a-priority-control {
+  display: grid;
+  grid-template-columns: 76px auto auto;
+  gap: 5px;
+  align-items: center;
+  min-width: 240px;
+}
+.h5a-priority-control input {
+  width: 76px;
+  min-height: 32px;
+  border: 1px solid var(--rmm-border);
+  border-radius: 7px;
+  padding: 0 7px;
+  background: var(--rmm-surface);
+  color: var(--rmm-text);
+  font: inherit;
+  font-size: 9px;
+  font-weight: 800;
+  outline: 0;
+}
+.h5a-priority-control input:focus {
+  border-color: var(--rmm-accent);
+  box-shadow: 0 0 0 3px var(--rmm-accent-soft);
+}
+.h5a-retry-wait {
+  grid-column: 1 / -1;
+  color: #a76b00;
+  font-size: 8px;
+  line-height: 1.3;
+}
+.h5a-position {
+  width: 44px;
+  color: var(--rmm-accent);
+  font-weight: 900;
+  white-space: nowrap;
+}
+.h5a-stage-label {
+  display: inline-flex;
+  border: 1px solid var(--rmm-border);
+  border-radius: 999px;
+  padding: 3px 7px;
+  background: var(--rmm-soft);
+  color: var(--rmm-muted);
+  font-size: 8px;
+  font-weight: 850;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+@media (max-width: 760px) {
+  .h5a-priority-control {
+    grid-template-columns: 70px auto auto;
+    min-width: 220px;
+  }
+}

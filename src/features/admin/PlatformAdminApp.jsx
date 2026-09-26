@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Activity, AlertTriangle, Ban, Building2, Database, LogOut, Menu, Moon,
+  Activity, AlertTriangle, ArrowUp, Ban, Building2, Database, LogOut, Menu, Moon,
   PackageCheck, Pause, Play, Plus, RefreshCw, RotateCcw, Save, Search, ServerCog,
   ShieldCheck, Sun, Trash2, Wrench, X,
 } from 'lucide-react'
@@ -183,11 +183,50 @@ function QualificationQueueTable({ rows, recent = false, onAction, busyId }) {
   </tr>)}</tbody></table></div>
 }
 
+function PendingPriorityControl({ row, busyId, onAction }) {
+  const [priority,setPriority]=useState(String(row.priority ?? 100))
+  useEffect(()=>{setPriority(String(row.priority ?? 100))},[row.priority])
+  const waiting = row.retry_not_before && new Date(row.retry_not_before).getTime() > Date.now()
+  return <div className="h5a-priority-control">
+    <input
+      type="number"
+      min="1"
+      step="1"
+      value={priority}
+      disabled={busyId===row.id}
+      onChange={e=>setPriority(e.target.value)}
+      title="Higher priority runs first within the same qualification stage."
+    />
+    <button className="rmm-secondary compact" disabled={busyId===row.id} onClick={()=>onAction(row,'set_priority',{priority:Number(priority)})}><Save size={12}/>Save</button>
+    <button className="rmm-secondary compact" disabled={busyId===row.id} onClick={()=>onAction(row,'push_top')}><ArrowUp size={12}/>Top</button>
+    {waiting?<span className="h5a-retry-wait">Wait until {fmtDate(row.retry_not_before)}</span>:null}
+  </div>
+}
+
+function PendingQueueTable({ rows, onAction, busyId }) {
+  if (!rows.length) return <div className="h5a-empty">Nothing is waiting in the qualification queue.</div>
+  return <div className="h5a-table-wrap"><table><thead><tr>
+    <th>#</th><th>Software</th><th>Version</th><th>Stage</th><th>Priority</th><th>Queued</th><th>Actions</th>
+  </tr></thead><tbody>{rows.map(row=><tr key={row.id}>
+    <td className="h5a-position">#{row.position}</td>
+    <td><strong>{row.canonical_name}</strong>{row.last_error?<small className="h5a-cell-sub">{row.last_error}</small>:null}</td>
+    <td>{row.target_version||'—'}</td>
+    <td><span className="h5a-stage-label">{String(row.test_type||'').replaceAll('_',' ')}</span></td>
+    <td><PendingPriorityControl row={row} busyId={busyId} onAction={onAction}/></td>
+    <td>{fmtDate(row.created_at)}</td>
+    <td><div className="h5a-row-actions">
+      <button className="rmm-primary compact" disabled={busyId===row.id} onClick={()=>onAction(row,'run_now')}><Play size={12}/>Run now</button>
+      <button className="rmm-secondary compact" disabled={busyId===row.id} onClick={()=>onAction(row,'cancel')}><Trash2 size={12}/>Cancel</button>
+    </div></td>
+  </tr>)}</tbody></table></div>
+}
+
 function Qualification({ data, query, refresh }) {
   const [busy,setBusy]=useState('')
   const [notice,setNotice]=useState('')
   const [error,setError]=useState('')
   const active=(data.active||[]).filter(r=>!query||r.canonical_name.toLowerCase().includes(query.toLowerCase()))
+  const pending=(data.pending||[]).filter(r=>!query||r.canonical_name.toLowerCase().includes(query.toLowerCase()))
   const recent=(data.recent||[]).filter(r=>!query||r.canonical_name.toLowerCase().includes(query.toLowerCase()))
   async function runnerAction(runner,action){
     setBusy(runner.id);setError('');setNotice('')
@@ -203,11 +242,16 @@ function Qualification({ data, query, refresh }) {
       await refresh()
     }catch(err){setError(err.message)}finally{setBusy('')}
   }
-  async function queueAction(row,action){
+  async function queueAction(row,action,payload={}){
     setBusy(row.id);setError('');setNotice('')
     try{
-      await api(`/qualification/queue/${row.id}/action`,{method:'POST',body:JSON.stringify({action,runNow:true})})
-      setNotice(action==='cancel'&&row.state!=='queued'?'Safe cancellation requested; cleanup will complete before cancellation.':`${row.canonical_name}: ${action.replaceAll('_',' ')} completed.`)
+      await api(`/qualification/queue/${row.id}/action`,{method:'POST',body:JSON.stringify({action,runNow:true,...payload})})
+      const message =
+        action==='cancel'&&row.state!=='queued' ? 'Safe cancellation requested; cleanup will complete before cancellation.' :
+        action==='push_top' ? `${row.canonical_name} moved to the top of its pending stage.` :
+        action==='set_priority' ? `${row.canonical_name} priority updated.` :
+        `${row.canonical_name}: ${action.replaceAll('_',' ')} completed.`
+      setNotice(message)
       await refresh()
     }catch(err){setError(err.message)}finally{setBusy('')}
   }
@@ -223,7 +267,8 @@ function Qualification({ data, query, refresh }) {
         <button className="rmm-primary compact" disabled={busy===r.id||paused} onClick={()=>runnerAction(r,'run_next')} title={paused?'Resume the runner before dispatching new software.':'Explicitly dispatch the next eligible queued application.'}><Play size={13}/>Run next</button>
         {contaminants.length?<button className="rmm-secondary compact danger" disabled={busy===r.id} onClick={()=>runnerAction(r,'cleanup_contaminants')}><Wrench size={13}/>Cleanup contaminant</button>:null}
       </div></div></article>})}</div>
-    <div className="rmm-card h5a-table-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">RUNNER</span><h2>Active queue</h2><p>Cancel is safe: active software is cleaned before the row is cancelled.</p></div></div><QualificationQueueTable rows={active} onAction={queueAction} busyId={busy}/></div>
+    <div className="rmm-card h5a-table-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">CURRENT WORK</span><h2>Active qualification</h2><p>Only work currently installing, verifying or cleaning appears here. Safe cancel always cleans before cancellation.</p></div></div><QualificationQueueTable rows={active} onAction={queueAction} busyId={busy}/></div>
+    <div className="rmm-card h5a-table-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">PENDING QUEUE</span><h2>What runs next</h2><p>{pending.length} queued item{pending.length===1?'':'s'}. Higher priority runs first within the same qualification stage. Push to top changes order only; Run now is the explicit dispatch action.</p></div><span className="h5a-result-count">{pending.length} queued</span></div><PendingQueueTable rows={pending} onAction={queueAction} busyId={busy}/></div>
     <div className="rmm-card h5a-table-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">OUTCOMES</span><h2>Recent qualification results</h2></div></div><QualificationQueueTable rows={recent} recent onAction={queueAction} busyId={busy}/></div>
   </>
 }
@@ -332,7 +377,7 @@ export function PlatformAdminApp() {
   const [query,setQuery]=useState('')
   const [mobileOpen,setMobileOpen]=useState(false)
   const [theme,setThemeState]=useState(()=>localStorage.getItem('hi5central-admin-theme')||'light')
-  const [data,setData]=useState({overview:null,tenants:[],qualification:{runners:[],active:[],recent:[]},catalogue:[],audit:[]})
+  const [data,setData]=useState({overview:null,tenants:[],qualification:{runners:[],active:[],pending:[],recent:[]},catalogue:[],audit:[]})
   const [error,setError]=useState('')
   function setTheme(value){setThemeState(value);localStorage.setItem('hi5central-admin-theme',value)}
   useEffect(()=>{api('/auth/session').then(r=>setUser(r.user)).catch(()=>{}).finally(()=>setLoading(false))},[])

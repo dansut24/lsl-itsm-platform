@@ -24,6 +24,10 @@ const checks = [
   [qualification.includes('export async function reconcileSoftwareQualificationQueue()') && qualification.includes('dispatchAttempted: false'), 'Qualification must expose a reconcile-only path that never dispatches new software.'],
   [api.includes("action === 'reconcile'") && api.includes('reconcileSoftwareQualificationQueue()') && api.includes("action === 'run_next'"), 'Admin must keep Reconcile and Run next as separate actions.'],
   [app.includes('>Reconcile</button>') && app.includes('>Run next</button>') && app.includes('No new software was dispatched.'), 'Admin UI must clearly distinguish Reconcile from Run next.'],
+  [api.includes('pending: pending.rows') && app.includes('PENDING QUEUE') && app.includes('What runs next'), 'Admin qualification must expose a dedicated pending queue.'],
+  [qualification.includes('export async function setSoftwareQualificationPriority') && qualification.includes('export async function pushSoftwareQualificationToTop'), 'Qualification must expose non-dispatching priority management.'],
+  [qualification.includes("'adminPriorityUpdatedAt'") && !qualification.match(/setSoftwareQualificationPriority[\s\S]{0,1600}adminRunNowRequestedAt/), 'Changing queue priority must not clear retry gates or imply Run now.'],
+  [api.includes("action === 'set_priority'") && api.includes("action === 'push_top'") && app.includes('>Top</button>'), 'Admin must allow queued software to be reprioritised and pushed to the top.'],
 ]
 
 let failures = 0
