@@ -31,6 +31,7 @@ import {
   Network,
   Package,
   PackageCheck,
+  RefreshCw,
   Search,
   Server,
   Settings,
@@ -335,6 +336,30 @@ function DeviceProperty({ label, value, detail }) {
   return <div><span>{label}</span><strong>{reported ? value : 'Not reported'}</strong>{detail && <small>{detail}</small>}</div>
 }
 
+function formatBytes(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number) || number < 0) return 'Not reported'
+  if (number >= 1024 ** 4) return (number / (1024 ** 4)).toFixed(1).replace(/\.0$/, '') + ' TB'
+  if (number >= 1024 ** 3) return (number / (1024 ** 3)).toFixed(1).replace(/\.0$/, '') + ' GB'
+  if (number >= 1024 ** 2) return (number / (1024 ** 2)).toFixed(1).replace(/\.0$/, '') + ' MB'
+  if (number >= 1024) return (number / 1024).toFixed(1).replace(/\.0$/, '') + ' KB'
+  return Math.round(number) + ' B'
+}
+
+function formatInventoryDate(value) {
+  if (!value) return 'Not reported'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleDateString()
+}
+
+function softwareScopeLabel(scope = '') {
+  const value = String(scope || '')
+  if (value === 'machine64') return 'Machine · 64-bit'
+  if (value === 'machine32') return 'Machine · 32-bit'
+  if (value.startsWith('user:')) return 'User'
+  return value || 'Not reported'
+}
+
 function formatLinkSpeed(value) {
   const number = Number(value)
   if (!Number.isFinite(number) || number <= 0 || number > 1_000_000_000_000) return 'Not reported'
@@ -622,9 +647,84 @@ function NetworkAdaptersPanel({ device }) {
 
 function DeviceHardware({ device }) {
   const memoryDetail = device.memoryUsedBytes && device.memoryTotalBytes ? (device.memoryUsedBytes / (1024 ** 3)).toFixed(1) + ' GB used · ' + (device.memory == null ? 'usage not reported' : device.memory + '%') : (device.memory == null ? '' : device.memory + '% used')
+  const battery = device.battery || {}
+  const gpus = Array.isArray(device.gpus) ? device.gpus : []
+  const storageVolumes = Array.isArray(device.storageVolumes) ? device.storageVolumes : []
+  const monitorCount = Number(device.displayInfo?.monitor_count)
   return (
-    <div className="rmm-device-section-grid">
-      <section className="rmm-card"><div className="rmm-card-heading"><div><span className="rmm-eyebrow">System</span><h2>Hardware inventory</h2></div></div><div className="rmm-property-grid detailed"><DeviceProperty label="Manufacturer" value={device.manufacturer} /><DeviceProperty label="Model" value={device.model} /><DeviceProperty label="Serial number" value={device.serial} /><DeviceProperty label="BIOS / firmware" value={device.bios} /><DeviceProperty label="Processor" value={device.processor} /><DeviceProperty label="Installed RAM" value={device.ramGb == null ? null : device.ramGb + ' GB'} detail={memoryDetail} /><DeviceProperty label="Storage capacity" value={device.storageGb == null ? null : device.storageGb + ' GB'} detail={device.storageFreeGb == null ? '' : device.storageFreeGb + ' GB available'} /><DeviceProperty label="Warranty" value={device.warranty} /></div></section>
+    <div className="rmm-device-section-grid rmm-hardware-expanded">
+      <section className="rmm-card">
+        <div className="rmm-card-heading"><div><span className="rmm-eyebrow">System</span><h2>Hardware identity</h2></div></div>
+        <div className="rmm-property-grid detailed">
+          <DeviceProperty label="Manufacturer" value={device.manufacturer} />
+          <DeviceProperty label="Model" value={device.model} />
+          <DeviceProperty label="Serial number" value={device.serial} />
+          <DeviceProperty label="System family" value={device.systemFamily} />
+          <DeviceProperty label="System SKU" value={device.systemSku} />
+          <DeviceProperty label="Device UUID" value={device.deviceUuid} />
+          <DeviceProperty label="BIOS / firmware" value={device.bios} />
+          <DeviceProperty label="BIOS date" value={device.biosDate ? formatInventoryDate(device.biosDate) : null} />
+        </div>
+      </section>
+
+      <section className="rmm-card">
+        <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Compute</span><h2>Processor & memory</h2></div></div>
+        <div className="rmm-property-grid detailed">
+          <DeviceProperty label="Processor" value={device.processor} detail={device.cpuVendor} />
+          <DeviceProperty label="Physical cores" value={device.cpuCores} />
+          <DeviceProperty label="Logical processors" value={device.cpuLogicalProcessors} />
+          <DeviceProperty label="Maximum clock" value={device.cpuMaxClockMhz ? Math.round(Number(device.cpuMaxClockMhz)) + ' MHz' : null} />
+          <DeviceProperty label="Installed RAM" value={device.ramGb == null ? null : device.ramGb + ' GB'} detail={memoryDetail} />
+          <DeviceProperty label="OS architecture" value={device.architecture} />
+          <DeviceProperty label="Windows release" value={device.osDisplayVersion} />
+          <DeviceProperty label="OS installed" value={device.osInstallDate ? formatInventoryDate(device.osInstallDate) : null} />
+        </div>
+      </section>
+
+      <section className="rmm-card rmm-hardware-list-card">
+        <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Graphics</span><h2>GPU & displays</h2></div><small>{Number.isFinite(monitorCount) ? monitorCount + ' monitor' + (monitorCount === 1 ? '' : 's') : 'Monitor count not reported'}</small></div>
+        <div className="rmm-hardware-item-list">
+          {gpus.map((gpu, index) => <article key={(gpu.pnp_device_id || gpu.name || 'gpu') + ':' + index}>
+            <span className="rmm-hardware-item-icon"><Monitor size={17} /></span>
+            <div><strong>{gpu.name || gpu.video_processor || 'Graphics adapter'}</strong><small>Driver {gpu.driver_version || 'not reported'} · {gpu.status || 'Status not reported'}</small></div>
+            <div className="rmm-hardware-item-meta">
+              <span><small>Memory</small><strong>{gpu.adapter_ram_bytes ? formatBytes(gpu.adapter_ram_bytes) : 'Not reported'}</strong></span>
+              <span><small>Resolution</small><strong>{gpu.current_horizontal_resolution && gpu.current_vertical_resolution ? gpu.current_horizontal_resolution + ' × ' + gpu.current_vertical_resolution : 'Not reported'}</strong></span>
+              <span><small>Driver date</small><strong>{gpu.driver_date ? formatInventoryDate(gpu.driver_date) : 'Not reported'}</strong></span>
+            </div>
+          </article>)}
+        </div>
+        {!gpus.length && <div className="rmm-empty compact"><Monitor size={22} /><strong>No graphics inventory reported</strong><span>Refresh inventory after the Agent reconnects.</span></div>}
+      </section>
+
+      <section className="rmm-card">
+        <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Power</span><h2>Battery & power</h2></div></div>
+        <div className="rmm-property-grid detailed">
+          <DeviceProperty label="Battery" value={battery.present === true || battery.battery_present === true ? 'Present' : battery.present === false || battery.battery_present === false ? 'Not present' : null} />
+          <DeviceProperty label="Charge" value={battery.charge_percent != null ? Math.round(Number(battery.charge_percent)) + '%' : battery.battery_percent != null ? Math.round(Number(battery.battery_percent)) + '%' : null} />
+          <DeviceProperty label="Power source" value={battery.ac_line_status} />
+          <DeviceProperty label="Charging" value={battery.charging === true ? 'Yes' : battery.charging === false ? 'No' : null} />
+          <DeviceProperty label="Battery health" value={battery.health} />
+          <DeviceProperty label="Estimated runtime" value={battery.battery_life_seconds ? Math.round(Number(battery.battery_life_seconds) / 60) + ' minutes' : null} />
+        </div>
+      </section>
+
+      <section className="rmm-card rmm-hardware-list-card">
+        <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Storage</span><h2>Volumes & encryption</h2></div><small>{storageVolumes.length ? storageVolumes.length + ' volume' + (storageVolumes.length === 1 ? '' : 's') : 'No volumes reported'}</small></div>
+        <div className="rmm-hardware-item-list">
+          {storageVolumes.map((volume, index) => <article key={(volume.drive || volume.mount || 'volume') + ':' + index}>
+            <span className="rmm-hardware-item-icon"><HardDrive size={17} /></span>
+            <div><strong>{[volume.drive, volume.label].filter(Boolean).join(' · ') || 'Storage volume'}</strong><small>{volume.filesystem || 'Filesystem not reported'} · {volume.type || 'Volume type not reported'}</small></div>
+            <div className="rmm-hardware-item-meta">
+              <span><small>Capacity</small><strong>{formatBytes(volume.total_bytes)}</strong></span>
+              <span><small>Free</small><strong>{formatBytes(volume.free_bytes)}</strong></span>
+              <span><small>Used</small><strong>{volume.used_percent == null ? 'Not reported' : Math.round(Number(volume.used_percent)) + '%'}</strong></span>
+              <span><small>BitLocker</small><strong>{volume.bitlocker_status || volume.bitlocker?.protection_status || 'Not reported'}</strong></span>
+            </div>
+          </article>)}
+        </div>
+      </section>
+
       <NetworkAdaptersPanel device={device} />
     </div>
   )
@@ -722,7 +822,7 @@ function DeviceSoftware({ device }) {
         <label className="rmm-device-inline-search"><Search size={15} /><input value={search} onChange={(event) => { setSearch(event.target.value); setVisibleLimit(120) }} placeholder="Search installed software…" /></label>
       </div>
       <div className="rmm-table rmm-device-software-table">
-        <div className="rmm-table-head"><span>Application</span><span>Version</span><span>Publisher</span><span>Installed</span><span>Removal</span></div>
+        <div className="rmm-table-head"><span>Application</span><span>Version</span><span>Publisher</span><span>Installed</span><span>Scope / size</span><span>Removal</span></div>
         {renderedSoftware.map((app) => {
           const key = softwareKey(app)
           const protectedApp = protectedSoftware(app)
@@ -732,6 +832,7 @@ function DeviceSoftware({ device }) {
             <span><strong>{app.version || 'Not reported'}</strong></span>
             <span><strong>{app.publisher || 'Not reported'}</strong></span>
             <span><strong>{app.installed || 'Not reported'}</strong></span>
+            <span><strong>{softwareScopeLabel(app.scope)}</strong><small>{app.estimatedSizeKb == null ? 'Size not reported' : formatBytes(Number(app.estimatedSizeKb) * 1024)}</small></span>
             <span>{protectedApp ? <StatusPill tone="neutral">Protected</StatusPill> : !device.agentDeviceId ? <StatusPill tone="neutral">Agent required</StatusPill> : !deviceOnline ? <button className="rmm-software-uninstall" disabled title="Device is offline" type="button"><WifiOff size={13} /> Offline</button> : <button className="rmm-software-uninstall" disabled={busyKey === key} onClick={() => uninstallSoftware(app)} type="button"><Trash2 size={13} /> {busyKey === key ? 'Uninstalling…' : 'Uninstall'}</button>}</span>
           </div>
         })}
@@ -852,7 +953,7 @@ function DevicePatching({ device }) {
   }
   const selectedRows = appUpdates.filter((row) => selected.includes(row.catalogue?.id))
   return <>
-    <div className="rmm-device-patch-summary"><div><span><PackageCheck size={18} /></span><div><strong>{appUpdates.length}</strong><small>Application updates</small></div></div><div><span><ShieldCheck size={18} /></span><div><strong>{device.pendingPatches ?? 'Not reported'}</strong><small>Windows updates</small></div></div><div><span><Clock3 size={18} /></span><div><strong>{device.inventory?.windows_updates?.last_scan_utc ? new Date(device.inventory.windows_updates.last_scan_utc).toLocaleString() : 'Not reported'}</strong><small>Last scan</small></div></div></div>
+    <div className="rmm-device-patch-summary"><div><span><PackageCheck size={18} /></span><div><strong>{appUpdates.length}</strong><small>Application updates</small></div></div><div><span><ShieldCheck size={18} /></span><div><strong>{device.pendingWindowsPatches ?? 'Not reported'}</strong><small>Windows updates</small></div></div><div><span><Clock3 size={18} /></span><div><strong>{device.inventory?.windows_updates?.last_scan_utc ? new Date(device.inventory.windows_updates.last_scan_utc).toLocaleString() : 'Not reported'}</strong><small>Last scan</small></div></div></div>
     <section className="rmm-table-card rmm-device-app-patching-card"><div className="rmm-device-section-heading"><div><span className="rmm-eyebrow">Device-scoped patching</span><h2>Application updates</h2><p>Vendor catalogue and WinGet discovery combined for this endpoint.</p></div><div className="rmm-row-actions"><button disabled={!online || busy || !selectedRows.length} onClick={() => patch(selectedRows)} type="button">Patch selected ({selectedRows.length})</button><button className="rmm-primary" disabled={!online || busy || !appUpdates.length} onClick={() => patch(appUpdates)} type="button">Patch all</button></div></div>
     {!online && <div className="rmm-device-action-message"><WifiOff size={14} /> Offline — update state is visible but execution is disabled and no job is queued.</div>}{message && <div className="rmm-device-action-message">{message}</div>}
     <div className="rmm-table rmm-device-patch-table rmm-app-patch-table"><div className="rmm-table-head"><span>Select</span><span>Application</span><span>Version</span><span>Provider / trust</span><span>Vulnerabilities</span><span>Action</span></div>{appUpdates.map((row) => { const id = row.catalogue?.id; const vulns = exposures.filter((v) => v.agent_device_id === device.agentDeviceId && v.catalogue_id === id); const kev = vulns.some((v) => v.kev || v.cisa_kev || v.cisaKev); return <div className="rmm-table-row" key={row.inventoryId + ':' + (id || row.applicationKey)}><span><input checked={selected.includes(id)} disabled={!online || !id} onChange={(event) => setSelected((current) => event.target.checked ? [...new Set([...current, id])] : current.filter((value) => value !== id))} type="checkbox" /></span><span><strong>{row.name}</strong><small>{row.publisher || row.catalogue?.publisher || 'Publisher not reported'}</small></span><span><strong>{row.installedVersion || '—'} → {row.targetVersion || row.availableVersion || '—'}</strong></span><span><strong>{row.provider || row.catalogue?.provider || 'catalogue'}</strong><small>{row.catalogue?.qualificationState || 'qualification pending'}</small></span><span><button className="rmm-linked-cves" disabled={!vulns.length} onClick={() => vulns.length && setVulnerabilityDetail({ row, vulnerabilities: vulns })} type="button"><strong>{vulns.length ? `${vulns.length} linked CVEs` : 'No linked exposure'}</strong>{vulns.length ? <ChevronRight size={13} /> : null}</button><small>{kev ? 'CISA KEV' : ''}</small></span><span><div className="rmm-row-actions"><button disabled={!online || busy || !id} onClick={() => patch([row])} type="button">Patch</button><button disabled={busy || !id} onClick={() => ignorePatch(row)} type="button">Ignore</button></div></span></div> })}</div>
@@ -893,9 +994,10 @@ function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device
   const deviceOnline = deviceIsOnline(device)
   const deviceOffline = hasLiveAgent && !deviceOnline
   const [tool, setTool] = useState(initialTool || '')
-  const [toolsOpen, setToolsOpen] = useState(false)
+  const subnavRef = useRef(null)
   const [remoteState, setRemoteState] = useState('')
   const [remoteBusy, setRemoteBusy] = useState(false)
+  const [powerBusy, setPowerBusy] = useState(false)
   const [monitoringResolution, setMonitoringResolution] = useState(null)
   const deviceAlerts = rmmAlerts.filter((alert) => alert.deviceId === device.id)
   const relatedTickets = tickets.filter((ticket) => (
@@ -915,8 +1017,18 @@ function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device
   useEffect(() => {
     setSection(initialSection || 'overview')
     setTool(initialSection === 'tools' ? (initialTool || '') : '')
-    setToolsOpen(false)
   }, [device.id, initialSection, initialTool])
+
+  useEffect(() => {
+    const nav = subnavRef.current
+    if (!nav) return
+    const active = nav.querySelector('[aria-current="page"]')
+    if (!active) return
+    const frame = window.requestAnimationFrame(() => {
+      active.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [section])
 
   useEffect(() => {
     let active = true
@@ -993,29 +1105,44 @@ function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device
     }
   }
 
-  function openTool(nextTool) {
-    setToolsOpen(false)
-    if (!hasLiveAgent) {
-      setRemoteState('Live device tools require the Hi5Central Agent.')
-      return
+  async function restartDevice() {
+    if (!hasLiveAgent || !deviceOnline || powerBusy) return
+    if (!window.confirm(`Restart ${device.name}? The device will restart in 15 seconds and unsaved user work may be lost.`)) return
+    setPowerBusy(true)
+    setRemoteState('Scheduling restart…')
+    try {
+      const response = await fetch(apiBase + '/api/v1/rmm/devices/' + encodeURIComponent(device.agentDeviceId) + '/power', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'restart', delaySeconds: 15 }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.error || 'Unable to restart this device.')
+      setRemoteState('Restart scheduled. The device may go offline briefly.')
+    } catch (error) {
+      setRemoteState(error?.message || 'Unable to restart this device.')
+    } finally {
+      setPowerBusy(false)
     }
-    if (!deviceOnline) {
-      setRemoteState('This device is offline. Live device tools are unavailable until the Agent reconnects.')
-      return
-    }
-    setTool(nextTool)
-    setSection('tools')
-    onDeviceRoute?.('tools', nextTool)
   }
 
   function selectSection(nextSection) {
-    setToolsOpen(false)
     const nextTool = nextSection === 'tools' && section === 'tools' ? tool : ''
     if (nextSection !== 'tools') setTool('')
     else if (section !== 'tools') setTool('')
     setSection(nextSection)
     onDeviceRoute?.(nextSection, nextTool)
   }
+
+  const patchPendingParts = []
+  if (Number(device.pendingSoftwarePatches || 0) > 0) patchPendingParts.push(device.pendingSoftwarePatches + ' app')
+  if (Number(device.pendingWindowsPatches || 0) > 0) patchPendingParts.push(device.pendingWindowsPatches + ' Windows')
+  const patchPendingText = device.patchStateReported === false
+    ? 'Update state not reported'
+    : patchPendingParts.length
+      ? patchPendingParts.join(' · ') + ' pending'
+      : 'No pending updates'
 
   let content
   if (section === 'hardware') content = <DeviceHardware device={device} />
@@ -1042,21 +1169,8 @@ function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device
         </div>
         <div className="rmm-device-actions">
           <button className="rmm-primary compact" disabled={remoteBusy || !hasLiveAgent || !canRemote || !deviceOnline} title={!hasLiveAgent ? 'Hi5Central Agent required' : !deviceOnline ? 'Device is offline' : canRemote ? 'Start unattended console remote session' : 'Your role does not include unattended remote access'} onClick={() => startRemote('console')} type="button"><Monitor size={16} /> {remoteBusy ? 'Starting…' : 'Remote desktop'}</button>
-          <div className="rmm-device-tools-menu">
-            <button disabled={!deviceOnline || !hasLiveAgent} title={!hasLiveAgent ? 'Hi5Central Agent required' : deviceOnline ? 'Open live device tools' : 'Device is offline'} onClick={() => setToolsOpen((value) => !value)} type="button"><TerminalSquare size={16} /> Tools <MoreHorizontal size={14} /></button>
-            {toolsOpen && <div className="rmm-device-tools-popover">
-              <button onClick={() => openTool('powershell')} type="button"><TerminalSquare size={15} /><span><strong>PowerShell</strong><small>Native ConPTY</small></span></button>
-              <button onClick={() => openTool('cmd')} type="button"><Code2 size={15} /><span><strong>Command Prompt</strong><small>Native ConPTY</small></span></button>
-              <button onClick={() => openTool('files')} type="button"><Box size={15} /><span><strong>File browser</strong><small>Upload, download and manage</small></span></button>
-              <button onClick={() => openTool('processes')} type="button"><ListChecks size={15} /><span><strong>Task Manager</strong><small>End and restart processes</small></span></button>
-              <button onClick={() => openTool('services')} type="button"><Server size={15} /><span><strong>Services</strong><small>State and startup type</small></span></button>
-              <button onClick={() => openTool('registry')} type="button"><Database size={15} /><span><strong>Registry Editor</strong><small>Browse and edit registry</small></span></button>
-              <button onClick={() => openTool('disks')} type="button"><HardDrive size={15} /><span><strong>Disk Management</strong><small>Volumes and BitLocker state</small></span></button>
-              <button onClick={() => openTool('sessions')} type="button"><Users size={15} /><span><strong>Users & Sessions</strong><small>Interactive and RDP sessions</small></span></button>
-              <button onClick={() => openTool('events')} type="button"><History size={15} /><span><strong>Event Logs</strong><small>Event health and diagnostics</small></span></button>
-              {canBackstageRemote && <button disabled={!deviceOnline} onClick={() => { setToolsOpen(false); startRemote('backstage') }} type="button"><Monitor size={15} /><span><strong>Background Mode</strong><small>Private Hi5 maintenance desktop</small></span></button>}
-            </div>}
-          </div>
+          <button disabled={!hasLiveAgent} title={!hasLiveAgent ? 'Hi5Central Agent required' : 'Open the full device tools workspace'} onClick={() => selectSection('tools')} type="button"><TerminalSquare size={16} /> Tools</button>
+          <button disabled={!hasLiveAgent || !deviceOnline || powerBusy} title={!hasLiveAgent ? 'Hi5Central Agent required' : !deviceOnline ? 'Device is offline' : 'Restart this device'} onClick={restartDevice} type="button"><RefreshCw size={16} /> {powerBusy ? 'Restarting…' : 'Restart'}</button>
           <button onClick={() => createIncident()} type="button"><AlertTriangle size={16} /> ITSM incident</button>
         </div>
       </header>
@@ -1068,10 +1182,10 @@ function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device
         <DeviceMetric icon={CircleGauge} label="CPU" value={device.cpu} tone={metricTone(device.cpu)} />
         <DeviceMetric icon={Activity} label="Memory" value={device.memory} tone={metricTone(device.memory)} />
         <DeviceMetric icon={HardDrive} label="Disk" value={device.disk} tone={metricTone(device.disk, 80, 92)} />
-        <div className={'rmm-device-metric patch ' + (device.patchCompliance == null ? 'neutral' : device.patchCompliance < 90 ? 'warning' : 'healthy')}><span><ShieldCheck size={17} /></span><div><small>Patch compliance</small><strong>{device.patchCompliance == null ? 'Not reported' : device.patchCompliance + '%'}</strong></div><small>{device.pendingPatches == null ? 'Update state not reported' : device.pendingPatches + ' pending update' + (device.pendingPatches === 1 ? '' : 's')}</small></div>
+        <button className={'rmm-device-metric patch ' + (device.patchCompliance == null ? 'neutral' : device.patchCompliance < 90 ? 'warning' : 'healthy')} onClick={() => selectSection('patching')} type="button"><span><ShieldCheck size={17} /></span><div><small>Patch compliance</small><strong>{device.patchCompliance == null ? 'Not reported' : device.patchCompliance + '%'}</strong></div><small>{patchPendingText}</small></button>
       </div>
 
-      <nav className="rmm-device-subnav" aria-label="Device detail sections">
+      <nav className="rmm-device-subnav" aria-label="Device detail sections" ref={subnavRef}>
         {sections.map(([id, label, Icon]) => <button aria-current={section === id ? 'page' : undefined} className={section === id ? 'active' : ''} key={id} onClick={() => selectSection(id)} type="button"><Icon size={14} />{label}{id === 'itsm' && relatedTickets.length > 0 && <b>{relatedTickets.length}</b>}</button>)}
       </nav>
 

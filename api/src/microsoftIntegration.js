@@ -761,6 +761,15 @@ export function registerMicrosoftRoutes(app) {
               COALESCE(self_agent.websocket_status,agent_match.websocket_status) AS agent_websocket_status,
               COALESCE(self_agent.agent_version,agent_match.agent_version) AS agent_version,
               COALESCE(self_agent.last_telemetry_at,agent_match.last_telemetry_at) AS agent_last_telemetry_at,
+              COALESCE(patch_state.current_count,0)::int AS agent_patch_current_count,
+              COALESCE(patch_state.pending_count,0)::int AS agent_patch_pending_count,
+              COALESCE(patch_state.blocked_count,0)::int AS agent_patch_blocked_count,
+              COALESCE(patch_state.total_count,0)::int AS agent_patch_total_count,
+              CASE
+                WHEN COALESCE(patch_state.total_count,0)>0
+                THEN round((100.0 * COALESCE(patch_state.current_count,0)) / patch_state.total_count)::int
+                ELSE NULL
+              END AS agent_software_patch_compliance,
               CASE
                 WHEN COALESCE(self_agent.websocket_status,agent_match.websocket_status)='Connected'
                  AND COALESCE(self_agent.last_telemetry_at,agent_match.last_telemetry_at) > now()-interval '90 seconds'
@@ -773,7 +782,7 @@ export function registerMicrosoftRoutes(app) {
        LEFT JOIN tenant_microsoft_connections mc ON mc.id=d.microsoft_connection_id
        LEFT JOIN rmm_agent_devices self_agent ON self_agent.inventory_id=d.id AND self_agent.disabled_at IS NULL
        LEFT JOIN LATERAL (
-         SELECT a.reference,ad.id AS agent_id,ad.cpu_percent,ad.memory_used_percent,ad.memory_total_bytes,ad.memory_used_bytes,ad.disk_used_percent,ad.uptime_seconds,ad.active_user,ad.service_status,ad.websocket_status,ad.agent_version,ad.last_telemetry_at,a.source_payload AS agent_inventory_payload,
+         SELECT a.id AS agent_inventory_id,a.reference,ad.id AS agent_id,ad.cpu_percent,ad.memory_used_percent,ad.memory_total_bytes,ad.memory_used_bytes,ad.disk_used_percent,ad.uptime_seconds,ad.active_user,ad.service_status,ad.websocket_status,ad.agent_version,ad.last_telemetry_at,a.source_payload AS agent_inventory_payload,
                 CASE
                   WHEN NULLIF(trim(d.directory_device_id),'') IS NOT NULL AND lower(trim(a.directory_device_id))=lower(trim(d.directory_device_id)) THEN 'directory_device_id'
                   ELSE 'serial_number'
@@ -795,6 +804,44 @@ export function registerMicrosoftRoutes(app) {
                   a.updated_at DESC
          LIMIT 1
        ) agent_match ON d.source='intune'
+       LEFT JOIN LATERAL (
+         SELECT
+           count(*) FILTER (WHERE patch_status='current') AS current_count,
+           count(*) FILTER (WHERE patch_status IN ('update_available','provider_blocked') AND rejected=false) AS pending_count,
+           count(*) FILTER (WHERE patch_status='provider_blocked' AND rejected=false) AS blocked_count,
+           count(*) FILTER (WHERE patch_status='current' OR (patch_status IN ('update_available','provider_blocked') AND rejected=false)) AS total_count
+         FROM (
+           SELECT o.patch_status,
+                  EXISTS (
+                    SELECT 1
+                    FROM rmm_device_patch_rejections r
+                    WHERE r.tenant_id=d.tenant_id
+                      AND r.agent_device_id=COALESCE(self_agent.id,agent_match.agent_id)
+                      AND r.catalogue_id=o.catalogue_id
+                      AND r.target_version=c.target_version
+                      AND r.revoked_at IS NULL
+                  ) AS rejected
+           FROM rmm_software_patch_observations o
+           JOIN rmm_software_catalogue c ON c.id=o.catalogue_id AND c.status='active'
+           WHERE o.tenant_id=d.tenant_id
+             AND o.inventory_id=COALESCE(self_agent.inventory_id,agent_match.agent_inventory_id)
+             AND COALESCE(NULLIF(c.target_version,''),'')<>''
+             AND c.qualification_state<>'blocked'
+             AND COALESCE(lower(c.source_metadata->>'sourceEnabled'),'true')<>'false'
+             AND (
+               (
+                 c.source_metadata->>'deploymentMode'='winget_preferred'
+                 AND COALESCE(c.source_metadata->>'wingetPackageId','')<>''
+                 AND lower(COALESCE(c.source_metadata->>'wingetFallbackReady','false'))='true'
+               )
+               OR (
+                 c.source_metadata->>'deploymentMode'='vendor_direct'
+                 AND c.source_metadata->>'trustState'='direct_ready'
+               )
+               OR (c.provider='winget' AND COALESCE(c.provider_package_id,'')<>'')
+             )
+         ) qualified_patch_state
+       ) patch_state ON COALESCE(self_agent.id,agent_match.agent_id) IS NOT NULL
        WHERE ${where} ORDER BY d.name`, params,
     )
     return c.json({ devices: result.rows })

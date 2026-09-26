@@ -1039,8 +1039,8 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
   const overview = bundle?.overview || {}
   const exposedApps = applications.filter((item) => item.updateAvailable > 0)
   const mappedApps = applications.filter((item) => item.catalogue)
-  const windowsReported = devices.filter((device) => device.pendingPatches != null)
-  const windowsPending = windowsReported.reduce((sum, device) => sum + Number(device.pendingPatches || 0), 0)
+  const windowsReported = devices.filter((device) => device.pendingWindowsPatches != null)
+  const windowsPending = windowsReported.reduce((sum, device) => sum + Number(device.pendingWindowsPatches || 0), 0)
   const patchHostReady = patchDevices.filter((device) => device.patchCapabilities?.softwareDiscovery).length
   const patchHostInstallReady = patchDevices.filter((device) => device.patchCapabilities?.softwareInstall).length
   const onlineInstallDevices = patchDevices.filter((device) => device.online)
@@ -1977,7 +1977,7 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
       <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Windows Update</span><h2>Endpoint update inventory</h2><p>Windows patch execution will use the same PatchHost, job history and maintenance policies as software patching.</p></div></div>
       <div className="rmm-patch-table windows">
         <div className="head"><span>Device</span><span>Pending</span><span>Last seen</span><span>Agent</span><span>Status</span></div>
-        {windowsReported.map((device) => <div className="row" key={device.id}><span><strong>{device.name}</strong><small>{device.user} · {device.site || 'No site'}</small></span><span><strong>{device.pendingPatches}</strong></span><span><strong>{device.lastSeen}</strong></span><span><strong>{device.agent}</strong></span><span>{device.status === 'Offline' ? <StatusPill tone="neutral"><WifiOff size={12} /> Offline</StatusPill> : <StatusPill tone={device.pendingPatches > 0 ? 'warning' : 'healthy'}>{device.pendingPatches > 0 ? 'Updates pending' : 'Current'}</StatusPill>}</span></div>)}
+        {windowsReported.map((device) => <div className="row" key={device.id}><span><strong>{device.name}</strong><small>{device.user} · {device.site || 'No site'}</small></span><span><strong>{device.pendingWindowsPatches}</strong></span><span><strong>{device.lastSeen}</strong></span><span><strong>{device.agent}</strong></span><span>{device.status === 'Offline' ? <StatusPill tone="neutral"><WifiOff size={12} /> Offline</StatusPill> : <StatusPill tone={device.pendingWindowsPatches > 0 ? 'warning' : 'healthy'}>{device.pendingWindowsPatches > 0 ? 'Updates pending' : 'Current'}</StatusPill>}</span></div>)}
       </div>
       {!windowsReported.length && <div className="rmm-empty"><Monitor size={24} /><strong>No Windows Update inventory yet</strong><span>Agent inventory will populate this view.</span></div>}
     </section>}

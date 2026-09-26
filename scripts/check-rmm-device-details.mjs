@@ -23,6 +23,22 @@ expect(deviceApi.includes('AS agent_memory_total_bytes') && deviceApi.includes('
 expect(bootstrap.includes('row.agent_memory_total_bytes || row.memory_bytes'), 'Device model must prefer live Agent memory over inventory fallback.')
 expect(platform.includes('device.memoryUsedBytes') && platform.includes('Installed RAM'), 'Device Details must show live memory context.')
 
+// Device patch compliance must come from real qualified/installable software state plus Windows Update inventory.
+expect(deviceApi.includes('agent_patch_current_count') && deviceApi.includes('patch_state.current_count') && deviceApi.includes('rmm_device_patch_rejections'), 'Device API must expose real patch-state counts and honour device patch exceptions.')
+expect(!bootstrap.includes('patchCompliance: null') && bootstrap.includes('agent_patch_pending_count') && bootstrap.includes('pendingWindowsPatches'), 'Production device mapping must calculate patch compliance and keep software/Windows pending counts separate.')
+expect(platform.includes('patchPendingText') && platform.includes("selectSection('patching')"), 'Patch compliance card must show the real pending breakdown and open the Patching tab.')
+
+// Header controls should use durable device workspaces and audited power actions.
+expect(toolApi.includes("'/api/v1/rmm/devices/:agentDeviceId/power'") && toolApi.includes("source: 'device_power_action'"), 'Device power actions must use a dedicated authenticated/audited endpoint.')
+expect(platform.includes('async function restartDevice') && platform.includes("selectSection('tools')") && !platform.includes('toolsOpen'), 'Device header must expose Restart and route Tools directly to the Tools tab without a duplicate popover.')
+expect(platform.includes("scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' })"), 'Device section navigation must scroll the active tab into view.')
+expect(activityApi.includes("requestMetadata.source) === 'device_power_action'") && activity.includes("powerAction === 'restart'"), 'Restart actions must be human-readable in Activity rather than exposed as custom commands.')
+
+// Hardware/software inventory should expose useful fields the Agent already collects.
+expect(platform.includes('GPU & displays') && platform.includes('Battery & power') && platform.includes('Volumes & encryption'), 'Hardware tab must expose graphics, battery and storage inventory.')
+expect(bootstrap.includes('cpuLogicalProcessors') && bootstrap.includes('deviceUuid') && bootstrap.includes('storageVolumes'), 'Production device mapping must retain richer hardware inventory.')
+expect(platform.includes('Scope / size') && platform.includes('softwareScopeLabel(app.scope)'), 'Software inventory must expose install scope and reported size.')
+
 // Network cards use inventory identity plus non-persisted live counters.
 expect(toolApi.includes("'/api/v1/rmm/devices/:agentDeviceId/network-stats'"), 'Live network-stats endpoint is missing.')
 expect(toolApi.includes("network_stats_request") && toolApi.includes('requestAgentProbe'), 'Network stats must use the lightweight Agent message probe, not persisted jobs.')

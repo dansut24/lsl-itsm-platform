@@ -187,6 +187,23 @@ export function jobActivityDescriptor(job, success, result = {}, errorMessage = 
         metadata: { releaseVersion: version, targetPatchHostVersion: targetPatchHost, result, requestMetadata },
       }
     }
+    if (clean(requestMetadata.source) === 'device_power_action') {
+      const action = clean(requestMetadata.power_action) || 'restart'
+      const verb = action === 'shutdown' ? 'shut down' : 'restart'
+      return {
+        ...common,
+        eventType: ok ? 'device.' + action + '.scheduled' : 'device.' + action + '.failed',
+        category: 'device',
+        summary: ok
+          ? actor.actorLabel + ' scheduled device ' + verb
+          : actor.actorLabel + ' failed to schedule device ' + verb,
+        detail: [
+          requestMetadata.delay_seconds != null ? String(requestMetadata.delay_seconds) + ' second countdown' : '',
+          suffix,
+        ].filter(Boolean).join(' · '),
+        metadata: { action, delaySeconds: requestMetadata.delay_seconds, result },
+      }
+    }
     if (clean(requestMetadata.source) === 'vendor_artifact_trust_probe') return null
     if (clean(requestMetadata.source) === 'vendor_verification_probe') {
       const filePath = clean(requestMetadata.verification_file_path)

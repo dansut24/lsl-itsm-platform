@@ -16,7 +16,23 @@ function deviceToRmm(row) {
   const inventory = row.agent_inventory_payload && typeof row.agent_inventory_payload === 'object' ? row.agent_inventory_payload : {}
   const summary = inventory.summary || {}
   const security = inventory.security || {}
+  const hardware = inventory.hardware || {}
+  const cpuInfo = inventory.cpu || {}
+  const osInfo = inventory.os || {}
+  const battery = inventory.battery || {}
+  const displayInfo = inventory.displays || {}
+  const gpus = Array.isArray(inventory.gpu) ? inventory.gpu : (Array.isArray(displayInfo.gpus) ? displayInfo.gpus : [])
+  const storageVolumes = Array.isArray(inventory.storage) ? inventory.storage : []
+  const warrantyIdentity = inventory.warranty_identity || {}
   const software = Array.isArray(inventory.software?.items) ? inventory.software.items : []
+  const windowsPendingRaw = inventory.windows_updates?.pending_count
+  const windowsPendingReported = windowsPendingRaw !== null && windowsPendingRaw !== undefined && Number.isFinite(Number(windowsPendingRaw))
+  const windowsPending = windowsPendingReported ? Math.max(0, Number(windowsPendingRaw)) : 0
+  const softwarePatchCurrent = Math.max(0, Number(row.agent_patch_current_count || 0))
+  const softwarePatchPending = Math.max(0, Number(row.agent_patch_pending_count || 0))
+  const softwarePatchTotal = Math.max(0, Number(row.agent_patch_total_count || 0))
+  const combinedPatchTotal = softwarePatchTotal + windowsPending
+  const patchCompliance = combinedPatchTotal > 0 ? Math.round((100 * softwarePatchCurrent) / combinedPatchTotal) : null
   const total = Number(row.storage_total_bytes || summary.storage_total_bytes || 0)
   const free = Number(row.storage_free_bytes || summary.storage_free_bytes || 0)
   const hasAgent = Boolean(row.agent_device_id)
@@ -34,8 +50,14 @@ function deviceToRmm(row) {
     site: row.assigned_site_name || 'Unassigned', siteId: row.assigned_site_external_key || '', group: hasAgent ? 'Hi5Central Agent' : 'Microsoft Intune', groupId: hasAgent ? 'agent' : 'intune', policy: hasAgent ? 'Agent managed' : 'Intune managed',
     sourceTenant: row.source_connection_name || '', sourceDirectoryTenantId: row.source_directory_tenant_id || '', sourceConnectionId: row.microsoft_connection_id || '',
     status: hasAgent ? (row.agent_online ? 'Online' : 'Offline') : 'Managed', health: hasAgent ? (row.agent_online ? 'Healthy' : 'Warning') : (compliant ? 'Healthy' : 'Warning'), alerts: hasAgent && !row.agent_online ? 1 : (compliant ? 0 : 1),
-    cpu: row.agent_cpu_percent == null ? null : Math.round(Number(row.agent_cpu_percent)), memory: row.agent_memory_used_percent == null ? null : Math.round(Number(row.agent_memory_used_percent)), disk: row.agent_disk_used_percent == null ? null : Math.round(Number(row.agent_disk_used_percent)), patchCompliance: null, pendingPatches: inventory.windows_updates?.pending_count ?? null,
-    manufacturer: row.manufacturer || summary.manufacturer || 'Unknown', model: row.model || summary.model || 'Unknown', serial: row.serial_number || summary.serial_number || 'Not reported', processor: inventory.cpu?.name || 'Not reported',
+    cpu: row.agent_cpu_percent == null ? null : Math.round(Number(row.agent_cpu_percent)), memory: row.agent_memory_used_percent == null ? null : Math.round(Number(row.agent_memory_used_percent)), disk: row.agent_disk_used_percent == null ? null : Math.round(Number(row.agent_disk_used_percent)),
+    patchCompliance, softwarePatchCompliance: row.agent_software_patch_compliance == null ? null : Number(row.agent_software_patch_compliance),
+    pendingPatches: softwarePatchPending + windowsPending, pendingSoftwarePatches: softwarePatchPending, pendingWindowsPatches: windowsPendingReported ? windowsPending : null,
+    patchCurrentCount: softwarePatchCurrent, patchTotalCount: softwarePatchTotal, patchStateReported: softwarePatchTotal > 0 || windowsPendingReported,
+    manufacturer: row.manufacturer || hardware.manufacturer || summary.manufacturer || 'Unknown', model: row.model || hardware.model || summary.model || 'Unknown', serial: row.serial_number || hardware.serial_number || summary.serial_number || 'Not reported', processor: cpuInfo.name || 'Not reported',
+    cpuVendor: cpuInfo.vendor || '', cpuCores: cpuInfo.cores ?? null, cpuLogicalProcessors: cpuInfo.logical_processors ?? null, cpuMaxClockMhz: cpuInfo.max_clock_mhz ?? null,
+    architecture: osInfo.architecture || '', osDisplayVersion: osInfo.display_version || '', osInstallDate: osInfo.install_date || '', deviceUuid: hardware.device_uuid || warrantyIdentity.device_uuid || '', systemSku: hardware.sku || '', systemFamily: hardware.system_family || '',
+    biosDate: hardware.bios_date || warrantyIdentity.bios_date || '', battery, gpus, displayInfo, storageVolumes,
     lastSeen: row.agent_last_telemetry_at ? new Date(row.agent_last_telemetry_at).toLocaleString() : (row.source_last_sync_at ? new Date(row.source_last_sync_at).toLocaleString() : 'Not reported'), uptime, lastBoot: inventory.os?.last_boot || 'Not reported',
     managedSince: row.enrolled_at ? new Date(row.enrolled_at).toLocaleDateString() : 'Not reported', agent: hasAgent ? (row.agent_version ? `Hi5Central ${row.agent_version}` : 'Hi5Central Agent') : (row.management_agent || 'Intune'), agentChannel: hasAgent ? 'Stable' : 'Microsoft',
     storageGb: total ? Math.round(total / (1024 ** 3)) : null, storageFreeGb: free ? Math.round(free / (1024 ** 3)) : null, ramGb: memoryTotal > 0 ? Math.round(memoryTotal / (1024 ** 3)) : null, memoryTotalBytes: memoryTotal || null, memoryUsedBytes: memoryUsed || null,

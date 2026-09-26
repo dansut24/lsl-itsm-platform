@@ -173,6 +173,74 @@ export function registerRmmDeviceToolRoutes(app) {
       return c.json({ error: error?.message || 'Unable to read live network statistics.' }, 504)
     }
   })
+  app.post('/api/v1/rmm/devices/:agentDeviceId/power', async (c) => {
+    const auth = await requireDeviceControl(c)
+    if (auth.error) return auth.error
+    const device = await managedAgent(auth.session.tenant_id, c.req.param('agentDeviceId'))
+    if (!device) return c.json({ error: 'Managed Agent not found for this device.' }, 404)
+    const socket = agentSocketForDevice(device.id)
+    if (!socket || socket.readyState !== 1) return c.json({ error: 'This device is offline. No power action was queued.', offline: true }, 409)
+
+    const body = await c.req.json().catch(() => ({}))
+    const action = clean(body.action || 'restart').toLowerCase()
+    if (!['restart','shutdown'].includes(action)) return c.json({ error: 'Power action must be restart or shutdown.' }, 400)
+    const delaySeconds = boundedInteger(body.delaySeconds ?? body.delay_seconds, 0, 300) ?? 15
+    const switchValue = action === 'restart' ? '/r' : '/s'
+    const comment = action === 'restart' ? 'Hi5Central remote restart' : 'Hi5Central remote shutdown'
+    const command = 'shutdown.exe ' + switchValue + ' /t ' + delaySeconds + ' /d p:4:1 /c "' + comment + '"'
+    const label = clean(auth.session.name || auth.session.email || 'Technician').slice(0, 255)
+    const payload = { command, timeout_seconds: 30 }
+    const requestMetadata = {
+      source: 'device_power_action',
+      power_action: action,
+      delay_seconds: delaySeconds,
+      device_name: device.name,
+      device_reference: device.reference,
+    }
+    const inserted = await pool.query(
+      "INSERT INTO rmm_agent_jobs " +
+      "(tenant_id,agent_device_id,job_type,payload,queued_by_user_id,initiated_by,initiated_by_label,request_metadata) " +
+      "VALUES ($1,$2,'custom.command',$3::jsonb,$4,'technician',$5,$6::jsonb) " +
+      "RETURNING id,job_type,status,created_at",
+      [auth.session.tenant_id, device.id, JSON.stringify(payload), auth.session.user_id, label, JSON.stringify(requestMetadata)],
+    )
+    const job = inserted.rows[0]
+    const claimed = await pool.query(
+      "UPDATE rmm_agent_jobs SET status='claimed',claimed_at=now(),updated_at=now() WHERE id=$1 AND tenant_id=$2 AND status='queued' RETURNING status,claimed_at,updated_at",
+      [job.id, auth.session.tenant_id],
+    )
+    if (!claimed.rowCount) return c.json({ error: 'Unable to claim the power action.' }, 409)
+    Object.assign(job, claimed.rows[0])
+    const pushed = sendAgentMessage(device.id, {
+      type: 'job_execute',
+      job: { id: job.id, job_type: 'custom.command', payload, created_at: job.created_at },
+    })
+    if (!pushed) {
+      await pool.query(
+        "UPDATE rmm_agent_jobs SET status='cancelled',claimed_at=NULL,completed_at=now(),error_message=$3,updated_at=now() WHERE id=$1 AND tenant_id=$2",
+        [job.id, auth.session.tenant_id, 'Device went offline before the power action could be dispatched.'],
+      )
+      return c.json({ error: 'The device went offline before the power action could start.', offline: true }, 409)
+    }
+    await recordRmmActivity({
+      tenantId: auth.session.tenant_id,
+      agentDeviceId: device.id,
+      inventoryId: device.inventory_id,
+      actorUserId: auth.session.user_id,
+      actorType: 'technician',
+      actorLabel: label,
+      eventType: 'device.' + action + '.requested',
+      category: 'device',
+      summary: label + ' requested device ' + action,
+      detail: delaySeconds ? delaySeconds + ' second countdown before ' + action : 'Immediate ' + action,
+      outcome: 'requested',
+      severity: 'info',
+      jobId: job.id,
+      metadata: { action, delaySeconds },
+    }).catch(() => {})
+    return c.json({ success: true, action, delaySeconds, job }, 202)
+  })
+
   app.post('/api/v1/rmm/devices/:agentDeviceId/actions', async (c) => {
     const auth = await requireDeviceControl(c)
     if (auth.error) return auth.error

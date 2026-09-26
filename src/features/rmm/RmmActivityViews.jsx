@@ -240,6 +240,14 @@ function jobDetailRows(job = {}) {
     return rows
   }
   if (type === 'custom.command') {
+    const metadata = job.request_metadata && typeof job.request_metadata === 'object' ? job.request_metadata : {}
+    if (metadata.source === 'device_power_action') {
+      const action = metadata.power_action === 'shutdown' ? 'Shut down' : 'Restart'
+      add('Action', action)
+      if (metadata.delay_seconds !== undefined) add('Countdown', metadata.delay_seconds + ' seconds')
+      add('Result', job.status === 'completed' ? action + ' scheduled' : action + ' failed')
+      return rows
+    }
     add('Command', request.command || result.command)
     add('Exit code', result.exit_code ?? result.exitCode)
     if (result.duration_ms !== undefined) add('Duration', Math.round(Number(result.duration_ms) / 1000) + 's')
@@ -266,7 +274,8 @@ function HumanJobDetails({ job = {} }) {
   if (type === 'patch.software.bulk') return <BulkPatchResults result={job.result || {}} />
   const rows = jobDetailRows(job)
   const result = job.result && typeof job.result === 'object' ? job.result : {}
-  const commandOutput = type === 'custom.command' ? String(result.output || '').trim() : ''
+  const metadata = job.request_metadata && typeof job.request_metadata === 'object' ? job.request_metadata : {}
+  const commandOutput = type === 'custom.command' && metadata.source !== 'device_power_action' ? String(result.output || '').trim() : ''
   return <section className="rmm-job-human-detail">
     <div className="rmm-job-human-heading"><strong>Action details</strong><span>{jobLabel(type)}</span></div>
     <div className="rmm-job-human-grid">
@@ -296,9 +305,14 @@ function DetailModal({ detail, loading, onClose }) {
   const isTool = detail?.kind === 'tool'
   const payload = detail?.data || {}
   const visualStatus = !isTool ? jobVisualStatus(payload) : null
+  const powerAction = payload?.request_metadata?.source === 'device_power_action' ? payload.request_metadata.power_action : ''
   const title = isTool
     ? ((payload.shell === 'cmd' ? 'Command Prompt' : payload.shell === 'powershell' ? 'PowerShell' : payload.tool) + ' session')
-    : jobLabel(payload.job_type)
+    : powerAction === 'shutdown'
+      ? 'Shut down device'
+      : powerAction === 'restart'
+        ? 'Restart device'
+        : jobLabel(payload.job_type)
   const modal = <div className="rmm-audit-modal-backdrop" role="presentation">
     <section className="rmm-audit-modal" role="dialog" aria-modal="true" aria-label="Activity details">
       <header><div><span className="rmm-eyebrow">RMM audit detail</span><h2>{loading ? 'Loading details…' : title}</h2></div><button onClick={onClose} type="button" aria-label="Close"><X size={18} /></button></header>
