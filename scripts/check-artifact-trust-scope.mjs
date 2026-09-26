@@ -22,6 +22,13 @@ expect(
   'Target-version changes must invalidate version-scoped artifact trust evidence.',
 )
 expect(
+  vendorIntel.includes("- 'cleanInstallVerified'") &&
+    vendorIntel.includes("- 'cleanInstallVersion'") &&
+    vendorIntel.includes("- 'uninstallVerified'") &&
+    vendorIntel.includes("- 'automaticAdmissionVerified'"),
+  'Target-version changes must invalidate stale core qualification/admission evidence.',
+)
+expect(
   enrichment.includes("AND target_version=$4") &&
     enrichment.includes("AND source_metadata->>'latestSource'=$5"),
   'Artifact inspection reconciliation must only stamp the matching current source/version.',
@@ -81,8 +88,9 @@ expect(
 expect(
   qualification.includes('export async function resetStaleQualificationQueuesForCurrentTargets') &&
     qualification.includes("last_error='qualification_target_version_changed'") &&
-    qualification.includes("q.state IN ('queued','passed','review_required')"),
-  'Stale inactive qualification results must be invalidated once when the target version changes.',
+    qualification.includes("q.state IN ('queued','passed','review_required')") &&
+    qualification.includes("COALESCE(q.evidence->>'targetVersion','')=''"),
+  'Stale inactive qualification results must be invalidated once when the target version changes without repeatedly recycling current-target review rows.',
 )
 expect(
   qualification.includes("'qualification_target_version_changed'") &&

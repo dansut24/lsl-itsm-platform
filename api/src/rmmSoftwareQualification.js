@@ -2702,12 +2702,13 @@ export async function resetStaleQualificationQueuesForCurrentTargets({ limit = 1
               q.test_type='clean_install'
               AND (
                 (
-                  COALESCE(c.qualification_evidence->>'cleanInstallVersion','')<>''
-                  AND c.qualification_evidence->>'cleanInstallVersion'<>c.target_version
-                )
-                OR (
                   COALESCE(q.evidence->>'targetVersion','')<>''
                   AND q.evidence->>'targetVersion'<>c.target_version
+                )
+                OR (
+                  COALESCE(q.evidence->>'targetVersion','')=''
+                  AND COALESCE(c.qualification_evidence->>'cleanInstallVersion','')<>''
+                  AND c.qualification_evidence->>'cleanInstallVersion'<>c.target_version
                 )
               )
             )
