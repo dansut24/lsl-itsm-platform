@@ -429,3 +429,84 @@ body[data-hi5-surface='admin'] #root {
     min-width: 220px;
   }
 }
+
+.h5a-active-software-cell {
+  min-width: 560px;
+}
+.h5a-live-timer {
+  position: relative;
+  display: grid;
+  grid-template-columns: 118px minmax(150px,1.2fr) minmax(150px,1fr) minmax(190px,1.3fr);
+  gap: 7px;
+  margin-top: 9px;
+  border: 1px solid var(--rmm-border);
+  border-radius: 9px;
+  padding: 8px 8px 11px;
+  background: var(--rmm-soft);
+  overflow: hidden;
+}
+.h5a-timer-cell {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: 2px 5px;
+}
+.h5a-timer-cell > span {
+  color: var(--rmm-muted);
+  font-size: 7px;
+  font-weight: 900;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.h5a-timer-cell > strong {
+  color: var(--rmm-text);
+  font-size: 10px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.h5a-timer-cell > small {
+  color: var(--rmm-muted);
+  font-size: 8px;
+}
+.h5a-timer-deadline > strong {
+  color: var(--rmm-accent);
+  font-variant-numeric: tabular-nums;
+}
+.h5a-live-timer.is-overdue {
+  border-color: color-mix(in srgb, #d04458 36%, var(--rmm-border));
+  background: color-mix(in srgb, #d04458 7%, var(--rmm-surface));
+}
+.h5a-live-timer.is-overdue .h5a-timer-deadline > strong {
+  color: #c5364b;
+}
+.h5a-timer-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: color-mix(in srgb, var(--rmm-border) 70%, transparent);
+}
+.h5a-timer-progress > span {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  background: var(--rmm-accent);
+  transition: width 1s linear;
+}
+.h5a-live-timer.is-overdue .h5a-timer-progress > span {
+  background: #c5364b;
+}
+@media (max-width: 1000px) {
+  .h5a-active-software-cell { min-width: 430px; }
+  .h5a-live-timer {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+@media (max-width: 760px) {
+  .h5a-active-software-cell { min-width: 360px; }
+  .h5a-live-timer {
+    grid-template-columns: 1fr;
+    min-width: 330px;
+  }
+}

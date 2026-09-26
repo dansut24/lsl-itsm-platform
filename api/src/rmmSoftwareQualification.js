@@ -3,6 +3,13 @@ import { agentSocketForDevice, sendAgentMessage } from './rmmAgent.js'
 import { verificationVersionForRelease } from './rmmSoftwareVersioning.js'
 import { COMMON_WINDOWS_SOFTWARE_LOWER } from './rmmCommonSoftware.js'
 
+export const QUALIFICATION_TIMING_LIMITS = Object.freeze({
+  installRuntimeSeconds: 600,
+  inventoryGraceSeconds: 600,
+  uninstallRuntimeSeconds: 480,
+  residueCleanupSeconds: 180,
+})
+
 function clean(value = '') { return String(value ?? '').trim() }
 
 function qualificationStageEnabled(stage) {

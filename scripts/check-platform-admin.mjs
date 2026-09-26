@@ -31,6 +31,9 @@ const checks = [
   [api.includes("action === 'set_priority'") && api.includes("action === 'push_top'") && app.includes('>Top</button>'), 'Admin must allow queued software to be reprioritised and pushed to the top.'],
   [qualification.includes('limit = 2000') && !qualification.includes('maxPending = 12') && !qualification.includes('safeMaxPending'), 'Automatic clean qualification must materialise the full eligible backlog instead of a rolling pending buffer.'],
   [vendorIntel.includes('queueAutomaticCleanInstallQualifications({\n      limit: 2000,\n      allowUnresolvedVulnerability: true') && !vendorIntel.includes('maxPending: 12') && !vendorIntel.includes('maxPending: 1'), 'Qualification progression must continuously seed the full clean-install backlog.'],
+  [qualification.includes('installRuntimeSeconds: 600') && qualification.includes('inventoryGraceSeconds: 600') && qualification.includes('uninstallRuntimeSeconds: 480') && qualification.includes('residueCleanupSeconds: 180'), 'Qualification timing limits must remain explicit and shared with Admin.'],
+  [api.includes('qualificationTiming(row)') && api.includes('deadlineLabel') && api.includes('cleanup_job_type'), 'Admin API must return phase-aware qualification timing metadata.'],
+  [app.includes('function LiveQualificationTimer') && app.includes('setInterval(()=>setNow(Date.now()),1000)') && app.includes('Total elapsed') && app.includes('Current phase'), 'Admin active qualification must render a live phase timer.'],
 ]
 
 let failures = 0

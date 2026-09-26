@@ -166,12 +166,51 @@ function DataTable({ rows, columns }) {
   return <div className="h5a-table-wrap"><table><thead><tr>{columns.map(c=><th key={c}>{c.replaceAll('_',' ')}</th>)}</tr></thead><tbody>{rows.map((row,index)=><tr key={row.id||index}>{columns.map(c=><td key={c}>{c==='state'||c==='qualification_state'?<StatusPill value={row[c]}/>:String(row[c]??'—')}</td>)}</tr>)}</tbody></table></div>
 }
 
+function durationLabel(milliseconds) {
+  if (!Number.isFinite(milliseconds)) return '—'
+  const negative = milliseconds < 0
+  let seconds = Math.max(0, Math.floor(Math.abs(milliseconds) / 1000))
+  const hours = Math.floor(seconds / 3600)
+  seconds %= 3600
+  const minutes = Math.floor(seconds / 60)
+  const remainder = seconds % 60
+  const value = hours
+    ? `${hours}:${String(minutes).padStart(2,'0')}:${String(remainder).padStart(2,'0')}`
+    : `${minutes}:${String(remainder).padStart(2,'0')}`
+  return negative ? `+${value} overdue` : value
+}
+
+function LiveQualificationTimer({ timing }) {
+  const [now,setNow]=useState(Date.now())
+  useEffect(()=>{
+    const timer=setInterval(()=>setNow(Date.now()),1000)
+    return ()=>clearInterval(timer)
+  },[])
+  if(!timing)return null
+  const overallStart=Date.parse(timing.overallStartedAt||'')
+  const phaseStart=Date.parse(timing.phaseStartedAt||'')
+  const deadline=Date.parse(timing.deadlineAt||'')
+  const totalElapsed=Number.isFinite(overallStart)?now-overallStart:NaN
+  const phaseElapsed=Number.isFinite(phaseStart)?now-phaseStart:NaN
+  const remaining=Number.isFinite(deadline)?deadline-now:NaN
+  const overdue=Number.isFinite(remaining)&&remaining<0
+  const totalWindow=Number.isFinite(deadline)&&Number.isFinite(phaseStart)?Math.max(1,deadline-phaseStart):0
+  const used=totalWindow?Math.min(100,Math.max(0,((now-phaseStart)/totalWindow)*100)):0
+  return <div className={`h5a-live-timer ${overdue?'is-overdue':''}`}>
+    <div className="h5a-timer-cell"><span>Total elapsed</span><strong>{durationLabel(totalElapsed)}</strong></div>
+    <div className="h5a-timer-cell"><span>Current phase</span><strong>{timing.phaseLabel||timing.phase||'—'}</strong><small>{durationLabel(phaseElapsed)} elapsed</small></div>
+    <div className="h5a-timer-cell h5a-timer-deadline"><span>{timing.deadlineLabel||'Phase deadline'}</span><strong>{Number.isFinite(remaining)?durationLabel(remaining):'No countdown'}</strong>{timing.deadlineAt?<small>{fmtDate(timing.deadlineAt)}</small>:null}</div>
+    <div className="h5a-timer-cell"><span>Next</span><strong>{timing.nextPhaseLabel||'—'}</strong></div>
+    {totalWindow?<div className="h5a-timer-progress" aria-hidden="true"><span style={{width:`${used}%`}}/></div>:null}
+  </div>
+}
+
 function QualificationQueueTable({ rows, recent = false, onAction, busyId }) {
   if (!rows.length) return <div className="h5a-empty">No qualification rows.</div>
   return <div className="h5a-table-wrap"><table><thead><tr>
     <th>Software</th><th>Version</th><th>State</th><th>Attempt</th><th>Last error</th><th>Actions</th>
   </tr></thead><tbody>{rows.map(row=><tr key={row.id}>
-    <td><strong>{row.canonical_name}</strong><small className="h5a-cell-sub">{row.test_type}</small></td>
+    <td className={row.timing?'h5a-active-software-cell':''}><strong>{row.canonical_name}</strong><small className="h5a-cell-sub">{row.test_type}</small>{row.timing?<LiveQualificationTimer timing={row.timing}/>:null}</td>
     <td>{row.target_version||'—'}</td><td><StatusPill value={row.state}/></td><td>{row.attempt_count??0}</td>
     <td className="h5a-error-cell">{row.last_error||'—'}</td>
     <td><div className="h5a-row-actions">
@@ -225,6 +264,12 @@ function Qualification({ data, query, refresh }) {
   const [busy,setBusy]=useState('')
   const [notice,setNotice]=useState('')
   const [error,setError]=useState('')
+  useEffect(()=>{
+    const timer=setInterval(()=>{
+      if(document.visibilityState==='visible') refresh()
+    },5000)
+    return ()=>clearInterval(timer)
+  },[refresh])
   const active=(data.active||[]).filter(r=>!query||r.canonical_name.toLowerCase().includes(query.toLowerCase()))
   const pending=(data.pending||[]).filter(r=>!query||r.canonical_name.toLowerCase().includes(query.toLowerCase()))
   const recent=(data.recent||[]).filter(r=>!query||r.canonical_name.toLowerCase().includes(query.toLowerCase()))

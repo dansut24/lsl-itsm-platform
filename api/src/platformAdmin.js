@@ -8,6 +8,7 @@ import { requestIp, requestUserAgent } from './securityAudit.js'
 import {
   cancelSoftwareQualificationQueue,
   forceQualificationCleanup,
+  QUALIFICATION_TIMING_LIMITS,
   prioritiseSoftwareQualificationQueue,
   pushSoftwareQualificationToTop,
   qualificationRunnerContaminantsForAdmin,
@@ -27,10 +28,101 @@ const BILLING_ROLES = new Set(['owner','admin','billing'])
 const CATALOGUE_ROLES = new Set(['owner','admin','catalogue'])
 
 function clean(value, max = 500) { return String(value ?? '').trim().slice(0, max) }
+function object(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {} }
 function normaliseEmail(value) { return clean(value, 254).toLowerCase() }
 function hash(value) { return createHash('sha256').update(String(value || '')).digest('hex') }
 function validEmail(value) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) }
 function validSlug(value) { return /^[a-z0-9][a-z0-9-]{1,46}[a-z0-9]$/.test(value) && !value.includes('--') }
+
+function isoTime(value) {
+  if (!value) return ''
+  const date = value instanceof Date ? value : new Date(value)
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString()
+}
+function plusSeconds(value, seconds) {
+  const base = value instanceof Date ? value : new Date(value || '')
+  if (Number.isNaN(base.getTime())) return ''
+  return new Date(base.getTime() + Math.max(0, Number(seconds) || 0) * 1000).toISOString()
+}
+function qualificationTiming(row) {
+  const evidence = object(row.evidence)
+  const overallStartedAt = isoTime(row.started_at || row.install_claimed_at || row.install_created_at || evidence.dispatchedAt)
+  const cleanupPhase = clean(evidence.cleanupPhase)
+  let phase = clean(row.state)
+  let phaseLabel = clean(row.state).replaceAll('_', ' ')
+  let phaseStartedAt = overallStartedAt
+  let deadlineAt = ''
+  let deadlineLabel = ''
+  let nextPhaseLabel = ''
+
+  if (clean(row.state) === 'running') {
+    phase = clean(row.install_job_status) === 'completed' ? 'verification_reconcile' : 'install'
+    phaseLabel = phase === 'install' ? 'Install / verify' : 'Verified install — awaiting reconcile'
+    phaseStartedAt = isoTime(row.install_claimed_at || row.install_created_at || row.started_at)
+    if (phase === 'install') {
+      deadlineAt = plusSeconds(phaseStartedAt, QUALIFICATION_TIMING_LIMITS.installRuntimeSeconds)
+      deadlineLabel = 'Install timeout'
+      nextPhaseLabel = 'Cleanup begins after verified install'
+    } else {
+      nextPhaseLabel = 'Cleanup due now'
+    }
+  } else if (clean(row.state) === 'cleanup_pending') {
+    phase = 'cleanup_pending'
+    phaseLabel = 'Waiting to dispatch cleanup'
+    phaseStartedAt = isoTime(evidence.installCompletedAt || row.updated_at)
+    deadlineAt = plusSeconds(phaseStartedAt, QUALIFICATION_TIMING_LIMITS.inventoryGraceSeconds)
+    deadlineLabel = 'Inventory / cleanup deadline'
+    nextPhaseLabel = 'Uninstall dispatch is due now'
+  } else if (clean(row.state) === 'cleanup_running') {
+    const cleanupStatus = clean(row.cleanup_job_status)
+    const cleanupCompletedAt = isoTime(row.cleanup_completed_at)
+    if (cleanupPhase === 'residue_cleanup') {
+      phase = 'residue_cleanup'
+      phaseLabel = 'Final residue cleanup'
+      phaseStartedAt = isoTime(row.cleanup_claimed_at || row.cleanup_created_at || evidence.residueCleanupDispatchedAt)
+      deadlineAt = plusSeconds(phaseStartedAt, QUALIFICATION_TIMING_LIMITS.residueCleanupSeconds)
+      deadlineLabel = 'Residue cleanup timeout'
+      nextPhaseLabel = 'Qualification completes after residue verification'
+    } else if (cleanupStatus === 'completed') {
+      phase = 'cleanup_inventory_wait'
+      const preclean = cleanupPhase === 'preclean'
+      phaseLabel = preclean
+        ? 'Pre-clean complete — verifying clean inventory'
+        : 'Uninstall complete — verifying removal'
+      phaseStartedAt = cleanupCompletedAt || isoTime(evidence.uninstallCompletedAt || evidence.precleanUninstallCompletedAt || row.updated_at)
+      deadlineAt = plusSeconds(phaseStartedAt, QUALIFICATION_TIMING_LIMITS.inventoryGraceSeconds)
+      deadlineLabel = preclean ? 'Pre-clean verification deadline' : 'Removal verification deadline'
+      nextPhaseLabel = preclean
+        ? 'Install begins after clean inventory'
+        : 'Residue cleanup follows confirmed removal'
+    } else {
+      phase = cleanupPhase === 'preclean' ? 'preclean_uninstall' : 'uninstall_cleanup'
+      phaseLabel = cleanupPhase === 'preclean' ? 'Pre-clean uninstall' : 'Uninstall cleanup'
+      phaseStartedAt = isoTime(row.cleanup_claimed_at || row.cleanup_created_at || evidence.cleanupDispatchedAt || evidence.precleanDispatchedAt)
+      const cleanupRuntimeSeconds = clean(row.cleanup_job_type) === 'patch.software'
+        ? QUALIFICATION_TIMING_LIMITS.installRuntimeSeconds
+        : QUALIFICATION_TIMING_LIMITS.uninstallRuntimeSeconds
+      deadlineAt = plusSeconds(phaseStartedAt, cleanupRuntimeSeconds)
+      deadlineLabel = clean(row.cleanup_job_type) === 'patch.software'
+        ? 'PatchHost cleanup timeout'
+        : 'Uninstall timeout'
+      nextPhaseLabel = cleanupPhase === 'preclean'
+        ? 'Install begins after clean inventory'
+        : 'Removal verification follows uninstall'
+    }
+  }
+
+  return {
+    overallStartedAt,
+    phase,
+    phaseLabel,
+    phaseStartedAt,
+    deadlineAt,
+    deadlineLabel,
+    nextPhaseLabel,
+    limits: QUALIFICATION_TIMING_LIMITS,
+  }
+}
 
 function originAllowed(c) {
   const origin = clean(c.req.header('origin')).toLowerCase()
@@ -331,7 +423,16 @@ export function registerPlatformAdminRoutes(app) {
         `SELECT q.id,q.catalogue_id,c.canonical_name,c.target_version,q.test_type,q.state,q.priority,
                 q.attempt_count,q.last_error,q.runner_agent_device_id,q.agent_job_id,q.cleanup_job_id,
                 q.evidence,q.started_at,q.updated_at,
-                install_job.status AS agent_job_status,cleanup_job.status AS cleanup_job_status
+                install_job.status AS install_job_status,
+                install_job.created_at AS install_created_at,
+                install_job.claimed_at AS install_claimed_at,
+                install_job.completed_at AS install_completed_at,
+                cleanup_job.status AS cleanup_job_status,
+                cleanup_job.job_type AS cleanup_job_type,
+                cleanup_job.created_at AS cleanup_created_at,
+                cleanup_job.claimed_at AS cleanup_claimed_at,
+                cleanup_job.completed_at AS cleanup_completed_at,
+                cleanup_job.payload AS cleanup_payload
            FROM rmm_software_qualification_queue q
            JOIN rmm_software_catalogue c ON c.id=q.catalogue_id
            LEFT JOIN rmm_agent_jobs install_job ON install_job.id=q.agent_job_id
@@ -368,7 +469,11 @@ export function registerPlatformAdminRoutes(app) {
       ...runner,
       contaminants: await qualificationRunnerContaminantsForAdmin(runner.agent_device_id),
     })))
-    return c.json({ runners: runnerItems, active: active.rows, pending: pending.rows, recent: recent.rows })
+    const activeItems = active.rows.map((row) => ({
+      ...row,
+      timing: qualificationTiming(row),
+    }))
+    return c.json({ runners: runnerItems, active: activeItems, pending: pending.rows, recent: recent.rows })
   })
 
   app.post('/api/platform/v1/qualification/runners/:agentDeviceId/action', async (c) => {
