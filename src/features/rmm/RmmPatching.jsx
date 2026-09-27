@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   AlertTriangle,
@@ -26,6 +26,7 @@ import {
   archiveVendorSource,
   createPatchAssignment,
   createPatchPolicy,
+  evaluateWindowsUpdatePolicies,
   createSoftwareCatalogueEntry,
   createVendorSource,
   deletePatchAssignment,
@@ -40,6 +41,7 @@ import {
   remediateVulnerabilityExposure,
   searchWingetRepository,
   testVendorSource,
+  updatePatchPolicy,
   updateVendorSource,
   updateSoftwareValidation,
   revalidateSoftwareCatalogueEntry,
@@ -517,36 +519,78 @@ function SoftwarePatchModal({ application, installs, devices, onClose, onPatch, 
   </div>
 }
 
-function PolicyModal({ onClose, onSave }) {
+function PolicyModal({ policy, onClose, onSave }) {
+  const maintenance = policy?.maintenance_window || {}
+  const windowsRules = policy?.windows_rules || {}
+  const windowsDelays = windowsRules.delayDays || {}
+  const vulnerabilityRules = policy?.software_rules?.vulnerabilityRules || {}
+  const detectedTimezone = typeof Intl !== 'undefined'
+    ? Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/London'
+    : 'Europe/London'
   const [form, setForm] = useState({
-    name: '',
-    description: '',
-    approvalMode: 'manual',
-    deploymentDelayDays: 3,
-    softwareEnabled: true,
-    windowsEnabled: false,
-    rebootPolicy: 'never',
-    maxRetries: 2,
-    maintenanceStart: '18:00',
-    maintenanceEnd: '05:00',
-    criticalExploited: 'automatic',
-    critical: 'automatic',
-    high: 'manual',
-    medium: 'manual',
-    low: 'skip',
-    advisory: 'skip',
+    name: policy?.name || '',
+    description: policy?.description || '',
+    approvalMode: policy?.approval_mode || 'manual',
+    deploymentDelayDays: policy?.deployment_delay_days ?? 3,
+    softwareEnabled: policy ? policy.software_enabled !== false : true,
+    windowsEnabled: policy ? policy.windows_enabled === true : true,
+    rebootPolicy: policy?.reboot_policy || 'never',
+    maxRetries: policy?.max_retries ?? 2,
+    maintenanceStart: maintenance.start || '18:00',
+    maintenanceEnd: maintenance.end || '05:00',
+    maintenanceTimezone: maintenance.timezone && maintenance.timezone !== 'tenant' ? maintenance.timezone : detectedTimezone,
+    maintenanceDays: Array.isArray(maintenance.days) && maintenance.days.length ? maintenance.days : [1, 2, 3, 4, 5],
+    windowsAutoInstall: windowsRules.autoInstall === true,
+    includeDrivers: windowsRules.includeDrivers === true,
+    includeFeatureUpdates: windowsRules.includeFeatureUpdates === true,
+    includeDefinitions: windowsRules.includeDefinitions !== false,
+    windowsCriticalDelay: windowsDelays.critical ?? 0,
+    windowsSecurityDelay: windowsDelays.security ?? 2,
+    windowsQualityDelay: windowsDelays.quality ?? 7,
+    windowsFeatureDelay: windowsDelays.feature ?? 30,
+    windowsDriverDelay: windowsDelays.driver ?? 14,
+    windowsDefinitionDelay: windowsDelays.definition ?? 0,
+    criticalExploited: vulnerabilityRules.critical_exploited || 'automatic',
+    critical: vulnerabilityRules.critical || 'automatic',
+    high: vulnerabilityRules.high || 'manual',
+    medium: vulnerabilityRules.medium || 'manual',
+    low: vulnerabilityRules.low || 'skip',
+    advisory: vulnerabilityRules.advisory || 'skip',
   })
   const update = (key, value) => setForm((current) => ({ ...current, [key]: value }))
+  const toggleDay = (day) => setForm((current) => ({
+    ...current,
+    maintenanceDays: current.maintenanceDays.includes(day)
+      ? current.maintenanceDays.filter((item) => item !== day)
+      : [...current.maintenanceDays, day].sort(),
+  }))
+  const dayLabels = [['M', 1], ['T', 2], ['W', 3], ['T', 4], ['F', 5], ['S', 6], ['S', 7]]
+
   return <div className="rmm-patch-modal-backdrop">
-    <form className="rmm-patch-modal" onSubmit={(event) => {
+    <form className="rmm-patch-modal rmm-patch-policy-modal" onSubmit={(event) => {
       event.preventDefault()
-      if (form.name.trim().length < 2) return
+      if (form.name.trim().length < 2 || !form.maintenanceDays.length) return
       onSave({
         ...form,
         maintenanceWindow: {
           start: form.maintenanceStart,
           end: form.maintenanceEnd,
-          timezone: 'tenant',
+          timezone: form.maintenanceTimezone,
+          days: form.maintenanceDays,
+        },
+        windowsRules: {
+          autoInstall: form.windowsAutoInstall,
+          includeDrivers: form.includeDrivers,
+          includeFeatureUpdates: form.includeFeatureUpdates,
+          includeDefinitions: form.includeDefinitions,
+          delayDays: {
+            critical: Number(form.windowsCriticalDelay) || 0,
+            security: Number(form.windowsSecurityDelay) || 0,
+            quality: Number(form.windowsQualityDelay) || 0,
+            feature: Number(form.windowsFeatureDelay) || 0,
+            driver: Number(form.windowsDriverDelay) || 0,
+            definition: Number(form.windowsDefinitionDelay) || 0,
+          },
         },
         softwareRules: {
           vulnerabilityRules: {
@@ -561,33 +605,67 @@ function PolicyModal({ onClose, onSave }) {
       })
     }}>
       <header>
-        <div><span className="rmm-eyebrow">Reusable targeting</span><h2>New patch policy</h2></div>
+        <div><span className="rmm-eyebrow">Reusable targeting</span><h2>{policy ? 'Edit patch policy' : 'New patch policy'}</h2></div>
         <button aria-label="Close" onClick={onClose} type="button"><X size={17} /></button>
       </header>
       <div className="rmm-patch-form-grid">
         <label className="wide">Policy name<input autoFocus value={form.name} onChange={(event) => update('name', event.target.value)} placeholder="Standard workstations" /></label>
         <label className="wide">Description<textarea rows="2" value={form.description} onChange={(event) => update('description', event.target.value)} /></label>
-        <label>Approval mode<select value={form.approvalMode} onChange={(event) => update('approvalMode', event.target.value)}><option value="manual">Manual approval</option><option value="automatic">Automatic</option><option value="pilot">Pilot → production</option><option value="blocked">Blocked</option></select></label>
-        <label>Deployment delay (days)<input min="0" max="365" type="number" value={form.deploymentDelayDays} onChange={(event) => update('deploymentDelayDays', event.target.value)} /></label>
-        <label>Window starts<input type="time" value={form.maintenanceStart} onChange={(event) => update('maintenanceStart', event.target.value)} /></label>
-        <label>Window ends<input type="time" value={form.maintenanceEnd} onChange={(event) => update('maintenanceEnd', event.target.value)} /></label>
-        <label>Reboot policy<select value={form.rebootPolicy} onChange={(event) => update('rebootPolicy', event.target.value)}><option value="never">Never automatically</option><option value="maintenance_window">During maintenance window</option><option value="notify_user">Notify user</option></select></label>
-        <label>Retries<input min="0" max="10" type="number" value={form.maxRetries} onChange={(event) => update('maxRetries', event.target.value)} /></label>
-        <div className="wide"><strong>Vulnerability-driven approvals</strong><small>Automatic still requires a qualified, trusted remediation. Skip suppresses automatic deployment, not vulnerability visibility.</small></div>
-        {[
-          ['criticalExploited', 'Critical / known exploited'],
-          ['critical', 'Critical (CVSS ≥ 9.0)'],
-          ['high', 'High (CVSS 7.0–8.9)'],
-          ['medium', 'Medium (CVSS 4.0–6.9)'],
-          ['low', 'Low (CVSS < 4.0)'],
-          ['advisory', 'Advisory / no scored CVE'],
-        ].map(([key, label]) => <label key={key}>{label}<select value={form[key]} onChange={(event) => update(key, event.target.value)}><option value="automatic">Auto approve</option><option value="manual">Manual approval</option><option value="skip">Skip automatic patching</option></select></label>)}
+        <label>Software approval<select value={form.approvalMode} onChange={(event) => update('approvalMode', event.target.value)}><option value="manual">Manual approval</option><option value="automatic">Automatic</option><option value="pilot">Pilot → production</option><option value="blocked">Blocked</option></select></label>
+        <label>Software/default delay<input min="0" max="365" type="number" value={form.deploymentDelayDays} onChange={(event) => update('deploymentDelayDays', event.target.value)} /></label>
       </div>
+
+      <section className="rmm-policy-schedule">
+        <div className="rmm-policy-section-title"><strong>Windows Update schedule</strong><small>Applicable updates remain visible immediately. Installation waits for both the configured delay and this maintenance window.</small></div>
+        <div className="rmm-patch-checks">
+          <label><input checked={form.windowsEnabled} onChange={(event) => update('windowsEnabled', event.target.checked)} type="checkbox" /><span><strong>Windows Update policy</strong><small>Apply this schedule to assigned Windows endpoints.</small></span></label>
+          <label><input checked={form.windowsAutoInstall} onChange={(event) => update('windowsAutoInstall', event.target.checked)} type="checkbox" /><span><strong>Automatically install eligible updates</strong><small>Only while the maintenance window is open.</small></span></label>
+        </div>
+        <div className="rmm-patch-form-grid">
+          <label>Window starts<input type="time" value={form.maintenanceStart} onChange={(event) => update('maintenanceStart', event.target.value)} /></label>
+          <label>Window ends<input type="time" value={form.maintenanceEnd} onChange={(event) => update('maintenanceEnd', event.target.value)} /></label>
+          <label className="wide">Timezone<input value={form.maintenanceTimezone} onChange={(event) => update('maintenanceTimezone', event.target.value)} placeholder="Europe/London" /></label>
+          <div className="wide rmm-policy-days"><span>Patch days</span><div>{dayLabels.map(([label, day]) => <button className={form.maintenanceDays.includes(day) ? 'active' : ''} key={day} onClick={() => toggleDay(day)} type="button">{label}</button>)}</div></div>
+        </div>
+        <div className="rmm-policy-delay-grid">
+          {[
+            ['windowsCriticalDelay', 'Critical', 'Immediate by default'],
+            ['windowsSecurityDelay', 'Security', 'Security fixes'],
+            ['windowsQualityDelay', 'Quality', 'Cumulative / quality'],
+            ['windowsFeatureDelay', 'Feature', 'Feature releases'],
+            ['windowsDriverDelay', 'Drivers', 'Driver updates'],
+            ['windowsDefinitionDelay', 'Definitions', 'Defender intelligence'],
+          ].map(([key, label, detail]) => <label key={key}><span><strong>{label}</strong><small>{detail}</small></span><input min="0" max="365" type="number" value={form[key]} onChange={(event) => update(key, event.target.value)} /><em>days</em></label>)}
+        </div>
+        <div className="rmm-patch-checks">
+          <label><input checked={form.includeFeatureUpdates} onChange={(event) => update('includeFeatureUpdates', event.target.checked)} type="checkbox" /><span><strong>Feature updates</strong><small>Off by default for controlled rollout.</small></span></label>
+          <label><input checked={form.includeDrivers} onChange={(event) => update('includeDrivers', event.target.checked)} type="checkbox" /><span><strong>Driver updates</strong><small>Off by default.</small></span></label>
+          <label><input checked={form.includeDefinitions} onChange={(event) => update('includeDefinitions', event.target.checked)} type="checkbox" /><span><strong>Defender definitions</strong><small>Enabled by default with no delay.</small></span></label>
+        </div>
+        <div className="rmm-patch-form-grid">
+          <label>Reboot handling<select value={form.rebootPolicy} onChange={(event) => update('rebootPolicy', event.target.value)}><option value="never">Do not reboot automatically</option><option value="maintenance_window">Reboot during maintenance window</option><option value="notify_user">Notify user before reboot</option></select></label>
+          <label>Retries<input min="0" max="10" type="number" value={form.maxRetries} onChange={(event) => update('maxRetries', event.target.value)} /></label>
+        </div>
+        <div className="rmm-patch-security-note"><ShieldCheck size={16} /><span>Phase one installs Windows updates silently but does not force an automatic reboot. Reboot-required endpoints remain flagged until reboot automation is enabled separately.</span></div>
+      </section>
+
+      <details className="rmm-policy-software-rules">
+        <summary>Software vulnerability approvals</summary>
+        <div className="rmm-patch-form-grid">
+          {[
+            ['criticalExploited', 'Critical / known exploited'],
+            ['critical', 'Critical (CVSS ≥ 9.0)'],
+            ['high', 'High (CVSS 7.0–8.9)'],
+            ['medium', 'Medium (CVSS 4.0–6.9)'],
+            ['low', 'Low (CVSS < 4.0)'],
+            ['advisory', 'Advisory / no scored CVE'],
+          ].map(([key, label]) => <label key={key}>{label}<select value={form[key]} onChange={(event) => update(key, event.target.value)}><option value="automatic">Auto approve</option><option value="manual">Manual approval</option><option value="skip">Skip automatic patching</option></select></label>)}
+        </div>
+      </details>
       <div className="rmm-patch-checks">
-        <label><input checked={form.softwareEnabled} onChange={(event) => update('softwareEnabled', event.target.checked)} type="checkbox" /><span><strong>Software patching</strong><small>Prioritised for the first execution release.</small></span></label>
-        <label><input checked={form.windowsEnabled} onChange={(event) => update('windowsEnabled', event.target.checked)} type="checkbox" /><span><strong>Windows Update</strong><small>Uses the same PatchHost and policy framework.</small></span></label>
+        <label><input checked={form.softwareEnabled} onChange={(event) => update('softwareEnabled', event.target.checked)} type="checkbox" /><span><strong>Software patching</strong><small>Use this policy for qualified third-party applications too.</small></span></label>
       </div>
-      <footer><button onClick={onClose} type="button">Cancel</button><button className="rmm-primary" type="submit"><Plus size={15} /> Create policy</button></footer>
+      <footer><button onClick={onClose} type="button">Cancel</button><button className="rmm-primary" type="submit"><PackageCheck size={15} /> {policy ? 'Save policy' : 'Create policy'}</button></footer>
     </form>
   </div>
 }
@@ -912,6 +990,8 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
   const [showVendorSource, setShowVendorSource] = useState(false)
   const [editingVendorSource, setEditingVendorSource] = useState(null)
   const [showPolicy, setShowPolicy] = useState(false)
+  const [editingPolicy, setEditingPolicy] = useState(null)
+  const [windowsEvaluating, setWindowsEvaluating] = useState(false)
   const [assignPolicy, setAssignPolicy] = useState(null)
 
   async function refresh() {
@@ -1039,8 +1119,21 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
   const overview = bundle?.overview || {}
   const exposedApps = applications.filter((item) => item.updateAvailable > 0)
   const mappedApps = applications.filter((item) => item.catalogue)
-  const windowsReported = devices.filter((device) => device.pendingWindowsPatches != null)
-  const windowsPending = windowsReported.reduce((sum, device) => sum + Number(device.pendingWindowsPatches || 0), 0)
+  const windowsUpdates = bundle?.windowsUpdates || { summary: {}, observations: [], decisions: [] }
+  const windowsSummary = windowsUpdates.summary || {}
+  const windowsPending = Number(windowsSummary.pending || 0)
+  const windowsPendingRows = (windowsUpdates.observations || []).filter((item) => item.pending)
+  const windowsDecisions = windowsUpdates.decisions || []
+  const windowsByDevice = [...new Map(windowsPendingRows.map((item) => [item.inventory_id, {
+    inventoryId: item.inventory_id,
+    agentDeviceId: item.agent_device_id,
+    name: item.device_name,
+    reference: item.device_reference,
+    agentVersion: item.agent_version,
+    online: item.websocket_status === 'Connected' && item.last_telemetry_at && Date.now() - new Date(item.last_telemetry_at).getTime() <= 90000,
+    updates: windowsPendingRows.filter((row) => row.inventory_id === item.inventory_id),
+    decision: windowsDecisions.find((row) => row.inventory_id === item.inventory_id) || null,
+  }])).values()]
   const patchHostReady = patchDevices.filter((device) => device.patchCapabilities?.softwareDiscovery).length
   const patchHostInstallReady = patchDevices.filter((device) => device.patchCapabilities?.softwareInstall).length
   const onlineInstallDevices = patchDevices.filter((device) => device.online)
@@ -1579,15 +1672,35 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
 
   async function savePolicy(form) {
     setSaving(true)
+    setError('')
     try {
-      const result = await createPatchPolicy(form)
+      const result = editingPolicy?.id
+        ? await updatePatchPolicy(editingPolicy.id, form)
+        : await createPatchPolicy(form)
       setBundle(result.bundle)
       setShowPolicy(false)
+      setEditingPolicy(null)
       setTab('policies')
     } catch (requestError) {
-      setError(requestError?.message || 'Unable to create patch policy.')
+      setError(requestError?.message || 'Unable to save patch policy.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function evaluateWindowsPatching() {
+    if (windowsEvaluating) return
+    setWindowsEvaluating(true)
+    setError('')
+    try {
+      const result = await evaluateWindowsUpdatePolicies(true)
+      const refreshed = await loadRmmPatching()
+      setBundle(refreshed)
+      return result
+    } catch (requestError) {
+      setError(requestError?.message || 'Unable to evaluate Windows Update schedules.')
+    } finally {
+      setWindowsEvaluating(false)
     }
   }
   async function saveAssignment(assignment) {
@@ -1616,7 +1729,7 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
   }
 
   return <>
-    {!softwareOnly && <PageHeading action={<div className="rmm-patch-heading-actions"><button disabled={loading} onClick={refresh} type="button"><RefreshCw size={15} /> Refresh</button><button className="rmm-primary compact" onClick={() => setShowPolicy(true)} type="button"><Plus size={15} /> New policy</button></div>} />}
+    {!softwareOnly && <PageHeading action={<div className="rmm-patch-heading-actions"><button disabled={loading} onClick={refresh} type="button"><RefreshCw size={15} /> Refresh</button><button className="rmm-primary compact" onClick={() => { setEditingPolicy(null); setShowPolicy(true) }} type="button"><Plus size={15} /> New policy</button></div>} />}
     {error && <div className="rmm-patch-error"><AlertTriangle size={16} /><span>{error}</span></div>}
 
     {!softwareOnly && <div className="rmm-patch-metrics">
@@ -1974,21 +2087,57 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
     </section>}
 
     {tab === 'windows' && <section className="rmm-patch-panel">
-      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Windows Update</span><h2>Endpoint update inventory</h2><p>Windows patch execution will use the same PatchHost, job history and maintenance policies as software patching.</p></div></div>
-      <div className="rmm-patch-table windows">
-        <div className="head"><span>Device</span><span>Pending</span><span>Last seen</span><span>Agent</span><span>Status</span></div>
-        {windowsReported.map((device) => <div className="row" key={device.id}><span><strong>{device.name}</strong><small>{device.user} · {device.site || 'No site'}</small></span><span><strong>{device.pendingWindowsPatches}</strong></span><span><strong>{device.lastSeen}</strong></span><span><strong>{device.agent}</strong></span><span>{device.status === 'Offline' ? <StatusPill tone="neutral"><WifiOff size={12} /> Offline</StatusPill> : <StatusPill tone={device.pendingWindowsPatches > 0 ? 'warning' : 'healthy'}>{device.pendingWindowsPatches > 0 ? 'Updates pending' : 'Current'}</StatusPill>}</span></div>)}
+      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Windows Update</span><h2>OS patch scheduling</h2><p>Windows Update remains the source of applicable patches. Hi5Central decides when eligible updates may install based on assignment, release delay and maintenance window.</p></div><button disabled={windowsEvaluating} onClick={evaluateWindowsPatching} type="button"><RefreshCw size={14} /> {windowsEvaluating ? 'Evaluating…' : 'Evaluate schedules'}</button></div>
+      <div className="rmm-windows-summary">
+        <article><small>Pending</small><strong>{windowsSummary.pending || 0}</strong><span>{windowsSummary.devices || 0} device{Number(windowsSummary.devices || 0) === 1 ? '' : 's'}</span></article>
+        <article><small>Critical / security</small><strong>{Number(windowsSummary.critical || 0) + Number(windowsSummary.security || 0)}</strong><span>{windowsSummary.critical || 0} critical · {windowsSummary.security || 0} security</span></article>
+        <article><small>Quality</small><strong>{windowsSummary.quality || 0}</strong><span>Cumulative and servicing updates</span></article>
+        <article><small>Feature / driver</small><strong>{Number(windowsSummary.feature || 0) + Number(windowsSummary.driver || 0)}</strong><span>{windowsSummary.feature || 0} feature · {windowsSummary.driver || 0} driver</span></article>
+        <article><small>Reboot required</small><strong>{windowsSummary.rebootRequired || 0}</strong><span>No forced reboot in phase one</span></article>
       </div>
-      {!windowsReported.length && <div className="rmm-empty"><Monitor size={24} /><strong>No Windows Update inventory yet</strong><span>Agent inventory will populate this view.</span></div>}
+      <div className="rmm-patch-table windows scheduled">
+        <div className="head"><span>Device</span><span>Pending</span><span>Patch classes</span><span>Policy</span><span>Schedule state</span><span>Agent</span></div>
+        {windowsByDevice.map((device) => {
+          const classes = device.updates.reduce((result, item) => ({ ...result, [item.update_class]: (result[item.update_class] || 0) + 1 }), {})
+          const decision = device.decision
+          const reason = decision?.reason || 'awaiting policy evaluation'
+          const tone = decision?.state === 'dispatched' ? 'running' : decision?.state === 'blocked' || decision?.state === 'failed' ? 'critical' : decision?.state === 'eligible' ? 'warning' : device.online ? 'neutral' : 'neutral'
+          return <Fragment key={device.inventoryId}>
+            <div className="row">
+              <span><strong>{device.name}</strong><small>{device.reference}</small></span>
+              <span><strong>{device.updates.length}</strong><small>{device.updates.filter((item) => item.downloaded).length} downloaded</small></span>
+              <span><strong>{Object.entries(classes).map(([name, count]) => count + ' ' + name).join(' · ')}</strong><small>{device.updates.filter((item) => item.reboot_required).length ? 'Update metadata reports reboot requirement' : 'No current reboot flag'}</small></span>
+              <span><strong>{decision?.policy_name || 'No assigned Windows policy'}</strong><small>{decision?.maintenance_window?.start ? decision.maintenance_window.start + '–' + decision.maintenance_window.end + ' · ' + (decision.maintenance_window.timezone || 'tenant timezone') : 'Assign a patch policy to automate'}</small></span>
+              <span><StatusPill tone={tone}>{readinessLabel(decision?.state || (device.online ? 'waiting' : 'offline'))}</StatusPill><small>{readinessLabel(reason)}</small></span>
+              <span>{device.online ? <StatusPill tone="healthy">Online</StatusPill> : <StatusPill tone="neutral"><WifiOff size={12} /> Offline</StatusPill>}<small>{device.agentVersion ? 'Agent ' + device.agentVersion : 'Agent version unknown'}</small></span>
+            </div>
+            <div className="rmm-windows-update-detail-row">
+              <details>
+                <summary>View {device.updates.length} pending update{device.updates.length === 1 ? '' : 's'}</summary>
+                <div className="rmm-windows-update-list">
+                  {device.updates.map((update) => <div key={update.id}>
+                    <span><strong>{update.title}</strong><small>{(update.kb_articles || []).join(', ') || 'No KB article'} · {update.categories?.join(', ') || update.update_class}</small></span>
+                    <span><StatusPill tone={['critical', 'security'].includes(update.update_class) ? 'warning' : 'neutral'}>{update.update_class}</StatusPill><small>{update.release_at ? 'Released ' + new Date(update.release_at).toLocaleDateString() : 'First seen ' + new Date(update.first_seen_at).toLocaleDateString()}</small></span>
+                    <span><strong>{update.downloaded ? 'Downloaded' : 'Not downloaded'}</strong><small>{update.severity || 'No MSRC severity'}</small></span>
+                  </div>)}
+                </div>
+              </details>
+            </div>
+          </Fragment>
+        })}
+      </div>
+      {!windowsByDevice.length && <div className="rmm-empty"><Monitor size={24} /><strong>{loading ? 'Loading Windows Update inventory…' : 'No pending Windows updates'}</strong><span>Applicable Windows updates are populated by managed Agent inventory scans.</span></div>}
+      <div className="rmm-patch-security-note"><ShieldCheck size={16} /><span>Scheduled installs are server-authoritative. Offline devices are not left with queued update jobs; they are re-evaluated when online. Feature and driver updates remain excluded unless the assigned policy explicitly enables them.</span></div>
     </section>}
     {tab === 'policies' && <section className="rmm-patch-panel">
-      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Targeting</span><h2>Patch policies</h2><p>Policies use the same Estate → Site → Group → Device targeting model as Monitoring.</p></div><button className="rmm-primary compact" onClick={() => setShowPolicy(true)} type="button"><Plus size={14} /> New policy</button></div>
+      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Targeting</span><h2>Patch policies</h2><p>Policies use the same Estate → Site → Group → Device targeting model as Monitoring. Windows schedules combine release delays with a maintenance window.</p></div><button className="rmm-primary compact" onClick={() => { setEditingPolicy(null); setShowPolicy(true) }} type="button"><Plus size={14} /> New policy</button></div>
       <div className="rmm-patch-policy-grid">
         {policies.map((policy) => <article key={policy.id}>
           <header><div><span className="rmm-eyebrow">{policy.approval_mode}</span><h3>{policy.name}</h3></div><StatusPill tone={policy.status === 'active' ? 'healthy' : 'neutral'}>{policy.status}</StatusPill></header>
           <p>{policy.description || 'No description provided.'}</p>
-          <div className="meta"><span><small>Software</small><strong>{policy.software_enabled ? 'Enabled' : 'Disabled'}</strong></span><span><small>Windows</small><strong>{policy.windows_enabled ? 'Enabled' : 'Disabled'}</strong></span><span><small>Delay</small><strong>{policy.deployment_delay_days} days</strong></span><span><small>Reboot</small><strong>{policy.reboot_policy}</strong></span></div>
-          <footer><span>{assignments.filter((assignment) => assignment.policy_id === policy.id && assignment.enabled !== false).length} assignments</span><button disabled={saving} onClick={() => setAssignPolicy(policy)} type="button"><GitBranch size={14} /> Assign scope</button></footer>
+          <div className="meta"><span><small>Software</small><strong>{policy.software_enabled ? 'Enabled' : 'Disabled'}</strong></span><span><small>Windows</small><strong>{policy.windows_enabled ? policy.windows_rules?.autoInstall ? 'Automatic' : 'Manual' : 'Disabled'}</strong></span><span><small>Window</small><strong>{policy.maintenance_window?.start || '18:00'}–{policy.maintenance_window?.end || '05:00'}</strong></span><span><small>Reboot</small><strong>{readinessLabel(policy.reboot_policy)}</strong></span></div>
+          {policy.windows_enabled && <div className="rmm-policy-card-schedule"><small>{(policy.maintenance_window?.days || [1,2,3,4,5]).map((day) => ['','Mon','Tue','Wed','Thu','Fri','Sat','Sun'][day]).join(' · ')} · {policy.maintenance_window?.timezone || 'Europe/London'}</small><small>Critical {policy.windows_rules?.delayDays?.critical ?? 0}d · Security {policy.windows_rules?.delayDays?.security ?? policy.deployment_delay_days}d · Quality {policy.windows_rules?.delayDays?.quality ?? policy.deployment_delay_days}d · Feature {policy.windows_rules?.includeFeatureUpdates ? (policy.windows_rules?.delayDays?.feature ?? 14) + 'd' : 'off'} · Drivers {policy.windows_rules?.includeDrivers ? (policy.windows_rules?.delayDays?.driver ?? 14) + 'd' : 'off'}</small></div>}
+          <footer><span>{assignments.filter((assignment) => assignment.policy_id === policy.id && assignment.enabled !== false).length} assignments</span><div><button disabled={saving} onClick={() => { setEditingPolicy(policy); setShowPolicy(true) }} type="button"><Wrench size={14} /> Edit</button><button disabled={saving} onClick={() => setAssignPolicy(policy)} type="button"><GitBranch size={14} /> Assign scope</button></div></footer>
         </article>)}
       </div>
       {!policies.length && <div className="rmm-empty"><GitBranch size={24} /><strong>No patch policies yet</strong><span>Create a software-first policy, then target it to Estate, Site, Group or Device.</span></div>}
@@ -2011,7 +2160,7 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
           onPatch={runSoftwarePatch}
           saving={saving}
         />}
-        {showPolicy && <PolicyModal onClose={() => setShowPolicy(false)} onSave={savePolicy} />}
+        {showPolicy && <PolicyModal policy={editingPolicy} onClose={() => { setShowPolicy(false); setEditingPolicy(null) }} onSave={savePolicy} />}
         {assignPolicy && <AssignmentModal devices={bundle?.devices || devices} groups={scope.groups || []} onClose={() => setAssignPolicy(null)} onSave={saveAssignment} policy={assignPolicy} />}
       </div>,
       document.body,

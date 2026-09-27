@@ -764,3 +764,102 @@
   .rmm-qualification-history > div > span { grid-template-columns:1fr; }
   .rmm-qualification-history em { grid-column:auto; }
 }
+
+/* Windows Update scheduling */
+.rmm-windows-summary {
+  display:grid;
+  grid-template-columns:repeat(5,minmax(0,1fr));
+  gap:8px;
+  padding:12px;
+  border-bottom:1px solid var(--rmm-border);
+  background:var(--rmm-soft);
+}
+.rmm-windows-summary article {
+  display:grid;
+  gap:2px;
+  border:1px solid var(--rmm-border);
+  border-radius:9px;
+  padding:9px;
+  background:var(--rmm-surface);
+}
+.rmm-windows-summary small,.rmm-windows-summary span { color:var(--rmm-muted); font-size:7px; }
+.rmm-windows-summary strong { font-size:14px; }
+.rmm-patch-table.windows.scheduled .head,
+.rmm-patch-table.windows.scheduled .row {
+  grid-template-columns:minmax(210px,1.1fr) 75px minmax(190px,1fr) minmax(210px,1fr) minmax(165px,.8fr) minmax(125px,.65fr);
+  min-width:1120px;
+}
+.rmm-windows-update-detail-row { border-bottom:1px solid var(--rmm-border); padding:0 12px 9px; }
+.rmm-windows-update-detail-row details { border:1px solid var(--rmm-border); border-radius:8px; background:var(--rmm-soft); }
+.rmm-windows-update-detail-row summary { padding:8px 10px; cursor:pointer; color:var(--rmm-muted); font-size:7px; font-weight:850; }
+.rmm-windows-update-list { display:grid; gap:5px; border-top:1px solid var(--rmm-border); padding:8px; }
+.rmm-windows-update-list > div {
+  display:grid;
+  grid-template-columns:minmax(0,1.5fr) minmax(160px,.55fr) minmax(120px,.4fr);
+  gap:10px;
+  align-items:center;
+  border-radius:7px;
+  padding:8px;
+  background:var(--rmm-surface);
+}
+.rmm-windows-update-list > div > span { min-width:0; display:grid; gap:2px; }
+.rmm-windows-update-list strong { overflow:hidden; font-size:8px; text-overflow:ellipsis; white-space:nowrap; }
+.rmm-windows-update-list small { overflow:hidden; color:var(--rmm-muted); font-size:7px; text-overflow:ellipsis; white-space:nowrap; }
+
+.rmm-patch-policy-modal { width:min(900px,100%); }
+.rmm-policy-schedule { display:grid; gap:10px; margin-top:12px; border:1px solid var(--rmm-border); border-radius:10px; padding:11px; background:var(--rmm-soft); }
+.rmm-policy-section-title { display:grid; gap:3px; }
+.rmm-policy-section-title strong { font-size:9px; }
+.rmm-policy-section-title small { color:var(--rmm-muted); font-size:7px; line-height:1.45; }
+.rmm-policy-schedule .rmm-patch-checks { margin-top:0; }
+.rmm-policy-days { display:grid; gap:5px; color:var(--rmm-muted); font-size:7px; font-weight:850; }
+.rmm-policy-days > div { display:grid; grid-template-columns:repeat(7,1fr); gap:5px; }
+.rmm-policy-days button {
+  min-height:34px;
+  border:1px solid var(--rmm-border);
+  border-radius:7px;
+  background:var(--rmm-surface);
+  color:var(--rmm-muted);
+  font:inherit;
+  font-size:7px;
+  font-weight:850;
+  cursor:pointer;
+}
+.rmm-policy-days button.active { border-color:var(--rmm-accent); background:rgba(var(--rmm-accent-rgb),.08); color:var(--rmm-accent); }
+.rmm-policy-delay-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; }
+.rmm-policy-delay-grid label {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) 64px auto;
+  align-items:center;
+  gap:7px;
+  border:1px solid var(--rmm-border);
+  border-radius:8px;
+  padding:8px;
+  background:var(--rmm-surface);
+}
+.rmm-policy-delay-grid label > span { min-width:0; display:grid; gap:1px; }
+.rmm-policy-delay-grid strong { font-size:8px; }
+.rmm-policy-delay-grid small,.rmm-policy-delay-grid em { color:var(--rmm-muted); font-size:6px; font-style:normal; }
+.rmm-policy-delay-grid input { width:64px; min-height:32px; border:1px solid var(--rmm-border); border-radius:7px; padding:0 7px; background:var(--rmm-soft); color:var(--rmm-text); font:inherit; font-size:8px; }
+.rmm-policy-software-rules { margin-top:10px; border:1px solid var(--rmm-border); border-radius:9px; background:var(--rmm-soft); }
+.rmm-policy-software-rules summary { padding:9px 10px; cursor:pointer; font-size:8px; font-weight:850; }
+.rmm-policy-software-rules .rmm-patch-form-grid { border-top:1px solid var(--rmm-border); padding:10px; }
+.rmm-policy-card-schedule { display:grid; gap:3px; margin-top:7px; border-radius:7px; padding:7px; background:var(--rmm-surface); }
+.rmm-policy-card-schedule small { color:var(--rmm-muted); font-size:7px; line-height:1.4; }
+.rmm-patch-policy-grid footer > div { display:flex; gap:6px; }
+
+@media (max-width:900px) {
+  .rmm-windows-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .rmm-policy-delay-grid { grid-template-columns:1fr 1fr; }
+}
+@media (max-width:700px) {
+  .rmm-windows-summary { grid-template-columns:1fr 1fr; padding:8px; }
+  .rmm-patch-table.windows.scheduled .row { min-width:0; grid-template-columns:1fr 1fr; }
+  .rmm-windows-update-detail-row { margin:0 8px 8px; padding:0; border:0; }
+  .rmm-windows-update-list > div { grid-template-columns:1fr; }
+  .rmm-policy-delay-grid { grid-template-columns:1fr; }
+  .rmm-policy-days > div { grid-template-columns:repeat(7,1fr); }
+  .rmm-patch-policy-grid footer { align-items:flex-start; flex-direction:column; }
+  .rmm-patch-policy-grid footer > div { width:100%; }
+  .rmm-patch-policy-grid footer > div button { flex:1; justify-content:center; }
+}

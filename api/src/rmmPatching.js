@@ -31,6 +31,7 @@ import {
 } from './rmmTenantVendorSources.js'
 import { recalculateTenantVulnerabilityExposures, syncGithubRepositoryAdvisoriesForCatalogue, vulnerabilityExposureByInstallation, vulnerabilityExposureRows, vulnerabilityExposureSummary } from './rmmVulnerabilityExposure.js'
 import { resolveSession } from './session.js'
+import { evaluateWindowsUpdatePolicies, windowsUpdateBundle } from './rmmWindowsUpdates.js'
 
 function clean(value = '') { return String(value ?? '').trim() }
 function lower(value = '') { return clean(value).toLowerCase() }
@@ -1608,7 +1609,7 @@ export async function reconcilePatchDeployments(tenantId) {
 
 async function patchBundle(tenantId) {
   await reconcilePatchDeployments(tenantId)
-  const [devices, catalogue, policies, assignments, vulnerabilities, discovery, vendorIntel, tenantVendorSources, exposureSummary, softwareVulnerabilityExposures, vulnerabilityExposureRowsData, deployments, vulnerabilityCatalogue, devicePatchRejections, qualificationQueue] = await Promise.all([
+  const [devices, catalogue, policies, assignments, vulnerabilities, discovery, vendorIntel, tenantVendorSources, exposureSummary, softwareVulnerabilityExposures, vulnerabilityExposureRowsData, deployments, vulnerabilityCatalogue, devicePatchRejections, qualificationQueue, windowsUpdates] = await Promise.all([
     patchDeviceRows(tenantId),
     catalogueRows(tenantId),
     policyRows(tenantId),
@@ -1624,6 +1625,7 @@ async function patchBundle(tenantId) {
     vulnerabilityCatalogueCoverage(),
     devicePatchRejectionRows(tenantId),
     qualificationQueueSummary(tenantId),
+    windowsUpdateBundle(tenantId),
   ])
   const software = buildSoftware(devices, catalogue, discovery.observations)
   const vulnerabilityHydration = await vulnerabilityHydrationRows(software.deviceSoftware)
@@ -1655,6 +1657,7 @@ async function patchBundle(tenantId) {
     policies,
     assignments,
     deployments,
+    windowsUpdates,
     vulnerabilities,
     vulnerabilityExposures: exposureSummary,
     softwareVulnerabilityExposures,
@@ -2782,6 +2785,61 @@ function validReboot(value) {
   return ['never', 'maintenance_window', 'notify_user'].includes(value) ? value : 'never'
 }
 
+function normalizeMaintenanceWindow(value = {}) {
+  const source = object(value)
+  const validTime = (input, fallback) => /^([01]\d|2[0-3]):[0-5]\d$/.test(clean(input)) ? clean(input) : fallback
+  let timezone = clean(source.timezone)
+  if (!timezone || timezone === 'tenant') timezone = 'Europe/London'
+  try { new Intl.DateTimeFormat('en-GB', { timeZone: timezone }).format(new Date()) }
+  catch { timezone = 'Europe/London' }
+  const days = [...new Set(array(source.days).map((day) => Math.trunc(Number(day))).filter((day) => day >= 1 && day <= 7))]
+  return {
+    start: validTime(source.start, '18:00'),
+    end: validTime(source.end, '05:00'),
+    timezone,
+    days: days.length ? days : [1, 2, 3, 4, 5],
+  }
+}
+
+function normalizeWindowsRules(value = {}, deploymentDelayDays = 0) {
+  const source = object(value)
+  const delays = object(source.delayDays)
+  const base = Math.max(0, Math.min(365, Number(deploymentDelayDays) || 0))
+  const delay = (key, fallback) => {
+    const configured = Number(delays[key])
+    return Math.max(0, Math.min(365, Number.isFinite(configured) ? configured : fallback))
+  }
+  return {
+    autoInstall: source.autoInstall === true,
+    includeDrivers: source.includeDrivers === true,
+    includeFeatureUpdates: source.includeFeatureUpdates === true,
+    includeDefinitions: source.includeDefinitions !== false,
+    delayDays: {
+      critical: delay('critical', 0),
+      security: delay('security', base),
+      quality: delay('quality', base),
+      feature: delay('feature', Math.max(base, 14)),
+      driver: delay('driver', Math.max(base, 14)),
+      definition: delay('definition', 0),
+      other: delay('other', base),
+    },
+  }
+}
+
+let windowsPatchTimer = null
+async function runWindowsPatchSchedules() {
+  const tenants = await pool.query(
+    'SELECT DISTINCT tenant_id FROM rmm_agent_devices WHERE disabled_at IS NULL AND tenant_id IS NOT NULL',
+  )
+  for (const row of tenants.rows) {
+    await evaluateWindowsUpdatePolicies(row.tenant_id, {
+      dispatch: true,
+      agentSocketForDevice,
+      sendAgentMessage,
+    }).catch((error) => console.error('RMM Windows patch schedule evaluation failed', row.tenant_id, error.message))
+  }
+}
+
 function priorityForScope(scopeType) {
   return ({ Estate: 100, Site: 220, Group: 340, Device: 900 })[scopeType] || 100
 }
@@ -2791,6 +2849,11 @@ export function registerRmmPatchingRoutes(app) {
     vulnerabilityPolicyTimer = setInterval(() => void runRealtimeVulnerabilityPolicies(), 60_000)
     vulnerabilityPolicyTimer.unref?.()
     setTimeout(() => void runRealtimeVulnerabilityPolicies(), 15_000).unref?.()
+  }
+  if (!windowsPatchTimer) {
+    windowsPatchTimer = setInterval(() => void runWindowsPatchSchedules(), 60_000)
+    windowsPatchTimer.unref?.()
+    setTimeout(() => void runWindowsPatchSchedules(), 20_000).unref?.()
   }
   app.post('/api/v1/agent/devices/patch-discovery', async (c) => {
     const agent = await authenticateAgent(c.req.header('x-hi5-device-id'), c.req.header('x-hi5-agent-secret'))
@@ -3955,12 +4018,27 @@ export function registerRmmPatchingRoutes(app) {
     return c.json({ success: true, decisions })
   })
 
+  app.post('/api/v1/rmm/windows-updates/evaluate', async (c) => {
+    const auth = await requirePatchAccess(c, 'policy')
+    if (auth.error) return auth.error
+    const body = await c.req.json().catch(() => ({}))
+    const decisions = await evaluateWindowsUpdatePolicies(auth.session.tenant_id, {
+      dispatch: body.dispatch !== false,
+      agentSocketForDevice,
+      sendAgentMessage,
+    })
+    return c.json({ success: true, decisions, windowsUpdates: await windowsUpdateBundle(auth.session.tenant_id) })
+  })
+
   app.post('/api/v1/rmm/patch-policies', async (c) => {
     const auth = await requirePatchAccess(c, 'policy')
     if (auth.error) return auth.error
     const body = await c.req.json().catch(() => ({}))
     const name = clean(body.name)
     if (name.length < 2) return c.json({ error: 'Policy name is required.' }, 400)
+    const deploymentDelayDays = Math.max(0, Math.min(365, Number(body.deploymentDelayDays) || 0))
+    const maintenanceWindow = normalizeMaintenanceWindow(body.maintenanceWindow)
+    const windowsRules = normalizeWindowsRules(body.windowsRules, deploymentDelayDays)
     const result = await pool.query(
       `INSERT INTO rmm_patch_policies
         (tenant_id,name,description,software_enabled,windows_enabled,approval_mode,deployment_delay_days,
@@ -3969,16 +4047,44 @@ export function registerRmmPatchingRoutes(app) {
        RETURNING id`,
       [
         auth.session.tenant_id, name, clean(body.description), body.softwareEnabled !== false,
-        Boolean(body.windowsEnabled), validApproval(clean(body.approvalMode)),
-        Math.max(0, Math.min(365, Number(body.deploymentDelayDays) || 0)),
-        JSON.stringify(object(body.maintenanceWindow)), validReboot(clean(body.rebootPolicy)),
+        Boolean(body.windowsEnabled), validApproval(clean(body.approvalMode)), deploymentDelayDays,
+        JSON.stringify(maintenanceWindow), validReboot(clean(body.rebootPolicy)),
         Math.max(0, Math.min(10, Number(body.maxRetries) || 2)),
-        JSON.stringify(object(body.softwareRules)), JSON.stringify(object(body.windowsRules)),
+        JSON.stringify(object(body.softwareRules)), JSON.stringify(windowsRules),
         auth.session.user_id,
       ],
     )
     await audit(auth.session, 'patch_policy.created', 'Created patch policy “' + name + '”', '', { policyId: result.rows[0].id })
     return c.json({ success: true, id: result.rows[0].id, bundle: await patchBundle(auth.session.tenant_id) }, 201)
+  })
+
+  app.put('/api/v1/rmm/patch-policies/:policyId', async (c) => {
+    const auth = await requirePatchAccess(c, 'policy')
+    if (auth.error) return auth.error
+    const body = await c.req.json().catch(() => ({}))
+    const name = clean(body.name)
+    if (name.length < 2) return c.json({ error: 'Policy name is required.' }, 400)
+    const deploymentDelayDays = Math.max(0, Math.min(365, Number(body.deploymentDelayDays) || 0))
+    const maintenanceWindow = normalizeMaintenanceWindow(body.maintenanceWindow)
+    const windowsRules = normalizeWindowsRules(body.windowsRules, deploymentDelayDays)
+    const result = await pool.query(
+      `UPDATE rmm_patch_policies SET
+         name=$3,description=$4,software_enabled=$5,windows_enabled=$6,approval_mode=$7,
+         deployment_delay_days=$8,maintenance_window=$9::jsonb,reboot_policy=$10,max_retries=$11,
+         software_rules=$12::jsonb,windows_rules=$13::jsonb,updated_by_user_id=$14,updated_at=now()
+       WHERE id=$1 AND tenant_id=$2 AND status<>'archived'
+       RETURNING id,name`,
+      [
+        clean(c.req.param('policyId')), auth.session.tenant_id, name, clean(body.description),
+        body.softwareEnabled !== false, Boolean(body.windowsEnabled), validApproval(clean(body.approvalMode)),
+        deploymentDelayDays, JSON.stringify(maintenanceWindow), validReboot(clean(body.rebootPolicy)),
+        Math.max(0, Math.min(10, Number(body.maxRetries) || 2)),
+        JSON.stringify(object(body.softwareRules)), JSON.stringify(windowsRules), auth.session.user_id,
+      ],
+    )
+    if (!result.rowCount) return c.json({ error: 'Patch policy not found.' }, 404)
+    await audit(auth.session, 'patch_policy.updated', 'Updated patch policy “' + name + '”', '', { policyId: result.rows[0].id })
+    return c.json({ success: true, id: result.rows[0].id, bundle: await patchBundle(auth.session.tenant_id) })
   })
 
   app.post('/api/v1/rmm/patch-assignments', async (c) => {

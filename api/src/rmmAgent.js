@@ -7,6 +7,7 @@ import { pool, withTransaction } from './db.js'
 import { recordJobCompletionActivity, recordRmmActivity } from './rmmActivity.js'
 import { bitLockerRecoveryEscrowNeeded, ingestBitLockerRecoveryEscrow } from './rmmRecoveryKeys.js'
 import { recalculateTenantVulnerabilityExposures } from './rmmVulnerabilityExposure.js'
+import { ingestWindowsUpdateInventory, reconcileWindowsUpdateJobResult } from './rmmWindowsUpdates.js'
 import { resolveSession } from './session.js'
 
 const AGENT_DOWNLOAD_URL = 'https://downloads.hi5central.com/agent/latest/Hi5CentralAgentSetup.exe'
@@ -460,6 +461,8 @@ async function ingestInventory(agent, payload) {
       [agent.id, clean(agentInfo.version), collectedAt],
     )
 
+    await ingestWindowsUpdateInventory(agent, effectivePayload, client)
+
     for (const event of inventoryDeltaEvents(previousPayload, effectivePayload)) {
       await recordRmmActivity({
         tenantId: agent.tenant_id,
@@ -865,6 +868,8 @@ export function registerRmmAgentRoutes(app) {
           WHERE agent_device_id=$1 AND status='claimed'
             AND claimed_at < now() - CASE
               WHEN job_type='patch.software.bulk' THEN interval '6 hours'
+              WHEN job_type='windows_update.install' THEN interval '3 hours'
+              WHEN job_type='windows_update.scan' THEN interval '45 minutes'
               WHEN job_type='patch.software' THEN interval '35 minutes'
               WHEN job_type='custom.command' THEN interval '15 minutes'
               ELSE interval '5 minutes'
@@ -909,6 +914,9 @@ export function registerRmmAgentRoutes(app) {
     )
     if (!result.rowCount) return c.json({ success: false, error: 'Job not found or already completed.' }, 404)
     const completedJob = { ...result.rows[0], inventory_id: agent.inventory_id }
+    await reconcileWindowsUpdateJobResult(completedJob, resultPayload, success).catch((error) => {
+      console.error('Windows Update job reconciliation failed', completedJob.id, error.message)
+    })
     const bulkSucceededCount = Number(resultPayload.succeededCount || 0)
     const bulkFailedCount = Number(resultPayload.failedCount || 0)
     const bulkPartialSuccess = completedJob.job_type === 'patch.software.bulk'

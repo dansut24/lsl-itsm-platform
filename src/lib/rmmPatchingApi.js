@@ -147,6 +147,20 @@ export function createPatchPolicy(policy) {
   })
 }
 
+export function updatePatchPolicy(policyId, policy) {
+  return request('/api/v1/rmm/patch-policies/' + encodeURIComponent(policyId), {
+    method: 'PUT',
+    body: JSON.stringify(policy),
+  })
+}
+
+export function evaluateWindowsUpdatePolicies(dispatch = true) {
+  return request('/api/v1/rmm/windows-updates/evaluate', {
+    method: 'POST',
+    body: JSON.stringify({ dispatch }),
+  })
+}
+
 export function createPatchAssignment(assignment) {
   return request('/api/v1/rmm/patch-assignments', {
     method: 'POST',

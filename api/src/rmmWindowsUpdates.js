@@ -1,0 +1,463 @@
+import { pool } from './db.js'
+import { recordRmmActivity } from './rmmActivity.js'
+
+function clean(value = '') { return String(value ?? '').trim() }
+function object(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {} }
+function array(value) { return Array.isArray(value) ? value : [] }
+function clampInt(value, min, max, fallback = min) {
+  const n = Number(value)
+  return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.trunc(n))) : fallback
+}
+function parseDate(value) {
+  if (!value) return null
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+function versionParts(value = '') { return clean(value).match(/\d+/g)?.slice(0, 4).map(Number) || [] }
+function versionAtLeast(current, target) {
+  if (clean(current) === '1.0.0' && /^0\.1\./.test(clean(target))) return false
+  const left = versionParts(current)
+  const right = versionParts(target)
+  for (let index = 0; index < Math.max(left.length, right.length, 1); index += 1) {
+    const delta = (left[index] || 0) - (right[index] || 0)
+    if (delta) return delta > 0
+  }
+  return Boolean(left.length && right.length)
+}
+
+function classifyUpdate(update = {}) {
+  const title = clean(update.title).toLowerCase()
+  const categories = array(update.categories).map((value) => clean(value).toLowerCase())
+  const severity = clean(update.severity || update.msrc_severity).toLowerCase()
+  const has = (needle) => categories.some((value) => value.includes(needle))
+  if (has('driver') || title.includes('driver')) return 'driver'
+  if (has('definition') || title.includes('security intelligence update') || title.includes('definition update')) return 'definition'
+  if (has('upgrades') || title.includes('feature update to windows')) return 'feature'
+  if (severity === 'critical' || has('critical updates')) return 'critical'
+  if (severity || has('security updates') || title.includes('security update')) return 'security'
+  if (has('update rollups') || has('updates') || title.includes('cumulative update')) return 'quality'
+  return 'other'
+}
+
+function observationKey(update = {}) {
+  const id = clean(update.update_id || update.updateId)
+  const revision = clampInt(update.revision_number ?? update.revisionNumber, 0, 1000000, 0)
+  if (id) return id + ':' + revision
+  const kbs = array(update.kb || update.kb_articles || update.kbArticles)
+    .map((value) => clean(value).toUpperCase().replace(/^KB/, ''))
+    .filter(Boolean)
+    .sort()
+  return (kbs.join(',') + '|' + clean(update.title).toLowerCase().replace(/\s+/g, ' ')).slice(0, 900)
+}
+
+export async function ingestWindowsUpdateInventory(agent, payload, client = pool) {
+  const windows = object(payload?.windows_updates)
+  if (!Array.isArray(windows.updates) || clean(windows.error)) return { authoritative: false, observed: 0 }
+
+  const scanAt = parseDate(windows.last_scan_utc) || parseDate(payload?.collected_at) || new Date()
+  await client.query(
+    'UPDATE rmm_windows_update_observations SET pending=false,last_scan_at=$4,updated_at=now() ' +
+    'WHERE tenant_id=$1 AND inventory_id=$2 AND agent_device_id=$3 AND pending=true',
+    [agent.tenant_id, agent.inventory_id, agent.id, scanAt.toISOString()],
+  )
+
+  let observed = 0
+  for (const update of windows.updates) {
+    const title = clean(update?.title).slice(0, 1000)
+    if (!title) continue
+    const kbs = array(update?.kb || update?.kb_articles || update?.kbArticles)
+      .map((value) => {
+        const text = clean(value).toUpperCase()
+        return text && !text.startsWith('KB') ? 'KB' + text : text
+      }).filter(Boolean).slice(0, 50)
+    const categories = array(update?.categories).map((value) => clean(value)).filter(Boolean).slice(0, 50)
+    const releaseAt = parseDate(update?.last_deployment_change_time || update?.lastDeploymentChangeTime)
+
+    await client.query(
+      'INSERT INTO rmm_windows_update_observations ' +
+      '(tenant_id,inventory_id,agent_device_id,update_key,update_id,revision_number,title,kb_articles,categories,severity,update_class,' +
+      'downloaded,mandatory,reboot_required,auto_select,browse_only,release_at,first_seen_at,last_seen_at,last_scan_at,pending,metadata) ' +
+      'VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12,$13,$14,$15,$16,$17,now(),now(),$18,true,$19::jsonb) ' +
+      'ON CONFLICT (tenant_id,inventory_id,update_key) DO UPDATE SET agent_device_id=EXCLUDED.agent_device_id,' +
+      'update_id=EXCLUDED.update_id,revision_number=EXCLUDED.revision_number,title=EXCLUDED.title,kb_articles=EXCLUDED.kb_articles,' +
+      'categories=EXCLUDED.categories,severity=EXCLUDED.severity,update_class=EXCLUDED.update_class,downloaded=EXCLUDED.downloaded,' +
+      'mandatory=EXCLUDED.mandatory,reboot_required=EXCLUDED.reboot_required,auto_select=EXCLUDED.auto_select,browse_only=EXCLUDED.browse_only,' +
+      'release_at=COALESCE(EXCLUDED.release_at,rmm_windows_update_observations.release_at),last_seen_at=now(),last_scan_at=EXCLUDED.last_scan_at,' +
+      'pending=true,metadata=EXCLUDED.metadata,updated_at=now()',
+      [
+        agent.tenant_id, agent.inventory_id, agent.id, observationKey(update),
+        clean(update?.update_id || update?.updateId).slice(0, 180),
+        clampInt(update?.revision_number ?? update?.revisionNumber, 0, 1000000, 0),
+        title, JSON.stringify(kbs), JSON.stringify(categories),
+        clean(update?.severity || update?.msrc_severity).slice(0, 80),
+        classifyUpdate(update), update?.downloaded === true || update?.is_downloaded === true,
+        update?.mandatory === true, update?.reboot_required === true || update?.requires_reboot === true,
+        update?.auto_select === true, update?.browse_only === true,
+        releaseAt?.toISOString() || null, scanAt.toISOString(),
+        JSON.stringify({ source: 'windows_update_agent', inventoryScanAt: scanAt.toISOString() }),
+      ],
+    )
+    observed += 1
+  }
+  return { authoritative: true, observed, scannedAt: scanAt.toISOString() }
+}
+
+async function effectiveWindowsPolicy(tenantId, inventoryId) {
+  const result = await pool.query(
+    'SELECT p.*,x.priority AS assignment_priority,x.scope_type AS assignment_scope_type,x.scope_name AS assignment_scope_name ' +
+    'FROM rmm_patch_assignments x JOIN rmm_patch_policies p ON p.id=x.policy_id AND p.tenant_id=x.tenant_id ' +
+    "AND p.status='active' AND p.windows_enabled=true JOIN rmm_device_inventory i ON i.id=$2 AND i.tenant_id=x.tenant_id " +
+    'LEFT JOIN organisation_people op ON op.tenant_id=i.tenant_id AND op.id=i.assigned_person_id ' +
+    'LEFT JOIN organisation_sites os ON os.tenant_id=i.tenant_id AND os.id=op.site_id ' +
+    "WHERE x.tenant_id=$1 AND x.enabled=true AND ((x.scope_type='Estate' AND x.scope_id='ALL') OR " +
+    "(x.scope_type='Device' AND x.scope_id IN (i.id::text,i.reference,COALESCE((SELECT id::text FROM rmm_agent_devices WHERE inventory_id=i.id AND disabled_at IS NULL LIMIT 1),''))) OR " +
+    "(x.scope_type='Site' AND x.scope_id IN (COALESCE(os.id::text,''),COALESCE(os.external_key,''),COALESCE(os.name,''))) OR " +
+    "(x.scope_type='Group' AND EXISTS (SELECT 1 FROM rmm_device_group_memberships gm WHERE gm.tenant_id=i.tenant_id AND gm.inventory_id=i.id AND gm.group_id::text=x.scope_id))) " +
+    'ORDER BY x.priority DESC,x.created_at DESC LIMIT 1',
+    [tenantId, inventoryId],
+  )
+  return result.rows[0] || null
+}
+
+function normalizeTimezone(value) {
+  const timezone = clean(value)
+  if (!timezone || timezone === 'tenant') return 'Europe/London'
+  try {
+    new Intl.DateTimeFormat('en-GB', { timeZone: timezone }).format(new Date())
+    return timezone
+  } catch {
+    return 'Europe/London'
+  }
+}
+
+const DAY_INDEX = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 }
+function localClock(at, timezone) {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: timezone, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(at)
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]))
+  return { day: DAY_INDEX[values.weekday] || 1, minutes: Number(values.hour || 0) * 60 + Number(values.minute || 0) }
+}
+function timeMinutes(value, fallback) {
+  const match = clean(value).match(/^(\d{1,2}):(\d{2})$/)
+  if (!match) return fallback
+  const hour = Number(match[1])
+  const minute = Number(match[2])
+  return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59 ? hour * 60 + minute : fallback
+}
+function previousDay(day) { return day <= 1 ? 7 : day - 1 }
+
+export function windowsMaintenanceWindow(policy, at = new Date()) {
+  const config = object(policy?.maintenance_window)
+  const timezone = normalizeTimezone(config.timezone)
+  const configuredDays = array(config.days).map((value) => clampInt(value, 1, 7, 0)).filter(Boolean)
+  const days = new Set(configuredDays.length ? configuredDays : [1, 2, 3, 4, 5, 6, 7])
+  const start = timeMinutes(config.start, 0)
+  const end = timeMinutes(config.end, 1439)
+  const clock = localClock(at, timezone)
+  let open = false
+  if (start === end) open = days.has(clock.day)
+  else if (start < end) open = days.has(clock.day) && clock.minutes >= start && clock.minutes < end
+  else open = (days.has(clock.day) && clock.minutes >= start) || (days.has(previousDay(clock.day)) && clock.minutes < end)
+  return { open, timezone, start: clean(config.start || '00:00'), end: clean(config.end || '23:59'), days: [...days] }
+}
+
+function normalizedRules(policy) {
+  const rules = object(policy?.windows_rules)
+  const delays = object(rules.delayDays)
+  const base = clampInt(policy?.deployment_delay_days, 0, 365, 0)
+  return {
+    autoInstall: rules.autoInstall === true,
+    includeDrivers: rules.includeDrivers === true,
+    includeFeatureUpdates: rules.includeFeatureUpdates === true,
+    includeDefinitions: rules.includeDefinitions !== false,
+    delayDays: {
+      critical: clampInt(delays.critical, 0, 365, 0),
+      security: clampInt(delays.security, 0, 365, base),
+      quality: clampInt(delays.quality, 0, 365, base),
+      feature: clampInt(delays.feature, 0, 365, Math.max(base, 14)),
+      driver: clampInt(delays.driver, 0, 365, Math.max(base, 14)),
+      definition: clampInt(delays.definition, 0, 365, 0),
+      other: clampInt(delays.other, 0, 365, base),
+    },
+  }
+}
+
+function updateEligibility(row, rules, now) {
+  const klass = clean(row.update_class) || 'other'
+  if (klass === 'driver' && !rules.includeDrivers) return { eligible: false, reason: 'drivers_disabled' }
+  if (klass === 'feature' && !rules.includeFeatureUpdates) return { eligible: false, reason: 'feature_updates_disabled' }
+  if (klass === 'definition' && !rules.includeDefinitions) return { eligible: false, reason: 'definitions_disabled' }
+  const delayDays = rules.delayDays[klass] ?? rules.delayDays.other
+  const anchor = parseDate(row.release_at) || parseDate(row.first_seen_at) || now
+  const eligibleAt = new Date(anchor.getTime() + delayDays * 86400000)
+  return {
+    eligible: now >= eligibleAt,
+    reason: now >= eligibleAt ? 'delay_elapsed' : 'deployment_delay',
+    delayDays,
+    eligibleAt: eligibleAt.toISOString(),
+  }
+}
+
+async function saveDecision(input) {
+  await pool.query(
+    'INSERT INTO rmm_windows_patch_decisions ' +
+    '(tenant_id,inventory_id,agent_device_id,policy_id,agent_job_id,state,reason,eligible_update_keys,decision,evaluated_at,dispatched_at,updated_at) ' +
+    'VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,now(),CASE WHEN $10 THEN now() ELSE NULL END,now()) ' +
+    'ON CONFLICT (tenant_id,inventory_id) DO UPDATE SET agent_device_id=EXCLUDED.agent_device_id,policy_id=EXCLUDED.policy_id,' +
+    'agent_job_id=EXCLUDED.agent_job_id,state=EXCLUDED.state,reason=EXCLUDED.reason,eligible_update_keys=EXCLUDED.eligible_update_keys,' +
+    'decision=EXCLUDED.decision,evaluated_at=now(),dispatched_at=CASE WHEN $10 THEN now() ELSE rmm_windows_patch_decisions.dispatched_at END,updated_at=now()',
+    [
+      input.tenantId, input.inventoryId, input.agentDeviceId, input.policyId || null, input.agentJobId || null,
+      input.state, input.reason, JSON.stringify(input.eligibleKeys || []), JSON.stringify(input.decision || {}),
+      input.dispatched === true,
+    ],
+  )
+}
+
+async function dispatchInstall(tenantId, device, policy, eligible, sendAgentMessage) {
+  const kbArticles = [...new Set(eligible.flatMap((row) => array(row.kb_articles).map(clean)).filter(Boolean))]
+  const titles = [...new Set(eligible.filter((row) => !array(row.kb_articles).length).map((row) => clean(row.title)).filter(Boolean))]
+  const payload = {
+    install_all: false,
+    include_drivers: eligible.some((row) => row.update_class === 'driver'),
+    kb_articles: kbArticles,
+    titles,
+    timeout_seconds: 7200,
+  }
+  const metadata = {
+    source: 'windows_patch_schedule',
+    policy_id: policy.id,
+    policy_name: policy.name,
+    update_keys: eligible.map((row) => row.update_key),
+    update_classes: [...new Set(eligible.map((row) => row.update_class))],
+  }
+  const inserted = await pool.query(
+    "INSERT INTO rmm_agent_jobs (tenant_id,agent_device_id,job_type,payload,initiated_by,initiated_by_label,request_metadata) " +
+    "VALUES ($1,$2,'windows_update.install',$3::jsonb,'system','SYSTEM · Windows patch schedule',$4::jsonb) RETURNING id,status,created_at",
+    [tenantId, device.agent_device_id, JSON.stringify(payload), JSON.stringify(metadata)],
+  )
+  const job = inserted.rows[0]
+  const claimed = await pool.query(
+    "UPDATE rmm_agent_jobs SET status='claimed',claimed_at=now(),updated_at=now() WHERE id=$1 AND status='queued' RETURNING id",
+    [job.id],
+  )
+  if (!claimed.rowCount) return { dispatched: false, jobId: job.id, error: 'claim_failed' }
+
+  const pushed = sendAgentMessage(device.agent_device_id, {
+    type: 'job_execute',
+    job: { id: job.id, job_type: 'windows_update.install', payload, created_at: job.created_at },
+  })
+  if (!pushed) {
+    await pool.query(
+      "UPDATE rmm_agent_jobs SET status='cancelled',completed_at=now(),error_message='Device went offline before scheduled Windows Update dispatch.',updated_at=now() WHERE id=$1",
+      [job.id],
+    )
+    return { dispatched: false, jobId: job.id, error: 'device_offline' }
+  }
+
+  await recordRmmActivity({
+    tenantId,
+    agentDeviceId: device.agent_device_id,
+    inventoryId: device.inventory_id,
+    actorType: 'system',
+    actorLabel: 'SYSTEM',
+    eventType: 'windows_updates.scheduled_install',
+    category: 'updates',
+    summary: 'SYSTEM: started ' + eligible.length + ' scheduled Windows update' + (eligible.length === 1 ? '' : 's'),
+    detail: clean(policy.name) + ' · ' + eligible.map((row) => clean(row.title)).slice(0, 5).join(' · '),
+    outcome: 'requested',
+    jobId: job.id,
+    metadata,
+  }).catch(() => null)
+
+  return { dispatched: true, jobId: job.id }
+}
+
+export async function evaluateWindowsUpdatePolicies(tenantId, options = {}) {
+  const devices = await pool.query(
+    'SELECT a.id AS agent_device_id,a.inventory_id,a.agent_version,a.websocket_status,a.last_telemetry_at,i.name,i.reference ' +
+    'FROM rmm_agent_devices a JOIN rmm_device_inventory i ON i.id=a.inventory_id AND i.active=true ' +
+    'WHERE a.tenant_id=$1 AND a.disabled_at IS NULL',
+    [tenantId],
+  )
+  const decisions = []
+
+  for (const device of devices.rows) {
+    const pendingResult = await pool.query(
+      'SELECT * FROM rmm_windows_update_observations WHERE tenant_id=$1 AND inventory_id=$2 AND pending=true ORDER BY first_seen_at,lower(title)',
+      [tenantId, device.inventory_id],
+    )
+    const pending = pendingResult.rows
+    if (!pending.length) {
+      await saveDecision({
+        tenantId, inventoryId: device.inventory_id, agentDeviceId: device.agent_device_id,
+        state: 'waiting', reason: 'no_pending_updates', decision: { pending: 0 },
+      })
+      continue
+    }
+
+    const policy = await effectiveWindowsPolicy(tenantId, device.inventory_id)
+    if (!policy) {
+      await saveDecision({
+        tenantId, inventoryId: device.inventory_id, agentDeviceId: device.agent_device_id,
+        state: 'waiting', reason: 'no_windows_patch_policy', decision: { pending: pending.length },
+      })
+      continue
+    }
+
+    const rules = normalizedRules(policy)
+    const now = new Date()
+    const window = windowsMaintenanceWindow(policy, now)
+    const evaluated = pending.map((row) => ({ row, eligibility: updateEligibility(row, rules, now) }))
+    const eligible = evaluated.filter((item) => item.eligibility.eligible).map((item) => item.row)
+    const decision = {
+      policyId: policy.id, policyName: policy.name, pending: pending.length, eligible: eligible.length,
+      window, rules,
+      updates: evaluated.map(({ row, eligibility }) => ({
+        updateKey: row.update_key, title: row.title, updateClass: row.update_class, ...eligibility,
+      })),
+    }
+
+    if (!rules.autoInstall || !eligible.length || !window.open) {
+      const reason = !rules.autoInstall
+        ? 'manual_windows_install'
+        : !eligible.length
+          ? (evaluated.find((item) => !item.eligibility.eligible)?.eligibility.reason || 'no_eligible_updates')
+          : 'outside_maintenance_window'
+      await saveDecision({
+        tenantId, inventoryId: device.inventory_id, agentDeviceId: device.agent_device_id, policyId: policy.id,
+        state: eligible.length ? 'eligible' : 'waiting', reason,
+        eligibleKeys: eligible.map((row) => row.update_key), decision,
+      })
+      decisions.push({ inventoryId: device.inventory_id, policyId: policy.id, state: eligible.length ? 'eligible' : 'waiting', reason })
+      continue
+    }
+
+    if (!versionAtLeast(device.agent_version, '0.1.206')) {
+      await saveDecision({
+        tenantId, inventoryId: device.inventory_id, agentDeviceId: device.agent_device_id, policyId: policy.id,
+        state: 'blocked', reason: 'agent_upgrade_required',
+        eligibleKeys: eligible.map((row) => row.update_key),
+        decision: { ...decision, requiredAgentVersion: '0.1.206', currentAgentVersion: clean(device.agent_version) },
+      })
+      decisions.push({ inventoryId: device.inventory_id, policyId: policy.id, state: 'blocked', reason: 'agent_upgrade_required' })
+      continue
+    }
+
+    const socket = typeof options.agentSocketForDevice === 'function' ? options.agentSocketForDevice(device.agent_device_id) : null
+    if (!socket || socket.readyState !== 1) {
+      await saveDecision({
+        tenantId, inventoryId: device.inventory_id, agentDeviceId: device.agent_device_id, policyId: policy.id,
+        state: 'offline', reason: 'device_offline', eligibleKeys: eligible.map((row) => row.update_key), decision,
+      })
+      continue
+    }
+
+    const active = await pool.query(
+      "SELECT id,status FROM rmm_agent_jobs WHERE tenant_id=$1 AND agent_device_id=$2 AND job_type='windows_update.install' " +
+      "AND request_metadata->>'source'='windows_patch_schedule' AND status IN ('queued','claimed') ORDER BY created_at DESC LIMIT 1",
+      [tenantId, device.agent_device_id],
+    )
+    if (active.rowCount) {
+      await saveDecision({
+        tenantId, inventoryId: device.inventory_id, agentDeviceId: device.agent_device_id, policyId: policy.id,
+        agentJobId: active.rows[0].id, state: 'dispatched', reason: 'install_already_running',
+        eligibleKeys: eligible.map((row) => row.update_key), decision,
+      })
+      continue
+    }
+
+    if (options.dispatch === false || typeof options.sendAgentMessage !== 'function') {
+      await saveDecision({
+        tenantId, inventoryId: device.inventory_id, agentDeviceId: device.agent_device_id, policyId: policy.id,
+        state: 'eligible', reason: 'ready_to_dispatch', eligibleKeys: eligible.map((row) => row.update_key), decision,
+      })
+      continue
+    }
+
+    const pushed = await dispatchInstall(tenantId, device, policy, eligible, options.sendAgentMessage)
+    await saveDecision({
+      tenantId, inventoryId: device.inventory_id, agentDeviceId: device.agent_device_id, policyId: policy.id,
+      agentJobId: pushed.jobId, state: pushed.dispatched ? 'dispatched' : (pushed.error === 'device_offline' ? 'offline' : 'failed'),
+      reason: pushed.dispatched ? 'scheduled_install_dispatched' : pushed.error,
+      eligibleKeys: eligible.map((row) => row.update_key), decision, dispatched: pushed.dispatched,
+    })
+    decisions.push({ inventoryId: device.inventory_id, policyId: policy.id, ...pushed })
+  }
+  return decisions
+}
+
+export async function windowsUpdateBundle(tenantId) {
+  const [observations, decisions] = await Promise.all([
+    pool.query(
+      'SELECT o.*,i.reference AS device_reference,i.name AS device_name,a.agent_version,a.websocket_status,a.last_telemetry_at ' +
+      'FROM rmm_windows_update_observations o JOIN rmm_device_inventory i ON i.id=o.inventory_id ' +
+      'LEFT JOIN rmm_agent_devices a ON a.id=o.agent_device_id AND a.disabled_at IS NULL ' +
+      'WHERE o.tenant_id=$1 ORDER BY o.pending DESC,lower(i.name),o.update_class,o.first_seen_at,lower(o.title)',
+      [tenantId],
+    ),
+    pool.query(
+      'SELECT d.*,p.name AS policy_name,p.maintenance_window,p.windows_rules,p.reboot_policy,i.name AS device_name,i.reference AS device_reference,' +
+      'j.status AS job_status,j.result AS job_result,j.error_message AS job_error,j.created_at AS job_created_at ' +
+      'FROM rmm_windows_patch_decisions d JOIN rmm_device_inventory i ON i.id=d.inventory_id ' +
+      'LEFT JOIN rmm_patch_policies p ON p.id=d.policy_id LEFT JOIN rmm_agent_jobs j ON j.id=d.agent_job_id ' +
+      'WHERE d.tenant_id=$1 ORDER BY lower(i.name)',
+      [tenantId],
+    ),
+  ])
+  const pending = observations.rows.filter((row) => row.pending)
+  const byClass = {}
+  for (const row of pending) byClass[row.update_class] = (byClass[row.update_class] || 0) + 1
+  return {
+    summary: {
+      pending: pending.length,
+      devices: new Set(pending.map((row) => row.inventory_id)).size,
+      critical: byClass.critical || 0,
+      security: byClass.security || 0,
+      quality: byClass.quality || 0,
+      feature: byClass.feature || 0,
+      driver: byClass.driver || 0,
+      definition: byClass.definition || 0,
+      other: byClass.other || 0,
+      rebootRequired: decisions.rows.filter((row) => row.state === 'reboot_required').length,
+    },
+    observations: observations.rows,
+    decisions: decisions.rows,
+  }
+}
+
+export async function reconcileWindowsUpdateJobResult(job, resultPayload = {}, success = false) {
+  if (clean(job?.job_type) !== 'windows_update.install') return
+  const rebootRequired = resultPayload.reboot_required === true || resultPayload.rebootRequired === true
+  const state = success ? (rebootRequired ? 'reboot_required' : 'completed') : 'failed'
+  await pool.query(
+    'UPDATE rmm_windows_patch_decisions SET state=$2,reason=$3,completed_at=now(),updated_at=now(),decision=decision || $4::jsonb ' +
+    'WHERE tenant_id=$1 AND agent_job_id=$5',
+    [
+      job.tenant_id, state,
+      success ? (rebootRequired ? 'install_completed_reboot_required' : 'install_completed') : 'install_failed',
+      JSON.stringify({ result: resultPayload, completedAt: new Date().toISOString() }),
+      job.id,
+    ],
+  )
+  await recordRmmActivity({
+    tenantId: job.tenant_id,
+    agentDeviceId: job.agent_device_id,
+    inventoryId: job.inventory_id || null,
+    actorType: clean(job.initiated_by) || 'system',
+    actorLabel: clean(job.initiated_by_label) || 'SYSTEM',
+    eventType: 'windows_updates.install_completed',
+    category: 'updates',
+    summary: success
+      ? 'SYSTEM: Windows Update install completed' + (rebootRequired ? ' · reboot required' : '')
+      : 'SYSTEM: Windows Update install failed',
+    detail: [
+      resultPayload.selected_count != null ? String(resultPayload.selected_count) + ' update(s) selected' : '',
+      clean(resultPayload.install_result), clean(job.error_message),
+    ].filter(Boolean).join(' · '),
+    outcome: success ? (rebootRequired ? 'warning' : 'success') : 'failed',
+    jobId: job.id,
+    metadata: { result: resultPayload },
+  }).catch(() => null)
+}
