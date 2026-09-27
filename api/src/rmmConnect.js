@@ -553,7 +553,12 @@ export function attachRmmConnectWebSockets(server) {
         return
       }
       if (type === 'session_ended' || type === 'host_closed') {
-        endConnectSession(sessionId, 'customer_closed_app').catch(() => {})
+        const reason = type === 'session_ended' ? 'customer_ended_session' : 'customer_closed_app'
+        endConnectSession(sessionId, reason, {
+          userId: null,
+          type: 'customer',
+          label: 'Customer',
+        }).catch(() => {})
         return
       }
       if (!HOST_RELAY_TYPES.has(type)) return

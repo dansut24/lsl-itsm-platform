@@ -36,6 +36,7 @@ expect(api.includes("/connect/host/ws"), 'Dedicated portable host WebSocket is m
 expect(api.includes("/connect/viewer/ws"), 'Dedicated Connect viewer WebSocket is missing.')
 expect(api.includes("'switch_monitor', 'input_event'"), 'Connect viewer WebSocket must continue relaying authenticated input_event controls.')
 expect(api.includes("No managed Agent enrollment was created."), 'Connect audit must explicitly distinguish ad-hoc support from managed enrollment.')
+expect(api.includes("'customer_ended_session'") && api.includes("type: 'customer'") && api.includes("label: 'Customer'"), 'Customer End session must be audited distinctly from closing the Connect app.')
 expect(ui.includes('Hi5Central Connect'), 'Technician Connect workspace is missing.')
 expect(platform.includes("requiresRemote: true"), 'Connect navigation must remain hidden without remote-access permission.')
 expect(platform.includes("activeView === 'connect' && !canRemote"), 'Direct Connect routes must fall back safely when remote permission is absent.')
