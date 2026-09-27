@@ -34,7 +34,7 @@ const claimBuckets = new Map()
 
 const HOST_RELAY_TYPES = new Set([
   'webrtc_offer', 'offer', 'ice_candidate', 'candidate', 'webrtc_ice_candidate',
-  'remote_state', 'remote_error', 'monitor_list', 'chat_message', 'chat_close',
+  'remote_state', 'remote_error', 'session_state', 'monitor_list', 'chat_message', 'chat_close',
   'connect_permission_response',
   'remote_file_list', 'remote_file_download', 'remote_file_upload_started',
   'remote_file_upload_complete', 'remote_file_upload_cancelled',

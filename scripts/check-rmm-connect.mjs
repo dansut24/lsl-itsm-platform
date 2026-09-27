@@ -42,6 +42,7 @@ expect(api.includes("/connect/viewer/ws"), 'Dedicated Connect viewer WebSocket i
 expect(api.includes("'switch_monitor', 'input_event'"), 'Connect viewer WebSocket must continue relaying authenticated input_event controls.')
 expect(api.includes("/connect-sessions/:sessionId/hold") && api.includes("/connect-sessions/:sessionId/resume"), 'Connect technician APIs must support customer-approved hold and resume.')
 expect(api.includes("'connect_permission_request'") && api.includes("'connect_permission_response'"), 'Connect permission requests must be relayed explicitly.')
+expect(api.includes("'session_state'"), 'Connect must relay secure-desktop transition state from the attended host to the Viewer.')
 expect(api.includes("'remote_file_list_request'") && api.includes("'file_transfer_chunk'"), 'Connect WebSocket bridge must relay consent-gated file browser traffic.')
 expect(api.includes("type: 'host_disconnected'") && api.includes("type: 'host_reconnected'"), 'Connect must preserve sessions across temporary host disconnects.')
 expect(api.includes("if (type === 'end_session')") && api.includes("['viewer_disconnected','viewer_closed','viewer_left','stop_webrtc']"), 'Only an explicit technician End action may terminate a Connect session when the viewer leaves.')
