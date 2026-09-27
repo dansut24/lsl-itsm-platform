@@ -161,6 +161,20 @@ export function evaluateWindowsUpdatePolicies(dispatch = true) {
   })
 }
 
+export function pauseWindowsUpdateRollout(updateKey, reason = '') {
+  return request('/api/v1/rmm/windows-updates/' + encodeURIComponent(updateKey) + '/pause', {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  })
+}
+
+export function resumeWindowsUpdateRollout(updateKey) {
+  return request('/api/v1/rmm/windows-updates/' + encodeURIComponent(updateKey) + '/resume', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
 export function createPatchAssignment(assignment) {
   return request('/api/v1/rmm/patch-assignments', {
     method: 'POST',

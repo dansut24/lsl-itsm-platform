@@ -27,6 +27,8 @@ import {
   createPatchAssignment,
   createPatchPolicy,
   evaluateWindowsUpdatePolicies,
+  pauseWindowsUpdateRollout,
+  resumeWindowsUpdateRollout,
   createSoftwareCatalogueEntry,
   createVendorSource,
   deletePatchAssignment,
@@ -523,6 +525,13 @@ function PolicyModal({ policy, onClose, onSave }) {
   const maintenance = policy?.maintenance_window || {}
   const windowsRules = policy?.windows_rules || {}
   const windowsDelays = windowsRules.delayDays || {}
+  const rollout = windowsRules.rollout || {}
+  const rolloutWaves = Array.isArray(rollout.waves) ? rollout.waves : []
+  const rolloutWave = (id, fallback) => rolloutWaves.find((wave) => wave.id === id) || fallback
+  const pilotWave = rolloutWave('pilot', { percentage: 5, delayDays: 0 })
+  const earlyWave = rolloutWave('early', { percentage: 15, delayDays: 1 })
+  const broadWave = rolloutWave('broad', { percentage: 60, delayDays: 3 })
+  const finalWave = rolloutWave('final', { percentage: 20, delayDays: 5 })
   const vulnerabilityRules = policy?.software_rules?.vulnerabilityRules || {}
   const detectedTimezone = typeof Intl !== 'undefined'
     ? Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/London'
@@ -550,6 +559,15 @@ function PolicyModal({ policy, onClose, onSave }) {
     windowsFeatureDelay: windowsDelays.feature ?? 30,
     windowsDriverDelay: windowsDelays.driver ?? 14,
     windowsDefinitionDelay: windowsDelays.definition ?? 0,
+    rolloutEnabled: policy ? rollout.enabled === true : true,
+    rolloutPilotPercent: pilotWave.percentage ?? 5,
+    rolloutPilotDelay: pilotWave.delayDays ?? 0,
+    rolloutEarlyPercent: earlyWave.percentage ?? 15,
+    rolloutEarlyDelay: earlyWave.delayDays ?? 1,
+    rolloutBroadPercent: broadWave.percentage ?? 60,
+    rolloutBroadDelay: broadWave.delayDays ?? 3,
+    rolloutFinalDelay: finalWave.delayDays ?? 5,
+    rolloutDeadlineDays: rollout.deadlineDays ?? 7,
     criticalExploited: vulnerabilityRules.critical_exploited || 'automatic',
     critical: vulnerabilityRules.critical || 'automatic',
     high: vulnerabilityRules.high || 'manual',
@@ -583,6 +601,16 @@ function PolicyModal({ policy, onClose, onSave }) {
           includeDrivers: form.includeDrivers,
           includeFeatureUpdates: form.includeFeatureUpdates,
           includeDefinitions: form.includeDefinitions,
+          rollout: {
+            enabled: form.rolloutEnabled,
+            deadlineDays: Number(form.rolloutDeadlineDays) || 0,
+            waves: [
+              { id: 'pilot', percentage: Number(form.rolloutPilotPercent) || 0, delayDays: Number(form.rolloutPilotDelay) || 0 },
+              { id: 'early', percentage: Number(form.rolloutEarlyPercent) || 0, delayDays: Number(form.rolloutEarlyDelay) || 0 },
+              { id: 'broad', percentage: Number(form.rolloutBroadPercent) || 0, delayDays: Number(form.rolloutBroadDelay) || 0 },
+              { id: 'final', percentage: Math.max(0, 100 - (Number(form.rolloutPilotPercent) || 0) - (Number(form.rolloutEarlyPercent) || 0) - (Number(form.rolloutBroadPercent) || 0)), delayDays: Number(form.rolloutFinalDelay) || 0 },
+            ],
+          },
           delayDays: {
             critical: Number(form.windowsCriticalDelay) || 0,
             security: Number(form.windowsSecurityDelay) || 0,
@@ -637,6 +665,25 @@ function PolicyModal({ policy, onClose, onSave }) {
             ['windowsDefinitionDelay', 'Definitions', 'Defender intelligence'],
           ].map(([key, label, detail]) => <label key={key}><span><strong>{label}</strong><small>{detail}</small></span><input min="0" max="365" type="number" value={form[key]} onChange={(event) => update(key, event.target.value)} /><em>days</em></label>)}
         </div>
+        <div className="rmm-policy-section-title"><strong>Staged rollout</strong><small>Keep a stable percentage of devices in each wave. The compliance deadline releases any remaining devices even if their wave has not opened yet.</small></div>
+        <div className="rmm-patch-checks">
+          <label><input checked={form.rolloutEnabled} onChange={(event) => update('rolloutEnabled', event.target.checked)} type="checkbox" /><span><strong>Use deployment waves</strong><small>Definitions bypass waves so Defender intelligence can stay current.</small></span></label>
+        </div>
+        {form.rolloutEnabled && <>
+          <div className="rmm-patch-form-grid">
+            <label>Pilot devices (%)<input min="0" max="100" type="number" value={form.rolloutPilotPercent} onChange={(event) => update('rolloutPilotPercent', event.target.value)} /></label>
+            <label>Pilot starts after<input min="0" max="365" type="number" value={form.rolloutPilotDelay} onChange={(event) => update('rolloutPilotDelay', event.target.value)} /><small>Days after the category deferral.</small></label>
+            <label>Early devices (%)<input min="0" max="100" type="number" value={form.rolloutEarlyPercent} onChange={(event) => update('rolloutEarlyPercent', event.target.value)} /></label>
+            <label>Early starts after<input min="0" max="365" type="number" value={form.rolloutEarlyDelay} onChange={(event) => update('rolloutEarlyDelay', event.target.value)} /></label>
+            <label>Broad devices (%)<input min="0" max="100" type="number" value={form.rolloutBroadPercent} onChange={(event) => update('rolloutBroadPercent', event.target.value)} /></label>
+            <label>Broad starts after<input min="0" max="365" type="number" value={form.rolloutBroadDelay} onChange={(event) => update('rolloutBroadDelay', event.target.value)} /></label>
+            <label>Final devices (%)<input readOnly type="number" value={Math.max(0, 100 - (Number(form.rolloutPilotPercent) || 0) - (Number(form.rolloutEarlyPercent) || 0) - (Number(form.rolloutBroadPercent) || 0))} /></label>
+            <label>Final starts after<input min="0" max="365" type="number" value={form.rolloutFinalDelay} onChange={(event) => update('rolloutFinalDelay', event.target.value)} /></label>
+            <label>Compliance deadline<input min="0" max="365" type="number" value={form.rolloutDeadlineDays} onChange={(event) => update('rolloutDeadlineDays', event.target.value)} /><small>Days after the category deferral.</small></label>
+          </div>
+          <div className="rmm-patch-security-note"><ShieldCheck size={16} /><span>Ring membership is deterministic per device and policy, so the same endpoints remain in Pilot/Early/Broad/Final instead of moving randomly each scheduler run.</span></div>
+        </>}
+
         <div className="rmm-patch-checks">
           <label><input checked={form.includeFeatureUpdates} onChange={(event) => update('includeFeatureUpdates', event.target.checked)} type="checkbox" /><span><strong>Feature updates</strong><small>Off by default for controlled rollout.</small></span></label>
           <label><input checked={form.includeDrivers} onChange={(event) => update('includeDrivers', event.target.checked)} type="checkbox" /><span><strong>Driver updates</strong><small>Off by default.</small></span></label>
@@ -992,6 +1039,7 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
   const [showPolicy, setShowPolicy] = useState(false)
   const [editingPolicy, setEditingPolicy] = useState(null)
   const [windowsEvaluating, setWindowsEvaluating] = useState(false)
+  const [windowsControlBusy, setWindowsControlBusy] = useState('')
   const [assignPolicy, setAssignPolicy] = useState(null)
 
   async function refresh() {
@@ -1124,6 +1172,7 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
   const windowsPending = Number(windowsSummary.pending || 0)
   const windowsPendingRows = (windowsUpdates.observations || []).filter((item) => item.pending)
   const windowsDecisions = windowsUpdates.decisions || []
+  const windowsReleases = windowsUpdates.releases || []
   const windowsByDevice = [...new Map(windowsPendingRows.map((item) => [item.inventory_id, {
     inventoryId: item.inventory_id,
     agentDeviceId: item.agent_device_id,
@@ -1703,6 +1752,22 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
       setWindowsEvaluating(false)
     }
   }
+  async function setWindowsReleaseControl(release, state) {
+    if (!release?.updateKey || windowsControlBusy) return
+    setWindowsControlBusy(release.updateKey)
+    setError('')
+    try {
+      const result = state === 'paused'
+        ? await pauseWindowsUpdateRollout(release.updateKey, 'Paused from Windows Update rollout console')
+        : await resumeWindowsUpdateRollout(release.updateKey)
+      setBundle((current) => ({ ...(current || {}), windowsUpdates: result.windowsUpdates }))
+    } catch (requestError) {
+      setError(requestError?.message || 'Unable to update Windows rollout state.')
+    } finally {
+      setWindowsControlBusy('')
+    }
+  }
+
   async function saveAssignment(assignment) {
     setSaving(true)
     try {
@@ -2093,14 +2158,34 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
         <article><small>Critical / security</small><strong>{Number(windowsSummary.critical || 0) + Number(windowsSummary.security || 0)}</strong><span>{windowsSummary.critical || 0} critical · {windowsSummary.security || 0} security</span></article>
         <article><small>Quality</small><strong>{windowsSummary.quality || 0}</strong><span>Cumulative and servicing updates</span></article>
         <article><small>Feature / driver</small><strong>{Number(windowsSummary.feature || 0) + Number(windowsSummary.driver || 0)}</strong><span>{windowsSummary.feature || 0} feature · {windowsSummary.driver || 0} driver</span></article>
-        <article><small>Reboot required</small><strong>{windowsSummary.rebootRequired || 0}</strong><span>No forced reboot in phase one</span></article>
+        <article><small>Reboot required</small><strong>{windowsSummary.rebootRequired || 0}</strong><span>{windowsSummary.pausedReleases || 0} paused release{Number(windowsSummary.pausedReleases || 0) === 1 ? '' : 's'}</span></article>
       </div>
+
+      {!!windowsReleases.length && <>
+        <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Release control</span><h3>Windows update rollouts</h3><p>Pause a problematic release without disabling Windows patching for the rest of the estate. In-flight installs are allowed to finish; no new scheduled install will include a paused release.</p></div></div>
+        <div className="rmm-patch-table windows scheduled">
+          <div className="head"><span>Release</span><span>Devices</span><span>Class</span><span>Published</span><span>Rollout state</span><span>Action</span></div>
+          {windowsReleases.map((release) => <div className="row" key={release.updateKey}>
+            <span><strong>{release.title}</strong><small>{(release.kbArticles || []).join(', ') || release.updateId || 'No KB reference'}</small></span>
+            <span><strong>{release.devices}</strong><small>{release.downloadedDevices} downloaded</small></span>
+            <span><StatusPill tone={['critical','security'].includes(release.updateClass) ? 'warning' : 'neutral'}>{release.updateClass}</StatusPill><small>{release.severity || 'No MSRC severity'}</small></span>
+            <span><strong>{release.releaseAt ? new Date(release.releaseAt).toLocaleDateString() : 'Observed'}</strong><small>{release.firstSeenAt ? 'First seen ' + new Date(release.firstSeenAt).toLocaleDateString() : ''}</small></span>
+            <span><StatusPill tone={release.paused ? 'critical' : 'healthy'}>{release.paused ? 'Paused' : 'Active'}</StatusPill><small>{release.paused ? (release.control?.reason || 'Manual rollout pause') : 'Following assigned rollout waves'}</small></span>
+            <span><button disabled={windowsControlBusy === release.updateKey} onClick={() => setWindowsReleaseControl(release, release.paused ? 'active' : 'paused')} type="button">{windowsControlBusy === release.updateKey ? 'Saving…' : release.paused ? 'Resume' : 'Pause'}</button></span>
+          </div>)}
+        </div>
+      </>}
+
       <div className="rmm-patch-table windows scheduled">
         <div className="head"><span>Device</span><span>Pending</span><span>Patch classes</span><span>Policy</span><span>Schedule state</span><span>Agent</span></div>
         {windowsByDevice.map((device) => {
           const classes = device.updates.reduce((result, item) => ({ ...result, [item.update_class]: (result[item.update_class] || 0) + 1 }), {})
           const decision = device.decision
           const reason = decision?.reason || 'awaiting policy evaluation'
+          const rolloutUpdate = (decision?.decision?.updates || []).find((item) => item.rolloutEnabled)
+          const rolloutDetail = rolloutUpdate
+            ? (rolloutUpdate.rolloutWaveName || readinessLabel(rolloutUpdate.rolloutWave)) + ' · ' + (rolloutUpdate.deadlineAt ? 'deadline ' + new Date(rolloutUpdate.deadlineAt).toLocaleDateString() : readinessLabel(reason))
+            : readinessLabel(reason)
           const tone = decision?.state === 'dispatched' ? 'running' : decision?.state === 'blocked' || decision?.state === 'failed' ? 'critical' : decision?.state === 'eligible' ? 'warning' : device.online ? 'neutral' : 'neutral'
           return <Fragment key={device.inventoryId}>
             <div className="row">
@@ -2108,7 +2193,7 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
               <span><strong>{device.updates.length}</strong><small>{device.updates.filter((item) => item.downloaded).length} downloaded</small></span>
               <span><strong>{Object.entries(classes).map(([name, count]) => count + ' ' + name).join(' · ')}</strong><small>{device.updates.filter((item) => item.reboot_required).length ? 'Update metadata reports reboot requirement' : 'No current reboot flag'}</small></span>
               <span><strong>{decision?.policy_name || 'No assigned Windows policy'}</strong><small>{decision?.maintenance_window?.start ? decision.maintenance_window.start + '–' + decision.maintenance_window.end + ' · ' + (decision.maintenance_window.timezone || 'tenant timezone') : 'Assign a patch policy to automate'}</small></span>
-              <span><StatusPill tone={tone}>{readinessLabel(decision?.state || (device.online ? 'waiting' : 'offline'))}</StatusPill><small>{readinessLabel(reason)}</small></span>
+              <span><StatusPill tone={tone}>{readinessLabel(decision?.state || (device.online ? 'waiting' : 'offline'))}</StatusPill><small>{reason === 'rollout_paused' ? 'Rollout paused' : rolloutDetail}</small></span>
               <span>{device.online ? <StatusPill tone="healthy">Online</StatusPill> : <StatusPill tone="neutral"><WifiOff size={12} /> Offline</StatusPill>}<small>{device.agentVersion ? 'Agent ' + device.agentVersion : 'Agent version unknown'}</small></span>
             </div>
             <div className="rmm-windows-update-detail-row">
@@ -2136,7 +2221,7 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
           <header><div><span className="rmm-eyebrow">{policy.approval_mode}</span><h3>{policy.name}</h3></div><StatusPill tone={policy.status === 'active' ? 'healthy' : 'neutral'}>{policy.status}</StatusPill></header>
           <p>{policy.description || 'No description provided.'}</p>
           <div className="meta"><span><small>Software</small><strong>{policy.software_enabled ? 'Enabled' : 'Disabled'}</strong></span><span><small>Windows</small><strong>{policy.windows_enabled ? policy.windows_rules?.autoInstall ? 'Automatic' : 'Manual' : 'Disabled'}</strong></span><span><small>Window</small><strong>{policy.maintenance_window?.start || '18:00'}–{policy.maintenance_window?.end || '05:00'}</strong></span><span><small>Reboot</small><strong>{readinessLabel(policy.reboot_policy)}</strong></span></div>
-          {policy.windows_enabled && <div className="rmm-policy-card-schedule"><small>{(policy.maintenance_window?.days || [1,2,3,4,5]).map((day) => ['','Mon','Tue','Wed','Thu','Fri','Sat','Sun'][day]).join(' · ')} · {policy.maintenance_window?.timezone || 'Europe/London'}</small><small>Critical {policy.windows_rules?.delayDays?.critical ?? 0}d · Security {policy.windows_rules?.delayDays?.security ?? policy.deployment_delay_days}d · Quality {policy.windows_rules?.delayDays?.quality ?? policy.deployment_delay_days}d · Feature {policy.windows_rules?.includeFeatureUpdates ? (policy.windows_rules?.delayDays?.feature ?? 14) + 'd' : 'off'} · Drivers {policy.windows_rules?.includeDrivers ? (policy.windows_rules?.delayDays?.driver ?? 14) + 'd' : 'off'}</small></div>}
+          {policy.windows_enabled && <div className="rmm-policy-card-schedule"><small>{(policy.maintenance_window?.days || [1,2,3,4,5]).map((day) => ['','Mon','Tue','Wed','Thu','Fri','Sat','Sun'][day]).join(' · ')} · {policy.maintenance_window?.timezone || 'Europe/London'}</small><small>Critical {policy.windows_rules?.delayDays?.critical ?? 0}d · Security {policy.windows_rules?.delayDays?.security ?? policy.deployment_delay_days}d · Quality {policy.windows_rules?.delayDays?.quality ?? policy.deployment_delay_days}d · Feature {policy.windows_rules?.includeFeatureUpdates ? (policy.windows_rules?.delayDays?.feature ?? 14) + 'd' : 'off'} · Drivers {policy.windows_rules?.includeDrivers ? (policy.windows_rules?.delayDays?.driver ?? 14) + 'd' : 'off'}</small>{policy.windows_rules?.rollout?.enabled && <small>Rollout · {(policy.windows_rules.rollout.waves || []).map((wave) => (wave.name || wave.id) + ' ' + wave.percentage + '% @ +' + wave.delayDays + 'd').join(' · ')} · deadline +' + (policy.windows_rules.rollout.deadlineDays ?? 7) + 'd</small>}</div>}
           <footer><span>{assignments.filter((assignment) => assignment.policy_id === policy.id && assignment.enabled !== false).length} assignments</span><div><button disabled={saving} onClick={() => { setEditingPolicy(policy); setShowPolicy(true) }} type="button"><Wrench size={14} /> Edit</button><button disabled={saving} onClick={() => setAssignPolicy(policy)} type="button"><GitBranch size={14} /> Assign scope</button></div></footer>
         </article>)}
       </div>

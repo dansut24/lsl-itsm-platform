@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { pool } from './db.js'
 import { recordRmmActivity } from './rmmActivity.js'
 
@@ -162,6 +163,32 @@ export function windowsMaintenanceWindow(policy, at = new Date()) {
   return { open, timezone, start: clean(config.start || '00:00'), end: clean(config.end || '23:59'), days: [...days] }
 }
 
+const DEFAULT_ROLLOUT_WAVES = [
+  { id: 'pilot', name: 'Pilot', percentage: 5, delayDays: 0 },
+  { id: 'early', name: 'Early', percentage: 15, delayDays: 1 },
+  { id: 'broad', name: 'Broad', percentage: 60, delayDays: 3 },
+  { id: 'final', name: 'Final', percentage: 20, delayDays: 5 },
+]
+
+function normalizedRollout(value = {}) {
+  const source = object(value)
+  const configured = new Map(array(source.waves).map((wave) => [clean(wave?.id).toLowerCase(), object(wave)]))
+  let remaining = 100
+  let previousDelay = 0
+  const waves = DEFAULT_ROLLOUT_WAVES.map((fallback, index) => {
+    const candidate = configured.get(fallback.id) || {}
+    const delayDays = Math.max(previousDelay, clampInt(candidate.delayDays, 0, 365, fallback.delayDays))
+    previousDelay = delayDays
+    const percentage = index === DEFAULT_ROLLOUT_WAVES.length - 1
+      ? remaining
+      : Math.min(remaining, clampInt(candidate.percentage, 0, 100, fallback.percentage))
+    remaining -= percentage
+    return { id: fallback.id, name: fallback.name, percentage, delayDays }
+  })
+  const deadlineDays = Math.max(previousDelay, clampInt(source.deadlineDays, 0, 365, 7))
+  return { enabled: source.enabled === true, deadlineDays, waves }
+}
+
 function normalizedRules(policy) {
   const rules = object(policy?.windows_rules)
   const delays = object(rules.delayDays)
@@ -171,6 +198,7 @@ function normalizedRules(policy) {
     includeDrivers: rules.includeDrivers === true,
     includeFeatureUpdates: rules.includeFeatureUpdates === true,
     includeDefinitions: rules.includeDefinitions !== false,
+    rollout: normalizedRollout(rules.rollout),
     delayDays: {
       critical: clampInt(delays.critical, 0, 365, 0),
       security: clampInt(delays.security, 0, 365, base),
@@ -183,19 +211,71 @@ function normalizedRules(policy) {
   }
 }
 
-function updateEligibility(row, rules, now) {
+function rolloutBucket(tenantId, policyId, inventoryId) {
+  const digest = createHash('sha256').update([tenantId, policyId, inventoryId].map(clean).join(':')).digest()
+  return digest.readUInt32BE(0) % 100
+}
+
+function rolloutWaveFor(rules, tenantId, policyId, inventoryId) {
+  const bucket = rolloutBucket(tenantId, policyId, inventoryId)
+  let upper = 0
+  for (const wave of rules.rollout.waves) {
+    upper += wave.percentage
+    if (bucket < upper) return { ...wave, bucket }
+  }
+  return { ...rules.rollout.waves[rules.rollout.waves.length - 1], bucket }
+}
+
+function updateEligibility(row, rules, now, context = {}, control = null) {
   const klass = clean(row.update_class) || 'other'
   if (klass === 'driver' && !rules.includeDrivers) return { eligible: false, reason: 'drivers_disabled' }
   if (klass === 'feature' && !rules.includeFeatureUpdates) return { eligible: false, reason: 'feature_updates_disabled' }
   if (klass === 'definition' && !rules.includeDefinitions) return { eligible: false, reason: 'definitions_disabled' }
+
   const delayDays = rules.delayDays[klass] ?? rules.delayDays.other
   const anchor = parseDate(row.release_at) || parseDate(row.first_seen_at) || now
-  const eligibleAt = new Date(anchor.getTime() + delayDays * 86400000)
+  const baseEligibleAt = new Date(anchor.getTime() + delayDays * 86400000)
+
+  if (clean(control?.state) === 'paused') {
+    return {
+      eligible: false,
+      reason: 'rollout_paused',
+      delayDays,
+      eligibleAt: baseEligibleAt.toISOString(),
+      pausedReason: clean(control.reason),
+      pausedAt: control.paused_at || null,
+    }
+  }
+
+  if (!rules.rollout.enabled || klass === 'definition') {
+    return {
+      eligible: now >= baseEligibleAt,
+      reason: now >= baseEligibleAt ? 'delay_elapsed' : 'deployment_delay',
+      delayDays,
+      eligibleAt: baseEligibleAt.toISOString(),
+      rolloutEnabled: false,
+    }
+  }
+
+  const wave = rolloutWaveFor(rules, context.tenantId, context.policyId, context.inventoryId)
+  const waveEligibleAt = new Date(baseEligibleAt.getTime() + wave.delayDays * 86400000)
+  const deadlineAt = new Date(baseEligibleAt.getTime() + rules.rollout.deadlineDays * 86400000)
+  const deadlineReached = now >= deadlineAt
+  const waveOpen = now >= waveEligibleAt
   return {
-    eligible: now >= eligibleAt,
-    reason: now >= eligibleAt ? 'delay_elapsed' : 'deployment_delay',
+    eligible: deadlineReached || waveOpen,
+    reason: deadlineReached ? 'compliance_deadline' : waveOpen ? 'rollout_wave_open' : 'rollout_wave_wait',
     delayDays,
-    eligibleAt: eligibleAt.toISOString(),
+    baseEligibleAt: baseEligibleAt.toISOString(),
+    eligibleAt: waveEligibleAt.toISOString(),
+    deadlineAt: deadlineAt.toISOString(),
+    deadlineReached,
+    rolloutEnabled: true,
+    rolloutBucket: wave.bucket,
+    rolloutWave: wave.id,
+    rolloutWaveName: wave.name,
+    rolloutWavePercentage: wave.percentage,
+    rolloutWaveDelayDays: wave.delayDays,
   }
 }
 
@@ -234,9 +314,18 @@ async function dispatchInstall(tenantId, device, policy, eligible, sendAgentMess
   }
   const inserted = await pool.query(
     "INSERT INTO rmm_agent_jobs (tenant_id,agent_device_id,job_type,payload,initiated_by,initiated_by_label,request_metadata) " +
-    "VALUES ($1,$2,'windows_update.install',$3::jsonb,'system','SYSTEM · Windows patch schedule',$4::jsonb) RETURNING id,status,created_at",
+    "VALUES ($1,$2,'windows_update.install',$3::jsonb,'system','SYSTEM · Windows patch schedule',$4::jsonb) " +
+    "ON CONFLICT DO NOTHING RETURNING id,status,created_at",
     [tenantId, device.agent_device_id, JSON.stringify(payload), JSON.stringify(metadata)],
   )
+  if (!inserted.rowCount) {
+    const existing = await pool.query(
+      "SELECT id FROM rmm_agent_jobs WHERE tenant_id=$1 AND agent_device_id=$2 AND job_type='windows_update.install' " +
+      "AND status IN ('queued','claimed') AND request_metadata->>'source'='windows_patch_schedule' ORDER BY created_at DESC LIMIT 1",
+      [tenantId, device.agent_device_id],
+    )
+    return { dispatched: false, jobId: existing.rows[0]?.id || null, error: 'install_already_running' }
+  }
   const job = inserted.rows[0]
   const claimed = await pool.query(
     "UPDATE rmm_agent_jobs SET status='claimed',claimed_at=now(),updated_at=now() WHERE id=$1 AND status='queued' RETURNING id",
@@ -275,12 +364,19 @@ async function dispatchInstall(tenantId, device, policy, eligible, sendAgentMess
 }
 
 export async function evaluateWindowsUpdatePolicies(tenantId, options = {}) {
-  const devices = await pool.query(
-    'SELECT a.id AS agent_device_id,a.inventory_id,a.agent_version,a.websocket_status,a.last_telemetry_at,i.name,i.reference ' +
-    'FROM rmm_agent_devices a JOIN rmm_device_inventory i ON i.id=a.inventory_id AND i.active=true ' +
-    'WHERE a.tenant_id=$1 AND a.disabled_at IS NULL',
-    [tenantId],
-  )
+  const [devices, controlResult] = await Promise.all([
+    pool.query(
+      'SELECT a.id AS agent_device_id,a.inventory_id,a.agent_version,a.websocket_status,a.last_telemetry_at,i.name,i.reference ' +
+      'FROM rmm_agent_devices a JOIN rmm_device_inventory i ON i.id=a.inventory_id AND i.active=true ' +
+      'WHERE a.tenant_id=$1 AND a.disabled_at IS NULL',
+      [tenantId],
+    ),
+    pool.query(
+      "SELECT update_key,state,reason,paused_at,resumed_at,updated_at FROM rmm_windows_update_controls WHERE tenant_id=$1",
+      [tenantId],
+    ),
+  ])
+  const controls = new Map(controlResult.rows.map((row) => [row.update_key, row]))
   const decisions = []
 
   for (const device of devices.rows) {
@@ -309,7 +405,16 @@ export async function evaluateWindowsUpdatePolicies(tenantId, options = {}) {
     const rules = normalizedRules(policy)
     const now = new Date()
     const window = windowsMaintenanceWindow(policy, now)
-    const evaluated = pending.map((row) => ({ row, eligibility: updateEligibility(row, rules, now) }))
+    const evaluated = pending.map((row) => ({
+      row,
+      eligibility: updateEligibility(
+        row,
+        rules,
+        now,
+        { tenantId, policyId: policy.id, inventoryId: device.inventory_id },
+        controls.get(row.update_key) || null,
+      ),
+    }))
     const eligible = evaluated.filter((item) => item.eligibility.eligible).map((item) => item.row)
     const decision = {
       policyId: policy.id, policyName: policy.name, pending: pending.length, eligible: eligible.length,
@@ -320,10 +425,12 @@ export async function evaluateWindowsUpdatePolicies(tenantId, options = {}) {
     }
 
     if (!rules.autoInstall || !eligible.length || !window.open) {
+      const paused = evaluated.find((item) => item.eligibility.reason === 'rollout_paused')
+      const waitingWave = evaluated.find((item) => item.eligibility.reason === 'rollout_wave_wait')
       const reason = !rules.autoInstall
         ? 'manual_windows_install'
         : !eligible.length
-          ? (evaluated.find((item) => !item.eligibility.eligible)?.eligibility.reason || 'no_eligible_updates')
+          ? (paused?.eligibility.reason || waitingWave?.eligibility.reason || evaluated.find((item) => !item.eligibility.eligible)?.eligibility.reason || 'no_eligible_updates')
           : 'outside_maintenance_window'
       await saveDecision({
         tenantId, inventoryId: device.inventory_id, agentDeviceId: device.agent_device_id, policyId: policy.id,
@@ -377,9 +484,11 @@ export async function evaluateWindowsUpdatePolicies(tenantId, options = {}) {
     }
 
     const pushed = await dispatchInstall(tenantId, device, policy, eligible, options.sendAgentMessage)
+    const alreadyRunning = pushed.error === 'install_already_running'
     await saveDecision({
       tenantId, inventoryId: device.inventory_id, agentDeviceId: device.agent_device_id, policyId: policy.id,
-      agentJobId: pushed.jobId, state: pushed.dispatched ? 'dispatched' : (pushed.error === 'device_offline' ? 'offline' : 'failed'),
+      agentJobId: pushed.jobId,
+      state: pushed.dispatched || alreadyRunning ? 'dispatched' : (pushed.error === 'device_offline' ? 'offline' : 'failed'),
       reason: pushed.dispatched ? 'scheduled_install_dispatched' : pushed.error,
       eligibleKeys: eligible.map((row) => row.update_key), decision, dispatched: pushed.dispatched,
     })
@@ -389,7 +498,7 @@ export async function evaluateWindowsUpdatePolicies(tenantId, options = {}) {
 }
 
 export async function windowsUpdateBundle(tenantId) {
-  const [observations, decisions] = await Promise.all([
+  const [observations, decisions, controlsResult] = await Promise.all([
     pool.query(
       'SELECT o.*,i.reference AS device_reference,i.name AS device_name,a.agent_version,a.websocket_status,a.last_telemetry_at ' +
       'FROM rmm_windows_update_observations o JOIN rmm_device_inventory i ON i.id=o.inventory_id ' +
@@ -405,10 +514,40 @@ export async function windowsUpdateBundle(tenantId) {
       'WHERE d.tenant_id=$1 ORDER BY lower(i.name)',
       [tenantId],
     ),
+    pool.query(
+      'SELECT update_key,state,reason,paused_at,resumed_at,updated_at FROM rmm_windows_update_controls WHERE tenant_id=$1 ORDER BY updated_at DESC',
+      [tenantId],
+    ),
   ])
   const pending = observations.rows.filter((row) => row.pending)
   const byClass = {}
   for (const row of pending) byClass[row.update_class] = (byClass[row.update_class] || 0) + 1
+  const controls = new Map(controlsResult.rows.map((row) => [row.update_key, row]))
+  const releases = [...pending.reduce((result, row) => {
+    let release = result.get(row.update_key)
+    if (!release) {
+      const control = controls.get(row.update_key) || null
+      release = {
+        updateKey: row.update_key,
+        updateId: row.update_id,
+        revisionNumber: row.revision_number,
+        title: row.title,
+        kbArticles: row.kb_articles,
+        updateClass: row.update_class,
+        severity: row.severity,
+        releaseAt: row.release_at,
+        firstSeenAt: row.first_seen_at,
+        devices: 0,
+        downloadedDevices: 0,
+        control,
+        paused: control?.state === 'paused',
+      }
+      result.set(row.update_key, release)
+    }
+    release.devices += 1
+    if (row.downloaded) release.downloadedDevices += 1
+    return result
+  }, new Map()).values()]
   return {
     summary: {
       pending: pending.length,
@@ -420,11 +559,53 @@ export async function windowsUpdateBundle(tenantId) {
       driver: byClass.driver || 0,
       definition: byClass.definition || 0,
       other: byClass.other || 0,
+      pausedReleases: releases.filter((row) => row.paused).length,
       rebootRequired: decisions.rows.filter((row) => row.state === 'reboot_required').length,
     },
     observations: observations.rows,
     decisions: decisions.rows,
+    controls: controlsResult.rows,
+    releases,
   }
+}
+
+export async function setWindowsUpdateControl(tenantId, updateKey, state, options = {}) {
+  const normalizedState = state === 'paused' ? 'paused' : 'active'
+  const known = await pool.query(
+    'SELECT title,kb_articles FROM rmm_windows_update_observations WHERE tenant_id=$1 AND update_key=$2 ORDER BY pending DESC,last_seen_at DESC LIMIT 1',
+    [tenantId, updateKey],
+  )
+  if (!known.rowCount) return null
+  const reason = clean(options.reason).slice(0, 1000)
+  const result = await pool.query(
+    "INSERT INTO rmm_windows_update_controls " +
+    "(tenant_id,update_key,state,reason,paused_by_user_id,paused_at,resumed_at,metadata) " +
+    "VALUES ($1,$2,$3,$4,$5,CASE WHEN $3='paused' THEN now() ELSE NULL END,CASE WHEN $3='active' THEN now() ELSE NULL END,$6::jsonb) " +
+    "ON CONFLICT (tenant_id,update_key) DO UPDATE SET " +
+    "state=EXCLUDED.state,reason=EXCLUDED.reason," +
+    "paused_by_user_id=CASE WHEN EXCLUDED.state='paused' THEN EXCLUDED.paused_by_user_id ELSE rmm_windows_update_controls.paused_by_user_id END," +
+    "paused_at=CASE WHEN EXCLUDED.state='paused' THEN now() ELSE rmm_windows_update_controls.paused_at END," +
+    "resumed_at=CASE WHEN EXCLUDED.state='active' THEN now() ELSE rmm_windows_update_controls.resumed_at END," +
+    "metadata=EXCLUDED.metadata,updated_at=now() RETURNING *",
+    [
+      tenantId,
+      updateKey,
+      normalizedState,
+      reason,
+      options.userId || null,
+      JSON.stringify({ source: 'windows_update_rollout_console' }),
+    ],
+  )
+  if (normalizedState === 'paused') {
+    await pool.query(
+      "UPDATE rmm_agent_jobs SET status='cancelled',completed_at=now()," +
+      "error_message='Windows Update rollout was paused before dispatch.',updated_at=now() " +
+      "WHERE tenant_id=$1 AND job_type='windows_update.install' AND status='queued' " +
+      "AND request_metadata->>'source'='windows_patch_schedule' AND (request_metadata->'update_keys') ? $2",
+      [tenantId, updateKey],
+    ).catch(() => null)
+  }
+  return { control: result.rows[0], release: known.rows[0] }
 }
 
 export async function reconcileWindowsUpdateJobResult(job, resultPayload = {}, success = false) {
@@ -456,7 +637,8 @@ export async function reconcileWindowsUpdateJobResult(job, resultPayload = {}, s
       resultPayload.selected_count != null ? String(resultPayload.selected_count) + ' update(s) selected' : '',
       clean(resultPayload.install_result), clean(job.error_message),
     ].filter(Boolean).join(' · '),
-    outcome: success ? (rebootRequired ? 'warning' : 'success') : 'failed',
+    outcome: success ? 'success' : 'failed',
+    severity: success && rebootRequired ? 'warning' : (success ? 'info' : 'warning'),
     jobId: job.id,
     metadata: { result: resultPayload },
   }).catch(() => null)

@@ -31,7 +31,7 @@ import {
 } from './rmmTenantVendorSources.js'
 import { recalculateTenantVulnerabilityExposures, syncGithubRepositoryAdvisoriesForCatalogue, vulnerabilityExposureByInstallation, vulnerabilityExposureRows, vulnerabilityExposureSummary } from './rmmVulnerabilityExposure.js'
 import { resolveSession } from './session.js'
-import { evaluateWindowsUpdatePolicies, windowsUpdateBundle } from './rmmWindowsUpdates.js'
+import { evaluateWindowsUpdatePolicies, setWindowsUpdateControl, windowsUpdateBundle } from './rmmWindowsUpdates.js'
 
 function clean(value = '') { return String(value ?? '').trim() }
 function lower(value = '') { return clean(value).toLowerCase() }
@@ -2801,6 +2801,33 @@ function normalizeMaintenanceWindow(value = {}) {
   }
 }
 
+function normalizeWindowsRollout(value = {}) {
+  const source = object(value)
+  const defaults = [
+    { id: 'pilot', name: 'Pilot', percentage: 5, delayDays: 0 },
+    { id: 'early', name: 'Early', percentage: 15, delayDays: 1 },
+    { id: 'broad', name: 'Broad', percentage: 60, delayDays: 3 },
+    { id: 'final', name: 'Final', percentage: 20, delayDays: 5 },
+  ]
+  const configured = new Map(array(source.waves).map((wave) => [clean(wave?.id).toLowerCase(), object(wave)]))
+  let remaining = 100
+  let previousDelay = 0
+  const waves = defaults.map((fallback, index) => {
+    const candidate = configured.get(fallback.id) || {}
+    const configuredDelay = Number(candidate.delayDays)
+    const delayDays = Math.max(previousDelay, Math.max(0, Math.min(365, Number.isFinite(configuredDelay) ? configuredDelay : fallback.delayDays)))
+    previousDelay = delayDays
+    const configuredPercentage = Number(candidate.percentage)
+    const requestedPercentage = Math.max(0, Math.min(100, Number.isFinite(configuredPercentage) ? configuredPercentage : fallback.percentage))
+    const percentage = index === defaults.length - 1 ? remaining : Math.min(remaining, requestedPercentage)
+    remaining -= percentage
+    return { id: fallback.id, name: fallback.name, percentage, delayDays }
+  })
+  const configuredDeadline = Number(source.deadlineDays)
+  const deadlineDays = Math.max(previousDelay, Math.max(0, Math.min(365, Number.isFinite(configuredDeadline) ? configuredDeadline : 7)))
+  return { enabled: source.enabled === true, deadlineDays, waves }
+}
+
 function normalizeWindowsRules(value = {}, deploymentDelayDays = 0) {
   const source = object(value)
   const delays = object(source.delayDays)
@@ -2814,6 +2841,7 @@ function normalizeWindowsRules(value = {}, deploymentDelayDays = 0) {
     includeDrivers: source.includeDrivers === true,
     includeFeatureUpdates: source.includeFeatureUpdates === true,
     includeDefinitions: source.includeDefinitions !== false,
+    rollout: normalizeWindowsRollout(source.rollout),
     delayDays: {
       critical: delay('critical', 0),
       security: delay('security', base),
@@ -4028,6 +4056,45 @@ export function registerRmmPatchingRoutes(app) {
       sendAgentMessage,
     })
     return c.json({ success: true, decisions, windowsUpdates: await windowsUpdateBundle(auth.session.tenant_id) })
+  })
+
+  app.post('/api/v1/rmm/windows-updates/:updateKey/pause', async (c) => {
+    const auth = await requirePatchAccess(c, 'policy')
+    if (auth.error) return auth.error
+    const updateKey = clean(c.req.param('updateKey'))
+    const body = await c.req.json().catch(() => ({}))
+    const result = await setWindowsUpdateControl(auth.session.tenant_id, updateKey, 'paused', {
+      userId: auth.session.user_id,
+      reason: clean(body.reason) || 'Paused from Windows Update rollout console',
+    })
+    if (!result) return c.json({ error: 'Windows update release not found.' }, 404)
+    await audit(
+      auth.session,
+      'windows_update.rollout_paused',
+      'Paused Windows Update rollout “' + clean(result.release.title) + '”',
+      clean(body.reason),
+      { updateKey, kbArticles: result.release.kb_articles || [] },
+    )
+    return c.json({ success: true, control: result.control, windowsUpdates: await windowsUpdateBundle(auth.session.tenant_id) })
+  })
+
+  app.post('/api/v1/rmm/windows-updates/:updateKey/resume', async (c) => {
+    const auth = await requirePatchAccess(c, 'policy')
+    if (auth.error) return auth.error
+    const updateKey = clean(c.req.param('updateKey'))
+    const result = await setWindowsUpdateControl(auth.session.tenant_id, updateKey, 'active', {
+      userId: auth.session.user_id,
+      reason: 'Rollout resumed',
+    })
+    if (!result) return c.json({ error: 'Windows update release not found.' }, 404)
+    await audit(
+      auth.session,
+      'windows_update.rollout_resumed',
+      'Resumed Windows Update rollout “' + clean(result.release.title) + '”',
+      '',
+      { updateKey, kbArticles: result.release.kb_articles || [] },
+    )
+    return c.json({ success: true, control: result.control, windowsUpdates: await windowsUpdateBundle(auth.session.tenant_id) })
   })
 
   app.post('/api/v1/rmm/patch-policies', async (c) => {

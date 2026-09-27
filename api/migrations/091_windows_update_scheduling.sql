@@ -54,3 +54,9 @@ CREATE TABLE IF NOT EXISTS rmm_windows_patch_decisions (
 
 CREATE INDEX IF NOT EXISTS rmm_windows_patch_decisions_state_idx
   ON rmm_windows_patch_decisions(tenant_id, state, evaluated_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS rmm_windows_patch_active_job_uniq
+  ON rmm_agent_jobs(tenant_id, agent_device_id)
+  WHERE job_type='windows_update.install'
+    AND status IN ('queued','claimed')
+    AND request_metadata->>'source'='windows_patch_schedule';
