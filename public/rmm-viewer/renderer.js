@@ -1053,6 +1053,8 @@ let secureDesktopLikely = false;
 let secureDesktopActive = false;
 let desktopHandoffActive = false;
 let loginDesktopInputActive = false;
+let loginDesktopWakeTimer = null;
+let loginDesktopWakeAttempts = 0;
 let revealOnNextFrame = false;
 let monitorSwitchUntilMs = 0;
 let lastKeyframeRequestAtMs = 0;
@@ -1229,6 +1231,64 @@ function clearSecureDesktopState() {
   revealOnNextFrame = false;
 }
 
+function stopLoginDesktopWake() {
+  if (loginDesktopWakeTimer) {
+    clearTimeout(loginDesktopWakeTimer);
+    loginDesktopWakeTimer = null;
+  }
+  loginDesktopWakeAttempts = 0;
+}
+
+function armLoginDesktopWake() {
+  stopLoginDesktopWake();
+  const attempt = () => {
+    if (!currentSession || !loginDesktopInputActive) {
+      stopLoginDesktopWake();
+      return;
+    }
+
+    // Windows can expose a protected LockApp wallpaper before the credential
+    // surface is capturable. A modifier-only key safely dismisses that layer
+    // without inserting text into a credential field.
+    sendInput('key_down', { code: 'ShiftLeft', key: 'Shift' }, true);
+    window.setTimeout(() => {
+      if (currentSession && loginDesktopInputActive) {
+        sendInput('key_up', { code: 'ShiftLeft', key: 'Shift' }, true);
+      }
+    }, 35);
+
+    loginDesktopWakeAttempts += 1;
+    if (loginDesktopWakeAttempts < 6) {
+      loginDesktopWakeTimer = window.setTimeout(attempt, 220);
+    } else {
+      loginDesktopWakeTimer = null;
+    }
+  };
+
+  loginDesktopWakeTimer = window.setTimeout(attempt, 90);
+}
+
+function captureReconnectPoster() {
+  if (!elVideo || !elVideo.videoWidth || !elVideo.videoHeight) return false;
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = elVideo.videoWidth;
+    canvas.height = elVideo.videoHeight;
+    const ctx = canvas.getContext('2d', { alpha: false });
+    if (!ctx) return false;
+    ctx.drawImage(elVideo, 0, 0, canvas.width, canvas.height);
+    elVideo.poster = canvas.toDataURL('image/jpeg', 0.84);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function clearReconnectPoster() {
+  if (!elVideo) return;
+  try { elVideo.removeAttribute('poster'); } catch {}
+}
+
 function showLoginDesktopTransition() {
   passiveOverlayActive = false;
   if (elOverlay) {
@@ -1283,6 +1343,7 @@ function showStream() {
 }
 
 function markFrameRendered() {
+  clearReconnectPoster();
   const firstRenderedFrame = !hasEverRenderedFrame;
   if (isMobileViewerSurface()) {
     mobileRecoveryAttempts = 0;
@@ -2476,6 +2537,7 @@ function resetTransitionState() {
   secureDesktopActive = false;
   desktopHandoffActive = false;
   loginDesktopInputActive = false;
+  stopLoginDesktopWake();
   revealOnNextFrame = false;
   monitorSwitchUntilMs = 0;
   lastKeyframeRequestAtMs = 0;
@@ -2572,6 +2634,7 @@ function disconnect(reason, options = {}) {
   if (elVideo) {
     try { elVideo.pause(); } catch {}
     elVideo.srcObject = null;
+    clearReconnectPoster();
     elVideo.classList.remove("visible");
   }
 
@@ -3965,9 +4028,15 @@ async function onSignalMessage(raw) {
     case "host_disconnected": {
       if (!currentSession?.isConnectSession) break;
       connectHostReconnecting = true;
-      setMobileRecoveryStage('Waiting for customer Connect app');
-      setMobileQualityUi('Reconnecting', 'reconnecting', 'Customer app reconnecting');
-      setStatus('', 'Customer Connect app reconnecting…');
+      const seamlessLoginHandoff = loginDesktopInputActive || secureDesktopActive;
+      if (seamlessLoginHandoff) {
+        setMobileRecoveryStage('Windows desktop handoff');
+        setStatus('', 'Windows sign-in screen');
+      } else {
+        setMobileRecoveryStage('Waiting for customer Connect app');
+        setMobileQualityUi('Reconnecting', 'reconnecting', 'Customer app reconnecting');
+        setStatus('', 'Customer Connect app reconnecting…');
+      }
       teardownPeerForReconnect();
       updateConnectCapabilityButtons();
       break;
@@ -3976,9 +4045,14 @@ async function onSignalMessage(raw) {
     case "host_reconnected": {
       if (!currentSession?.isConnectSession) break;
       connectHostReconnecting = false;
-      setMobileRecoveryStage('Customer app returned · negotiating');
-      setMobileQualityUi('Measuring', 'good', 'Customer app returned');
-      setStatus('', 'Customer app returned · reconnecting…');
+      if (loginDesktopInputActive || secureDesktopActive) {
+        setMobileRecoveryStage('Windows desktop handoff');
+        setStatus('', 'Windows sign-in screen');
+      } else {
+        setMobileRecoveryStage('Customer app returned · negotiating');
+        setMobileQualityUi('Measuring', 'good', 'Customer app returned');
+        setStatus('', 'Customer app returned · reconnecting…');
+      }
       updateConnectCapabilityButtons();
       break;
     }
@@ -4293,12 +4367,14 @@ async function onSignalMessage(raw) {
         revealOnNextFrame = false;
         secureDesktopLikely = false;
         showLoginDesktopTransition();
-        setStatus('', 'Windows sign-in screen · tap or press a key to continue');
+        setStatus('', 'Windows sign-in screen');
+        armLoginDesktopWake();
         break;
       }
 
       if (state === "login_desktop_ready") {
         loginDesktopInputActive = true;
+        stopLoginDesktopWake();
         completeDesktopSourceTransition("login-desktop-ready");
         setStatus('online', 'Windows sign-in screen');
         break;
@@ -4308,6 +4384,7 @@ async function onSignalMessage(raw) {
         secureDesktopActive = true;
         desktopHandoffActive = false;
         loginDesktopInputActive = false;
+        stopLoginDesktopWake();
         revealOnNextFrame = false;
         secureDesktopLikely = false;
         showSecureBlackOverlay();
@@ -4386,12 +4463,18 @@ function scheduleMobileTransportHealthProbe(reason = 'transport-probe', delayMs 
 function teardownPeerForReconnect() {
   clearMobileTransportProbe();
   stopStatsPoll();
+  const frozen = captureReconnectPoster();
   remoteDescSet = false;
   pendingRemoteIce = [];
   if (inputDc) { try { inputDc.close(); } catch {} inputDc = null; }
   if (inputControlDc) { try { inputControlDc.close(); } catch {} inputControlDc = null; }
   if (mouseMoveDc) { try { mouseMoveDc.close(); } catch {} mouseMoveDc = null; }
   if (pc) { try { pc.onconnectionstatechange = null; pc.oniceconnectionstatechange = null; pc.close(); } catch {} pc = null; }
+  if (frozen && elVideo) {
+    try { elVideo.pause(); } catch {}
+    try { elVideo.srcObject = null; } catch {}
+    elVideo.classList.add("visible");
+  }
 }
 
 function connectViewerSignaling(reason = 'initial') {
