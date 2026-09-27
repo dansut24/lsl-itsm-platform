@@ -34,6 +34,18 @@ function formatRemaining(expiresAt, now) {
   const remainder = seconds % 60
   return minutes + ':' + String(remainder).padStart(2, '0')
 }
+function formatElapsed(startedAt, now) {
+  const started = new Date(startedAt || '').getTime()
+  if (!Number.isFinite(started)) return ''
+  const total = Math.max(0, Math.floor((now - started) / 1000))
+  const hours = Math.floor(total / 3600)
+  const minutes = Math.floor((total % 3600) / 60)
+  const seconds = total % 60
+  return hours > 0
+    ? hours + ':' + String(minutes).padStart(2, '0') + ':' + String(seconds).padStart(2, '0')
+    : minutes + ':' + String(seconds).padStart(2, '0')
+}
+
 function copyText(value) {
   if (!value) return Promise.resolve()
   if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(value)
@@ -195,6 +207,10 @@ export function RmmConnect() {
               </div>
               <div className="rmm-connect-row-meta">
                 <span>{session.host_platform || 'Windows support session'}</span>
+                {session.host_version ? <span>Connect {session.host_version}</span> : null}
+                {session.technician ? <span>Technician: {session.technician}</span> : null}
+                {session.host_connected_at ? <span>App online {formatElapsed(session.host_connected_at, now)}</span> : null}
+                {session.started_at ? <span>Remote active {formatElapsed(session.started_at, now)}</span> : null}
                 <span>Created {new Date(session.created_at).toLocaleString()}</span>
                 {session.expires_at ? <span>Expires {new Date(session.expires_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span> : null}
               </div>
