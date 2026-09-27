@@ -43,6 +43,7 @@ expect(api.includes("'switch_monitor', 'input_event'"), 'Connect viewer WebSocke
 expect(api.includes("/connect-sessions/:sessionId/hold") && api.includes("/connect-sessions/:sessionId/resume"), 'Connect technician APIs must support customer-approved hold and resume.')
 expect(api.includes("'connect_permission_request'") && api.includes("'connect_permission_response'"), 'Connect permission requests must be relayed explicitly.')
 expect(api.includes("'session_state'"), 'Connect must relay secure-desktop transition state from the attended host to the Viewer.')
+expect(api.includes("'service_shortcut'") && api.includes("'shortcut_result'"), 'Connect must relay service-side Ctrl+Alt+Del requests and results.')
 expect(api.includes('files_granted: permissions.files === true'), 'Connect host reconnect/elevation handoff must preserve already-approved file access.')
 expect(api.includes("'remote_file_list_request'") && api.includes("'file_transfer_chunk'"), 'Connect WebSocket bridge must relay consent-gated file browser traffic.')
 expect(api.includes("type: 'host_disconnected'") && api.includes("type: 'host_reconnected'"), 'Connect must preserve sessions across temporary host disconnects.')

@@ -1510,6 +1510,12 @@ function updateConnectCapabilityButtons() {
       ? "Files"
       : (connectFilePermissionPending ? "Waiting for customer file-access approval" : "Request file access");
   }
+  if (elBtnCad && currentSession?.isConnectSession) {
+    elBtnCad.disabled = !connectElevated || connectElevationPending || connectHostReconnecting || connectSessionHeld;
+    elBtnCad.title = connectElevated
+      ? "Ctrl+Alt+Del"
+      : "Administrator access is required for Ctrl+Alt+Del";
+  }
 }
 
 function requestConnectPermission(permission) {
@@ -4255,6 +4261,26 @@ async function onSignalMessage(raw) {
         break;
       }
 
+      if (state === "login_desktop_entering") {
+        secureDesktopActive = true;
+        desktopHandoffActive = false;
+        revealOnNextFrame = false;
+        secureDesktopLikely = false;
+        showOverlay(
+          "Windows sign-in screen",
+          "Switching to the Windows sign-in desktop…",
+          { spinner: true, keepVideo: true, passive: true }
+        );
+        setStatus('', 'Opening Windows sign-in screen…');
+        break;
+      }
+
+      if (state === "login_desktop_ready") {
+        completeDesktopSourceTransition("login-desktop-ready");
+        setStatus('online', 'Windows sign-in screen');
+        break;
+      }
+
       if (state === "secure_desktop_entering") {
         secureDesktopActive = true;
         desktopHandoffActive = false;
@@ -4539,7 +4565,8 @@ function startSession(params) {
     elBtnConsole.classList.toggle("session-toggle-active", launchMode === "console");
   }
   if (elBtnStartMenu) elBtnStartMenu.disabled = false;
-  if (elBtnCad) elBtnCad.disabled = false;
+  if (elBtnCad) elBtnCad.disabled = !!currentSession.isConnectSession;
+  updateConnectCapabilityButtons();
   if (elDeviceLabel) elDeviceLabel.textContent = deviceId || "";
 
   setStatus("", "Connecting…");

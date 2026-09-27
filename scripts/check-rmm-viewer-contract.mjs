@@ -100,17 +100,18 @@ expect(renderer.includes('sendMobileTextEntry'), 'Mobile block text-entry path i
 expect(renderer.includes('SHIFTED_PUNCTUATION_TEXT') && renderer.includes('SHIFTED_PUNCTUATION_TEXT[text]'), 'Mobile shifted punctuation mapping is incomplete.')
 expect(renderer.includes('isConnectSession: /\\/connect\\/viewer\\/ws'), 'Viewer must explicitly identify ad-hoc Connect sessions from the signaling endpoint.')
 expect(renderer.includes('useConnectMobileWsControl') && renderer.includes("kind !== 'mouse_move'"), 'Mobile Connect controls must use the authenticated WebSocket while fast pointer movement remains on WebRTC.')
+expect(renderer.includes('Administrator access is required for Ctrl+Alt+Del'), 'Connect Ctrl+Alt+Del must remain unavailable until the customer has granted administrator access.')
 
 // Secure desktop / UI continuity --------------------------------------------
-for (const state of ['connect_uac_customer_action_required','connect_uac_cancelled','secure_desktop_entering','secure_desktop_ready','desktop_handoff_entering','desktop_handoff_ready']) {
+for (const state of ['connect_uac_customer_action_required','connect_uac_cancelled','secure_desktop_entering','secure_desktop_ready','login_desktop_entering','login_desktop_ready','desktop_handoff_entering','desktop_handoff_ready']) {
   expect(renderer.includes(state), `Viewer is missing secure-desktop state ${state}.`)
 }
 expect(renderer.includes('completeDesktopSourceTransition') && renderer.includes('showStream();'), 'Secure desktop return must release the Viewer UI immediately instead of waiting on another decoded-frame callback.')
 expect(renderer.includes('setMobileViewControlsVisible(true)') && renderer.includes('setMobileBottomActionsVisible(true)'), 'Mobile zoom and action controls must remain available during desktop-source transitions.')
 expect(renderer.includes('if (!force && (secureDesktopActive || desktopHandoffActive)) return;'), 'Remote input must be suppressed during a desktop-source transition without blocking local mobile gestures.')
 const viewerHtml = read('public/rmm-viewer/index.html')
-expect(viewerHtml.includes('renderer.js?v=20260927-connect-mobile-resume'), 'Browser Viewer must cache-bust the Connect mobile-resume renderer update.')
-expect(viewerHtml.includes('browser.js?v=20260927-connect-mobile-resume'), 'Browser Viewer bootstrap must be cache-busted for Connect mobile lifecycle recovery.')
+expect(viewerHtml.includes('renderer.js?v=20260927-connect-login-cad'), 'Browser Viewer must cache-bust the Connect login/CAD renderer update.')
+expect(viewerHtml.includes('browser.js?v=20260927-connect-login-cad'), 'Browser Viewer bootstrap must be cache-busted for Connect login/CAD support.')
 expect(browser.includes('const isConnectViewer = /\\/connect\\/viewer\\/ws'), 'Browser bootstrap must identify attended Connect sessions before page lifecycle teardown.')
 expect(browser.includes('if (isConnectViewer)') && browser.includes('Do not destroy the attended Connect session here'), 'Mobile pagehide must not explicitly tear down an attended Connect session.')
 expect(browser.includes("window.hi5RemoteViewer?.recover?.('browser-pageshow')"), 'BFCache/pageshow must ask the Connect Viewer to recover its existing authorised session.')

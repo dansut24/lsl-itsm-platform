@@ -36,8 +36,8 @@ const claimBuckets = new Map()
 
 const HOST_RELAY_TYPES = new Set([
   'webrtc_offer', 'offer', 'ice_candidate', 'candidate', 'webrtc_ice_candidate',
-  'remote_state', 'remote_error', 'session_state', 'monitor_list', 'chat_message', 'chat_close',
-  'connect_permission_response',
+  'remote_state', 'remote_error', 'session_state', 'monitor_info', 'monitor_list', 'chat_message', 'chat_close',
+  'shortcut_result', 'connect_permission_response',
   'remote_file_list', 'remote_file_download', 'remote_file_upload_started',
   'remote_file_upload_complete', 'remote_file_upload_cancelled',
   'remote_file_upload_error', 'remote_file_download_error',
@@ -47,7 +47,7 @@ const HOST_RELAY_TYPES = new Set([
 ])
 const VIEWER_RELAY_TYPES = new Set([
   'webrtc_answer', 'answer', 'ice_candidate', 'candidate', 'viewer_answer',
-  'switch_monitor', 'input_event', 'chat_message', 'chat_close',
+  'switch_monitor', 'input_event', 'service_shortcut', 'service_command', 'chat_message', 'chat_close',
   'connect_permission_request',
   'remote_file_list_request', 'remote_file_download_request', 'remote_file_upload_request',
   'remote_file_upload_start', 'remote_file_upload_chunk',
