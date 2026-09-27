@@ -2089,11 +2089,24 @@ function sendInput(kind, extra = {}, force = false) {
 
   if (kind === 'mouse_move' && sendFastMouseMove(extra)) return;
 
-  const payload = JSON.stringify({ kind, ...extra });
-  const channel = inputControlDc && inputControlDc.readyState === 'open' ? inputControlDc : inputDc;
-  if (channel && channel.readyState === "open") {
-    channel.send(payload);
-    return;
+  // Mobile Safari reliably carries the high-rate binary pointer channel, but
+  // some Connect sessions open the reliable input-control SCTP channel without
+  // delivering tap/key payloads. For attended Connect on mobile, keep pointer
+  // movement on WebRTC and route actual controls over the authenticated
+  // signaling WebSocket instead. These messages are tiny and latency-insensitive
+  // compared with mouse movement.
+  const useConnectMobileWsControl =
+    Boolean(currentSession.isConnectSession) &&
+    isMobileViewerSurface() &&
+    kind !== 'mouse_move';
+
+  if (!useConnectMobileWsControl) {
+    const payload = JSON.stringify({ kind, ...extra });
+    const channel = inputControlDc && inputControlDc.readyState === 'open' ? inputControlDc : inputDc;
+    if (channel && channel.readyState === "open") {
+      channel.send(payload);
+      return;
+    }
   }
 
   if (ws && ws.readyState === WebSocket.OPEN) {
@@ -4224,7 +4237,8 @@ function startSession(params) {
     wssUrl,
     iceServers,
     viewerClient,
-    launchMode
+    launchMode,
+    isConnectSession: /\/connect\/viewer\/ws(?:\?|$)/i.test(String(wssUrl || ''))
   };
 
   if (isMobileViewerSurface()) activateMobileHistoryGuard();

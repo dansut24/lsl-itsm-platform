@@ -34,6 +34,7 @@ expect(api.includes("body.consent !== true"), 'Customer consent must remain mand
 expect(api.includes("status='claimed'") || api.includes("status='claimed'".replaceAll("'", "\'")) || api.includes("status='claimed'"), 'Connect claim must transition to one-time claimed state.')
 expect(api.includes("/connect/host/ws"), 'Dedicated portable host WebSocket is missing.')
 expect(api.includes("/connect/viewer/ws"), 'Dedicated Connect viewer WebSocket is missing.')
+expect(api.includes("'switch_monitor', 'input_event'"), 'Connect viewer WebSocket must continue relaying authenticated input_event controls.')
 expect(api.includes("No managed Agent enrollment was created."), 'Connect audit must explicitly distinguish ad-hoc support from managed enrollment.')
 expect(ui.includes('Hi5Central Connect'), 'Technician Connect workspace is missing.')
 expect(platform.includes("requiresRemote: true"), 'Connect navigation must remain hidden without remote-access permission.')
