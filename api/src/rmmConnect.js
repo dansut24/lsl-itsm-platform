@@ -660,11 +660,13 @@ export function attachRmmConnectWebSockets(server) {
       [sessionId, ACTIVE_TTL_SECONDS],
     ).catch(() => {})
     const held = !!remote.held_until && new Date(remote.held_until).getTime() > Date.now()
+    const permissions = connectPermissions.get(sessionId) || {}
     safeSend(hostWs, {
       type: 'connect_ready',
       session_id: sessionId,
       technician_name: remote.technician,
       organisation_name: remote.tenant_name,
+      files_granted: permissions.files === true,
       held_until: held ? remote.held_until : null,
     })
 

@@ -102,14 +102,14 @@ expect(renderer.includes('isConnectSession: /\\/connect\\/viewer\\/ws'), 'Viewer
 expect(renderer.includes('useConnectMobileWsControl') && renderer.includes("kind !== 'mouse_move'"), 'Mobile Connect controls must use the authenticated WebSocket while fast pointer movement remains on WebRTC.')
 
 // Secure desktop / UI continuity --------------------------------------------
-for (const state of ['secure_desktop_entering','secure_desktop_ready','desktop_handoff_entering','desktop_handoff_ready']) {
+for (const state of ['connect_uac_customer_action_required','connect_uac_cancelled','secure_desktop_entering','secure_desktop_ready','desktop_handoff_entering','desktop_handoff_ready']) {
   expect(renderer.includes(state), `Viewer is missing secure-desktop state ${state}.`)
 }
 expect(renderer.includes('completeDesktopSourceTransition') && renderer.includes('showStream();'), 'Secure desktop return must release the Viewer UI immediately instead of waiting on another decoded-frame callback.')
 expect(renderer.includes('setMobileViewControlsVisible(true)') && renderer.includes('setMobileBottomActionsVisible(true)'), 'Mobile zoom and action controls must remain available during desktop-source transitions.')
 expect(renderer.includes('if (!force && (secureDesktopActive || desktopHandoffActive)) return;'), 'Remote input must be suppressed during a desktop-source transition without blocking local mobile gestures.')
 const viewerHtml = read('public/rmm-viewer/index.html')
-expect(viewerHtml.includes('renderer.js?v=20260927-connect-resilience-permissions'), 'Browser Viewer must cache-bust the Connect resilience and permission renderer update.')
+expect(viewerHtml.includes('renderer.js?v=20260927-connect-uac-handoff'), 'Browser Viewer must cache-bust the attended Connect UAC handoff renderer update.')
 expect(viewerHtml.includes('#overlay.transition-hold') && viewerHtml.includes('pointer-events: none'), 'The secure-desktop transition layer must never intercept mobile pinch/zoom gestures.')
 expect(renderer.includes('elOverlayTitle.textContent = ""') && renderer.includes('elSpinner.style.display = "none"'), 'Desktop-source transition hold must clear stale Connecting UI content.')
 

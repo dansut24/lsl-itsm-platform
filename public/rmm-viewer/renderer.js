@@ -3960,6 +3960,9 @@ async function onSignalMessage(raw) {
       connectSessionHeld = Number.isFinite(heldUntil) && heldUntil > Date.now();
       if (connectElevated) {
         connectElevationPending = false;
+        clearSecureDesktopState();
+        showStream();
+        ensureRemoteVideoPlayback('connect-elevation-ready');
         setStatus('online', 'Administrator access active · negotiating remote control');
       }
       if (connectSessionHeld) {
@@ -4226,6 +4229,31 @@ async function onSignalMessage(raw) {
 
     case "session_state": {
       const state = msg.state || "";
+
+      if (state === "connect_uac_customer_action_required") {
+        connectElevationPending = true;
+        secureDesktopActive = true;
+        desktopHandoffActive = false;
+        revealOnNextFrame = false;
+        secureDesktopLikely = false;
+        showOverlay(
+          "Windows administrator approval",
+          "The customer must approve the Windows User Account Control prompt on the device before remote support can continue with administrator access.",
+          { spinner: true, keepVideo: true, passive: true }
+        );
+        setStatus('', 'Waiting for customer to approve Windows UAC on the device…');
+        updateConnectCapabilityButtons();
+        break;
+      }
+
+      if (state === "connect_uac_cancelled") {
+        connectElevationPending = false;
+        clearSecureDesktopState();
+        showStream();
+        setStatus('error', 'Windows administrator approval was cancelled');
+        updateConnectCapabilityButtons();
+        break;
+      }
 
       if (state === "secure_desktop_entering") {
         secureDesktopActive = true;
