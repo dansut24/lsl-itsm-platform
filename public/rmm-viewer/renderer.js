@@ -1052,6 +1052,7 @@ let passiveOverlayActive = false;
 let secureDesktopLikely = false;
 let secureDesktopActive = false;
 let desktopHandoffActive = false;
+let loginDesktopInputActive = false;
 let revealOnNextFrame = false;
 let monitorSwitchUntilMs = 0;
 let lastKeyframeRequestAtMs = 0;
@@ -1226,6 +1227,29 @@ function clearSecureDesktopState() {
   desktopHandoffActive = false;
   secureDesktopLikely = false;
   revealOnNextFrame = false;
+}
+
+function showLoginDesktopTransition() {
+  passiveOverlayActive = false;
+  if (elOverlay) {
+    elOverlay.classList.remove("hidden");
+    setOverlayMode("transition-hold");
+  }
+  if (elOverlayTitle) elOverlayTitle.textContent = "";
+  if (elOverlaySub) elOverlaySub.textContent = "";
+  if (elSpinner) elSpinner.style.display = "none";
+  if (elErrorDetail) {
+    elErrorDetail.style.display = "none";
+    elErrorDetail.textContent = "";
+  }
+  if (elVideo) elVideo.classList.add("visible");
+  if (elStatsBar) elStatsBar.classList.add("visible");
+  if (isMobileViewerSurface()) {
+    setMobileViewControlsVisible(true);
+    setMobileBottomActionsVisible(true);
+    applyMobileViewport({ clamp: mobileViewZoom <= 1.001 });
+  }
+  hideRemoteCursor();
 }
 
 function completeDesktopSourceTransition(reason = "desktop-source-ready") {
@@ -2178,7 +2202,7 @@ function sendViewerStreamProfile() {
 function sendInput(kind, extra = {}, force = false) {
   if (!currentSession) return;
   if (!force && !controlActive) return;
-  if (!force && (secureDesktopActive || desktopHandoffActive)) return;
+  if (!force && (secureDesktopActive || desktopHandoffActive) && !loginDesktopInputActive) return;
 
   if (kind === 'mouse_move' && sendFastMouseMove(extra)) return;
 
@@ -2451,6 +2475,7 @@ function resetTransitionState() {
   secureDesktopLikely = false;
   secureDesktopActive = false;
   desktopHandoffActive = false;
+  loginDesktopInputActive = false;
   revealOnNextFrame = false;
   monitorSwitchUntilMs = 0;
   lastKeyframeRequestAtMs = 0;
@@ -4264,18 +4289,16 @@ async function onSignalMessage(raw) {
       if (state === "login_desktop_entering") {
         secureDesktopActive = true;
         desktopHandoffActive = false;
+        loginDesktopInputActive = true;
         revealOnNextFrame = false;
         secureDesktopLikely = false;
-        showOverlay(
-          "Windows sign-in screen",
-          "Switching to the Windows sign-in desktop…",
-          { spinner: true, keepVideo: true, passive: true }
-        );
-        setStatus('', 'Opening Windows sign-in screen…');
+        showLoginDesktopTransition();
+        setStatus('', 'Windows sign-in screen · tap or press a key to continue');
         break;
       }
 
       if (state === "login_desktop_ready") {
+        loginDesktopInputActive = true;
         completeDesktopSourceTransition("login-desktop-ready");
         setStatus('online', 'Windows sign-in screen');
         break;
@@ -4284,6 +4307,7 @@ async function onSignalMessage(raw) {
       if (state === "secure_desktop_entering") {
         secureDesktopActive = true;
         desktopHandoffActive = false;
+        loginDesktopInputActive = false;
         revealOnNextFrame = false;
         secureDesktopLikely = false;
         showSecureBlackOverlay();
@@ -4296,6 +4320,7 @@ async function onSignalMessage(raw) {
       }
 
       if (state === "secure_desktop_exited") {
+        loginDesktopInputActive = false;
         completeDesktopSourceTransition("secure-desktop-exited");
         break;
       }
@@ -4310,6 +4335,7 @@ async function onSignalMessage(raw) {
       }
 
       if (state === "desktop_handoff_ready") {
+        loginDesktopInputActive = false;
         completeDesktopSourceTransition("desktop-handoff-ready");
         break;
       }
