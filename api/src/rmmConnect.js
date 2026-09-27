@@ -15,6 +15,7 @@ const TURN_HOST = process.env.TURN_HOST || `turn.${ROOT_DOMAIN}`
 const TURN_SHARED_SECRET_FILE = process.env.TURN_SHARED_SECRET_FILE || '/run/secrets/turn_shared_secret'
 const WAITING_TTL_SECONDS = 20 * 60
 const ACTIVE_TTL_SECONDS = 8 * 60 * 60
+const HOLD_TTL_SECONDS = 24 * 60 * 60
 const MAX_WS_PAYLOAD_BYTES = 8 * 1024 * 1024
 const CLAIM_WINDOW_MS = 60 * 1000
 const CLAIM_ATTEMPTS_PER_WINDOW = 8
@@ -28,16 +29,35 @@ if (process.env.NODE_ENV === 'production' && CONNECT_CODE_HMAC_KEY.length < 32) 
 
 const activeConnectHosts = new Map()
 const activeConnectViewers = new Map()
+const connectPermissions = new Map()
 const claimBuckets = new Map()
 
 const HOST_RELAY_TYPES = new Set([
   'webrtc_offer', 'offer', 'ice_candidate', 'candidate', 'webrtc_ice_candidate',
   'remote_state', 'remote_error', 'monitor_list', 'chat_message', 'chat_close',
+  'connect_permission_response',
+  'remote_file_list', 'remote_file_download', 'remote_file_upload_started',
+  'remote_file_upload_complete', 'remote_file_upload_cancelled',
+  'remote_file_upload_error', 'remote_file_download_error',
+  'remote_file_delete_complete', 'remote_file_mkdir_complete', 'remote_file_rename_complete',
+  'remote_file_delete_error', 'remote_file_mkdir_error', 'remote_file_rename_error',
+  'file_transfer_start', 'file_transfer_chunk', 'file_transfer_complete', 'file_transfer_error',
 ])
 const VIEWER_RELAY_TYPES = new Set([
   'webrtc_answer', 'answer', 'ice_candidate', 'candidate', 'viewer_answer',
   'switch_monitor', 'input_event', 'chat_message', 'chat_close',
+  'connect_permission_request',
+  'remote_file_list_request', 'remote_file_download_request', 'remote_file_upload_request',
+  'remote_file_upload_start', 'remote_file_upload_chunk',
+  'remote_file_upload_complete_request', 'remote_file_upload_cancel',
+  'remote_file_delete_request', 'remote_file_mkdir_request', 'remote_file_rename_request',
   'viewer_disconnected', 'viewer_closed', 'viewer_left', 'end_session', 'stop_webrtc',
+])
+const CONNECT_FILE_REQUEST_TYPES = new Set([
+  'remote_file_list_request', 'remote_file_download_request', 'remote_file_upload_request',
+  'remote_file_upload_start', 'remote_file_upload_chunk',
+  'remote_file_upload_complete_request', 'remote_file_upload_cancel',
+  'remote_file_delete_request', 'remote_file_mkdir_request', 'remote_file_rename_request',
 ])
 
 function clean(value = '') { return String(value ?? '').trim() }
@@ -147,8 +167,9 @@ async function requireConnectAccess(c) {
 async function connectSessionForTenant(id, tenantId) {
   const result = await pool.query(
     `SELECT c.id,c.tenant_id,c.created_by_user_id,c.support_code_hint,c.viewer_client,c.status,
-            c.customer_consent_at,c.claimed_at,c.host_connected_at,c.viewer_connected_at,c.started_at,c.ended_at,
-            c.expires_at,c.last_activity_at,c.end_reason,c.host_name,c.host_platform,c.host_version,c.created_at,c.updated_at,
+            c.customer_consent_at,c.claimed_at,c.host_connected_at,c.host_disconnected_at,c.viewer_connected_at,c.started_at,c.ended_at,
+            c.expires_at,c.held_until,c.hold_requested_at,c.hold_approved_at,c.last_activity_at,c.end_reason,
+            c.host_name,c.host_platform,c.host_version,c.host_elevated,c.file_access_granted_at,c.elevation_granted_at,c.created_at,c.updated_at,
             COALESCE(NULLIF(u.name,''),u.email,'Hi5Central technician') AS technician,
             COALESCE(NULLIF(t.company_name,''),t.slug,'Hi5Central') AS tenant_name,t.slug AS tenant_slug
        FROM rmm_connect_sessions c
@@ -163,7 +184,7 @@ async function expireOldSessions() {
   await pool.query(
     `UPDATE rmm_connect_sessions
         SET status='expired',ended_at=COALESCE(ended_at,now()),end_reason=COALESCE(end_reason,'expired'),updated_at=now()
-      WHERE expires_at<=now() AND status IN ('waiting','claimed','host_connected','viewer_connected')`,
+      WHERE expires_at<=now() AND status IN ('waiting','claimed','host_connected','viewer_connected','active')`,
   ).catch(() => {})
 }
 async function endConnectSession(sessionId, reason, actor = null) {
@@ -183,6 +204,7 @@ async function endConnectSession(sessionId, reason, actor = null) {
   try { viewerWs?.close(4000, 'Support session ended') } catch {}
   activeConnectHosts.delete(String(sessionId))
   activeConnectViewers.delete(String(sessionId))
+  connectPermissions.delete(String(sessionId))
   if (result.rowCount) {
     const row = result.rows[0]
     const label = clean(actor?.label) || 'SYSTEM'
@@ -258,9 +280,11 @@ export function registerRmmConnectRoutes(app) {
     if (auth.error) return auth.error
     await expireOldSessions()
     const result = await pool.query(
-      `SELECT c.id,c.support_code_hint,c.viewer_client,c.status,c.expires_at,c.claimed_at,c.host_connected_at,
-              c.viewer_connected_at,c.started_at,c.ended_at,c.last_activity_at,c.end_reason,c.host_name,c.host_platform,
-              c.host_version,c.created_at,COALESCE(NULLIF(u.name,''),u.email,'Hi5Central technician') AS technician
+      `SELECT c.id,c.support_code_hint,c.viewer_client,c.status,c.expires_at,c.held_until,c.hold_requested_at,c.hold_approved_at,
+              c.claimed_at,c.host_connected_at,c.host_disconnected_at,c.viewer_connected_at,c.started_at,c.ended_at,
+              c.last_activity_at,c.end_reason,c.host_name,c.host_platform,c.host_version,c.host_elevated,
+              c.file_access_granted_at,c.elevation_granted_at,c.created_at,
+              COALESCE(NULLIF(u.name,''),u.email,'Hi5Central technician') AS technician
          FROM rmm_connect_sessions c
          LEFT JOIN users u ON u.id=c.created_by_user_id
         WHERE c.tenant_id=$1
@@ -268,7 +292,12 @@ export function registerRmmConnectRoutes(app) {
         LIMIT 50`,
       [auth.session.tenant_id],
     )
-    return c.json({ sessions: result.rows, publicUrl: CONNECT_PUBLIC_URL })
+    const sessions = result.rows.map((row) => ({
+      ...row,
+      host_online: activeConnectHosts.has(String(row.id)),
+      viewer_online: activeConnectViewers.has(String(row.id)),
+    }))
+    return c.json({ sessions, publicUrl: CONNECT_PUBLIC_URL })
   })
 
   app.get('/api/v1/rmm/connect-sessions/:sessionId', async (c) => {
@@ -288,6 +317,9 @@ export function registerRmmConnectRoutes(app) {
     if (!row) return c.json({ error: 'Connect session not found.' }, 404)
     if (!['host_connected','viewer_connected','active'].includes(row.status) || new Date(row.expires_at).getTime() <= Date.now()) {
       return c.json({ error: 'The customer Connect app is not online.' }, 409)
+    }
+    if (row.held_until && new Date(row.held_until).getTime() > Date.now()) {
+      return c.json({ error: 'This Connect session is on hold. Resume it before opening the viewer.' }, 409)
     }
     const body = await c.req.json().catch(() => ({}))
     const viewerClient = clean(body.viewerClient).toLowerCase() === 'native' ? 'native' : 'browser'
@@ -316,6 +348,101 @@ export function registerRmmConnectRoutes(app) {
       nativeUrl: viewerClient === 'native' ? nativeLaunchUrl(connection) : null,
       viewerDownloadUrl: viewerClient === 'native' ? VIEWER_DOWNLOAD_URL : null,
     })
+  })
+
+  app.post('/api/v1/rmm/connect-sessions/:sessionId/hold', async (c) => {
+    const auth = await requireConnectAccess(c)
+    if (auth.error) return auth.error
+    const sessionId = clean(c.req.param('sessionId'))
+    const row = await connectSessionForTenant(sessionId, auth.session.tenant_id)
+    if (!row) return c.json({ error: 'Connect session not found.' }, 404)
+    if (['ended','expired','failed'].includes(row.status)) {
+      return c.json({ error: 'This Connect session has already ended.' }, 409)
+    }
+    const hostWs = activeConnectHosts.get(sessionId)
+    if (!hostWs || hostWs.readyState !== 1) {
+      return c.json({ error: 'The customer Connect app must be online before a session can be held.' }, 409)
+    }
+    const body = await c.req.json().catch(() => ({}))
+    const durationMinutes = Math.max(30, Math.min(24 * 60, Number(body.durationMinutes || 24 * 60) || 24 * 60))
+    await pool.query(
+      `UPDATE rmm_connect_sessions
+          SET hold_requested_at=now(),last_activity_at=now(),updated_at=now()
+        WHERE id=$1`,
+      [sessionId],
+    )
+    safeSend(hostWs, {
+      type: 'connect_hold_request',
+      session_id: sessionId,
+      duration_minutes: durationMinutes,
+      technician_name: clean(auth.session.name || auth.session.email) || 'Technician',
+    })
+    recordRmmActivity({
+      tenantId: auth.session.tenant_id,
+      actorUserId: auth.session.user_id,
+      actorType: 'technician',
+      actorLabel: clean(auth.session.name || auth.session.email) || 'Technician',
+      eventType: 'connect.hold_requested',
+      category: 'remote',
+      summary: 'Technician requested permission to keep a Hi5Central Connect session available',
+      detail: 'The customer must approve the hold and restart-reconnect permission locally.',
+      outcome: 'requested',
+      metadata: { connectSessionId: sessionId, durationMinutes },
+    }).catch(() => {})
+    return c.json({ session: { id: sessionId, holdRequested: true, durationMinutes } }, 202)
+  })
+
+  app.post('/api/v1/rmm/connect-sessions/:sessionId/resume', async (c) => {
+    const auth = await requireConnectAccess(c)
+    if (auth.error) return auth.error
+    const sessionId = clean(c.req.param('sessionId'))
+    const row = await connectSessionForTenant(sessionId, auth.session.tenant_id)
+    if (!row) return c.json({ error: 'Connect session not found.' }, 404)
+    if (['ended','expired','failed'].includes(row.status)) {
+      return c.json({ error: 'This Connect session has already ended.' }, 409)
+    }
+    await pool.query(
+      `UPDATE rmm_connect_sessions
+          SET held_until=NULL,hold_requested_at=NULL,hold_approved_at=NULL,
+              expires_at=GREATEST(expires_at,now() + ($2::text || ' seconds')::interval),
+              last_activity_at=now(),updated_at=now()
+        WHERE id=$1`,
+      [sessionId, ACTIVE_TTL_SECONDS],
+    )
+    const hostWs = activeConnectHosts.get(sessionId)
+    const viewerWs = activeConnectViewers.get(sessionId)
+    safeSend(hostWs, {
+      type: 'connect_hold_released',
+      session_id: sessionId,
+    })
+    safeSend(viewerWs, {
+      type: 'connect_hold_released',
+      session_id: sessionId,
+    })
+    if (hostWs?.readyState === 1 && viewerWs?.readyState === 1) {
+      const ice = iceConfiguration(sessionId)
+      safeSend(viewerWs, { type: 'session_config', session_id: sessionId, mode: 'console', ice_servers: ice.viewer })
+      safeSend(hostWs, {
+        type: 'start_webrtc',
+        session_id: sessionId,
+        mode: 'console',
+        technician_name: clean(auth.session.name || auth.session.email) || 'Technician',
+        iceServers: ice.host,
+      })
+    }
+    recordRmmActivity({
+      tenantId: auth.session.tenant_id,
+      actorUserId: auth.session.user_id,
+      actorType: 'technician',
+      actorLabel: clean(auth.session.name || auth.session.email) || 'Technician',
+      eventType: 'connect.hold_released',
+      category: 'remote',
+      summary: 'Technician released the Hi5Central Connect hold',
+      detail: 'Restart persistence was removed from the attended support app.',
+      outcome: 'success',
+      metadata: { connectSessionId: sessionId },
+    }).catch(() => {})
+    return c.json({ session: { id: sessionId, heldUntil: null } })
   })
 
   app.post('/api/v1/rmm/connect-sessions/:sessionId/terminate', async (c) => {
@@ -436,7 +563,7 @@ export function registerRmmConnectRoutes(app) {
 async function authenticateHost(ticket) {
   if (!clean(ticket)) return null
   const result = await pool.query(
-    `SELECT c.id,c.tenant_id,c.created_by_user_id,c.status,c.expires_at,
+    `SELECT c.id,c.tenant_id,c.created_by_user_id,c.status,c.expires_at,c.held_until,c.host_elevated,
             COALESCE(NULLIF(u.name,''),u.email,'Hi5Central technician') AS technician,
             COALESCE(NULLIF(t.company_name,''),t.slug,'Hi5Central') AS tenant_name
        FROM rmm_connect_sessions c
@@ -455,6 +582,7 @@ async function authenticateConnectViewer(sessionId, token) {
   if (!clean(sessionId) || !clean(token)) return null
   const result = await pool.query(
     `SELECT c.id,c.tenant_id,c.created_by_user_id,c.status,c.expires_at,c.viewer_client,c.host_name,
+            c.host_elevated,c.held_until,
             COALESCE(NULLIF(u.name,''),u.email,'Hi5Central technician') AS technician
        FROM rmm_connect_sessions c
        LEFT JOIN users u ON u.id=c.created_by_user_id
@@ -526,17 +654,33 @@ export function attachRmmConnectWebSockets(server) {
     await pool.query(
       `UPDATE rmm_connect_sessions
           SET status=CASE WHEN status='active' THEN status WHEN status='viewer_connected' THEN status ELSE 'host_connected' END,
-              host_connected_at=COALESCE(host_connected_at,now()),last_activity_at=now(),
+              host_connected_at=COALESCE(host_connected_at,now()),host_disconnected_at=NULL,last_activity_at=now(),
               expires_at=GREATEST(expires_at,now() + ($2::text || ' seconds')::interval),updated_at=now()
         WHERE id=$1`,
       [sessionId, ACTIVE_TTL_SECONDS],
     ).catch(() => {})
+    const held = !!remote.held_until && new Date(remote.held_until).getTime() > Date.now()
     safeSend(hostWs, {
       type: 'connect_ready',
       session_id: sessionId,
       technician_name: remote.technician,
       organisation_name: remote.tenant_name,
+      held_until: held ? remote.held_until : null,
     })
+
+    const existingViewer = activeConnectViewers.get(sessionId)
+    if (!held && existingViewer?.readyState === 1) {
+      const ice = iceConfiguration(sessionId)
+      safeSend(existingViewer, { type: 'host_reconnected', session_id: sessionId })
+      safeSend(existingViewer, { type: 'session_config', session_id: sessionId, mode: 'console', ice_servers: ice.viewer })
+      safeSend(hostWs, {
+        type: 'start_webrtc',
+        session_id: sessionId,
+        mode: 'console',
+        technician_name: remote.technician,
+        iceServers: ice.host,
+      })
+    }
 
     hostWs.on('message', (buffer) => {
       const text = Buffer.isBuffer(buffer) ? buffer.toString('utf8') : String(buffer)
@@ -544,12 +688,30 @@ export function attachRmmConnectWebSockets(server) {
       try { payload = JSON.parse(text) } catch { return }
       const type = clean(payload?.type)
       if (type === 'connect_hello') {
+        const elevated = payload?.elevated === true
         pool.query(
           `UPDATE rmm_connect_sessions
-              SET host_name=$2,host_platform=$3,host_version=$4,last_activity_at=now(),updated_at=now()
+              SET host_name=$2,host_platform=$3,host_version=$4,host_elevated=$5,
+                  elevation_granted_at=CASE WHEN $5 THEN COALESCE(elevation_granted_at,now()) ELSE elevation_granted_at END,
+                  host_disconnected_at=NULL,last_activity_at=now(),updated_at=now()
             WHERE id=$1`,
-          [sessionId, clean(payload.host_name).slice(0, 255), clean(payload.platform).slice(0, 120), clean(payload.version).slice(0, 80)],
+          [
+            sessionId,
+            clean(payload.host_name).slice(0, 255),
+            clean(payload.platform).slice(0, 120),
+            clean(payload.version).slice(0, 80),
+            elevated,
+          ],
         ).catch(() => {})
+        const permissions = connectPermissions.get(sessionId) || {}
+        permissions.elevated = elevated
+        connectPermissions.set(sessionId, permissions)
+        safeSend(activeConnectViewers.get(sessionId), {
+          type: 'connect_capabilities',
+          session_id: sessionId,
+          elevated,
+          files_granted: permissions.files === true,
+        })
         return
       }
       if (type === 'session_ended' || type === 'host_closed') {
@@ -560,6 +722,96 @@ export function attachRmmConnectWebSockets(server) {
           label: 'Customer',
         }).catch(() => {})
         return
+      }
+      if (type === 'connect_hold_response') {
+        const approved = payload?.approved === true
+        if (approved) {
+          const permissions = connectPermissions.get(sessionId) || {}
+          permissions.files = false
+          connectPermissions.set(sessionId, permissions)
+        }
+        const durationMinutes = Math.max(30, Math.min(24 * 60, Number(payload?.duration_minutes || 24 * 60) || 24 * 60))
+        if (approved) {
+          pool.query(
+            `UPDATE rmm_connect_sessions
+                SET status='host_connected',
+                    held_until=now() + ($2::text || ' minutes')::interval,
+                    hold_approved_at=now(),hold_requested_at=NULL,
+                    expires_at=GREATEST(expires_at,now() + ($3::text || ' seconds')::interval),
+                    last_activity_at=now(),updated_at=now()
+              WHERE id=$1`,
+            [sessionId, durationMinutes, HOLD_TTL_SECONDS],
+          ).catch(() => {})
+        } else {
+          pool.query(
+            `UPDATE rmm_connect_sessions
+                SET hold_requested_at=NULL,last_activity_at=now(),updated_at=now()
+              WHERE id=$1`,
+            [sessionId],
+          ).catch(() => {})
+        }
+        recordRmmActivity({
+          tenantId: remote.tenant_id,
+          actorType: 'user',
+          actorLabel: 'Customer',
+          eventType: approved ? 'connect.hold_approved' : 'connect.hold_denied',
+          category: 'remote',
+          summary: approved
+            ? 'Customer approved keeping the Hi5Central Connect session available'
+            : 'Customer declined keeping the Hi5Central Connect session available',
+          detail: approved
+            ? 'The temporary Connect app may reconnect once after the next Windows sign-in while the hold remains valid.'
+            : 'No restart persistence was enabled.',
+          outcome: approved ? 'success' : 'denied',
+          metadata: {
+            connectSessionId: sessionId,
+            durationMinutes,
+            restartRegistered: payload?.restart_registered === true,
+          },
+        }).catch(() => {})
+        safeSend(activeConnectViewers.get(sessionId), {
+          type: 'connect_hold_response',
+          session_id: sessionId,
+          approved,
+          duration_minutes: durationMinutes,
+          restart_registered: payload?.restart_registered === true,
+        })
+        return
+      }
+      if (type === 'connect_permission_response') {
+        const permission = clean(payload?.permission)
+        const approved = payload?.approved === true
+        const permissions = connectPermissions.get(sessionId) || {}
+        if (permission === 'files') permissions.files = approved
+        if (permission === 'elevation' && payload?.elevated === true) permissions.elevated = approved
+        connectPermissions.set(sessionId, permissions)
+        if (permission === 'files' && approved) {
+          pool.query(
+            `UPDATE rmm_connect_sessions
+                SET file_access_granted_at=COALESCE(file_access_granted_at,now()),last_activity_at=now(),updated_at=now()
+              WHERE id=$1`,
+            [sessionId],
+          ).catch(() => {})
+        }
+        if (permission === 'elevation' && approved) {
+          pool.query(
+            `UPDATE rmm_connect_sessions
+                SET elevation_granted_at=COALESCE(elevation_granted_at,now()),last_activity_at=now(),updated_at=now()
+              WHERE id=$1`,
+            [sessionId],
+          ).catch(() => {})
+        }
+        recordRmmActivity({
+          tenantId: remote.tenant_id,
+          actorType: 'user',
+          actorLabel: 'Customer',
+          eventType: approved ? 'connect.permission_approved' : 'connect.permission_denied',
+          category: 'remote',
+          summary: 'Customer ' + (approved ? 'approved' : 'declined') + ' Connect ' + (permission || 'requested') + ' permission',
+          detail: clean(payload?.reason) || null,
+          outcome: approved ? 'success' : 'denied',
+          metadata: { connectSessionId: sessionId, permission, elevated: payload?.elevated === true },
+        }).catch(() => {})
       }
       if (!HOST_RELAY_TYPES.has(type)) return
       payload.session_id = sessionId
@@ -597,7 +849,17 @@ export function attachRmmConnectWebSockets(server) {
       closed = true
       if (activeConnectHosts.get(sessionId) !== hostWs) return
       activeConnectHosts.delete(sessionId)
-      endConnectSession(sessionId, 'customer_closed_app').catch(() => {})
+      pool.query(
+        `UPDATE rmm_connect_sessions
+            SET host_disconnected_at=now(),last_activity_at=now(),updated_at=now()
+          WHERE id=$1 AND ended_at IS NULL`,
+        [sessionId],
+      ).catch(() => {})
+      safeSend(activeConnectViewers.get(sessionId), {
+        type: 'host_disconnected',
+        session_id: sessionId,
+        reconnecting: true,
+      })
     }
     hostWs.once('close', handleClose)
     hostWs.once('error', handleClose)
@@ -627,6 +889,14 @@ export function attachRmmConnectWebSockets(server) {
     ).catch(() => {})
     const ice = iceConfiguration(sessionId)
     safeSend(viewerWs, { type: 'viewer_connected', session_id: sessionId })
+    const permissions = connectPermissions.get(sessionId) || {}
+    safeSend(viewerWs, {
+      type: 'connect_capabilities',
+      session_id: sessionId,
+      elevated: remote.host_elevated === true,
+      files_granted: permissions.files === true,
+      held_until: remote.held_until || null,
+    })
     safeSend(viewerWs, { type: 'session_config', session_id: sessionId, mode: 'console', ice_servers: ice.viewer })
     safeSend(hostWs, {
       type: 'start_webrtc',
@@ -642,10 +912,24 @@ export function attachRmmConnectWebSockets(server) {
       try { payload = JSON.parse(text) } catch { return }
       const type = clean(payload?.type)
       if (!VIEWER_RELAY_TYPES.has(type)) return
+      if (CONNECT_FILE_REQUEST_TYPES.has(type)) {
+        const permissions = connectPermissions.get(sessionId) || {}
+        if (permissions.files !== true) {
+          safeSend(viewerWs, {
+            type: 'connect_permission_response',
+            session_id: sessionId,
+            permission: 'files',
+            approved: false,
+            reason: 'permission_required',
+          })
+          return
+        }
+      }
       payload.session_id = sessionId
       delete payload.sessionId
-      if (['viewer_disconnected','viewer_closed','viewer_left','end_session','stop_webrtc'].includes(type)) {
-        safeSend(hostWs, payload)
+      const currentHostWs = activeConnectHosts.get(sessionId)
+      if (type === 'end_session') {
+        safeSend(currentHostWs, payload)
         endConnectSession(sessionId, 'viewer_ended_session', {
           userId: remote.created_by_user_id,
           type: 'technician',
@@ -653,7 +937,11 @@ export function attachRmmConnectWebSockets(server) {
         }).catch(() => {})
         return
       }
-      safeSend(hostWs, payload)
+      if (['viewer_disconnected','viewer_closed','viewer_left','stop_webrtc'].includes(type)) {
+        safeSend(currentHostWs, payload)
+        return
+      }
+      safeSend(currentHostWs, payload)
       pool.query(`UPDATE rmm_connect_sessions SET last_activity_at=now(),updated_at=now() WHERE id=$1`, [sessionId]).catch(() => {})
     })
 

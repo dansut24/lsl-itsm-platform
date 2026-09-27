@@ -7,6 +7,7 @@
 const elStatusDot    = document.getElementById("status-dot");
 const elStatusLabel  = document.getElementById("status-label");
 const elDeviceLabel  = document.getElementById("device-label");
+const elBtnElevate   = document.getElementById("btn-elevate");
 const elBtnFiles     = document.getElementById("btn-files");
 const elBtnChat      = document.getElementById("btn-chat");
 const elBtnAudio     = document.getElementById("btn-audio");
@@ -141,6 +142,12 @@ let mobileLastGoodStatsAt = 0;
 let mobileQualityState = { current: 'good', candidate: null, count: 0, changedAt: 0, samples: [] };
 let mobileAdaptiveState = { tier: 0, bad: 0, good: 0, lastChangeAt: Date.now(), targetFps: 30, targetBitrateKbps: 8000, label: 'Native · 8 Mbps · 30 fps' };
 let mobileFileTransfer = null;
+let connectFileAccessGranted = false;
+let connectFilePermissionPending = false;
+let connectElevationPending = false;
+let connectElevated = false;
+let connectHostReconnecting = false;
+let connectSessionHeld = false;
 
 let inputBound = false;
 let controlActive = false;
@@ -1486,6 +1493,82 @@ function postFileToNativeWindow(msg) {
   }
 }
 
+function updateConnectCapabilityButtons() {
+  if (elBtnElevate) {
+    const isConnect = !!currentSession?.isConnectSession;
+    elBtnElevate.hidden = !isConnect;
+    elBtnElevate.disabled = !isConnect || connectElevationPending || connectElevated || connectHostReconnecting || connectSessionHeld;
+    const label = elBtnElevate.querySelector(".label");
+    if (label) label.textContent = connectElevated ? "Admin active" : (connectElevationPending ? "Admin…" : "Admin");
+    elBtnElevate.title = connectElevated
+      ? "Administrator access is active"
+      : (connectElevationPending ? "Waiting for customer approval" : "Request administrator access");
+  }
+  if (elBtnFiles && currentSession?.isConnectSession) {
+    elBtnFiles.disabled = connectFilePermissionPending || connectHostReconnecting || connectSessionHeld;
+    elBtnFiles.title = connectFileAccessGranted
+      ? "Files"
+      : (connectFilePermissionPending ? "Waiting for customer file-access approval" : "Request file access");
+  }
+}
+
+function requestConnectPermission(permission) {
+  if (!currentSession?.isConnectSession || !ws || ws.readyState !== WebSocket.OPEN) return false;
+  const normalized = String(permission || "").toLowerCase();
+  if (normalized === "files") {
+    if (connectFileAccessGranted) return true;
+    if (connectFilePermissionPending) return false;
+    connectFilePermissionPending = true;
+    setMobileFileStatus("Waiting for customer approval…");
+    setStatus("", "Waiting for customer file-access approval…");
+  } else if (normalized === "elevation") {
+    if (connectElevated || connectElevationPending) return false;
+    connectElevationPending = true;
+    setStatus("", "Waiting for customer administrator approval…");
+  } else {
+    return false;
+  }
+  updateConnectCapabilityButtons();
+  try {
+    ws.send(JSON.stringify({
+      type: "connect_permission_request",
+      session_id: currentSession.sessionId,
+      permission: normalized
+    }));
+    return true;
+  } catch {
+    if (normalized === "files") connectFilePermissionPending = false;
+    if (normalized === "elevation") connectElevationPending = false;
+    updateConnectCapabilityButtons();
+    return false;
+  }
+}
+
+function openFilesWithPermission() {
+  if (!currentSession?.isConnectSession) {
+    toggleFilesPanel(true);
+    requestRemoteFileList(elFilePath?.value || "/");
+    return;
+  }
+  if (!connectFileAccessGranted) {
+    toggleFilesPanel(true);
+    setMobileFileStatus("Ask the customer to approve file access.");
+    requestConnectPermission("files");
+    return;
+  }
+  toggleFilesPanel(true);
+  requestRemoteFileList(elFilePath?.value || "/");
+}
+
+function requestConnectElevation() {
+  if (!currentSession?.isConnectSession) return;
+  if (connectElevated) {
+    setStatus("online", "Administrator access active");
+    return;
+  }
+  requestConnectPermission("elevation");
+}
+
 function toggleFilesPanel(force) {
   const open = typeof force === "boolean" ? force : true;
   if (open) openFileBrowserWindow(); else closeFileBrowserWindow();
@@ -1802,6 +1885,10 @@ function renderRemoteFiles() {
 
 function sendRemoteFileRequest(fileType, payload = {}) {
   if (!ws || ws.readyState !== WebSocket.OPEN || !currentSession) return false;
+  if (currentSession.isConnectSession && !connectFileAccessGranted) {
+    requestConnectPermission("files");
+    return false;
+  }
 
   const directPayload = {
     type: fileType,
@@ -2403,6 +2490,12 @@ function disconnect(reason, options = {}) {
   mobileReconnectCooldownUntil = 0;
   mobileEndpointRestartUntil = 0;
   mobileRecoveryAttempts = 0;
+  connectFileAccessGranted = false;
+  connectFilePermissionPending = false;
+  connectElevationPending = false;
+  connectElevated = false;
+  connectHostReconnecting = false;
+  connectSessionHeld = false;
   resetTransitionState();
 
   if (localInputBlocked && currentSession) {
@@ -2452,6 +2545,7 @@ function disconnect(reason, options = {}) {
   }
 
   if (elBtnDisc) elBtnDisc.disabled = true;
+  if (elBtnElevate) { elBtnElevate.disabled = true; elBtnElevate.hidden = true; }
   if (elBtnFiles) elBtnFiles.disabled = true;
   if (elBtnChat) elBtnChat.disabled = true;
   if (elBtnAudio) elBtnAudio.disabled = true;
@@ -3837,6 +3931,114 @@ async function onSignalMessage(raw) {
       break;
     }
 
+    case "host_disconnected": {
+      if (!currentSession?.isConnectSession) break;
+      connectHostReconnecting = true;
+      setMobileRecoveryStage('Waiting for customer Connect app');
+      setMobileQualityUi('Reconnecting', 'reconnecting', 'Customer app reconnecting');
+      setStatus('', 'Customer Connect app reconnecting…');
+      teardownPeerForReconnect();
+      updateConnectCapabilityButtons();
+      break;
+    }
+
+    case "host_reconnected": {
+      if (!currentSession?.isConnectSession) break;
+      connectHostReconnecting = false;
+      setMobileRecoveryStage('Customer app returned · negotiating');
+      setMobileQualityUi('Measuring', 'good', 'Customer app returned');
+      setStatus('', 'Customer app returned · reconnecting…');
+      updateConnectCapabilityButtons();
+      break;
+    }
+
+    case "connect_capabilities": {
+      if (!currentSession?.isConnectSession) break;
+      connectElevated = msg.elevated === true;
+      connectFileAccessGranted = msg.files_granted === true;
+      const heldUntil = msg.held_until ? new Date(msg.held_until).getTime() : 0;
+      connectSessionHeld = Number.isFinite(heldUntil) && heldUntil > Date.now();
+      if (connectElevated) {
+        connectElevationPending = false;
+        setStatus('online', 'Administrator access active · negotiating remote control');
+      }
+      if (connectSessionHeld) {
+        teardownPeerForReconnect();
+        setMobileRecoveryStage('Session on hold');
+        setStatus('online', 'Session on hold · resume it from Hi5Central when ready');
+      }
+      updateConnectCapabilityButtons();
+      break;
+    }
+
+    case "connect_permission_response": {
+      if (!currentSession?.isConnectSession) break;
+      const permission = String(msg.permission || '').toLowerCase();
+      const approved = msg.approved === true;
+      const reason = String(msg.reason || '');
+      if (permission === 'files') {
+        connectFilePermissionPending = false;
+        connectFileAccessGranted = approved;
+        if (approved) {
+          setMobileFileStatus('File access approved.');
+          setStatus('online', 'File access approved');
+          toggleFilesPanel(true);
+          requestRemoteFileList(elFilePath?.value || '/');
+        } else {
+          setMobileFileStatus(reason === 'permission_required'
+            ? 'Customer approval is required before file access can be used.'
+            : 'Customer declined file access.');
+          setStatus('error', reason === 'permission_required'
+            ? 'File access requires customer approval'
+            : 'Customer declined file access');
+        }
+      } else if (permission === 'elevation') {
+        if (approved && (msg.elevated === true || reason === 'already_elevated')) {
+          connectElevated = true;
+          connectElevationPending = false;
+          setStatus('online', 'Administrator access active');
+        } else if (approved) {
+          connectElevationPending = true;
+          setStatus('', 'Customer approved · waiting for elevated Connect app…');
+        } else {
+          connectElevationPending = false;
+          setStatus('error', reason === 'uac_cancelled_or_failed'
+            ? 'Windows administrator approval was cancelled'
+            : 'Customer declined administrator access');
+        }
+      }
+      updateConnectCapabilityButtons();
+      break;
+    }
+
+    case "connect_hold_response": {
+      if (!currentSession?.isConnectSession) break;
+      connectSessionHeld = msg.approved === true;
+      if (connectSessionHeld) {
+        connectFileAccessGranted = false;
+        connectFilePermissionPending = false;
+        teardownPeerForReconnect();
+        setMobileRecoveryStage('Session on hold');
+        setMobileQualityUi('On hold', 'good', 'Customer approved hold');
+      }
+      setStatus(msg.approved ? 'online' : 'error',
+        msg.approved
+          ? 'Session on hold · customer approved return access'
+          : 'Customer declined session hold');
+      updateConnectCapabilityButtons();
+      break;
+    }
+
+    case "connect_hold_released": {
+      if (!currentSession?.isConnectSession) break;
+      connectSessionHeld = false;
+      mobileReconnectDeadline = 0;
+      setMobileRecoveryStage('Hold released · negotiating');
+      setStatus('', 'Session hold released · reconnecting…');
+      updateConnectCapabilityButtons();
+      break;
+    }
+
     case "session_config": {
       if (currentSession) {
         currentSession.iceServers = normalizeIceServers(msg.ice_servers || msg.iceServers || []);
@@ -4146,7 +4348,9 @@ function connectViewerSignaling(reason = 'initial') {
   socket.onmessage = onSignalMessage;
   socket.onerror = () => {
     if (ws !== socket) return;
-    if (isMobileViewerSurface() && currentSession?.viewerClient === 'browser') {
+    const recoverableConnect = !!currentSession?.isConnectSession;
+    const recoverableMobile = isMobileViewerSurface() && currentSession?.viewerClient === 'browser';
+    if (recoverableConnect || recoverableMobile) {
       setMobileRecoveryStage('Network interrupted');
       scheduleMobileSessionReconnect('signaling-error');
       return;
@@ -4156,7 +4360,9 @@ function connectViewerSignaling(reason = 'initial') {
   socket.onclose = () => {
     if (ws === socket) ws = null;
     if (!currentSession) return;
-    if (isMobileViewerSurface() && currentSession.viewerClient === 'browser') {
+    const recoverableConnect = !!currentSession.isConnectSession;
+    const recoverableMobile = isMobileViewerSurface() && currentSession.viewerClient === 'browser';
+    if (recoverableConnect || recoverableMobile) {
       scheduleMobileSessionReconnect('signaling-closed', { closeSocket: false });
       return;
     }
@@ -4166,11 +4372,18 @@ function connectViewerSignaling(reason = 'initial') {
 }
 
 function scheduleMobileSessionReconnect(reason = 'network-recovery', { closeSocket = true } = {}) {
-  if (!currentSession || !isMobileViewerSurface() || currentSession.viewerClient !== 'browser') return false;
-  if (mobileEndpointRestartUntil > Date.now()) return false;
+  if (!currentSession) return false;
+  const recoverableConnect = !!currentSession.isConnectSession;
+  const recoverableMobile = isMobileViewerSurface() && currentSession.viewerClient === 'browser';
+  if (!recoverableConnect && !recoverableMobile) return false;
+  if (recoverableConnect && connectSessionHeld) return false;
+  if (!recoverableConnect && mobileEndpointRestartUntil > Date.now()) return false;
   if (String(reason).includes('frame-stall')) return false;
   const now = Date.now();
-  if (!mobileReconnectDeadline) mobileReconnectDeadline = now + 85000;
+  if (!mobileReconnectDeadline) {
+    if (recoverableConnect) mobileReconnectDeadline = now + 240000;
+    else mobileReconnectDeadline = now + 85000;
+  }
   if (document.hidden) {
     setMobileRecoveryStage('Suspended · reconnect pending');
     if (!mobileReconnectTimer) {
@@ -4240,6 +4453,12 @@ function startSession(params) {
     launchMode,
     isConnectSession: /\/connect\/viewer\/ws(?:\?|$)/i.test(String(wssUrl || ''))
   };
+  connectFileAccessGranted = false;
+  connectFilePermissionPending = false;
+  connectElevationPending = false;
+  connectElevated = false;
+  connectHostReconnecting = false;
+  connectSessionHeld = false;
 
   if (isMobileViewerSurface()) activateMobileHistoryGuard();
   loadMobilePrefsForDevice(deviceId);
@@ -4259,6 +4478,11 @@ function startSession(params) {
   closeMonitorMenu();
 
   if (elBtnDisc) elBtnDisc.disabled = false;
+  if (elBtnElevate) {
+    elBtnElevate.hidden = !currentSession.isConnectSession;
+    elBtnElevate.disabled = !currentSession.isConnectSession;
+    elBtnElevate.title = currentSession.isConnectSession ? "Request administrator access" : "Administrator access";
+  }
   if (elBtnFiles) elBtnFiles.disabled = false;
   if (elBtnChat) elBtnChat.disabled = false;
   if (elBtnAudio) elBtnAudio.disabled = false;
@@ -4331,7 +4555,8 @@ window.hi5RemoteViewer = Object.freeze({
   isConnected: () => !!(pc && pc.connectionState === "connected")
 });
 
-if (elBtnFiles) elBtnFiles.addEventListener("click", () => { toggleFilesPanel(); if (elFilesPanel.classList.contains("visible")) requestRemoteFileList(elFilePath?.value || "/"); });
+if (elBtnElevate) elBtnElevate.addEventListener("click", requestConnectElevation);
+if (elBtnFiles) elBtnFiles.addEventListener("click", openFilesWithPermission);
 if (elBtnChat) elBtnChat.addEventListener("click", () => toggleChatPanel(true));
 if (elFilesClose) elFilesClose.addEventListener("click", () => toggleFilesPanel(false));
 if (elChatClose) elChatClose.addEventListener("click", () => toggleChatPanel(false));

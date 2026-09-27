@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { CheckCircle2, Clipboard, Clock3, ExternalLink, Laptop, Link2, LoaderCircle, MonitorUp, Plus, Power, ShieldCheck } from 'lucide-react'
+import { CheckCircle2, Clipboard, Clock3, ExternalLink, Laptop, Link2, LoaderCircle, MonitorUp, PauseCircle, PlayCircle, Plus, Power, ShieldCheck } from 'lucide-react'
 import { deploymentConfig } from '../../lib/deploymentConfig.js'
 import { detectRemoteViewerClient } from './remoteViewerClient.js'
 import './RmmConnect.css'
@@ -151,6 +151,41 @@ export function RmmConnect() {
     }
   }
 
+  async function holdSession(session) {
+    if (!window.confirm('Ask the customer to keep this Connect session available for up to 24 hours? They must approve locally. If approved, Connect can return once after their next Windows sign-in following a restart.')) return
+    setMessage('')
+    try {
+      const response = await fetch(base + '/api/v1/rmm/connect-sessions/' + encodeURIComponent(session.id) + '/hold', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ durationMinutes: 24 * 60 }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.error || 'Unable to request a session hold.')
+      setMessage('Waiting for the customer to approve keeping this session available…')
+      await load(true)
+    } catch (error) {
+      setMessage(error.message || 'Unable to request a session hold.')
+    }
+  }
+
+  async function resumeSession(session) {
+    setMessage('')
+    try {
+      const response = await fetch(base + '/api/v1/rmm/connect-sessions/' + encodeURIComponent(session.id) + '/resume', {
+        method: 'POST',
+        credentials: 'include',
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload.error || 'Unable to resume this Connect session.')
+      setMessage('Session hold released. You can reconnect to the customer computer.')
+      await load(true)
+    } catch (error) {
+      setMessage(error.message || 'Unable to resume this Connect session.')
+    }
+  }
+
   const liveSessions = sessions.filter((session) => !['ended','expired','failed'].includes(String(session.status || '').toLowerCase()))
   const recentSessions = sessions.filter((session) => ['ended','expired','failed'].includes(String(session.status || '').toLowerCase())).slice(0, 12)
   const activeFresh = freshCode && new Date(freshCode.expiresAt).getTime() > now
@@ -197,26 +232,41 @@ export function RmmConnect() {
       {liveSessions.length ? <div className="rmm-connect-list">
         {liveSessions.map((session) => {
           const status = String(session.status || '').toLowerCase()
-          const canOpen = ['host_connected','viewer_connected','active'].includes(status)
+          const heldUntil = session.held_until ? new Date(session.held_until).getTime() : 0
+          const held = Number.isFinite(heldUntil) && heldUntil > now
+          const holdPending = !!session.hold_requested_at && !session.hold_approved_at && !held
+          const hostOnline = session.host_online === true
+          const canOpen = hostOnline && !held && ['host_connected','viewer_connected','active'].includes(status)
+          const displayStatus = held
+            ? 'On hold'
+            : (!hostOnline && ['host_connected','viewer_connected','active'].includes(status) ? 'Customer app reconnecting' : statusLabel(status))
+          const displayTone = held || holdPending ? 'pending' : (!hostOnline && ['host_connected','viewer_connected','active'].includes(status) ? 'pending' : statusTone(status))
           return <article className="rmm-connect-row" key={session.id}>
             <div className="rmm-connect-row-icon"><MonitorUp size={19}/></div>
             <div className="rmm-connect-row-main">
               <div className="rmm-connect-row-title">
                 <strong>{session.host_name || (status === 'waiting' ? 'Waiting for customer' : 'Customer computer')}</strong>
-                <span className={'rmm-connect-status is-' + statusTone(status)}>{statusLabel(status)}</span>
+                <span className={'rmm-connect-status is-' + displayTone}>{holdPending ? 'Waiting for hold approval' : displayStatus}</span>
               </div>
               <div className="rmm-connect-row-meta">
                 <span>{session.host_platform || 'Windows support session'}</span>
                 {session.host_version ? <span>Connect {session.host_version}</span> : null}
                 {session.technician ? <span>Technician: {session.technician}</span> : null}
-                {session.host_connected_at ? <span>App online {formatElapsed(session.host_connected_at, now)}</span> : null}
-                {session.started_at ? <span>Remote active {formatElapsed(session.started_at, now)}</span> : null}
+                {session.host_elevated ? <span>Administrator access active</span> : null}
+                {session.file_access_granted_at ? <span>File access approved</span> : null}
+                {hostOnline ? <span>Customer app online</span> : (session.host_disconnected_at ? <span>Customer app offline since {new Date(session.host_disconnected_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span> : null)}
+                {session.host_connected_at ? <span>First online {formatElapsed(session.host_connected_at, now)} ago</span> : null}
+                {session.started_at ? <span>Remote started {formatElapsed(session.started_at, now)} ago</span> : null}
+                {held ? <span>Held until {new Date(session.held_until).toLocaleString()}</span> : null}
                 <span>Created {new Date(session.created_at).toLocaleString()}</span>
-                {session.expires_at ? <span>Expires {new Date(session.expires_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span> : null}
+                {session.expires_at ? <span>Expires {new Date(session.expires_at).toLocaleString()}</span> : null}
               </div>
             </div>
             <div className="rmm-connect-row-actions">
               <button className="rmm-primary" disabled={!canOpen} onClick={() => openViewer(session)} type="button"><MonitorUp size={15}/>{status === 'active' ? 'Reopen' : 'Connect'}</button>
+              {held
+                ? <button className="rmm-secondary" onClick={() => resumeSession(session)} type="button"><PlayCircle size={15}/> Resume</button>
+                : <button className="rmm-secondary" disabled={!hostOnline || holdPending} onClick={() => holdSession(session)} type="button"><PauseCircle size={15}/>{holdPending ? 'Awaiting approval' : 'Hold'}</button>}
               <button className="rmm-secondary is-danger" onClick={() => terminate(session)} type="button"><Power size={15}/> End</button>
             </div>
           </article>

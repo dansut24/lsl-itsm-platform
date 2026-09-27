@@ -109,7 +109,7 @@ expect(renderer.includes('completeDesktopSourceTransition') && renderer.includes
 expect(renderer.includes('setMobileViewControlsVisible(true)') && renderer.includes('setMobileBottomActionsVisible(true)'), 'Mobile zoom and action controls must remain available during desktop-source transitions.')
 expect(renderer.includes('if (!force && (secureDesktopActive || desktopHandoffActive)) return;'), 'Remote input must be suppressed during a desktop-source transition without blocking local mobile gestures.')
 const viewerHtml = read('public/rmm-viewer/index.html')
-expect(viewerHtml.includes('renderer.js?v=20260927-connect-mobile-ws-input'), 'Browser Viewer must cache-bust the Connect mobile-input renderer update.')
+expect(viewerHtml.includes('renderer.js?v=20260927-connect-resilience-permissions'), 'Browser Viewer must cache-bust the Connect resilience and permission renderer update.')
 expect(viewerHtml.includes('#overlay.transition-hold') && viewerHtml.includes('pointer-events: none'), 'The secure-desktop transition layer must never intercept mobile pinch/zoom gestures.')
 expect(renderer.includes('elOverlayTitle.textContent = ""') && renderer.includes('elSpinner.style.display = "none"'), 'Desktop-source transition hold must clear stale Connecting UI content.')
 
