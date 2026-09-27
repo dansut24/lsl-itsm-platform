@@ -109,7 +109,12 @@ expect(renderer.includes('completeDesktopSourceTransition') && renderer.includes
 expect(renderer.includes('setMobileViewControlsVisible(true)') && renderer.includes('setMobileBottomActionsVisible(true)'), 'Mobile zoom and action controls must remain available during desktop-source transitions.')
 expect(renderer.includes('if (!force && (secureDesktopActive || desktopHandoffActive)) return;'), 'Remote input must be suppressed during a desktop-source transition without blocking local mobile gestures.')
 const viewerHtml = read('public/rmm-viewer/index.html')
-expect(viewerHtml.includes('renderer.js?v=20260927-connect-uac-handoff'), 'Browser Viewer must cache-bust the attended Connect UAC handoff renderer update.')
+expect(viewerHtml.includes('renderer.js?v=20260927-connect-mobile-resume'), 'Browser Viewer must cache-bust the Connect mobile-resume renderer update.')
+expect(viewerHtml.includes('browser.js?v=20260927-connect-mobile-resume'), 'Browser Viewer bootstrap must be cache-busted for Connect mobile lifecycle recovery.')
+expect(browser.includes('const isConnectViewer = /\\/connect\\/viewer\\/ws'), 'Browser bootstrap must identify attended Connect sessions before page lifecycle teardown.')
+expect(browser.includes('if (isConnectViewer)') && browser.includes('Do not destroy the attended Connect session here'), 'Mobile pagehide must not explicitly tear down an attended Connect session.')
+expect(browser.includes("window.hi5RemoteViewer?.recover?.('browser-pageshow')"), 'BFCache/pageshow must ask the Connect Viewer to recover its existing authorised session.')
+expect(renderer.includes("event?.code === 4001") && renderer.includes('Viewer opened elsewhere'), 'A superseded Viewer must not auto-reconnect and steal a newer mobile Viewer connection.')
 expect(viewerHtml.includes('#overlay.transition-hold') && viewerHtml.includes('pointer-events: none'), 'The secure-desktop transition layer must never intercept mobile pinch/zoom gestures.')
 expect(renderer.includes('elOverlayTitle.textContent = ""') && renderer.includes('elSpinner.style.display = "none"'), 'Desktop-source transition hold must clear stale Connecting UI content.')
 

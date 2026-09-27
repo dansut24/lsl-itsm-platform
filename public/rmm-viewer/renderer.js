@@ -4385,9 +4385,17 @@ function connectViewerSignaling(reason = 'initial') {
     }
     disconnect('Connection error');
   };
-  socket.onclose = () => {
+  socket.onclose = (event) => {
     if (ws === socket) ws = null;
     if (!currentSession) return;
+
+    // A newer Viewer has deliberately taken ownership of this Connect session.
+    // The superseded mobile tab must not reconnect and steal it back.
+    if (event?.code === 4001) {
+      disconnect('Viewer opened elsewhere', { silent: true });
+      return;
+    }
+
     const recoverableConnect = !!currentSession.isConnectSession;
     const recoverableMobile = isMobileViewerSurface() && currentSession.viewerClient === 'browser';
     if (recoverableConnect || recoverableMobile) {
@@ -4580,6 +4588,12 @@ try {
 window.hi5RemoteViewer = Object.freeze({
   start: (params) => startSession(params),
   disconnect: () => disconnect("Disconnected by technician", { closeNative: true }),
+  recover: (reason = 'browser-resume') => {
+    if (!currentSession) return false;
+    ensureRemoteVideoPlayback(reason);
+    if (pc?.connectionState === 'connected' && ws?.readyState === WebSocket.OPEN) return true;
+    return scheduleMobileSessionReconnect(reason, { closeSocket: false });
+  },
   isConnected: () => !!(pc && pc.connectionState === "connected")
 });
 

@@ -25,6 +25,7 @@
 
   const valid = !!(launch.session_id && launch.device_id && launch.token && launch.wss_url);
   if (!valid) return;
+  const isConnectViewer = /\/connect\/viewer\/ws(?:\?|$)/i.test(String(launch.wss_url || ''));
 
   // Do not erase the one-time launch fragment until renderer.js has actually
   // exposed and accepted the Viewer API. This makes mobile launch resilient to
@@ -72,13 +73,28 @@
   };
 
   const handlePageExit = () => {
-    // WebSocket frames queued during unload are not guaranteed to leave the
-    // browser. Tell the authenticated API explicitly so the Agent/WebRTC
-    // session is torn down immediately rather than entering reconnect grace.
+    if (isConnectViewer) {
+      // Mobile Safari fires pagehide while switching apps/tabs and may keep the
+      // page in BFCache. Do not destroy the attended Connect session here.
+      // The server keeps a short Viewer reconnect grace and the page can recover
+      // the same authorised session when it becomes active again.
+      return;
+    }
+
+    // Managed RMM remote sessions retain their existing explicit teardown.
     terminateViewerSession();
     try { window.hi5RemoteViewer?.disconnect(); } catch {}
   };
 
-  window.addEventListener('pagehide', handlePageExit, { once: true });
-  window.addEventListener('beforeunload', handlePageExit, { once: true });
+  window.addEventListener('pagehide', handlePageExit);
+  window.addEventListener('beforeunload', handlePageExit);
+
+  window.addEventListener('pageshow', (event) => {
+    if (!isConnectViewer) return;
+    if (event.persisted || document.visibilityState === 'visible') {
+      window.setTimeout(() => {
+        try { window.hi5RemoteViewer?.recover?.('browser-pageshow'); } catch {}
+      }, 100);
+    }
+  });
 })();

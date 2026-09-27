@@ -16,6 +16,7 @@ const TURN_SHARED_SECRET_FILE = process.env.TURN_SHARED_SECRET_FILE || '/run/sec
 const WAITING_TTL_SECONDS = 20 * 60
 const ACTIVE_TTL_SECONDS = 8 * 60 * 60
 const HOLD_TTL_SECONDS = 24 * 60 * 60
+const CONNECT_VIEWER_RECONNECT_GRACE_MS = 5 * 60 * 1000
 const MAX_WS_PAYLOAD_BYTES = 8 * 1024 * 1024
 const CLAIM_WINDOW_MS = 60 * 1000
 const CLAIM_ATTEMPTS_PER_WINDOW = 8
@@ -29,6 +30,7 @@ if (process.env.NODE_ENV === 'production' && CONNECT_CODE_HMAC_KEY.length < 32) 
 
 const activeConnectHosts = new Map()
 const activeConnectViewers = new Map()
+const connectViewerRecovery = new Map()
 const connectPermissions = new Map()
 const claimBuckets = new Map()
 
@@ -204,6 +206,9 @@ async function endConnectSession(sessionId, reason, actor = null) {
   try { viewerWs?.close(4000, 'Support session ended') } catch {}
   activeConnectHosts.delete(String(sessionId))
   activeConnectViewers.delete(String(sessionId))
+  const recovery = connectViewerRecovery.get(String(sessionId))
+  if (recovery?.cleanupTimer) clearTimeout(recovery.cleanupTimer)
+  connectViewerRecovery.delete(String(sessionId))
   connectPermissions.delete(String(sessionId))
   if (result.rowCount) {
     const row = result.rows[0]
@@ -685,6 +690,10 @@ export function attachRmmConnectWebSockets(server) {
     }
 
     hostWs.on('message', (buffer) => {
+      // A reconnect replaces the authoritative host socket. Ignore any late
+      // frames from the superseded host so they cannot disturb a newly resumed
+      // Viewer negotiation.
+      if (activeConnectHosts.get(sessionId) !== hostWs) return
       const text = Buffer.isBuffer(buffer) ? buffer.toString('utf8') : String(buffer)
       let payload
       try { payload = JSON.parse(text) } catch { return }
@@ -876,6 +885,11 @@ export function attachRmmConnectWebSockets(server) {
       try { viewerWs.close(4004, 'Customer offline') } catch {}
       return
     }
+    const recovery = connectViewerRecovery.get(sessionId)
+    const viewerInterruptedAt = Number(recovery?.viewerDisconnectedAt || 0)
+    if (recovery?.cleanupTimer) clearTimeout(recovery.cleanupTimer)
+    connectViewerRecovery.delete(sessionId)
+
     const previous = activeConnectViewers.get(sessionId)
     if (previous && previous !== viewerWs) {
       try { previous.close(4001, 'Viewer superseded') } catch {}
@@ -889,6 +903,23 @@ export function attachRmmConnectWebSockets(server) {
         WHERE id=$1`,
       [sessionId, ACTIVE_TTL_SECONDS],
     ).catch(() => {})
+    if (viewerInterruptedAt) {
+      const interruptionSeconds = Math.max(0, Math.round((Date.now() - viewerInterruptedAt) / 1000))
+      recordRmmActivity({
+        tenantId: remote.tenant_id,
+        actorUserId: remote.created_by_user_id,
+        actorType: 'system',
+        actorLabel: 'SYSTEM',
+        eventType: 'connect.viewer_transport_recovered',
+        category: 'remote',
+        summary: 'SYSTEM: Connect Viewer connection recovered',
+        detail: 'The same attended support session resumed after ' + interruptionSeconds + ' seconds.',
+        outcome: 'success',
+        severity: 'info',
+        metadata: { connectSessionId: sessionId, interruptionSeconds, reason: 'viewer_reconnected' },
+      }).catch(() => {})
+    }
+
     const ice = iceConfiguration(sessionId)
     safeSend(viewerWs, { type: 'viewer_connected', session_id: sessionId })
     const permissions = connectPermissions.get(sessionId) || {}
@@ -909,6 +940,10 @@ export function attachRmmConnectWebSockets(server) {
     })
 
     viewerWs.on('message', (buffer) => {
+      // Ignore late input/stop frames from a Viewer that has already been
+      // superseded by a newer mobile/browser connection. Without this guard an
+      // old tab can stop the WebRTC sender that was just created for the new tab.
+      if (activeConnectViewers.get(sessionId) !== viewerWs) return
       const text = Buffer.isBuffer(buffer) ? buffer.toString('utf8') : String(buffer)
       let payload
       try { payload = JSON.parse(text) } catch { return }
@@ -947,18 +982,57 @@ export function attachRmmConnectWebSockets(server) {
       pool.query(`UPDATE rmm_connect_sessions SET last_activity_at=now(),updated_at=now() WHERE id=$1`, [sessionId]).catch(() => {})
     })
 
-    const handleViewerClose = () => {
+    let viewerCloseHandled = false
+    const handleViewerClose = (reason = 'viewer_disconnected') => {
+      if (viewerCloseHandled) return
+      viewerCloseHandled = true
       if (activeConnectViewers.get(sessionId) !== viewerWs) return
       activeConnectViewers.delete(sessionId)
+
+      const viewerDisconnectedAt = Date.now()
+      const cleanupTimer = setTimeout(() => {
+        const current = activeConnectViewers.get(sessionId)
+        const recovery = connectViewerRecovery.get(sessionId)
+        if (current || recovery?.cleanupTimer !== cleanupTimer) return
+        connectViewerRecovery.delete(sessionId)
+        safeSend(activeConnectHosts.get(sessionId), {
+          type: 'viewer_disconnected',
+          session_id: sessionId,
+        })
+      }, CONNECT_VIEWER_RECONNECT_GRACE_MS)
+
+      connectViewerRecovery.set(sessionId, {
+        viewerDisconnectedAt,
+        cleanupTimer,
+      })
+
       pool.query(
         `UPDATE rmm_connect_sessions
             SET status=CASE WHEN status='active' THEN 'host_connected' ELSE status END,last_activity_at=now(),updated_at=now()
           WHERE id=$1 AND ended_at IS NULL`,
         [sessionId],
       ).catch(() => {})
+
+      recordRmmActivity({
+        tenantId: remote.tenant_id,
+        actorUserId: remote.created_by_user_id,
+        actorType: 'system',
+        actorLabel: 'SYSTEM',
+        eventType: 'connect.viewer_transport_interrupted',
+        category: 'remote',
+        summary: 'SYSTEM: Connect Viewer connection interrupted',
+        detail: 'The attended support session remains authorised while the mobile/browser Viewer reconnects.',
+        outcome: 'requested',
+        severity: 'warning',
+        metadata: {
+          connectSessionId: sessionId,
+          reason,
+          graceMs: CONNECT_VIEWER_RECONNECT_GRACE_MS,
+        },
+      }).catch(() => {})
     }
-    viewerWs.once('close', handleViewerClose)
-    viewerWs.once('error', handleViewerClose)
+    viewerWs.once('close', () => handleViewerClose('viewer_disconnected'))
+    viewerWs.once('error', () => handleViewerClose('viewer_error'))
   })
 
   return { hostWss, viewerWss }
