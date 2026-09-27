@@ -31,7 +31,7 @@ import {
 } from './rmmTenantVendorSources.js'
 import { recalculateTenantVulnerabilityExposures, syncGithubRepositoryAdvisoriesForCatalogue, vulnerabilityExposureByInstallation, vulnerabilityExposureRows, vulnerabilityExposureSummary } from './rmmVulnerabilityExposure.js'
 import { resolveSession } from './session.js'
-import { evaluateWindowsUpdatePolicies, setWindowsUpdateControl, windowsUpdateBundle } from './rmmWindowsUpdates.js'
+import { dispatchWindowsUpdateRollback, evaluateWindowsUpdatePolicies, setWindowsUpdateControl, windowsUpdateBundle } from './rmmWindowsUpdates.js'
 
 function clean(value = '') { return String(value ?? '').trim() }
 function lower(value = '') { return clean(value).toLowerCase() }
@@ -4095,6 +4095,40 @@ export function registerRmmPatchingRoutes(app) {
       { updateKey, kbArticles: result.release.kb_articles || [] },
     )
     return c.json({ success: true, control: result.control, windowsUpdates: await windowsUpdateBundle(auth.session.tenant_id) })
+  })
+
+  app.post('/api/v1/rmm/windows-updates/:updateKey/rollback', async (c) => {
+    const auth = await requirePatchAccess(c, 'policy')
+    if (auth.error) return auth.error
+    const updateKey = clean(c.req.param('updateKey'))
+    const body = await c.req.json().catch(() => ({}))
+    const actorLabel = clean(auth.session.name || auth.session.email || 'Technician').slice(0, 255)
+    const result = await dispatchWindowsUpdateRollback(auth.session.tenant_id, updateKey, {
+      agentDeviceIds: array(body.agentDeviceIds),
+      dispatch: body.dispatch !== false,
+      userId: auth.session.user_id,
+      actorType: 'technician',
+      actorLabel,
+      pauseReason: clean(body.reason) || 'Paused automatically before rollback',
+      agentSocketForDevice,
+      sendAgentMessage,
+    })
+    if (result.error === 'update_not_found') return c.json({ error: 'Windows update release not found.' }, 404)
+    if (result.error === 'rollback_not_supported') {
+      return c.json({ error: 'Windows does not report rollback support for this release on any managed device.' }, 409)
+    }
+    await audit(
+      auth.session,
+      'windows_update.rollback_requested',
+      'Requested rollback for Windows Update “' + clean(result.release?.title) + '”',
+      clean(body.reason),
+      { updateKey, results: result.results },
+    )
+    return c.json({
+      success: true,
+      results: result.results,
+      windowsUpdates: await windowsUpdateBundle(auth.session.tenant_id),
+    }, 202)
   })
 
   app.post('/api/v1/rmm/patch-policies', async (c) => {

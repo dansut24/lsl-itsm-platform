@@ -498,7 +498,7 @@ export async function evaluateWindowsUpdatePolicies(tenantId, options = {}) {
 }
 
 export async function windowsUpdateBundle(tenantId) {
-  const [observations, decisions, controlsResult] = await Promise.all([
+  const [observations, decisions, controlsResult, jobsResult] = await Promise.all([
     pool.query(
       'SELECT o.*,i.reference AS device_reference,i.name AS device_name,a.agent_version,a.websocket_status,a.last_telemetry_at ' +
       'FROM rmm_windows_update_observations o JOIN rmm_device_inventory i ON i.id=o.inventory_id ' +
@@ -518,12 +518,28 @@ export async function windowsUpdateBundle(tenantId) {
       'SELECT update_key,state,reason,paused_at,resumed_at,updated_at FROM rmm_windows_update_controls WHERE tenant_id=$1 ORDER BY updated_at DESC',
       [tenantId],
     ),
+    pool.query(
+      "SELECT j.id,j.agent_device_id,j.job_type,j.status,j.result,j.request_metadata,j.created_at,j.completed_at," +
+      "a.inventory_id,a.agent_version,a.websocket_status,a.last_telemetry_at,i.name AS device_name,i.reference AS device_reference " +
+      "FROM rmm_agent_jobs j LEFT JOIN rmm_agent_devices a ON a.id=j.agent_device_id " +
+      "LEFT JOIN rmm_device_inventory i ON i.id=a.inventory_id " +
+      "WHERE j.tenant_id=$1 AND j.job_type IN ('windows_update.install','windows_update.rollback') " +
+      "AND j.created_at > now()-interval '90 days' ORDER BY j.created_at DESC",
+      [tenantId],
+    ),
   ])
   const pending = observations.rows.filter((row) => row.pending)
   const byClass = {}
   for (const row of pending) byClass[row.update_class] = (byClass[row.update_class] || 0) + 1
   const controls = new Map(controlsResult.rows.map((row) => [row.update_key, row]))
-  const releases = [...pending.reduce((result, row) => {
+  const recentKeys = new Set()
+  for (const job of jobsResult.rows) {
+    for (const key of array(object(job.request_metadata).update_keys)) recentKeys.add(clean(key))
+    const oneKey = clean(object(job.request_metadata).update_key)
+    if (oneKey) recentKeys.add(oneKey)
+  }
+  const releaseRows = observations.rows.filter((row) => row.pending || recentKeys.has(row.update_key))
+  const releaseMap = releaseRows.reduce((result, row) => {
     let release = result.get(row.update_key)
     if (!release) {
       const control = controls.get(row.update_key) || null
@@ -538,16 +554,71 @@ export async function windowsUpdateBundle(tenantId) {
         releaseAt: row.release_at,
         firstSeenAt: row.first_seen_at,
         devices: 0,
+        observedDevices: 0,
         downloadedDevices: 0,
+        rollbackTargets: [],
         control,
         paused: control?.state === 'paused',
       }
       result.set(row.update_key, release)
     }
-    release.devices += 1
-    if (row.downloaded) release.downloadedDevices += 1
+    release.observedDevices += 1
+    if (row.pending) {
+      release.devices += 1
+      if (row.downloaded) release.downloadedDevices += 1
+    }
     return result
-  }, new Map()).values()]
+  }, new Map())
+
+  const rolledBack = new Set()
+  for (const job of jobsResult.rows) {
+    if (job.job_type !== 'windows_update.rollback' || job.status !== 'completed') continue
+    if (clean(object(job.result).status) !== 'ok') continue
+    const key = clean(object(job.request_metadata).update_key)
+    if (key) rolledBack.add(job.agent_device_id + ':' + key)
+  }
+  const targetMaps = new Map()
+  for (const job of jobsResult.rows) {
+    if (job.job_type !== 'windows_update.install' || job.status !== 'completed') continue
+    const resultItems = array(object(job.result).results)
+    if (!resultItems.length) continue
+    for (const release of releaseMap.values()) {
+      if (rolledBack.has(job.agent_device_id + ':' + release.updateKey)) continue
+      const releaseId = clean(release.updateId).toLowerCase()
+      const releaseKbs = new Set(array(release.kbArticles).map((value) => clean(value).toUpperCase()))
+      const match = resultItems.find((item) => {
+        if (releaseId && clean(item?.update_id).toLowerCase() === releaseId) return true
+        return array(item?.kb_articles).some((kb) => releaseKbs.has(clean(kb).toUpperCase()))
+      })
+      if (match?.rollback_supported !== true) continue
+      let targets = targetMaps.get(release.updateKey)
+      if (!targets) {
+        targets = new Map()
+        targetMaps.set(release.updateKey, targets)
+      }
+      if (targets.has(job.agent_device_id)) continue
+      const online = job.websocket_status === 'Connected'
+        && job.last_telemetry_at
+        && Date.now() - new Date(job.last_telemetry_at).getTime() <= 90000
+      targets.set(job.agent_device_id, {
+        agentDeviceId: job.agent_device_id,
+        inventoryId: job.inventory_id,
+        deviceName: job.device_name,
+        deviceReference: job.device_reference,
+        agentVersion: job.agent_version,
+        online,
+        rollbackReady: versionAtLeast(job.agent_version, '0.1.207'),
+        installJobId: job.id,
+        installedAt: job.completed_at,
+      })
+    }
+  }
+  const releases = [...releaseMap.values()]
+  for (const release of releases) {
+    release.rollbackTargets = [...(targetMaps.get(release.updateKey)?.values() || [])]
+    release.rollbackAvailableDevices = release.rollbackTargets.length
+    release.rollbackOnlineDevices = release.rollbackTargets.filter((target) => target.online && target.rollbackReady).length
+  }
   return {
     summary: {
       pending: pending.length,
@@ -560,6 +631,7 @@ export async function windowsUpdateBundle(tenantId) {
       definition: byClass.definition || 0,
       other: byClass.other || 0,
       pausedReleases: releases.filter((row) => row.paused).length,
+      rollbackAvailable: releases.reduce((sum, row) => sum + row.rollbackAvailableDevices, 0),
       rebootRequired: decisions.rows.filter((row) => row.state === 'reboot_required').length,
     },
     observations: observations.rows,
@@ -608,8 +680,147 @@ export async function setWindowsUpdateControl(tenantId, updateKey, state, option
   return { control: result.rows[0], release: known.rows[0] }
 }
 
+export async function dispatchWindowsUpdateRollback(tenantId, updateKey, options = {}) {
+  const bundle = await windowsUpdateBundle(tenantId)
+  const release = bundle.releases.find((row) => row.updateKey === updateKey)
+  if (!release) return { error: 'update_not_found', results: [] }
+
+  const requestedIds = new Set(array(options.agentDeviceIds).map(clean).filter(Boolean))
+  const targets = release.rollbackTargets.filter((target) => !requestedIds.size || requestedIds.has(target.agentDeviceId))
+  if (!targets.length) return { error: 'rollback_not_supported', release, results: [] }
+
+  await setWindowsUpdateControl(tenantId, updateKey, 'paused', {
+    userId: options.userId || null,
+    reason: clean(options.pauseReason) || 'Paused automatically before Windows Update rollback',
+  })
+
+  const results = []
+  for (const target of targets) {
+    if (!target.rollbackReady) {
+      results.push({ agentDeviceId: target.agentDeviceId, status: 'blocked', reason: 'agent_upgrade_required', requiredAgentVersion: '0.1.207' })
+      continue
+    }
+    const socket = typeof options.agentSocketForDevice === 'function' ? options.agentSocketForDevice(target.agentDeviceId) : null
+    if (!socket || socket.readyState !== 1) {
+      results.push({ agentDeviceId: target.agentDeviceId, status: 'offline', reason: 'device_offline' })
+      continue
+    }
+    const active = await pool.query(
+      "SELECT id,status FROM rmm_agent_jobs WHERE tenant_id=$1 AND agent_device_id=$2 AND job_type='windows_update.rollback' " +
+      "AND status IN ('queued','claimed') AND request_metadata->>'source'='windows_update_rollback' ORDER BY created_at DESC LIMIT 1",
+      [tenantId, target.agentDeviceId],
+    )
+    if (active.rowCount) {
+      results.push({ agentDeviceId: target.agentDeviceId, status: 'running', jobId: active.rows[0].id })
+      continue
+    }
+    if (options.dispatch === false || typeof options.sendAgentMessage !== 'function') {
+      results.push({ agentDeviceId: target.agentDeviceId, status: 'ready' })
+      continue
+    }
+
+    const payload = {
+      update_ids: release.updateId ? [release.updateId] : [],
+      kb_articles: array(release.kbArticles),
+      titles: [release.title],
+      timeout_seconds: 7200,
+    }
+    const metadata = {
+      source: 'windows_update_rollback',
+      update_key: release.updateKey,
+      update_id: release.updateId,
+      kb_articles: array(release.kbArticles),
+      title: release.title,
+      install_job_id: target.installJobId,
+    }
+    const inserted = await pool.query(
+      "INSERT INTO rmm_agent_jobs " +
+      "(tenant_id,agent_device_id,job_type,payload,queued_by_user_id,initiated_by,initiated_by_label,request_metadata) " +
+      "VALUES ($1,$2,'windows_update.rollback',$3::jsonb,$4,$5,$6,$7::jsonb) ON CONFLICT DO NOTHING " +
+      "RETURNING id,status,created_at",
+      [
+        tenantId,
+        target.agentDeviceId,
+        JSON.stringify(payload),
+        options.userId || null,
+        clean(options.actorType) || 'technician',
+        clean(options.actorLabel) || 'Technician',
+        JSON.stringify(metadata),
+      ],
+    )
+    if (!inserted.rowCount) {
+      results.push({ agentDeviceId: target.agentDeviceId, status: 'running', reason: 'rollback_already_running' })
+      continue
+    }
+    const job = inserted.rows[0]
+    const claimed = await pool.query(
+      "UPDATE rmm_agent_jobs SET status='claimed',claimed_at=now(),updated_at=now() WHERE id=$1 AND status='queued' RETURNING id",
+      [job.id],
+    )
+    if (!claimed.rowCount) {
+      results.push({ agentDeviceId: target.agentDeviceId, status: 'failed', jobId: job.id, reason: 'claim_failed' })
+      continue
+    }
+    const pushed = options.sendAgentMessage(target.agentDeviceId, {
+      type: 'job_execute',
+      job: { id: job.id, job_type: 'windows_update.rollback', payload, created_at: job.created_at },
+    })
+    if (!pushed) {
+      await pool.query(
+        "UPDATE rmm_agent_jobs SET status='cancelled',completed_at=now(),error_message='Device went offline before Windows Update rollback dispatch.',updated_at=now() WHERE id=$1",
+        [job.id],
+      )
+      results.push({ agentDeviceId: target.agentDeviceId, status: 'offline', jobId: job.id, reason: 'device_offline' })
+      continue
+    }
+    await recordRmmActivity({
+      tenantId,
+      agentDeviceId: target.agentDeviceId,
+      inventoryId: target.inventoryId,
+      actorUserId: options.userId || null,
+      actorType: clean(options.actorType) || 'technician',
+      actorLabel: clean(options.actorLabel) || 'Technician',
+      eventType: 'windows_updates.rollback_requested',
+      category: 'updates',
+      summary: (clean(options.actorLabel) || 'Technician') + ': requested Windows Update rollback',
+      detail: release.title + (array(release.kbArticles).length ? ' · ' + array(release.kbArticles).join(', ') : ''),
+      outcome: 'requested',
+      severity: 'warning',
+      jobId: job.id,
+      metadata,
+    }).catch(() => null)
+    results.push({ agentDeviceId: target.agentDeviceId, status: 'dispatched', jobId: job.id })
+  }
+  return { release, results }
+}
+
 export async function reconcileWindowsUpdateJobResult(job, resultPayload = {}, success = false) {
-  if (clean(job?.job_type) !== 'windows_update.install') return
+  const jobType = clean(job?.job_type)
+  if (jobType === 'windows_update.rollback') {
+    const rebootRequired = resultPayload.reboot_required === true || resultPayload.rebootRequired === true
+    await recordRmmActivity({
+      tenantId: job.tenant_id,
+      agentDeviceId: job.agent_device_id,
+      inventoryId: job.inventory_id || null,
+      actorType: clean(job.initiated_by) || 'technician',
+      actorLabel: clean(job.initiated_by_label) || 'Technician',
+      eventType: 'windows_updates.rollback_completed',
+      category: 'updates',
+      summary: success
+        ? 'Windows Update rollback completed' + (rebootRequired ? ' · reboot required' : '')
+        : 'Windows Update rollback failed',
+      detail: [
+        resultPayload.selected_count != null ? String(resultPayload.selected_count) + ' update(s) selected' : '',
+        clean(resultPayload.rollback_result), clean(resultPayload.message), clean(job.error_message),
+      ].filter(Boolean).join(' · '),
+      outcome: success ? 'success' : 'failed',
+      severity: success ? (rebootRequired ? 'warning' : 'info') : 'warning',
+      jobId: job.id,
+      metadata: { result: resultPayload, request: object(job.request_metadata) },
+    }).catch(() => null)
+    return
+  }
+  if (jobType !== 'windows_update.install') return
   const rebootRequired = resultPayload.reboot_required === true || resultPayload.rebootRequired === true
   const state = success ? (rebootRequired ? 'reboot_required' : 'completed') : 'failed'
   await pool.query(

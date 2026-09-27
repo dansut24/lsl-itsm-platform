@@ -29,6 +29,7 @@ import {
   evaluateWindowsUpdatePolicies,
   pauseWindowsUpdateRollout,
   resumeWindowsUpdateRollout,
+  rollbackWindowsUpdateRelease,
   createSoftwareCatalogueEntry,
   createVendorSource,
   deletePatchAssignment,
@@ -1768,6 +1769,35 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
     }
   }
 
+  async function rollbackWindowsRelease(release) {
+    if (!release?.updateKey || windowsControlBusy) return
+    const readyTargets = (release.rollbackTargets || []).filter((target) => target.online && target.rollbackReady)
+    if (!readyTargets.length) {
+      setError(release.rollbackAvailableDevices
+        ? 'Rollback-capable devices are offline or require Agent 0.1.207.'
+        : 'Windows does not report this release as rollback-capable on any managed device.')
+      return
+    }
+    const confirmed = window.confirm(
+      'Rollback “' + release.title + '” on ' + readyTargets.length + ' online device' + (readyTargets.length === 1 ? '' : 's') +
+      '? Hi5Central will pause this release first so it is not immediately reinstalled.',
+    )
+    if (!confirmed) return
+    setWindowsControlBusy(release.updateKey)
+    setError('')
+    try {
+      const result = await rollbackWindowsUpdateRelease(
+        release.updateKey,
+        readyTargets.map((target) => target.agentDeviceId),
+      )
+      setBundle((current) => ({ ...(current || {}), windowsUpdates: result.windowsUpdates }))
+    } catch (requestError) {
+      setError(requestError?.message || 'Unable to start Windows Update rollback.')
+    } finally {
+      setWindowsControlBusy('')
+    }
+  }
+
   async function saveAssignment(assignment) {
     setSaving(true)
     try {
@@ -2167,11 +2197,11 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
           <div className="head"><span>Release</span><span>Devices</span><span>Class</span><span>Published</span><span>Rollout state</span><span>Action</span></div>
           {windowsReleases.map((release) => <div className="row" key={release.updateKey}>
             <span><strong>{release.title}</strong><small>{(release.kbArticles || []).join(', ') || release.updateId || 'No KB reference'}</small></span>
-            <span><strong>{release.devices}</strong><small>{release.downloadedDevices} downloaded</small></span>
+            <span><strong>{release.devices}</strong><small>{release.downloadedDevices} downloaded{release.rollbackAvailableDevices ? ' · ' + release.rollbackAvailableDevices + ' rollback-capable' : ''}</small></span>
             <span><StatusPill tone={['critical','security'].includes(release.updateClass) ? 'warning' : 'neutral'}>{release.updateClass}</StatusPill><small>{release.severity || 'No MSRC severity'}</small></span>
             <span><strong>{release.releaseAt ? new Date(release.releaseAt).toLocaleDateString() : 'Observed'}</strong><small>{release.firstSeenAt ? 'First seen ' + new Date(release.firstSeenAt).toLocaleDateString() : ''}</small></span>
             <span><StatusPill tone={release.paused ? 'critical' : 'healthy'}>{release.paused ? 'Paused' : 'Active'}</StatusPill><small>{release.paused ? (release.control?.reason || 'Manual rollout pause') : 'Following assigned rollout waves'}</small></span>
-            <span><button disabled={windowsControlBusy === release.updateKey} onClick={() => setWindowsReleaseControl(release, release.paused ? 'active' : 'paused')} type="button">{windowsControlBusy === release.updateKey ? 'Saving…' : release.paused ? 'Resume' : 'Pause'}</button></span>
+            <span><div className="rmm-row-actions"><button disabled={windowsControlBusy === release.updateKey} onClick={() => setWindowsReleaseControl(release, release.paused ? 'active' : 'paused')} type="button">{windowsControlBusy === release.updateKey ? 'Saving…' : release.paused ? 'Resume' : 'Pause'}</button><button disabled={windowsControlBusy === release.updateKey || !release.rollbackOnlineDevices} onClick={() => rollbackWindowsRelease(release)} title={release.rollbackAvailableDevices && !release.rollbackOnlineDevices ? 'Rollback-capable devices are offline or require Agent 0.1.207' : ''} type="button"><RotateCcw size={13} /> Rollback{release.rollbackAvailableDevices ? ' (' + release.rollbackAvailableDevices + ')' : ''}</button></div></span>
           </div>)}
         </div>
       </>}

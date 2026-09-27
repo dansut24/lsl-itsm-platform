@@ -175,6 +175,13 @@ export function resumeWindowsUpdateRollout(updateKey) {
   })
 }
 
+export function rollbackWindowsUpdateRelease(updateKey, agentDeviceIds = []) {
+  return request('/api/v1/rmm/windows-updates/' + encodeURIComponent(updateKey) + '/rollback', {
+    method: 'POST',
+    body: JSON.stringify({ agentDeviceIds }),
+  })
+}
+
 export function createPatchAssignment(assignment) {
   return request('/api/v1/rmm/patch-assignments', {
     method: 'POST',
