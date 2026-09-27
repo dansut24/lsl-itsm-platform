@@ -111,7 +111,7 @@ expect(renderer.includes('setMobileViewControlsVisible(true)') && renderer.inclu
 expect(renderer.includes('&& !loginDesktopInputActive) return;'), 'Viewer transition input gate must preserve Windows sign-in control.')
 expect(renderer.includes('showLoginDesktopTransition'), 'Viewer must retain an interactive Windows sign-in transition surface.')
 expect(renderer.includes('loginDesktopInputActive = true'), 'Viewer must enable Windows sign-in input before the first sign-in frame.')
-expect(renderer.includes('armLoginDesktopWake') && renderer.includes("code: 'ShiftLeft'"), 'Viewer must automatically dismiss the protected Windows lock layer with a non-text modifier input.')
+expect(renderer.includes('armLoginDesktopWake') && renderer.includes("code: 'ControlLeft'"), 'Viewer must automatically dismiss the protected Windows lock layer with a non-text modifier input.')
 expect(renderer.includes('captureReconnectPoster') && renderer.includes("elVideo.poster = canvas.toDataURL"), 'Viewer reconnect must retain the last visible frame instead of flashing black.')
 expect(renderer.includes("const seamlessLoginHandoff = loginDesktopInputActive || secureDesktopActive"), 'Connect host handoff at Winlogon must avoid a visible reconnecting state.')
 const viewerHtml = read('public/rmm-viewer/index.html')

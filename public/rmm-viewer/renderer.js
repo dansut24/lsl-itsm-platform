@@ -1250,15 +1250,15 @@ function armLoginDesktopWake() {
     // Windows can expose a protected LockApp wallpaper before the credential
     // surface is capturable. A modifier-only key safely dismisses that layer
     // without inserting text into a credential field.
-    sendInput('key_down', { code: 'ShiftLeft', key: 'Shift' }, true);
+    sendInput('key_down', { code: 'ControlLeft', key: 'Control' }, true);
     window.setTimeout(() => {
       if (currentSession && loginDesktopInputActive) {
-        sendInput('key_up', { code: 'ShiftLeft', key: 'Shift' }, true);
+        sendInput('key_up', { code: 'ControlLeft', key: 'Control' }, true);
       }
     }, 35);
 
     loginDesktopWakeAttempts += 1;
-    if (loginDesktopWakeAttempts < 6) {
+    if (loginDesktopWakeAttempts < 4) {
       loginDesktopWakeTimer = window.setTimeout(attempt, 220);
     } else {
       loginDesktopWakeTimer = null;
