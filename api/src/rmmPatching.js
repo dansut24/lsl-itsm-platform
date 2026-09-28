@@ -2964,17 +2964,20 @@ export async function unifiedCatalogueSearch(tenantId, options = {}) {
   const pageSize = Math.max(10, Math.min(100, Number(options.pageSize) || 50))
   const requestedPage = Math.max(1, Number(options.page) || 1)
 
-  const hi5Rows = source === 'winget'
-    ? []
-    : (await catalogueListRows(tenantId))
-      .map(catalogueSearchRow)
-      .filter((item) => provider === 'all' || item.provider === provider)
-      .filter((item) => catalogueSearchMatches(item, query))
+  const hi5Rows = (await catalogueListRows(tenantId))
+    .map(catalogueSearchRow)
+    .filter((item) => provider === 'all' || item.provider === provider)
+    .filter((item) => catalogueSearchMatches(item, query))
 
   const hi5Total = hi5Rows.length
-  const wingetAllowed = source !== 'hi5central' && (provider === 'all' || provider === 'winget')
+  const wingetAllowedByProvider = provider === 'all' || provider === 'winget'
 
   if (source === 'hi5central') {
+    let wingetTotal = 0
+    if (wingetAllowedByProvider) {
+      const count = await wingetRepositorySearch({ query: queryText, page: 1, pageSize: 10 })
+      wingetTotal = Number(count.total || 0)
+    }
     const total = hi5Total
     const pages = Math.max(1, Math.ceil(total / pageSize))
     const page = Math.min(requestedPage, pages)
@@ -2987,14 +2990,14 @@ export async function unifiedCatalogueSearch(tenantId, options = {}) {
       pageSize,
       pages,
       total,
-      sourceCounts: { hi5central: hi5Total, winget: 0 },
+      sourceCounts: { hi5central: hi5Total, winget: wingetTotal },
       sort: 'name',
       items: hi5Rows.slice(offset, offset + pageSize),
     }
   }
 
   if (source === 'winget') {
-    if (!wingetAllowed) {
+    if (!wingetAllowedByProvider) {
       return {
         query: queryText,
         source,
@@ -3003,7 +3006,7 @@ export async function unifiedCatalogueSearch(tenantId, options = {}) {
         pageSize,
         pages: 1,
         total: 0,
-        sourceCounts: { hi5central: 0, winget: 0 },
+        sourceCounts: { hi5central: hi5Total, winget: 0 },
         sort: 'name',
         items: [],
       }
@@ -3022,14 +3025,14 @@ export async function unifiedCatalogueSearch(tenantId, options = {}) {
       pageSize: Number(result.pageSize || pageSize),
       pages: Number(result.pages || 1),
       total: Number(result.total || 0),
-      sourceCounts: { hi5central: 0, winget: Number(result.total || 0) },
+      sourceCounts: { hi5central: hi5Total, winget: Number(result.total || 0) },
       sort: 'name',
       items,
     }
   }
 
   let wingetRows = []
-  if (wingetAllowed) {
+  if (wingetAllowedByProvider) {
     const result = await wingetRepositoryAllSearch({ query: queryText })
     wingetRows = array(result.packages).map(wingetSearchRow)
   }

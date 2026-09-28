@@ -1989,9 +1989,9 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
       <div className="rmm-catalogue-toolbar">
         <label className="search"><Search size={14} /><input value={catalogueQuery} onChange={(event) => setCatalogueQuery(event.target.value)} placeholder="Search application, publisher or package ID…" /></label>
         <select aria-label="Catalogue source filter" value={catalogueSourceFilter} onChange={(event) => setCatalogueSourceFilter(event.target.value)}>
-          <option value="all">All sources</option>
-          <option value="hi5central">Hi5Central</option>
-          <option value="winget">WinGet</option>
+          <option value="all">All sources ({Number(catalogueFeed.sourceCounts?.hi5central || 0) + Number(catalogueFeed.sourceCounts?.winget || 0)})</option>
+          <option value="hi5central">Hi5Central ({catalogueFeed.sourceCounts?.hi5central || 0})</option>
+          <option value="winget">WinGet ({catalogueFeed.sourceCounts?.winget || 0})</option>
         </select>
         <select aria-label="Catalogue provider filter" value={catalogueProviderFilter} onChange={(event) => setCatalogueProviderFilter(event.target.value)}>
           <option value="all">All providers</option>
