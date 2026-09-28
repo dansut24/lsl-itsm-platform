@@ -522,7 +522,8 @@ function SoftwarePatchModal({ application, installs, devices, onClose, onPatch, 
   </div>
 }
 
-function PolicyModal({ policy, catalogue = [], onClose, onSave }) {
+function PolicyModal({ policy, policyType = 'os', catalogue = [], onClose, onSave }) {
+  const type = policyType === 'software' ? 'software' : 'os'
   const maintenance = policy?.maintenance_window || {}
   const windowsRules = policy?.windows_rules || {}
   const windowsDelays = windowsRules.delayDays || {}
@@ -548,10 +549,10 @@ function PolicyModal({ policy, catalogue = [], onClose, onSave }) {
     description: policy?.description || '',
     approvalMode: policy?.approval_mode || 'manual',
     deploymentDelayDays: policy?.deployment_delay_days ?? 3,
-    softwareEnabled: policy ? policy.software_enabled !== false : true,
+    softwareEnabled: type === 'software',
     softwareTargetMode,
     softwareCatalogueIds: Array.isArray(softwareRules.catalogueIds) ? softwareRules.catalogueIds : [],
-    windowsEnabled: policy ? policy.windows_enabled === true : true,
+    windowsEnabled: type === 'os',
     rebootPolicy: policy?.reboot_policy || 'never',
     maxRetries: policy?.max_retries ?? 2,
     maintenanceStart: maintenance.start || '18:00',
@@ -639,6 +640,9 @@ function PolicyModal({ policy, catalogue = [], onClose, onSave }) {
       if (softwareSelectionInvalid) return
       onSave({
         ...form,
+        policyType: type,
+        softwareEnabled: type === 'software',
+        windowsEnabled: type === 'os',
         maintenanceWindow: {
           start: form.maintenanceStart,
           end: form.maintenanceEnd,
@@ -690,7 +694,7 @@ function PolicyModal({ policy, catalogue = [], onClose, onSave }) {
       })
     }}>
       <header>
-        <div><span className="rmm-eyebrow">Reusable targeting</span><h2>{policy ? 'Edit patch policy' : 'New patch policy'}</h2></div>
+        <div><span className="rmm-eyebrow">{type === 'os' ? 'OS patching policy' : 'Software patching policy'}</span><h2>{policy ? 'Edit ' : 'New '}{type === 'os' ? 'OS patching policy' : 'Software patching policy'}</h2></div>
         <button aria-label="Close" onClick={onClose} type="button"><X size={17} /></button>
       </header>
 
@@ -699,14 +703,13 @@ function PolicyModal({ policy, catalogue = [], onClose, onSave }) {
         <label className="wide">Description<textarea rows="2" value={form.description} onChange={(event) => update('description', event.target.value)} /></label>
       </div>
 
-      <section className="rmm-policy-schedule rmm-policy-domain">
+      {type === 'os' && <section className="rmm-policy-schedule rmm-policy-domain">
         <div className="rmm-policy-section-title"><strong>OS patching</strong><small>Controls Windows Update ownership, deferrals, deployment waves and the OS maintenance window.</small></div>
         <div className="rmm-patch-checks">
-          <label><input checked={form.windowsEnabled} onChange={(event) => update('windowsEnabled', event.target.checked)} type="checkbox" /><span><strong>Enable OS patching</strong><small>Hi5Central manages Windows Update on assigned Windows endpoints.</small></span></label>
-          {form.windowsEnabled && <label><input checked={form.windowsAutoInstall} onChange={(event) => update('windowsAutoInstall', event.target.checked)} type="checkbox" /><span><strong>Automatically install eligible updates</strong><small>Only while the OS maintenance window is open.</small></span></label>}
+          <label><input checked={form.windowsAutoInstall} onChange={(event) => update('windowsAutoInstall', event.target.checked)} type="checkbox" /><span><strong>Automatically install eligible updates</strong><small>Hi5Central owns Windows Update on assigned endpoints; automatic installs run only while the OS maintenance window is open.</small></span></label>
         </div>
 
-        {form.windowsEnabled && <>
+        <>
           <div className="rmm-policy-subsection-title"><strong>OS maintenance window</strong><small>Windows updates wait for this window after their category deferral and rollout wave open.</small></div>
           <div className="rmm-patch-form-grid">
             <label>Window starts<input type="time" value={form.maintenanceStart} onChange={(event) => update('maintenanceStart', event.target.value)} /></label>
@@ -755,16 +758,12 @@ function PolicyModal({ policy, catalogue = [], onClose, onSave }) {
             <label>Reboot handling<select value={form.rebootPolicy} onChange={(event) => update('rebootPolicy', event.target.value)}><option value="never">Do not reboot automatically</option><option value="maintenance_window">Reboot during maintenance window</option><option value="notify_user">Notify user before reboot</option></select></label>
           </div>
           <div className="rmm-patch-security-note"><ShieldCheck size={16} /><span>Windows updates install without forcing an automatic restart today. Reboot-required endpoints remain flagged until coordinated reboot automation is enabled.</span></div>
-        </>}
-      </section>
+        </>
+      </section>}
 
-      <section className="rmm-policy-schedule rmm-policy-domain">
+      {type === 'software' && <section className="rmm-policy-schedule rmm-policy-domain">
         <div className="rmm-policy-section-title"><strong>Software patching</strong><small>Choose exactly which software source this policy may patch and when automatic software remediation can run.</small></div>
-        <div className="rmm-patch-checks">
-          <label><input checked={form.softwareEnabled} onChange={(event) => update('softwareEnabled', event.target.checked)} type="checkbox" /><span><strong>Enable software patching</strong><small>Applies only to the software scope selected below.</small></span></label>
-        </div>
-
-        {form.softwareEnabled && <>
+        <>
           <div className="rmm-patch-form-grid">
             <label className="wide">Application scope<select value={form.softwareTargetMode} onChange={(event) => update('softwareTargetMode', event.target.value)}>
               <option value="selected_catalogue">Selected Hi5Central catalogue applications</option>
@@ -814,10 +813,10 @@ function PolicyModal({ policy, catalogue = [], onClose, onSave }) {
               ].map(([key, label]) => <label key={key}>{label}<select value={form[key]} onChange={(event) => update(key, event.target.value)}><option value="automatic">Auto approve</option><option value="manual">Manual approval</option><option value="skip">Skip automatic patching</option></select></label>)}
             </div>
           </details>
-        </>}
-      </section>
+        </>
+      </section>}
 
-      <footer><button onClick={onClose} type="button">Cancel</button><button className="rmm-primary" disabled={softwareSelectionInvalid} type="submit"><PackageCheck size={15} /> {policy ? 'Save policy' : 'Create policy'}</button></footer>
+      <footer><button onClick={onClose} type="button">Cancel</button><button className="rmm-primary" disabled={type === 'software' && softwareSelectionInvalid} type="submit"><PackageCheck size={15} /> {policy ? 'Save policy' : 'Create policy'}</button></footer>
     </form>
   </div>
 }
@@ -1145,6 +1144,7 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
   const [editingVendorSource, setEditingVendorSource] = useState(null)
   const [showPolicy, setShowPolicy] = useState(false)
   const [editingPolicy, setEditingPolicy] = useState(null)
+  const [policyModalType, setPolicyModalType] = useState('os')
   const [windowsEvaluating, setWindowsEvaluating] = useState(false)
   const [windowsControlBusy, setWindowsControlBusy] = useState('')
   const [assignPolicy, setAssignPolicy] = useState(null)
@@ -1270,6 +1270,8 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
   const vendorHealth = bundle?.vendorIntel?.health || {}
   const tenantVendorSources = bundle?.vendorIntel?.tenantSources || []
   const policies = bundle?.policies || []
+  const osPolicies = policies.filter((policy) => policy.windows_enabled === true && policy.software_enabled !== true)
+  const softwarePolicies = policies.filter((policy) => policy.software_enabled === true && policy.windows_enabled !== true)
   const assignments = bundle?.assignments || []
   const deviceSoftware = bundle?.deviceSoftware || []
   const deployments = bundle?.deployments || []
@@ -1946,7 +1948,7 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
   }
 
   return <>
-    {!softwareOnly && <PageHeading action={<div className="rmm-patch-heading-actions"><button disabled={loading} onClick={refresh} type="button"><RefreshCw size={15} /> Refresh</button><button className="rmm-primary compact" onClick={() => { setEditingPolicy(null); setShowPolicy(true) }} type="button"><Plus size={15} /> New policy</button></div>} />}
+    {!softwareOnly && <PageHeading action={<div className="rmm-patch-heading-actions"><button disabled={loading} onClick={refresh} type="button"><RefreshCw size={15} /> Refresh</button>{tab === 'policies' && <><button onClick={() => { setEditingPolicy(null); setPolicyModalType('os'); setShowPolicy(true) }} type="button"><Plus size={15} /> New OS policy</button><button className="rmm-primary compact" onClick={() => { setEditingPolicy(null); setPolicyModalType('software'); setShowPolicy(true) }} type="button"><Plus size={15} /> New software policy</button></>}</div>} />}
     {error && <div className="rmm-patch-error"><AlertTriangle size={16} /><span>{error}</span></div>}
 
     {!softwareOnly && <nav className="rmm-patch-tabs">
@@ -2202,50 +2204,70 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
       {!windowsByDevice.length && <div className="rmm-empty"><Monitor size={24} /><strong>{loading ? 'Loading Windows Update inventory…' : 'No pending Windows updates'}</strong><span>Applicable Windows updates are populated by managed Agent inventory scans.</span></div>}
       <div className="rmm-patch-security-note"><ShieldCheck size={16} /><span>Scheduled installs are server-authoritative. Offline devices are not left with queued update jobs; they are re-evaluated when online. Feature and driver updates remain excluded unless the assigned policy explicitly enables them.</span></div>
     </section>}
-    {tab === 'policies' && <section className="rmm-patch-panel">
-      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Targeting</span><h2>Patch policies</h2><p>OS patching and software patching are configured independently inside each policy, then assigned through Estate → Site → Group → Device scope.</p></div><button className="rmm-primary compact" onClick={() => { setEditingPolicy(null); setShowPolicy(true) }} type="button"><Plus size={14} /> New policy</button></div>
-      <div className="rmm-patch-policy-grid">
-        {policies.map((policy) => {
-          const softwareRules = policy.software_rules || {}
-          const softwareMode = ['selected_catalogue', 'all_catalogue', 'all_winget'].includes(softwareRules.targetMode) ? softwareRules.targetMode : 'all_catalogue'
-          const softwareWindow = softwareRules.maintenanceWindow || policy.maintenance_window || {}
-          const softwareScope = !policy.software_enabled
-            ? 'Disabled'
-            : softwareMode === 'selected_catalogue'
+    {tab === 'policies' && <section className="rmm-patch-panel rmm-policy-lists">
+      <section className="rmm-policy-list-section">
+        <div className="rmm-card-heading">
+          <div><span className="rmm-eyebrow">Windows management</span><h2>OS patching policies</h2><p>Windows Update ownership, maintenance windows, deferrals and deployment waves. OS policies are assigned independently from software policies.</p></div>
+          <button className="rmm-primary compact" onClick={() => { setEditingPolicy(null); setPolicyModalType('os'); setShowPolicy(true) }} type="button"><Plus size={14} /> New OS policy</button>
+        </div>
+        <div className="rmm-patch-policy-grid">
+          {osPolicies.map((policy) => <article key={policy.id}>
+            <header><div><span className="rmm-eyebrow">OS patching policy</span><h3>{policy.name}</h3></div><StatusPill tone={policy.status === 'active' ? 'healthy' : 'neutral'}>{policy.status}</StatusPill></header>
+            <p>{policy.description || 'No description provided.'}</p>
+            <div className="rmm-policy-domain-summary">
+              <div>
+                <div className="domain-head"><strong>Windows Update</strong><StatusPill tone="healthy">{policy.windows_rules?.autoInstall ? 'Automatic' : 'Managed'}</StatusPill></div>
+                <small>{policy.maintenance_window?.start || '18:00'}–{policy.maintenance_window?.end || '05:00'} · {(policy.maintenance_window?.days || [1,2,3,4,5]).map((day) => ['','Mon','Tue','Wed','Thu','Fri','Sat','Sun'][day]).join(' · ')} · {policy.maintenance_window?.timezone || 'Europe/London'}</small>
+                <small>Critical {policy.windows_rules?.delayDays?.critical ?? 0}d · Security {policy.windows_rules?.delayDays?.security ?? policy.deployment_delay_days}d · Quality {policy.windows_rules?.delayDays?.quality ?? policy.deployment_delay_days}d · Feature {policy.windows_rules?.includeFeatureUpdates ? (policy.windows_rules?.delayDays?.feature ?? 14) + 'd' : 'off'} · Drivers {policy.windows_rules?.includeDrivers ? (policy.windows_rules?.delayDays?.driver ?? 14) + 'd' : 'off'}</small>
+                {policy.windows_rules?.rollout?.enabled && <small>Rollout · {(policy.windows_rules.rollout.waves || []).map((wave) => (wave.name || wave.id) + ' ' + wave.percentage + '% @ +' + wave.delayDays + 'd').join(' · ')} · deadline +{policy.windows_rules.rollout.deadlineDays ?? 7}d</small>}
+              </div>
+            </div>
+            <footer><span>{assignments.filter((assignment) => assignment.policy_id === policy.id && assignment.enabled !== false).length} assignments</span><div><button disabled={saving} onClick={() => { setEditingPolicy(policy); setPolicyModalType('os'); setShowPolicy(true) }} type="button"><Wrench size={14} /> Edit</button><button disabled={saving} onClick={() => setAssignPolicy(policy)} type="button"><GitBranch size={14} /> Assign scope</button></div></footer>
+          </article>)}
+        </div>
+        {!osPolicies.length && <div className="rmm-empty"><Monitor size={24} /><strong>No OS patching policies</strong><span>Create an OS policy to manage Windows Update schedules and rollout.</span></div>}
+        {!!assignments.filter((assignment) => osPolicies.some((policy) => policy.id === assignment.policy_id)).length && <div className="rmm-patch-assignments">
+          <div className="head"><span>OS scope</span><span>Policy</span><span>Priority</span><span /></div>
+          {assignments.filter((assignment) => osPolicies.some((policy) => policy.id === assignment.policy_id)).map((assignment) => <div className="row" key={assignment.id}><span><strong>{assignment.scope_name || assignment.scope_id}</strong><small>{assignment.scope_type}</small></span><span><strong>{osPolicies.find((policy) => policy.id === assignment.policy_id)?.name || assignment.policy_id}</strong></span><span><strong>{assignment.priority}</strong></span><span><button disabled={saving} onClick={() => removeAssignment(assignment)} type="button"><Trash2 size={14} /></button></span></div>)}
+        </div>}
+      </section>
+
+      <section className="rmm-policy-list-section">
+        <div className="rmm-card-heading">
+          <div><span className="rmm-eyebrow">Application management</span><h2>Software patching policies</h2><p>Catalogue targeting, WinGet scope, approval behaviour and software maintenance windows. Software policies are assigned independently from OS policies.</p></div>
+          <button className="rmm-primary compact" onClick={() => { setEditingPolicy(null); setPolicyModalType('software'); setShowPolicy(true) }} type="button"><Plus size={14} /> New software policy</button>
+        </div>
+        <div className="rmm-patch-policy-grid">
+          {softwarePolicies.map((policy) => {
+            const softwareRules = policy.software_rules || {}
+            const softwareMode = ['selected_catalogue', 'all_catalogue', 'all_winget'].includes(softwareRules.targetMode) ? softwareRules.targetMode : 'all_catalogue'
+            const softwareWindow = softwareRules.maintenanceWindow || policy.maintenance_window || {}
+            const softwareScope = softwareMode === 'selected_catalogue'
               ? (softwareRules.catalogueIds || []).length + ' selected application' + ((softwareRules.catalogueIds || []).length === 1 ? '' : 's')
               : softwareMode === 'all_winget'
                 ? 'Use WinGet'
                 : 'All Hi5Central catalogue applications'
-          return <article key={policy.id}>
-            <header><div><span className="rmm-eyebrow">Patch policy</span><h3>{policy.name}</h3></div><StatusPill tone={policy.status === 'active' ? 'healthy' : 'neutral'}>{policy.status}</StatusPill></header>
-            <p>{policy.description || 'No description provided.'}</p>
-            <div className="rmm-policy-domain-summary">
-              <div>
-                <div className="domain-head"><strong>OS patching</strong><StatusPill tone={policy.windows_enabled ? 'healthy' : 'neutral'}>{policy.windows_enabled ? (policy.windows_rules?.autoInstall ? 'Automatic' : 'Managed') : 'Disabled'}</StatusPill></div>
-                {policy.windows_enabled && <>
-                  <small>{policy.maintenance_window?.start || '18:00'}–{policy.maintenance_window?.end || '05:00'} · {(policy.maintenance_window?.days || [1,2,3,4,5]).map((day) => ['','Mon','Tue','Wed','Thu','Fri','Sat','Sun'][day]).join(' · ')} · {policy.maintenance_window?.timezone || 'Europe/London'}</small>
-                  <small>Critical {policy.windows_rules?.delayDays?.critical ?? 0}d · Security {policy.windows_rules?.delayDays?.security ?? policy.deployment_delay_days}d · Quality {policy.windows_rules?.delayDays?.quality ?? policy.deployment_delay_days}d · Feature {policy.windows_rules?.includeFeatureUpdates ? (policy.windows_rules?.delayDays?.feature ?? 14) + 'd' : 'off'} · Drivers {policy.windows_rules?.includeDrivers ? (policy.windows_rules?.delayDays?.driver ?? 14) + 'd' : 'off'}</small>
-                  {policy.windows_rules?.rollout?.enabled && <small>Rollout · {(policy.windows_rules.rollout.waves || []).map((wave) => (wave.name || wave.id) + ' ' + wave.percentage + '% @ +' + wave.delayDays + 'd').join(' · ')} · deadline +{policy.windows_rules.rollout.deadlineDays ?? 7}d</small>}
-                </>}
-              </div>
-              <div>
-                <div className="domain-head"><strong>Software patching</strong><StatusPill tone={policy.software_enabled ? 'healthy' : 'neutral'}>{policy.software_enabled ? 'Enabled' : 'Disabled'}</StatusPill></div>
-                {policy.software_enabled && <>
+            return <article key={policy.id}>
+              <header><div><span className="rmm-eyebrow">Software patching policy</span><h3>{policy.name}</h3></div><StatusPill tone={policy.status === 'active' ? 'healthy' : 'neutral'}>{policy.status}</StatusPill></header>
+              <p>{policy.description || 'No description provided.'}</p>
+              <div className="rmm-policy-domain-summary">
+                <div>
+                  <div className="domain-head"><strong>Application scope</strong><StatusPill tone="healthy">{softwareMode === 'all_winget' ? 'WinGet' : 'Catalogue'}</StatusPill></div>
                   <small>{softwareScope}</small>
                   <small>{softwareWindow.start || '18:00'}–{softwareWindow.end || '05:00'} · {(softwareWindow.days || [1,2,3,4,5]).map((day) => ['','Mon','Tue','Wed','Thu','Fri','Sat','Sun'][day]).join(' · ')} · {softwareWindow.timezone || 'Europe/London'}</small>
                   <small>Approval {readinessLabel(policy.approval_mode)} · default delay {policy.deployment_delay_days ?? 0}d · retries {policy.max_retries ?? 2}</small>
-                </>}
+                </div>
               </div>
-            </div>
-            <footer><span>{assignments.filter((assignment) => assignment.policy_id === policy.id && assignment.enabled !== false).length} assignments</span><div><button disabled={saving} onClick={() => { setEditingPolicy(policy); setShowPolicy(true) }} type="button"><Wrench size={14} /> Edit</button><button disabled={saving} onClick={() => setAssignPolicy(policy)} type="button"><GitBranch size={14} /> Assign scope</button></div></footer>
-          </article>
-        })}
-      </div>
-      {!policies.length && <div className="rmm-empty"><GitBranch size={24} /><strong>No patch policies yet</strong><span>Create an OS/software patch policy, then target it to Estate, Site, Group or Device.</span></div>}
-      {!!assignments.length && <div className="rmm-patch-assignments">
-        <div className="head"><span>Scope</span><span>Policy</span><span>Priority</span><span /></div>
-        {assignments.map((assignment) => <div className="row" key={assignment.id}><span><strong>{assignment.scope_name || assignment.scope_id}</strong><small>{assignment.scope_type}</small></span><span><strong>{policies.find((policy) => policy.id === assignment.policy_id)?.name || assignment.policy_id}</strong></span><span><strong>{assignment.priority}</strong></span><span><button disabled={saving} onClick={() => removeAssignment(assignment)} type="button"><Trash2 size={14} /></button></span></div>)}
-      </div>}
+              <footer><span>{assignments.filter((assignment) => assignment.policy_id === policy.id && assignment.enabled !== false).length} assignments</span><div><button disabled={saving} onClick={() => { setEditingPolicy(policy); setPolicyModalType('software'); setShowPolicy(true) }} type="button"><Wrench size={14} /> Edit</button><button disabled={saving} onClick={() => setAssignPolicy(policy)} type="button"><GitBranch size={14} /> Assign scope</button></div></footer>
+            </article>
+          })}
+        </div>
+        {!softwarePolicies.length && <div className="rmm-empty"><PackageCheck size={24} /><strong>No software patching policies</strong><span>Create a software policy for selected catalogue apps, all Hi5Central apps or WinGet.</span></div>}
+        {!!assignments.filter((assignment) => softwarePolicies.some((policy) => policy.id === assignment.policy_id)).length && <div className="rmm-patch-assignments">
+          <div className="head"><span>Software scope</span><span>Policy</span><span>Priority</span><span /></div>
+          {assignments.filter((assignment) => softwarePolicies.some((policy) => policy.id === assignment.policy_id)).map((assignment) => <div className="row" key={assignment.id}><span><strong>{assignment.scope_name || assignment.scope_id}</strong><small>{assignment.scope_type}</small></span><span><strong>{softwarePolicies.find((policy) => policy.id === assignment.policy_id)?.name || assignment.policy_id}</strong></span><span><strong>{assignment.priority}</strong></span><span><button disabled={saving} onClick={() => removeAssignment(assignment)} type="button"><Trash2 size={14} /></button></span></div>)}
+        </div>}
+      </section>
     </section>}
 
     {typeof document !== 'undefined' && createPortal(
@@ -2258,7 +2280,7 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
           onPatch={runSoftwarePatch}
           saving={saving}
         />}
-        {showPolicy && <PolicyModal catalogue={catalogue} policy={editingPolicy} onClose={() => { setShowPolicy(false); setEditingPolicy(null) }} onSave={savePolicy} />}
+        {showPolicy && <PolicyModal catalogue={catalogue} policy={editingPolicy} policyType={policyModalType} onClose={() => { setShowPolicy(false); setEditingPolicy(null) }} onSave={savePolicy} />}
         {assignPolicy && <AssignmentModal devices={bundle?.devices || devices} groups={scope.groups || []} onClose={() => setAssignPolicy(null)} onSave={saveAssignment} policy={assignPolicy} />}
       </div>,
       document.body,

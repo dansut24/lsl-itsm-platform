@@ -4648,11 +4648,16 @@ export function registerRmmPatchingRoutes(app) {
     const body = await c.req.json().catch(() => ({}))
     const name = clean(body.name)
     if (name.length < 2) return c.json({ error: 'Policy name is required.' }, 400)
+    const policyType = clean(body.policyType).toLowerCase()
+    if (!['os', 'software'].includes(policyType)) return c.json({ error: 'Patch policy type must be OS or software.' }, 400)
+    const softwareEnabled = policyType === 'software'
+    const windowsEnabled = policyType === 'os'
     const deploymentDelayDays = Math.max(0, Math.min(365, Number(body.deploymentDelayDays) || 0))
-    const maintenanceWindow = normalizeMaintenanceWindow(body.maintenanceWindow)
-    const windowsRules = normalizeWindowsRules(body.windowsRules, deploymentDelayDays)
-    const softwareEnabled = body.softwareEnabled !== false
-    const softwareRules = normalizeSoftwareRules(body.softwareRules, maintenanceWindow)
+    const maintenanceWindow = normalizeMaintenanceWindow(
+      softwareEnabled ? object(body.softwareRules).maintenanceWindow : body.maintenanceWindow,
+    )
+    const windowsRules = windowsEnabled ? normalizeWindowsRules(body.windowsRules, deploymentDelayDays) : {}
+    const softwareRules = softwareEnabled ? normalizeSoftwareRules(body.softwareRules, maintenanceWindow) : {}
     const softwareValidation = await validateSoftwareRuleCatalogueIds(auth.session.tenant_id, softwareRules, softwareEnabled)
     if (softwareValidation.error) return c.json({ error: softwareValidation.error }, 400)
     const result = await pool.query(
@@ -4663,7 +4668,7 @@ export function registerRmmPatchingRoutes(app) {
        RETURNING id`,
       [
         auth.session.tenant_id, name, clean(body.description), softwareEnabled,
-        Boolean(body.windowsEnabled), validApproval(clean(body.approvalMode)), deploymentDelayDays,
+        windowsEnabled, validApproval(clean(body.approvalMode)), deploymentDelayDays,
         JSON.stringify(maintenanceWindow), validReboot(clean(body.rebootPolicy)),
         Math.max(0, Math.min(10, Number(body.maxRetries) || 2)),
         JSON.stringify(softwareRules), JSON.stringify(windowsRules),
@@ -4680,11 +4685,27 @@ export function registerRmmPatchingRoutes(app) {
     const body = await c.req.json().catch(() => ({}))
     const name = clean(body.name)
     if (name.length < 2) return c.json({ error: 'Policy name is required.' }, 400)
+    const policyType = clean(body.policyType).toLowerCase()
+    if (!['os', 'software'].includes(policyType)) return c.json({ error: 'Patch policy type must be OS or software.' }, 400)
+    const existing = await pool.query(
+      'SELECT software_enabled,windows_enabled FROM rmm_patch_policies WHERE id=$1 AND tenant_id=$2 AND status<>\'archived\' LIMIT 1',
+      [clean(c.req.param('policyId')), auth.session.tenant_id],
+    )
+    if (!existing.rowCount) return c.json({ error: 'Patch policy not found.' }, 404)
+    const existingType = existing.rows[0].windows_enabled === true && existing.rows[0].software_enabled !== true
+      ? 'os'
+      : existing.rows[0].software_enabled === true && existing.rows[0].windows_enabled !== true
+        ? 'software'
+        : ''
+    if (existingType && existingType !== policyType) return c.json({ error: 'Patch policy type cannot be changed after creation.' }, 409)
+    const softwareEnabled = policyType === 'software'
+    const windowsEnabled = policyType === 'os'
     const deploymentDelayDays = Math.max(0, Math.min(365, Number(body.deploymentDelayDays) || 0))
-    const maintenanceWindow = normalizeMaintenanceWindow(body.maintenanceWindow)
-    const windowsRules = normalizeWindowsRules(body.windowsRules, deploymentDelayDays)
-    const softwareEnabled = body.softwareEnabled !== false
-    const softwareRules = normalizeSoftwareRules(body.softwareRules, maintenanceWindow)
+    const maintenanceWindow = normalizeMaintenanceWindow(
+      softwareEnabled ? object(body.softwareRules).maintenanceWindow : body.maintenanceWindow,
+    )
+    const windowsRules = windowsEnabled ? normalizeWindowsRules(body.windowsRules, deploymentDelayDays) : {}
+    const softwareRules = softwareEnabled ? normalizeSoftwareRules(body.softwareRules, maintenanceWindow) : {}
     const softwareValidation = await validateSoftwareRuleCatalogueIds(auth.session.tenant_id, softwareRules, softwareEnabled)
     if (softwareValidation.error) return c.json({ error: softwareValidation.error }, 400)
     const result = await pool.query(
@@ -4696,7 +4717,7 @@ export function registerRmmPatchingRoutes(app) {
        RETURNING id,name`,
       [
         clean(c.req.param('policyId')), auth.session.tenant_id, name, clean(body.description),
-        softwareEnabled, Boolean(body.windowsEnabled), validApproval(clean(body.approvalMode)),
+        softwareEnabled, windowsEnabled, validApproval(clean(body.approvalMode)),
         deploymentDelayDays, JSON.stringify(maintenanceWindow), validReboot(clean(body.rebootPolicy)),
         Math.max(0, Math.min(10, Number(body.maxRetries) || 2)),
         JSON.stringify(softwareRules), JSON.stringify(windowsRules), auth.session.user_id,

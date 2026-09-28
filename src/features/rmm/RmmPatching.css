@@ -877,6 +877,9 @@
 .rmm-policy-software-rules .rmm-patch-form-grid { border-top:1px solid var(--rmm-border); padding:10px; }
 .rmm-policy-card-schedule { display:grid; gap:3px; margin-top:7px; border-radius:7px; padding:7px; background:var(--rmm-surface); }
 .rmm-policy-card-schedule small { color:var(--rmm-muted); font-size:7px; line-height:1.4; }
+.rmm-policy-lists { display:grid; gap:18px; }
+.rmm-policy-list-section { display:grid; gap:10px; border:1px solid var(--rmm-border); border-radius:12px; overflow:hidden; background:var(--rmm-surface); }
+.rmm-policy-list-section + .rmm-policy-list-section { margin-top:2px; }
 .rmm-policy-domain-summary { display:grid; grid-template-columns:1fr 1fr; gap:7px; margin-top:8px; }
 .rmm-policy-domain-summary > div { min-width:0; display:grid; gap:4px; border:1px solid var(--rmm-border); border-radius:8px; padding:8px; background:var(--rmm-surface); }
 .rmm-policy-domain-summary .domain-head { display:flex; align-items:center; justify-content:space-between; gap:6px; }
