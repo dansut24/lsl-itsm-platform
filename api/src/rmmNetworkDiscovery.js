@@ -98,6 +98,56 @@ function parseIpv4(value) {
   return value.split('.').reduce((number, octet) => ((number << 8) | Number(octet)) >>> 0, 0)
 }
 
+function ipv4FromNumber(value) {
+  const number = Number(value) >>> 0
+  return [
+    (number >>> 24) & 255,
+    (number >>> 16) & 255,
+    (number >>> 8) & 255,
+    number & 255,
+  ].join('.')
+}
+
+function netmaskPrefix(mask = '') {
+  const octets = clean(mask, 64).split('.').map(Number)
+  if (octets.length !== 4 || octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return null
+  const binary = octets.map((part) => part.toString(2).padStart(8, '0')).join('')
+  if (!/^1*0*$/.test(binary)) return null
+  return binary.indexOf('0') === -1 ? 32 : binary.indexOf('0')
+}
+
+function suggestedCidrs(network = {}) {
+  const suggestions = new Set()
+  const add = (address, mask = '') => {
+    const ip = parseIpv4(clean(address, 64))
+    if (ip == null) return
+    const first = Number(String(address).split('.')[0])
+    const second = Number(String(address).split('.')[1])
+    if (first === 127 || first === 0 || (first === 169 && second === 254)) return
+    let prefix = netmaskPrefix(mask)
+    if (!Number.isInteger(prefix)) prefix = 24
+    if (prefix < 20 || prefix > 32) return
+    const hostBits = 32 - prefix
+    const maskNumber = prefix === 32 ? 0xffffffff : (0xffffffff << hostBits) >>> 0
+    suggestions.add(ipv4FromNumber((ip & maskNumber) >>> 0) + '/' + prefix)
+  }
+
+  const configurations = Array.isArray(network?.configurations) ? network.configurations : []
+  for (const item of configurations) {
+    const addresses = Array.isArray(item?.ip_addresses) ? item.ip_addresses : []
+    const masks = Array.isArray(item?.subnets) ? item.subnets : []
+    const ipv4Index = addresses.findIndex((value) => isIP(clean(value, 64)) === 4)
+    if (ipv4Index >= 0) {
+      const mask = masks.find((value) => /^\d+\.\d+\.\d+\.\d+$/.test(clean(value, 64))) || ''
+      add(addresses[ipv4Index], mask)
+    }
+  }
+  const primary = Array.isArray(network?.primary?.ipv4) ? network.primary.ipv4 : []
+  for (const address of primary) add(address)
+  if (network?.primary_ipv4) add(network.primary_ipv4)
+  return [...suggestions].slice(0, 8)
+}
+
 function validateCidr(value) {
   const input = clean(value, 64)
   const [address, prefixValue] = input.split('/')
@@ -229,6 +279,7 @@ async function bundle(tenantId) {
     pool.query(
       `SELECT a.id AS agent_device_id,a.websocket_status,a.last_telemetry_at,a.agent_version,
               i.id AS inventory_id,i.name,i.reference,i.operating_system,
+              i.source_payload->'network' AS network,
               CASE WHEN a.websocket_status='Connected' AND a.last_telemetry_at>now()-interval '90 seconds'
                    THEN true ELSE false END AS online
          FROM rmm_agent_devices a
@@ -247,10 +298,14 @@ async function bundle(tenantId) {
   ])
 
   const onlineDevices = devices.rows.filter((row) => row.status === 'online').length
-  const probeRows = probes.rows.map((row) => ({
-    ...row,
-    snmp_capable: versionAtLeast(row.agent_version, SNMP_MIN_AGENT_VERSION),
-  }))
+  const probeRows = probes.rows.map((row) => {
+    const { network, ...probe } = row
+    return {
+      ...probe,
+      snmp_capable: versionAtLeast(row.agent_version, SNMP_MIN_AGENT_VERSION),
+      suggested_cidrs: suggestedCidrs(network || {}),
+    }
+  })
   return {
     credentials: credentials.rows.map(credentialSummary),
     profiles: profiles.rows,

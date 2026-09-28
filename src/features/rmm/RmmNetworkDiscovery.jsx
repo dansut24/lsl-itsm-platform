@@ -100,6 +100,10 @@ export function RmmNetworkDiscovery() {
     () => new Map(probes.map((item) => [item.agent_device_id, item])),
     [probes],
   )
+  const selectedProbe = probeById.get(profile.probeAgentDeviceId)
+  const suggestedRanges = Array.isArray(selectedProbe?.suggested_cidrs)
+    ? selectedProbe.suggested_cidrs
+    : []
 
   async function createCredential(event) {
     event.preventDefault()
@@ -242,8 +246,17 @@ export function RmmNetworkDiscovery() {
         </div>
         <form className="rmm-network-form" onSubmit={createProfile}>
           <label><span>Profile name</span><input value={profile.name} onChange={(e) => setProfile({ ...profile, name: e.target.value })} placeholder="e.g. Head Office LAN" required /></label>
-          <label><span>IPv4 CIDR</span><input value={profile.cidr} onChange={(e) => setProfile({ ...profile, cidr: e.target.value })} placeholder="192.168.1.0/24" required /></label>
-          <label><span>Probe endpoint</span><select value={profile.probeAgentDeviceId} onChange={(e) => setProfile({ ...profile, probeAgentDeviceId: e.target.value })} required><option value="">Select probe…</option>{probes.map((item) => <option value={item.agent_device_id} key={item.agent_device_id}>{item.name || item.reference} {item.online ? (item.snmp_capable ? '· SNMP ready' : '· Upgrade Agent') : '· Offline'}</option>)}</select></label>
+          <label><span>IPv4 CIDR</span><input value={profile.cidr} onChange={(e) => setProfile({ ...profile, cidr: e.target.value })} placeholder="192.168.1.0/24" required />{suggestedRanges.length > 0 && <small>Suggested from probe inventory: {suggestedRanges.join(', ')}</small>}</label>
+          <label><span>Probe endpoint</span><select value={profile.probeAgentDeviceId} onChange={(e) => {
+            const probeId = e.target.value
+            const probe = probeById.get(probeId)
+            const suggested = Array.isArray(probe?.suggested_cidrs) ? probe.suggested_cidrs[0] : ''
+            setProfile((current) => ({
+              ...current,
+              probeAgentDeviceId: probeId,
+              cidr: current.cidr || suggested || '',
+            }))
+          }} required><option value="">Select probe…</option>{probes.map((item) => <option value={item.agent_device_id} key={item.agent_device_id}>{item.name || item.reference} {item.online ? (item.snmp_capable ? '· SNMP ready' : '· Upgrade Agent') : '· Offline'}</option>)}</select></label>
           <label><span>Credential</span><select value={profile.credentialId} onChange={(e) => setProfile({ ...profile, credentialId: e.target.value })} required><option value="">Select credential…</option>{credentials.filter((item) => item.enabled).map((item) => <option value={item.id} key={item.id}>{item.name} · {item.snmpVersion.toUpperCase()}</option>)}</select></label>
           <label><span>Site</span><select value={profile.siteId} onChange={(e) => setProfile({ ...profile, siteId: e.target.value })}><option value="">No site assignment</option>{sites.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
           <label><span>Poll interval</span><select value={profile.scanIntervalMinutes} onChange={(e) => setProfile({ ...profile, scanIntervalMinutes: e.target.value })}><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">1 hour</option><option value="240">4 hours</option><option value="1440">Daily</option></select></label>
