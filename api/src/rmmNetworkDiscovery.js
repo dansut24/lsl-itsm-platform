@@ -34,6 +34,7 @@ function versionAtLeast(value, minimum) {
 
 const SNMP_MIN_AGENT_VERSION = '0.1.232'
 const PRESENCE_MIN_AGENT_VERSION = '0.1.233'
+const DYNAMIC_DNSSD_MIN_AGENT_VERSION = '0.1.239'
 
 function parseKeyMaterial(rawValue, variableName) {
   const raw = clean(rawValue, 4096)
@@ -405,6 +406,7 @@ async function bundle(tenantId) {
       ...probe,
       snmp_capable: versionAtLeast(row.agent_version, SNMP_MIN_AGENT_VERSION),
       presence_capable: versionAtLeast(row.agent_version, PRESENCE_MIN_AGENT_VERSION),
+      dynamic_dnssd_capable: versionAtLeast(row.agent_version, DYNAMIC_DNSSD_MIN_AGENT_VERSION),
       suggested_cidrs: suggestedCidrs(network || {}),
     }
   })
@@ -433,7 +435,9 @@ async function bundle(tenantId) {
       minAgentVersion: PRESENCE_MIN_AGENT_VERSION,
       minSnmpAgentVersion: SNMP_MIN_AGENT_VERSION,
       minPresenceAgentVersion: PRESENCE_MIN_AGENT_VERSION,
+      minDynamicDnsSdAgentVersion: DYNAMIC_DNSSD_MIN_AGENT_VERSION,
       presenceDiscovery: true,
+      dynamicDnsSd: true,
       methods: ['arp','icmp','reverse_dns','ssdp','mdns','snmp'],
       nameEnrichmentDeferred: true,
       ipv4: true,
