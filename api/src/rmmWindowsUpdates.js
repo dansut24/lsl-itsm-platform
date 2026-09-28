@@ -405,10 +405,10 @@ async function ensureWindowsUpdateManagement(tenantId, device, policy, state, op
     }
   }
 
-  if (!versionAtLeast(device.agent_version, '0.1.210')) {
+  if (!versionAtLeast(device.agent_version, '0.1.213')) {
     await pool.query(
       'UPDATE rmm_windows_update_management SET last_error=$3,updated_at=now() WHERE tenant_id=$1 AND inventory_id=$2',
-      [tenantId, device.inventory_id, 'Agent 0.1.210 or later is required for managed Windows Update mode.'],
+      [tenantId, device.inventory_id, 'Agent 0.1.213 or later is required for managed Windows Update mode.'],
     )
     return {
       desired,
@@ -416,7 +416,7 @@ async function ensureWindowsUpdateManagement(tenantId, device, policy, state, op
       state: 'blocked',
       blocking: desired,
       reason: 'windows_update_management_agent_upgrade_required',
-      requiredAgentVersion: '0.1.210',
+      requiredAgentVersion: '0.1.213',
       currentAgentVersion: clean(device.agent_version),
       policyId,
       policyName,
