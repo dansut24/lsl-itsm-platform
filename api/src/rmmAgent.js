@@ -952,6 +952,18 @@ export function registerRmmAgentRoutes(app) {
       )
     }
 
+    if (clean(completedJob.request_metadata?.source) === 'app_portal') {
+      await pool.query(
+        `UPDATE rmm_app_portal_installations
+            SET status=$3,result=$4::jsonb,completed_at=now(),updated_at=now()
+          WHERE tenant_id=$1 AND agent_job_id=$2`,
+        [agent.tenant_id, completedJob.id, success ? 'succeeded' : 'failed', JSON.stringify({
+          ...resultPayload,
+          ...(errorMessage ? { error: errorMessage } : {}),
+        })],
+      ).catch((error) => console.error('App Portal installation reconciliation failed', completedJob.id, error.message))
+    }
+
     if (completedJob.job_type === 'patch.software') {
       const rebootRequired = Boolean(resultPayload.rebootRequired || resultPayload.reboot_required)
       const verificationFailed = Boolean(resultPayload.verificationFailed || resultPayload.verification_failed)

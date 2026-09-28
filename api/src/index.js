@@ -17,6 +17,7 @@ import { attachRmmViewerWebSocket, registerRmmRemoteRoutes } from './rmmRemote.j
 import { attachRmmConnectWebSockets, registerRmmConnectRoutes } from './rmmConnect.js'
 import { registerRmmScopeRoutes } from './rmmScope.js'
 import { registerRmmPatchingRoutes } from './rmmPatching.js'
+import { registerRmmAppPortalRoutes } from './rmmAppPortal.js'
 import { registerRmmRecoveryKeyRoutes } from './rmmRecoveryKeys.js'
 import { startRmmVulnerabilitySyncScheduler } from './rmmVulnerabilityIntel.js'
 import { startSoftwareVendorSyncScheduler } from './rmmSoftwareVendorIntel.js'
@@ -110,7 +111,7 @@ app.use('*', secureHeaders())
 app.use('/api/*', cors({
   origin: allowedOrigin,
   allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization'],
+  allowHeaders: ['Content-Type', 'Authorization', 'X-Hi5-Filename'],
   credentials: true,
   maxAge: 600,
 }))
@@ -400,6 +401,7 @@ registerRmmRemoteRoutes(app)
 registerRmmConnectRoutes(app)
 registerRmmScopeRoutes(app)
 registerRmmPatchingRoutes(app)
+registerRmmAppPortalRoutes(app)
 registerRmmRecoveryKeyRoutes(app)
 
 app.notFound((c) => c.json({ error: 'Not found' }, 404))
