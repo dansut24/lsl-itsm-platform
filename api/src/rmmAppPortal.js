@@ -199,6 +199,9 @@ async function resolvedApps(agent, identity) {
   const context = await assignmentContext(agent, identity)
   const result = await pool.query(
     `SELECT a.id,a.name,a.publisher,a.description,a.category,a.icon_url,a.source_type,a.catalogue_id,
+            (SELECT count(*)::int
+               FROM rmm_app_portal_installations i
+              WHERE i.tenant_id=a.tenant_id AND i.app_id=a.id AND i.status='succeeded') AS install_count,
             r.id AS revision_id,r.revision,r.version,r.source_kind,r.publish_state,
             x.id AS assignment_id,x.scope_type,x.scope_id,x.scope_name,x.intent,x.priority
        FROM rmm_app_portal_apps a
@@ -223,6 +226,7 @@ async function resolvedApps(agent, identity) {
     iconUrl: row.icon_url,
     sourceType: row.source_type,
     catalogueId: row.catalogue_id,
+    installCount: Number(row.install_count || 0),
     revisionId: row.revision_id,
     revision: row.revision,
     version: row.version,
