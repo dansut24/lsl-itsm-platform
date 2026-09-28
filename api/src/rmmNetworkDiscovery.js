@@ -32,7 +32,8 @@ function versionAtLeast(value, minimum) {
   return true
 }
 
-const SNMP_MIN_AGENT_VERSION = '0.1.231'
+const SNMP_MIN_AGENT_VERSION = '0.1.232'
+const PRESENCE_MIN_AGENT_VERSION = '0.1.233'
 
 function parseKeyMaterial(rawValue, variableName) {
   const raw = clean(rawValue, 4096)
@@ -189,11 +190,11 @@ async function validateProfileReferences(tenantId, probeAgentDeviceId, credentia
             FROM rmm_agent_devices
            WHERE id=$1 AND tenant_id=$4 AND disabled_at IS NULL
         ) AS probe_ok,
-        EXISTS(
+        CASE WHEN $2::uuid IS NULL THEN true ELSE EXISTS(
           SELECT 1
             FROM rmm_network_discovery_credentials
-           WHERE id=$2 AND tenant_id=$4 AND enabled=true
-        ) AS credential_ok,
+           WHERE id=$2::uuid AND tenant_id=$4 AND enabled=true
+        ) END AS credential_ok,
         CASE WHEN $3::uuid IS NULL THEN true ELSE EXISTS(
           SELECT 1
             FROM organisation_sites
@@ -250,13 +251,14 @@ async function bundle(tenantId) {
     pool.query(
       `SELECT p.id,p.name,p.cidr::text,p.site_id,p.probe_agent_device_id,p.credential_id,
               p.snmp_port,p.timeout_ms,p.retries,p.concurrency,p.scan_interval_minutes,p.enabled,
+              p.presence_enabled,p.snmp_enabled,p.presence_timeout_ms,
               p.last_scan_at,p.next_scan_at,p.created_at,p.updated_at,
               i.name AS probe_name,i.reference AS probe_reference,
               s.name AS site_name,c.name AS credential_name,c.snmp_version
          FROM rmm_network_discovery_profiles p
          JOIN rmm_agent_devices a ON a.id=p.probe_agent_device_id AND a.tenant_id=p.tenant_id
          JOIN rmm_device_inventory i ON i.id=a.inventory_id AND i.tenant_id=a.tenant_id
-         JOIN rmm_network_discovery_credentials c ON c.id=p.credential_id AND c.tenant_id=p.tenant_id
+         LEFT JOIN rmm_network_discovery_credentials c ON c.id=p.credential_id AND c.tenant_id=p.tenant_id
          LEFT JOIN organisation_sites s ON s.id=p.site_id AND s.tenant_id=p.tenant_id
         WHERE p.tenant_id=$1
         ORDER BY p.enabled DESC,lower(p.name)`,
@@ -264,7 +266,8 @@ async function bundle(tenantId) {
     ),
     pool.query(
       `SELECT r.id,r.profile_id,r.agent_device_id,r.agent_job_id,r.status,
-              r.addresses_total,r.addresses_responded,r.snmp_devices,r.error_message,
+              r.addresses_total,r.addresses_responded,r.snmp_devices,
+              r.presence_devices,r.snmp_enriched_devices,r.error_message,
               r.initiated_by,r.started_at,r.completed_at,r.created_at,p.name AS profile_name
          FROM rmm_network_discovery_runs r
          JOIN rmm_network_discovery_profiles p ON p.id=r.profile_id AND p.tenant_id=r.tenant_id
@@ -277,7 +280,9 @@ async function bundle(tenantId) {
       `SELECT d.id,d.profile_id,d.site_id,d.source_agent_device_id,d.ip_address::text,
               d.mac_address,d.hostname,d.snmp_version,d.sys_name,d.sys_descr,d.sys_object_id,
               d.sys_location,d.sys_contact,d.uptime_ticks,d.interface_count,d.vendor,d.model,
-              d.device_type,d.status,d.interfaces,d.metadata,d.first_seen_at,d.last_seen_at,d.last_snmp_at,
+              d.device_type,d.status,d.interfaces,d.metadata,d.discovery_methods,
+              d.icmp_reachable,d.latency_ms,d.first_seen_at,d.last_seen_at,
+              d.last_presence_at,d.last_snmp_at,
               p.name AS profile_name,p.cidr::text,s.name AS site_name
          FROM rmm_network_devices d
          JOIN rmm_network_discovery_profiles p ON p.id=d.profile_id AND p.tenant_id=d.tenant_id
@@ -290,7 +295,8 @@ async function bundle(tenantId) {
     ),
     pool.query(
       `SELECT a.id AS agent_device_id,a.websocket_status,a.last_telemetry_at,a.agent_version,
-              i.id AS inventory_id,i.name,i.reference,i.operating_system,
+              i.id AS inventory_id,i.name,i.reference,i.platform,i.operating_system,
+              i.manufacturer,i.model,
               i.source_payload->'network' AS network,
               CASE WHEN a.websocket_status='Connected' AND a.last_telemetry_at>now()-interval '90 seconds'
                    THEN true ELSE false END AS online
@@ -309,12 +315,87 @@ async function bundle(tenantId) {
     ),
   ])
 
-  const onlineDevices = devices.rows.filter((row) => row.status === 'online').length
+  const normalizeMac = (value = '') => clean(value, 128).replace(/[^0-9a-f]/gi, '').toUpperCase()
+  const managedByIp = new Map()
+  const managedByMac = new Map()
+
+  for (const row of probes.rows) {
+    const network = row.network && typeof row.network === 'object' ? row.network : {}
+    const identity = {
+      agentDeviceId: row.agent_device_id,
+      inventoryId: row.inventory_id,
+      name: row.name,
+      reference: row.reference,
+      agentVersion: row.agent_version,
+      online: row.online,
+      platform: row.platform,
+      operatingSystem: row.operating_system,
+      manufacturer: row.manufacturer,
+      model: row.model,
+    }
+    const addresses = new Set()
+    const macs = new Set()
+
+    const addIp = (value) => {
+      const ip = clean(value, 128)
+      if (isIP(ip) === 4 && !ip.startsWith('169.254.')) addresses.add(ip)
+    }
+    const addMac = (value) => {
+      const mac = normalizeMac(value)
+      if (mac.length === 12) macs.add(mac)
+    }
+
+    addIp(network.primary_ipv4)
+    addMac(network.mac)
+    addMac(network.mac_address)
+    for (const value of Array.isArray(network?.primary?.ipv4) ? network.primary.ipv4 : []) addIp(value)
+    addMac(network?.primary?.mac)
+    addMac(network?.primary?.mac_address)
+
+    for (const adapter of Array.isArray(network.adapters) ? network.adapters : []) {
+      for (const value of Array.isArray(adapter?.ipv4) ? adapter.ipv4 : []) addIp(value)
+      addMac(adapter?.mac)
+      addMac(adapter?.mac_address)
+    }
+    for (const config of Array.isArray(network.configurations) ? network.configurations : []) {
+      for (const value of Array.isArray(config?.ip_addresses) ? config.ip_addresses : []) addIp(value)
+      addMac(config?.mac_address)
+    }
+
+    for (const ip of addresses) managedByIp.set(ip, identity)
+    for (const mac of macs) managedByMac.set(mac, identity)
+  }
+
+  const deviceRows = devices.rows.map((row) => {
+    const managed = managedByIp.get(clean(row.ip_address, 128))
+      || managedByMac.get(normalizeMac(row.mac_address))
+      || null
+    return {
+      ...row,
+      managed: Boolean(managed),
+      management_state: managed ? 'managed' : 'discovered',
+      managed_agent_device_id: managed?.agentDeviceId || null,
+      managed_inventory_id: managed?.inventoryId || null,
+      managed_device_name: managed?.name || '',
+      managed_reference: managed?.reference || '',
+      managed_agent_version: managed?.agentVersion || '',
+      vendor: row.vendor || managed?.manufacturer || '',
+      model: row.model || managed?.model || '',
+      device_type: managed
+        ? 'computer'
+        : (row.device_type || 'network_device'),
+      managed_platform: managed?.platform || managed?.operatingSystem || '',
+    }
+  })
+
+  const onlineDevices = deviceRows.filter((row) => row.status === 'online').length
+  const managedDevices = deviceRows.filter((row) => row.managed).length
   const probeRows = probes.rows.map((row) => {
     const { network, ...probe } = row
     return {
       ...probe,
       snmp_capable: versionAtLeast(row.agent_version, SNMP_MIN_AGENT_VERSION),
+      presence_capable: versionAtLeast(row.agent_version, PRESENCE_MIN_AGENT_VERSION),
       suggested_cidrs: suggestedCidrs(network || {}),
     }
   })
@@ -322,22 +403,29 @@ async function bundle(tenantId) {
     credentials: credentials.rows.map(credentialSummary),
     profiles: profiles.rows,
     runs: runs.rows,
-    devices: devices.rows,
+    devices: deviceRows,
     probes: probeRows,
     sites: sites.rows,
     summary: {
       profiles: profiles.rows.filter((row) => row.enabled).length,
-      devices: devices.rowCount,
+      devices: deviceRows.length,
       onlineDevices,
-      offlineDevices: Math.max(0, devices.rowCount - onlineDevices),
+      offlineDevices: Math.max(0, deviceRows.length - onlineDevices),
+      managedDevices,
+      unmanagedDevices: Math.max(0, deviceRows.length - managedDevices),
       onlineProbes: probeRows.filter((row) => row.online).length,
       snmpCapableProbes: probeRows.filter((row) => row.online && row.snmp_capable).length,
+      presenceCapableProbes: probeRows.filter((row) => row.online && row.presence_capable).length,
     },
     capabilities: {
       snmpV1: true,
       snmpV2c: true,
       snmpV3: false,
-      minAgentVersion: SNMP_MIN_AGENT_VERSION,
+      minAgentVersion: PRESENCE_MIN_AGENT_VERSION,
+      minSnmpAgentVersion: SNMP_MIN_AGENT_VERSION,
+      minPresenceAgentVersion: PRESENCE_MIN_AGENT_VERSION,
+      presenceDiscovery: true,
+      methods: ['arp','icmp','reverse_dns','snmp'],
       ipv4: true,
       ipv6: false,
       maxAddressesPerProfile: 4096,
@@ -369,7 +457,7 @@ async function loadProfileForDispatch(tenantId, profileId) {
             a.websocket_status,a.last_telemetry_at,a.disabled_at,a.agent_version,
             i.name AS probe_name
        FROM rmm_network_discovery_profiles p
-       JOIN rmm_network_discovery_credentials c
+       LEFT JOIN rmm_network_discovery_credentials c
          ON c.id=p.credential_id AND c.tenant_id=p.tenant_id
        JOIN rmm_agent_devices a
          ON a.id=p.probe_agent_device_id AND a.tenant_id=p.tenant_id
@@ -394,20 +482,28 @@ async function dispatchProfileScan(session, profileId, initiatedBy = 'technician
     error.status = 409
     throw error
   }
-  if (!profile.credential_enabled) {
+  const snmpEnabled = Boolean(profile.snmp_enabled && profile.credential_id)
+  const presenceEnabled = profile.presence_enabled !== false
+  if (!presenceEnabled && !snmpEnabled) {
+    const error = new Error('This discovery profile has no enabled discovery methods.')
+    error.status = 409
+    throw error
+  }
+  if (snmpEnabled && !profile.credential_enabled) {
     const error = new Error('The SNMP credential assigned to this profile is disabled.')
     error.status = 409
     throw error
   }
-  if (profile.snmp_version === 'v3') {
+  if (snmpEnabled && profile.snmp_version === 'v3') {
     const error = new Error('SNMPv3 credentials can be stored now, but SNMPv3 probe execution is not enabled in this Agent build yet.')
     error.status = 409
     throw error
   }
-  if (!versionAtLeast(profile.agent_version, SNMP_MIN_AGENT_VERSION)) {
+  const requiredAgentVersion = presenceEnabled ? PRESENCE_MIN_AGENT_VERSION : SNMP_MIN_AGENT_VERSION
+  if (!versionAtLeast(profile.agent_version, requiredAgentVersion)) {
     const error = new Error(
-      'The selected probe must be upgraded to Hi5Central Agent ' + SNMP_MIN_AGENT_VERSION
-      + ' or later before it can run SNMP discovery.',
+      'The selected probe must be upgraded to Hi5Central Agent ' + requiredAgentVersion
+      + ' or later before it can run this discovery profile.',
     )
     error.status = 409
     throw error
@@ -422,14 +518,17 @@ async function dispatchProfileScan(session, profileId, initiatedBy = 'technician
   }
 
   const persistedPayload = {
-    protocolVersion: 1,
+    protocolVersion: 2,
     profileId: profile.id,
     cidr: String(profile.cidr),
+    presenceEnabled,
+    presenceTimeoutMs: Number(profile.presence_timeout_ms || 350),
+    snmpEnabled,
     snmpPort: Number(profile.snmp_port),
     timeoutMs: Number(profile.timeout_ms),
     retries: Number(profile.retries),
     concurrency: Number(profile.concurrency),
-    snmpVersion: profile.snmp_version,
+    snmpVersion: snmpEnabled ? profile.snmp_version : '',
   }
 
   const created = await withTransaction(async (client) => {
@@ -479,21 +578,25 @@ async function dispatchProfileScan(session, profileId, initiatedBy = 'technician
 
   const livePayload = {
     ...created.payload,
-    credential: profile.snmp_version === 'v3'
+    ...(snmpEnabled
       ? {
-        version: profile.snmp_version,
-        username: profile.username,
-        securityLevel: profile.security_level,
-        authProtocol: profile.auth_protocol,
-        authSecret: decryptSecret(profile.auth_secret_encrypted),
-        privacyProtocol: profile.privacy_protocol,
-        privacySecret: decryptSecret(profile.privacy_secret_encrypted),
-        contextName: profile.context_name,
+        credential: profile.snmp_version === 'v3'
+          ? {
+            version: profile.snmp_version,
+            username: profile.username,
+            securityLevel: profile.security_level,
+            authProtocol: profile.auth_protocol,
+            authSecret: decryptSecret(profile.auth_secret_encrypted),
+            privacyProtocol: profile.privacy_protocol,
+            privacySecret: decryptSecret(profile.privacy_secret_encrypted),
+            contextName: profile.context_name,
+          }
+          : {
+            version: profile.snmp_version,
+            community: decryptSecret(profile.community_encrypted),
+          },
       }
-      : {
-        version: profile.snmp_version,
-        community: decryptSecret(profile.community_encrypted),
-      },
+      : {}),
   }
 
   const pushed = sendAgentMessage(profile.probe_agent_device_id, {
@@ -574,15 +677,19 @@ async function cleanupStaleDiscoveryRuns() {
 async function dispatchDueNetworkDiscoveryProfiles() {
   await cleanupStaleDiscoveryRuns()
   const due = await pool.query(
-    `SELECT p.id,p.tenant_id,a.agent_version
+    `SELECT p.id,p.tenant_id,p.presence_enabled,p.snmp_enabled,p.credential_id,
+              a.agent_version,c.snmp_version,c.enabled AS credential_enabled
        FROM rmm_network_discovery_profiles p
-       JOIN rmm_network_discovery_credentials c
-         ON c.id=p.credential_id AND c.tenant_id=p.tenant_id AND c.enabled=true
+       LEFT JOIN rmm_network_discovery_credentials c
+         ON c.id=p.credential_id AND c.tenant_id=p.tenant_id
        JOIN rmm_agent_devices a
          ON a.id=p.probe_agent_device_id AND a.tenant_id=p.tenant_id
       WHERE p.enabled=true
-        AND c.snmp_version IN ('v1','v2c')
         AND p.next_scan_at IS NOT NULL
+        AND (
+          p.presence_enabled=true
+          OR (p.snmp_enabled=true AND c.id IS NOT NULL AND c.enabled=true AND c.snmp_version IN ('v1','v2c'))
+        )
         AND p.next_scan_at<=now()
         AND a.disabled_at IS NULL
         AND a.websocket_status='Connected'
@@ -597,7 +704,10 @@ async function dispatchDueNetworkDiscoveryProfiles() {
       LIMIT 10`,
   )
   for (const row of due.rows) {
-    if (!versionAtLeast(row.agent_version, SNMP_MIN_AGENT_VERSION)) {
+    const requiredAgentVersion = row.presence_enabled
+      ? PRESENCE_MIN_AGENT_VERSION
+      : SNMP_MIN_AGENT_VERSION
+    if (!versionAtLeast(row.agent_version, requiredAgentVersion)) {
       await pool.query(
         `UPDATE rmm_network_discovery_profiles
             SET next_scan_at=now() + interval '15 minutes',updated_at=now()
@@ -758,14 +868,14 @@ export function registerRmmNetworkDiscoveryRoutes(app) {
     const name = clean(body.name, 160)
     const cidr = validateCidr(body.cidr)
     const probeAgentDeviceId = clean(body.probeAgentDeviceId, 128)
-    const credentialId = clean(body.credentialId, 128)
+    const credentialId = clean(body.credentialId, 128) || null
     if (!name) return c.json({ error: 'Profile name is required.' }, 400)
     if (!cidr.ok) return c.json({ error: cidr.error }, 400)
-    if (!probeAgentDeviceId || !credentialId) {
-      return c.json({ error: 'Select a probe endpoint and SNMP credential.' }, 400)
+    if (!probeAgentDeviceId) {
+      return c.json({ error: 'Select a probe endpoint.' }, 400)
     }
     const siteId = clean(body.siteId, 128) || null
-    if (!isUuid(probeAgentDeviceId) || !isUuid(credentialId) || (siteId && !isUuid(siteId))) {
+    if (!isUuid(probeAgentDeviceId) || (credentialId && !isUuid(credentialId)) || (siteId && !isUuid(siteId))) {
       return c.json({ error: 'Probe, credential or site identifier is invalid.' }, 400)
     }
     const references = await validateProfileReferences(
@@ -779,21 +889,26 @@ export function registerRmmNetworkDiscoveryRoutes(app) {
     if (!references.site_ok) return c.json({ error: 'Selected site is not available.' }, 400)
     const snmpPort = Math.max(1, Math.min(65535, Number(body.snmpPort || 161)))
     const timeoutMs = Math.max(100, Math.min(10000, Number(body.timeoutMs || 800)))
+    const presenceTimeoutMs = Math.max(50, Math.min(5000, Number(body.presenceTimeoutMs || 350)))
     const retries = Math.max(0, Math.min(5, Number(body.retries ?? 1)))
     const concurrency = Math.max(1, Math.min(128, Number(body.concurrency || 32)))
     const interval = Math.max(5, Math.min(10080, Number(body.scanIntervalMinutes || 60)))
+    const presenceEnabled = body.presenceEnabled !== false
+    const snmpEnabled = Boolean(credentialId && body.snmpEnabled !== false)
 
     try {
       const result = await pool.query(
         `INSERT INTO rmm_network_discovery_profiles
           (tenant_id,name,cidr,site_id,probe_agent_device_id,credential_id,snmp_port,
            timeout_ms,retries,concurrency,scan_interval_minutes,next_scan_at,
+           presence_enabled,snmp_enabled,presence_timeout_ms,
            created_by_user_id,updated_by_user_id)
-         VALUES ($1,$2,$3::cidr,$4,$5,$6,$7,$8,$9,$10,$11,now(),$12,$12)
+         VALUES ($1,$2,$3::cidr,$4,$5,$6,$7,$8,$9,$10,$11,now(),$12,$13,$14,$15,$15)
          RETURNING id`,
         [
           auth.session.tenant_id, name, cidr.cidr, siteId, probeAgentDeviceId, credentialId,
-          snmpPort, timeoutMs, retries, concurrency, interval, auth.session.user_id,
+          snmpPort, timeoutMs, retries, concurrency, interval,
+          presenceEnabled, snmpEnabled, presenceTimeoutMs, auth.session.user_id,
         ],
       )
       await audit(auth.session, 'network.discovery.profile.created', 'Network discovery profile created', name + ' · ' + cidr.cidr, {
@@ -826,7 +941,10 @@ export function registerRmmNetworkDiscoveryRoutes(app) {
     const enabled = body.enabled == null ? row.enabled : Boolean(body.enabled)
     const siteId = clean(body.siteId ?? row.site_id, 128) || null
     const probeAgentDeviceId = clean(body.probeAgentDeviceId ?? row.probe_agent_device_id, 128)
-    const credentialId = clean(body.credentialId ?? row.credential_id, 128)
+    const credentialId = clean(body.credentialId ?? row.credential_id, 128) || null
+    if (!isUuid(probeAgentDeviceId) || (credentialId && !isUuid(credentialId)) || (siteId && !isUuid(siteId))) {
+      return c.json({ error: 'Probe, credential or site identifier is invalid.' }, 400)
+    }
     const references = await validateProfileReferences(
       auth.session.tenant_id,
       probeAgentDeviceId,
@@ -837,12 +955,22 @@ export function registerRmmNetworkDiscoveryRoutes(app) {
     if (!references.credential_ok) return c.json({ error: 'Selected SNMP credential is not available.' }, 400)
     if (!references.site_ok) return c.json({ error: 'Selected site is not available.' }, 400)
 
+    const presenceEnabled = body.presenceEnabled == null ? row.presence_enabled : Boolean(body.presenceEnabled)
+    const snmpEnabled = credentialId
+      ? (body.snmpEnabled == null ? row.snmp_enabled : Boolean(body.snmpEnabled))
+      : false
+    const presenceTimeoutMs = Math.max(
+      50,
+      Math.min(5000, Number(body.presenceTimeoutMs ?? row.presence_timeout_ms ?? 350)),
+    )
+
     await pool.query(
       `UPDATE rmm_network_discovery_profiles
           SET name=$3,cidr=$4::cidr,site_id=$5,probe_agent_device_id=$6,credential_id=$7,
               snmp_port=$8,timeout_ms=$9,retries=$10,concurrency=$11,scan_interval_minutes=$12,
               enabled=$13,next_scan_at=CASE WHEN $13 THEN COALESCE(next_scan_at,now()) ELSE NULL END,
-              updated_by_user_id=$14,updated_at=now()
+              presence_enabled=$14,snmp_enabled=$15,presence_timeout_ms=$16,
+              updated_by_user_id=$17,updated_at=now()
         WHERE id=$1 AND tenant_id=$2`,
       [
         profileId,
@@ -858,6 +986,9 @@ export function registerRmmNetworkDiscoveryRoutes(app) {
         Math.max(1, Math.min(128, Number(body.concurrency ?? row.concurrency))),
         Math.max(5, Math.min(10080, Number(body.scanIntervalMinutes ?? row.scan_interval_minutes))),
         enabled,
+        presenceEnabled,
+        snmpEnabled,
+        presenceTimeoutMs,
         auth.session.user_id,
       ],
     )

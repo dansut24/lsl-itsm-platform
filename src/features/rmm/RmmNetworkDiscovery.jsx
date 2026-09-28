@@ -62,6 +62,9 @@ export function RmmNetworkDiscovery() {
     credentialId: '',
     siteId: '',
     scanIntervalMinutes: 60,
+    presenceEnabled: true,
+    presenceTimeoutMs: 350,
+    snmpEnabled: true,
     timeoutMs: 800,
     retries: 1,
     concurrency: 32,
@@ -136,6 +139,9 @@ export function RmmNetworkDiscovery() {
         body: JSON.stringify({
           ...profile,
           scanIntervalMinutes: Number(profile.scanIntervalMinutes),
+          presenceEnabled: true,
+          presenceTimeoutMs: Number(profile.presenceTimeoutMs),
+          snmpEnabled: Boolean(profile.credentialId),
           timeoutMs: Number(profile.timeoutMs),
           retries: Number(profile.retries),
           concurrency: Number(profile.concurrency),
@@ -149,6 +155,9 @@ export function RmmNetworkDiscovery() {
         credentialId: '',
         siteId: '',
         scanIntervalMinutes: 60,
+        presenceEnabled: true,
+        presenceTimeoutMs: 350,
+        snmpEnabled: true,
         timeoutMs: 800,
         retries: 1,
         concurrency: 32,
@@ -171,7 +180,7 @@ export function RmmNetworkDiscovery() {
         body: JSON.stringify({}),
       })
       setBundle(payload.bundle)
-      setNotice('SNMP discovery scan started on the selected probe.')
+      setNotice('Network discovery scan started on the selected probe.')
     } catch (err) {
       setError(err.message || String(err))
     } finally {
@@ -204,7 +213,7 @@ export function RmmNetworkDiscovery() {
       <div>
         <span className="rmm-eyebrow">Network management</span>
         <h1>Network discovery</h1>
-        <p>Use a managed Agent as an on-site probe to discover switches, routers, firewalls, printers, access points and other SNMP devices.</p>
+        <p>Use a managed Agent as an on-site probe to discover devices by network presence, then enrich supported hardware with SNMP identity and monitoring data.</p>
       </div>
       <button className="rmm-primary compact" disabled={loading} onClick={() => load()} type="button">
         <RefreshCw size={14} className={loading ? 'spin' : ''} /> Refresh
@@ -217,14 +226,14 @@ export function RmmNetworkDiscovery() {
     <div className="rmm-network-metrics">
       <article className="rmm-card"><Radar size={19} /><span>Discovery profiles</span><strong>{summary.profiles ?? 0}</strong><small>Enabled network ranges</small></article>
       <article className="rmm-card"><Network size={19} /><span>Discovered devices</span><strong>{summary.devices ?? 0}</strong><small>{summary.onlineDevices ?? 0} online · {summary.offlineDevices ?? 0} offline</small></article>
-      <article className="rmm-card"><Server size={19} /><span>SNMP-capable probes</span><strong>{summary.snmpCapableProbes ?? 0}</strong><small>{summary.onlineProbes ?? 0} online · requires Agent {capabilities.minAgentVersion || '0.1.231'}+</small></article>
-      <article className="rmm-card"><ShieldCheck size={19} /><span>SNMP support</span><strong>v1 / v2c</strong><small>{capabilities.snmpV3 ? 'SNMPv3 enabled' : 'SNMPv3 schema ready · probe support next'}</small></article>
+      <article className="rmm-card"><Server size={19} /><span>Discovery-capable probes</span><strong>{summary.presenceCapableProbes ?? 0}</strong><small>{summary.onlineProbes ?? 0} online · presence requires Agent {capabilities.minPresenceAgentVersion || '0.1.233'}+</small></article>
+      <article className="rmm-card"><ShieldCheck size={19} /><span>Coverage</span><strong>{summary.managedDevices ?? 0} managed</strong><small>{summary.unmanagedDevices ?? 0} discovered without an Agent</small></article>
     </div>
 
     <div className="rmm-network-config-grid">
       <section className="rmm-card rmm-network-config-card">
         <div className="rmm-card-heading">
-          <div><span className="rmm-eyebrow">Credentials</span><h2>SNMP credentials</h2><p>Secrets are encrypted at rest and only sent to the selected live probe during a scan.</p></div>
+          <div><span className="rmm-eyebrow">Optional enrichment</span><h2>SNMP credentials</h2><p>Presence discovery does not require SNMP. Add credentials only when you want richer identity, uptime and interface data from supported devices.</p></div>
           <KeyRound size={19} />
         </div>
         <form className="rmm-network-form" onSubmit={createCredential}>
@@ -235,13 +244,13 @@ export function RmmNetworkDiscovery() {
         </form>
         <div className="rmm-network-credential-list">
           {credentials.map((item) => <div key={item.id}><span><strong>{item.name}</strong><small>{item.snmpVersion.toUpperCase()} · secret {item.secretConfigured ? 'configured' : 'missing'}</small></span><StatusPill tone={item.enabled ? 'healthy' : 'neutral'}>{item.enabled ? 'Enabled' : 'Disabled'}</StatusPill></div>)}
-          {!credentials.length && <div className="rmm-network-mini-empty">No SNMP credentials configured yet.</div>}
+          {!credentials.length && <div className="rmm-network-mini-empty">No SNMP credentials configured. Presence discovery will still work.</div>}
         </div>
       </section>
 
       <section className="rmm-card rmm-network-config-card">
         <div className="rmm-card-heading">
-          <div><span className="rmm-eyebrow">Ranges & probes</span><h2>Create discovery profile</h2><p>Choose an Agent on the same customer network and the IPv4 range it should scan.</p></div>
+          <div><span className="rmm-eyebrow">Ranges & probes</span><h2>Create discovery profile</h2><p>Choose an Agent and private IPv4 range. Hi5Central discovers devices by ARP/ICMP/reverse DNS even when no SNMP credential is supplied.</p></div>
           <Radar size={19} />
         </div>
         <form className="rmm-network-form" onSubmit={createProfile}>
@@ -256,16 +265,17 @@ export function RmmNetworkDiscovery() {
               probeAgentDeviceId: probeId,
               cidr: current.cidr || suggested || '',
             }))
-          }} required><option value="">Select probe…</option>{probes.map((item) => <option value={item.agent_device_id} key={item.agent_device_id}>{item.name || item.reference} {item.online ? (item.snmp_capable ? '· SNMP ready' : '· Upgrade Agent') : '· Offline'}</option>)}</select></label>
-          <label><span>Credential</span><select value={profile.credentialId} onChange={(e) => setProfile({ ...profile, credentialId: e.target.value })} required><option value="">Select credential…</option>{credentials.filter((item) => item.enabled).map((item) => <option value={item.id} key={item.id}>{item.name} · {item.snmpVersion.toUpperCase()}</option>)}</select></label>
+          }} required><option value="">Select probe…</option>{probes.map((item) => <option value={item.agent_device_id} key={item.agent_device_id}>{item.name || item.reference} {item.online ? (item.presence_capable ? '· Discovery ready' : item.snmp_capable ? '· SNMP only · upgrade for presence' : '· Upgrade Agent') : '· Offline'}</option>)}</select></label>
+          <label><span>SNMP credential (optional)</span><select value={profile.credentialId} onChange={(e) => setProfile({ ...profile, credentialId: e.target.value })}><option value="">None · presence discovery only</option>{credentials.filter((item) => item.enabled).map((item) => <option value={item.id} key={item.id}>{item.name} · {item.snmpVersion.toUpperCase()}</option>)}</select><small>Attach a credential only to enrich devices that expose SNMP.</small></label>
           <label><span>Site</span><select value={profile.siteId} onChange={(e) => setProfile({ ...profile, siteId: e.target.value })}><option value="">No site assignment</option>{sites.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
           <label><span>Poll interval</span><select value={profile.scanIntervalMinutes} onChange={(e) => setProfile({ ...profile, scanIntervalMinutes: e.target.value })}><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">1 hour</option><option value="240">4 hours</option><option value="1440">Daily</option></select></label>
           <details className="wide rmm-network-advanced"><summary>Advanced scan settings</summary><div>
-            <label><span>Timeout (ms)</span><input type="number" min="100" max="10000" value={profile.timeoutMs} onChange={(e) => setProfile({ ...profile, timeoutMs: e.target.value })} /></label>
+            <label><span>Presence timeout (ms)</span><input type="number" min="50" max="5000" value={profile.presenceTimeoutMs} onChange={(e) => setProfile({ ...profile, presenceTimeoutMs: e.target.value })} /></label>
+            <label><span>SNMP timeout (ms)</span><input type="number" min="100" max="10000" value={profile.timeoutMs} onChange={(e) => setProfile({ ...profile, timeoutMs: e.target.value })} /></label>
             <label><span>Retries</span><input type="number" min="0" max="5" value={profile.retries} onChange={(e) => setProfile({ ...profile, retries: e.target.value })} /></label>
             <label><span>Concurrency</span><input type="number" min="1" max="128" value={profile.concurrency} onChange={(e) => setProfile({ ...profile, concurrency: e.target.value })} /></label>
           </div></details>
-          <button className="rmm-primary" disabled={busy === 'profile' || !credentials.length || !probes.length} type="submit">{busy === 'profile' ? 'Creating…' : 'Create profile'}</button>
+          <button className="rmm-primary" disabled={busy === 'profile' || !probes.length} type="submit">{busy === 'profile' ? 'Creating…' : 'Create profile'}</button>
         </form>
       </section>
     </div>
@@ -273,48 +283,53 @@ export function RmmNetworkDiscovery() {
     <section className="rmm-table-card rmm-network-profile-card">
       <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Discovery scopes</span><h2>Network ranges</h2><p>Each range is scanned from its assigned on-site Agent probe.</p></div></div>
       <div className="rmm-network-table profiles">
-        <div className="head"><span>Profile</span><span>Range</span><span>Probe</span><span>Credential</span><span>Last scan</span><span>Status</span><span /></div>
+        <div className="head"><span>Profile</span><span>Range</span><span>Probe</span><span>Enrichment</span><span>Last scan</span><span>Status</span><span /></div>
         {profiles.map((item) => {
           const probe = probeById.get(item.probe_agent_device_id)
           const scanning = runs.some((run) => run.profile_id === item.id && ['queued', 'running'].includes(run.status))
+          const presenceRequired = item.presence_enabled !== false
+          const probeReady = Boolean(probe?.online && (presenceRequired ? probe?.presence_capable : probe?.snmp_capable))
           return <div className="row" key={item.id}>
             <span><strong>{item.name}</strong><small>{item.site_name || 'No site assigned'} · every {item.scan_interval_minutes} min</small></span>
-            <span><strong>{item.cidr}</strong><small>UDP/{item.snmp_port} · {item.timeout_ms}ms · {item.concurrency} workers</small></span>
+            <span><strong>{item.cidr}</strong><small>{presenceRequired ? 'ARP + ICMP + reverse DNS' : 'SNMP only'} · {item.concurrency} workers</small></span>
             <span><strong>{item.probe_name || item.probe_reference}</strong><small>{probe?.agent_version || 'Agent'} · {probe?.online ? 'Online' : 'Offline'}</small></span>
-            <span><strong>{item.credential_name}</strong><small>{String(item.snmp_version).toUpperCase()}</small></span>
+            <span><strong>{item.credential_name || 'No SNMP credential'}</strong><small>{item.credential_name ? String(item.snmp_version || '').toUpperCase() + ' enrichment' : 'Presence discovery only'}</small></span>
             <span><strong>{when(item.last_scan_at)}</strong><small>Next: {item.enabled ? when(item.next_scan_at) : 'Disabled'}</small></span>
-            <span><StatusPill tone={item.enabled ? (probe?.online && probe?.snmp_capable ? 'healthy' : 'warning') : 'neutral'}>{item.enabled ? (!probe?.online ? 'Probe offline' : probe?.snmp_capable ? 'Ready' : 'Upgrade Agent') : 'Disabled'}</StatusPill></span>
-            <span className="actions"><button disabled={!item.enabled || !probe?.online || !probe?.snmp_capable || scanning || busy === 'scan:' + item.id} onClick={() => runScan(item.id)} type="button"><Play size={13} /> {scanning ? 'Scanning…' : 'Scan now'}</button><button disabled={busy === 'profile:' + item.id} onClick={() => toggleProfile(item)} type="button">{item.enabled ? 'Disable' : 'Enable'}</button></span>
+            <span><StatusPill tone={item.enabled ? (probeReady ? 'healthy' : 'warning') : 'neutral'}>{item.enabled ? (!probe?.online ? 'Probe offline' : probeReady ? 'Ready' : 'Upgrade Agent') : 'Disabled'}</StatusPill></span>
+            <span className="actions"><button disabled={!item.enabled || !probeReady || scanning || busy === 'scan:' + item.id} onClick={() => runScan(item.id)} type="button"><Play size={13} /> {scanning ? 'Scanning…' : 'Scan now'}</button><button disabled={busy === 'profile:' + item.id} onClick={() => toggleProfile(item)} type="button">{item.enabled ? 'Disable' : 'Enable'}</button></span>
           </div>
         })}
       </div>
-      {!profiles.length && <div className="rmm-empty compact"><Radar size={22} /><strong>No discovery ranges yet</strong><span>Create a credential and profile above to start finding network devices.</span></div>}
+      {!profiles.length && <div className="rmm-empty compact"><Radar size={22} /><strong>No discovery ranges yet</strong><span>Create a profile above to start finding devices. SNMP credentials are optional.</span></div>}
     </section>
 
     <section className="rmm-table-card rmm-network-devices-card">
-      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">SNMP inventory</span><h2>Discovered network devices</h2><p>Standard SNMP system identity returned by devices on configured ranges.</p></div><span>{devices.length} device{devices.length === 1 ? '' : 's'}</span></div>
+      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Network inventory</span><h2>Discovered network devices</h2><p>Presence discovery identifies devices by IP, MAC and hostname. SNMP adds richer identity when available.</p></div><span>{devices.length} device{devices.length === 1 ? '' : 's'}</span></div>
       <div className="rmm-network-table devices">
-        <div className="head"><span>Device</span><span>Address</span><span>Vendor / type</span><span>SNMP identity</span><span>Interfaces</span><span>Last seen</span><span>Status</span></div>
+        <div className="head"><span>Device</span><span>Address</span><span>Vendor / type</span><span>Discovery</span><span>Management</span><span>Last seen</span><span>Status</span></div>
         {devices.map((item) => {
           const Icon = deviceIcon(item.device_type)
+          const methods = Array.isArray(item.discovery_methods) ? item.discovery_methods : []
           return <div className="row" key={item.id}>
-            <span className="device"><i><Icon size={16} /></i><span><strong>{item.sys_name || item.hostname || item.ip_address}</strong><small>{item.profile_name}{item.site_name ? ' · ' + item.site_name : ''}</small></span></span>
+            <span className="device"><i><Icon size={16} /></i><span><strong>{item.managed_device_name || item.sys_name || item.hostname || item.ip_address}</strong><small>{item.profile_name}{item.site_name ? ' · ' + item.site_name : ''}</small></span></span>
             <span><strong>{item.ip_address}</strong><small>{item.mac_address || 'MAC not resolved'}</small></span>
             <span><strong>{item.vendor || 'Unknown vendor'}</strong><small>{String(item.device_type || 'network_device').replaceAll('_', ' ')}</small></span>
-            <span><strong>{item.sys_object_id || 'Object ID not reported'}</strong><small title={item.sys_descr}>{item.sys_descr || 'Description not reported'}</small></span>
-            <span><strong>{item.interface_count ?? '—'}</strong><small>{String(item.snmp_version || '').toUpperCase()}</small></span>
-            <span><strong>{when(item.last_seen_at)}</strong><small>{item.sys_location || 'Location not reported'}</small></span>
+            <span><strong>{methods.length ? methods.map((value) => String(value).toUpperCase()).join(' · ') : 'Presence'}</strong><small>{item.icmp_reachable ? 'ICMP reachable' + (item.latency_ms != null ? ' · ' + item.latency_ms + ' ms' : '') : item.snmp_version ? 'SNMP ' + String(item.snmp_version).toUpperCase() : 'Seen on local network'}</small></span>
+            <span>{item.managed
+              ? <><StatusPill tone="healthy">Agent installed</StatusPill><small>{item.managed_agent_version || item.managed_reference || ''}</small></>
+              : <><StatusPill tone="warning">Unmanaged</StatusPill><small>Eligible for assessment / deployment</small></>}</span>
+            <span><strong>{when(item.last_seen_at)}</strong><small>{item.hostname || item.sys_location || 'No hostname reported'}</small></span>
             <span><StatusPill tone={item.status === 'online' ? 'healthy' : 'offline'}>{item.status}</StatusPill></span>
           </div>
         })}
       </div>
-      {!devices.length && <div className="rmm-empty compact"><Network size={22} /><strong>No SNMP devices discovered yet</strong><span>Run a profile scan to populate network inventory.</span></div>}
+      {!devices.length && <div className="rmm-empty compact"><Network size={22} /><strong>No network devices discovered yet</strong><span>Create a presence profile and run a scan. SNMP is optional.</span></div>}
     </section>
 
     <section className="rmm-card rmm-network-runs-card">
       <div className="rmm-card-heading"><div><span className="rmm-eyebrow">History</span><h2>Recent discovery runs</h2></div></div>
       <div className="rmm-network-run-list">
-        {runs.slice(0, 12).map((run) => <div key={run.id}><CircleDot size={13} /><span><strong>{run.profile_name}</strong><small>{when(run.created_at)} · {run.addresses_total || 0} addresses · {run.snmp_devices || 0} SNMP devices</small></span><StatusPill tone={run.status === 'completed' ? 'healthy' : run.status === 'failed' ? 'critical' : run.status === 'running' ? 'running' : 'neutral'}>{run.status}</StatusPill></div>)}
+        {runs.slice(0, 12).map((run) => <div key={run.id}><CircleDot size={13} /><span><strong>{run.profile_name}</strong><small>{when(run.created_at)} · {run.addresses_total || 0} addresses · {run.presence_devices || 0} devices found · {run.snmp_enriched_devices || 0} SNMP enriched</small></span><StatusPill tone={run.status === 'completed' ? 'healthy' : run.status === 'failed' ? 'critical' : run.status === 'running' ? 'running' : 'neutral'}>{run.status}</StatusPill></div>)}
         {!runs.length && <div className="rmm-network-mini-empty">No network discovery scans have run yet.</div>}
       </div>
     </section>

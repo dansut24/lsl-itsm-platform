@@ -13,6 +13,18 @@ function asInteger(value, fallback = null) {
   return Number.isFinite(number) ? Math.trunc(number) : fallback
 }
 
+function discoveryMethods(raw = {}) {
+  const methods = new Set(
+    asArray(raw?.discoveryMethods ?? raw?.discovery_methods)
+      .map((value) => clean(value, 32).toLowerCase())
+      .filter(Boolean),
+  )
+  if (raw?.icmpReachable ?? raw?.icmp_reachable) methods.add('icmp')
+  if (clean(raw?.macAddress ?? raw?.mac_address, 64)) methods.add('arp')
+  if (clean(raw?.snmpVersion ?? raw?.snmp_version, 32)) methods.add('snmp')
+  return [...methods]
+}
+
 function inferVendor(sysObjectId = '', sysDescr = '') {
   const oid = clean(sysObjectId, 256)
   const descr = clean(sysDescr, 4096).toLowerCase()
@@ -90,6 +102,17 @@ export async function reconcileNetworkDiscoveryJobResult(completedJob, resultPay
     completedJob.error_message || resultPayload.error || resultPayload.message,
     2000,
   )
+  const snmpEnrichedDevices = asInteger(
+    resultPayload.snmpEnrichedDevices ?? resultPayload.snmp_enriched_devices,
+    devices.filter((item) => discoveryMethods(item).includes('snmp')).length,
+  ) || 0
+  const presenceDevices = asInteger(
+    resultPayload.presenceDevices ?? resultPayload.presence_devices,
+    devices.filter((item) => {
+      const methods = discoveryMethods(item)
+      return methods.includes('arp') || methods.includes('icmp') || methods.includes('reverse_dns')
+    }).length,
+  ) || 0
 
   await withTransaction(async (client) => {
     if (success) {
@@ -103,6 +126,8 @@ export async function reconcileNetworkDiscoveryJobResult(completedJob, resultPay
       for (const raw of devices) {
         const ipAddress = clean(raw?.ipAddress ?? raw?.ip_address, 128)
         if (!ipAddress) continue
+        const methods = discoveryMethods(raw)
+        const snmpObserved = methods.includes('snmp')
         const sysDescr = clean(raw?.sysDescr ?? raw?.sys_descr, 8192)
         const sysObjectId = clean(raw?.sysObjectId ?? raw?.sys_object_id, 512)
         const vendor = clean(raw?.vendor, 256) || inferVendor(sysObjectId, sysDescr)
@@ -114,32 +139,38 @@ export async function reconcileNetworkDiscoveryJobResult(completedJob, resultPay
             (tenant_id,profile_id,site_id,source_agent_device_id,ip_address,mac_address,hostname,
              snmp_version,sys_name,sys_descr,sys_object_id,sys_location,sys_contact,uptime_ticks,
              interface_count,vendor,model,device_type,status,interfaces,metadata,
-             first_seen_at,last_seen_at,last_snmp_at,updated_at)
+             discovery_methods,icmp_reachable,latency_ms,
+             first_seen_at,last_seen_at,last_presence_at,last_snmp_at,updated_at)
            VALUES
             ($1,$2,$3,$4,$5::inet,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'online',
-             $19::jsonb,$20::jsonb,now(),now(),now(),now())
+             $19::jsonb,$20::jsonb,$21::jsonb,$22,$23,
+             now(),now(),now(),CASE WHEN $24 THEN now() ELSE NULL END,now())
            ON CONFLICT (profile_id,ip_address)
            DO UPDATE SET
              site_id=EXCLUDED.site_id,
              source_agent_device_id=EXCLUDED.source_agent_device_id,
              mac_address=CASE WHEN EXCLUDED.mac_address<>'' THEN EXCLUDED.mac_address ELSE rmm_network_devices.mac_address END,
              hostname=CASE WHEN EXCLUDED.hostname<>'' THEN EXCLUDED.hostname ELSE rmm_network_devices.hostname END,
-             snmp_version=EXCLUDED.snmp_version,
-             sys_name=EXCLUDED.sys_name,
-             sys_descr=EXCLUDED.sys_descr,
-             sys_object_id=EXCLUDED.sys_object_id,
-             sys_location=EXCLUDED.sys_location,
-             sys_contact=EXCLUDED.sys_contact,
-             uptime_ticks=EXCLUDED.uptime_ticks,
-             interface_count=EXCLUDED.interface_count,
+             snmp_version=CASE WHEN EXCLUDED.snmp_version<>'' THEN EXCLUDED.snmp_version ELSE rmm_network_devices.snmp_version END,
+             sys_name=CASE WHEN EXCLUDED.sys_name<>'' THEN EXCLUDED.sys_name ELSE rmm_network_devices.sys_name END,
+             sys_descr=CASE WHEN EXCLUDED.sys_descr<>'' THEN EXCLUDED.sys_descr ELSE rmm_network_devices.sys_descr END,
+             sys_object_id=CASE WHEN EXCLUDED.sys_object_id<>'' THEN EXCLUDED.sys_object_id ELSE rmm_network_devices.sys_object_id END,
+             sys_location=CASE WHEN EXCLUDED.sys_location<>'' THEN EXCLUDED.sys_location ELSE rmm_network_devices.sys_location END,
+             sys_contact=CASE WHEN EXCLUDED.sys_contact<>'' THEN EXCLUDED.sys_contact ELSE rmm_network_devices.sys_contact END,
+             uptime_ticks=COALESCE(EXCLUDED.uptime_ticks,rmm_network_devices.uptime_ticks),
+             interface_count=COALESCE(EXCLUDED.interface_count,rmm_network_devices.interface_count),
              vendor=CASE WHEN EXCLUDED.vendor<>'' THEN EXCLUDED.vendor ELSE rmm_network_devices.vendor END,
              model=CASE WHEN EXCLUDED.model<>'' THEN EXCLUDED.model ELSE rmm_network_devices.model END,
              device_type=EXCLUDED.device_type,
              status='online',
-             interfaces=EXCLUDED.interfaces,
+             interfaces=CASE WHEN EXCLUDED.interfaces<>'[]'::jsonb THEN EXCLUDED.interfaces ELSE rmm_network_devices.interfaces END,
              metadata=EXCLUDED.metadata,
+             discovery_methods=EXCLUDED.discovery_methods,
+             icmp_reachable=EXCLUDED.icmp_reachable,
+             latency_ms=EXCLUDED.latency_ms,
              last_seen_at=now(),
-             last_snmp_at=now(),
+             last_presence_at=now(),
+             last_snmp_at=CASE WHEN $24 THEN now() ELSE rmm_network_devices.last_snmp_at END,
              updated_at=now()`,
           [
             run.tenant_id,
@@ -164,6 +195,10 @@ export async function reconcileNetworkDiscoveryJobResult(completedJob, resultPay
             JSON.stringify(raw?.metadata && typeof raw.metadata === 'object' && !Array.isArray(raw.metadata)
               ? raw.metadata
               : {}),
+            JSON.stringify(methods),
+            Boolean(raw?.icmpReachable ?? raw?.icmp_reachable),
+            asInteger(raw?.latencyMs ?? raw?.latency_ms),
+            snmpObserved,
           ],
         )
       }
@@ -175,8 +210,10 @@ export async function reconcileNetworkDiscoveryJobResult(completedJob, resultPay
               addresses_total=$4,
               addresses_responded=$5,
               snmp_devices=$6,
-              result=$7::jsonb,
-              error_message=$8,
+              presence_devices=$7,
+              snmp_enriched_devices=$8,
+              result=$9::jsonb,
+              error_message=$10,
               started_at=COALESCE(
                 rmm_network_discovery_runs.started_at,
                 job.claimed_started_at,
@@ -187,7 +224,7 @@ export async function reconcileNetworkDiscoveryJobResult(completedJob, resultPay
         FROM (
           SELECT id,claimed_at AS claimed_started_at
             FROM rmm_agent_jobs
-           WHERE id=$9
+           WHERE id=$11
         ) job
        WHERE rmm_network_discovery_runs.id=$1
          AND rmm_network_discovery_runs.tenant_id=$2`,
@@ -197,7 +234,9 @@ export async function reconcileNetworkDiscoveryJobResult(completedJob, resultPay
         status,
         addressesTotal,
         addressesResponded,
-        devices.length,
+        snmpEnrichedDevices,
+        presenceDevices,
+        snmpEnrichedDevices,
         JSON.stringify(resultPayload),
         errorMessage,
         completedJob.id,
