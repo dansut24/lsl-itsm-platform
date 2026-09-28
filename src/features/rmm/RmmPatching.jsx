@@ -142,7 +142,7 @@ function PageHeading({ action }) {
       <div>
         <span className="rmm-eyebrow">Maintenance</span>
         <h1>Patching</h1>
-        <p>Software patching, Windows Update, vulnerability intelligence and patch policy targeting.</p>
+        <p>Software catalogue, Windows Update and patch policy targeting.</p>
       </div>
       {action}
     </div>
@@ -608,12 +608,16 @@ function PolicyModal({ policy, catalogue = [], onClose, onSave }) {
       : [...current.softwareCatalogueIds, id],
   }))
   const dayLabels = [['M', 1], ['T', 2], ['W', 3], ['T', 4], ['F', 5], ['S', 6], ['S', 7]]
-  const softwareCatalogueOptions = useMemo(
-    () => [...catalogue]
-      .filter((item) => item?.id && item?.canonicalName)
-      .sort((left, right) => String(left.canonicalName).localeCompare(String(right.canonicalName))),
-    [catalogue],
-  )
+  const softwareCatalogueOptions = useMemo(() => {
+    const byIdentity = new Map()
+    for (const item of catalogue.filter((entry) => entry?.id && entry?.canonicalName)) {
+      const identity = String(item.executionPackageId || item.packageId || item.canonicalName).toLowerCase()
+      const current = byIdentity.get(identity)
+      if (!current || (current.builtIn && !item.builtIn)) byIdentity.set(identity, item)
+    }
+    return [...byIdentity.values()]
+      .sort((left, right) => String(left.canonicalName).localeCompare(String(right.canonicalName)))
+  }, [catalogue])
   const searchText = softwareAppSearch.trim().toLowerCase()
   const visibleSoftwareApps = softwareCatalogueOptions
     .filter((item) => !searchText || [item.canonicalName, item.publisher, item.packageId, item.executionPackageId].filter(Boolean).join(' ').toLowerCase().includes(searchText))

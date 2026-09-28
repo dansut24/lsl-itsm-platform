@@ -2622,17 +2622,20 @@ async function bulkSoftwarePatchPlan(tenantId, agentDeviceId, mode = 'selected_c
   }
 }
 
-async function createAndDispatchBulkSoftwarePatch(session, plans, mode = 'selected_catalogue') {
+async function createAndDispatchBulkSoftwarePatch(session, plans, mode = 'selected_catalogue', options = {}) {
   const label = clean(session.name || session.email || 'Technician').slice(0, 255)
+  const initiatedBy = clean(options.initiatedBy || 'technician')
+  const actorType = initiatedBy === 'system' ? 'system' : 'technician'
+  const source = clean(options.source || 'rmm_device_bulk_patching')
   const first = plans[0]
   const created = await withTransaction(async (client) => {
     const jobResult = await client.query(
       `INSERT INTO rmm_agent_jobs
         (tenant_id,agent_device_id,job_type,payload,queued_by_user_id,initiated_by,initiated_by_label,request_metadata)
-       VALUES ($1,$2,'patch.software.bulk',$3::jsonb,$4,'technician',$5,$6::jsonb)
+       VALUES ($1,$2,'patch.software.bulk',$3::jsonb,$4,$5,$6,$7::jsonb)
        RETURNING id,status,correlation_id,created_at`,
-      [session.tenant_id, first.device.agent_device_id, JSON.stringify({ protocolVersion: 1, mode, items: plans.map((plan) => plan.manifest) }), session.user_id, label,
-        JSON.stringify({ source: 'rmm_device_bulk_patching', mode, item_count: plans.length, device_name: first.device.device_name, device_reference: first.device.reference })],
+      [session.tenant_id, first.device.agent_device_id, JSON.stringify({ protocolVersion: 1, mode, items: plans.map((plan) => plan.manifest) }), session.user_id, initiatedBy, label,
+        JSON.stringify({ source, mode, item_count: plans.length, policy_id: clean(options.policyId), policy_name: clean(options.policyName), device_name: first.device.device_name, device_reference: first.device.reference })],
     )
     const job = jobResult.rows[0]
     const deployments = []
@@ -2684,10 +2687,10 @@ async function createAndDispatchBulkSoftwarePatch(session, plans, mode = 'select
 
   await recordRmmActivity({
     tenantId: session.tenant_id, agentDeviceId: first.device.agent_device_id, inventoryId: first.device.inventory_id,
-    actorUserId: session.user_id, actorType: 'technician', actorLabel: label, eventType: 'patch.software.bulk.requested', category: 'patching',
+    actorUserId: session.user_id, actorType, actorLabel: label, eventType: 'patch.software.bulk.requested', category: 'patching',
     summary: label + ' started ' + plans.length + ' software patches', detail: plans.map((plan) => plan.manifest.applicationName + ' ' + plan.manifest.installedVersion + ' → ' + plan.manifest.targetVersion).join(' · '),
     outcome: 'requested', correlationId: created.job.correlation_id, jobId: created.job.id,
-    metadata: { mode, deploymentIds: created.deployments.map((deployment) => deployment.id), catalogueIds: plans.map((plan) => plan.device.catalogue_id) },
+    metadata: { source, policyId: clean(options.policyId), policyName: clean(options.policyName), mode, deploymentIds: created.deployments.map((deployment) => deployment.id), catalogueIds: plans.map((plan) => plan.device.catalogue_id) },
   }).catch(() => null)
   return { ...created, dispatched: true }
 }
@@ -2727,7 +2730,13 @@ function softwarePolicyTarget(policy, exposure) {
     return { targeted: selected.has(clean(exposure.catalogue_id)), mode }
   }
   if (mode === 'all_winget') {
-    return { targeted: clean(exposure.catalogue_provider) === 'winget', mode }
+    const metadata = object(exposure.source_metadata)
+    const wingetReady = clean(exposure.catalogue_provider) === 'winget'
+      || (
+        clean(metadata.wingetPackageId)
+        && metadata.wingetFallbackReady === true
+      )
+    return { targeted: Boolean(wingetReady), mode }
   }
   return { targeted: true, mode }
 }
@@ -2740,7 +2749,7 @@ function softwarePolicyMaintenance(policy, at = new Date()) {
   return windowsMaintenanceWindow({ maintenance_window: maintenanceWindow }, at)
 }
 
-async function effectiveVulnerabilityPolicy(tenantId, exposure) {
+async function effectiveSoftwarePolicy(tenantId, inventoryId) {
   const result = await pool.query(
     `SELECT p.* FROM rmm_patch_assignments x
        JOIN rmm_patch_policies p ON p.id=x.policy_id AND p.tenant_id=x.tenant_id AND p.status='active' AND p.software_enabled=true
@@ -2752,8 +2761,12 @@ async function effectiveVulnerabilityPolicy(tenantId, exposure) {
         (x.scope_type='Device' AND x.scope_id IN (i.id::text,i.reference,COALESCE((SELECT id::text FROM rmm_agent_devices WHERE inventory_id=i.id AND disabled_at IS NULL LIMIT 1),''))) OR
         (x.scope_type='Site' AND x.scope_id IN (COALESCE(os.id::text,''),COALESCE(os.external_key,''),COALESCE(os.name,''))) OR
         (x.scope_type='Group' AND EXISTS (SELECT 1 FROM rmm_device_group_memberships gm WHERE gm.tenant_id=i.tenant_id AND gm.inventory_id=i.id AND gm.group_id::text=x.scope_id))
-      ) ORDER BY x.priority DESC,x.created_at DESC LIMIT 1`, [tenantId, exposure.inventory_id])
+      ) ORDER BY x.priority DESC,x.created_at DESC LIMIT 1`, [tenantId, inventoryId])
   return result.rows[0] || null
+}
+
+async function effectiveVulnerabilityPolicy(tenantId, exposure) {
+  return effectiveSoftwarePolicy(tenantId, exposure.inventory_id)
 }
 
 export async function evaluateRealtimeVulnerabilityPolicies(tenantId, { dispatch = true } = {}) {
@@ -2937,6 +2950,193 @@ function normalizeWindowsRules(value = {}, deploymentDelayDays = 0) {
       definition: delay('definition', 0),
       other: delay('other', base),
     },
+  }
+}
+
+function softwarePolicyMode(policy) {
+  const mode = clean(object(policy?.software_rules).targetMode)
+  return ['selected_catalogue', 'all_catalogue', 'all_winget'].includes(mode) ? mode : 'all_catalogue'
+}
+
+function softwarePolicyReleaseTime(catalogueEntry, wingetCandidate = null) {
+  const metadata = object(catalogueEntry?.source_metadata)
+  const evidence = object(catalogueEntry?.qualification_evidence)
+  for (const value of [
+    wingetCandidate?.first_seen_at,
+    metadata.releaseDate,
+    evidence.cleanInstallVerifiedAt,
+    catalogueEntry?.qualified_at,
+    catalogueEntry?.created_at,
+  ]) {
+    if (!value) continue
+    const date = new Date(value)
+    if (!Number.isNaN(date.getTime())) return date
+  }
+  return null
+}
+
+function softwarePolicyDelaySatisfied(policy, catalogueEntry, wingetCandidate = null, at = new Date()) {
+  const delayDays = Math.max(0, Math.min(365, Number(policy?.deployment_delay_days) || 0))
+  if (!delayDays) return true
+  const releaseTime = softwarePolicyReleaseTime(catalogueEntry, wingetCandidate)
+  if (!releaseTime) return false
+  return at.getTime() - releaseTime.getTime() >= delayDays * 24 * 60 * 60 * 1000
+}
+
+export async function evaluateSoftwarePatchPolicies(tenantId, { dispatch = true, at = new Date() } = {}) {
+  const [devices, catalogue, discovery] = await Promise.all([
+    patchDeviceRows(tenantId),
+    catalogueRows(tenantId),
+    patchDiscoveryRows(tenantId),
+  ])
+  const software = buildSoftware(devices, catalogue, discovery.observations)
+  const catalogueById = new Map(catalogue.map((item) => [clean(item.id), item]))
+  const candidateByPackageId = new Map(
+    discovery.candidates
+      .filter((item) => clean(item.provider_package_id))
+      .map((item) => [lower(item.provider_package_id), item]),
+  )
+  const observationsByInventory = new Map()
+  for (const observation of discovery.observations) {
+    if (!observationsByInventory.has(observation.inventory_id)) observationsByInventory.set(observation.inventory_id, [])
+    observationsByInventory.get(observation.inventory_id).push(observation)
+  }
+
+  const decisions = []
+  for (const device of devices) {
+    const policy = await effectiveSoftwarePolicy(tenantId, device.inventory_id)
+    const mode = softwarePolicyMode(policy)
+    const maintenance = policy ? softwarePolicyMaintenance(policy, at) : { open: false }
+    const approval = clean(policy?.approval_mode)
+    const base = {
+      agentDeviceId: device.agent_device_id,
+      inventoryId: device.inventory_id,
+      deviceName: device.name,
+      policyId: policy?.id || '',
+      policyName: clean(policy?.name),
+      mode,
+      approval,
+      maintenanceOpen: Boolean(maintenance.open),
+      eligibleCount: 0,
+      dispatched: false,
+      jobId: '',
+      reason: '',
+    }
+
+    if (!policy) {
+      decisions.push({ ...base, reason: 'no_software_patch_policy' })
+      continue
+    }
+    if (approval !== 'automatic') {
+      decisions.push({ ...base, reason: approval === 'blocked' ? 'software_patching_blocked' : 'software_patch_approval_required' })
+      continue
+    }
+    if (!maintenance.open) {
+      decisions.push({ ...base, reason: 'outside_software_maintenance_window' })
+      continue
+    }
+    if (!device.online) {
+      decisions.push({ ...base, reason: 'device_offline' })
+      continue
+    }
+
+    const activeBulk = await pool.query(
+      `SELECT id FROM rmm_agent_jobs
+        WHERE tenant_id=$1 AND agent_device_id=$2 AND job_type='patch.software.bulk'
+          AND status IN ('queued','claimed')
+        ORDER BY created_at DESC LIMIT 1`,
+      [tenantId, device.agent_device_id],
+    )
+    if (activeBulk.rowCount) {
+      decisions.push({ ...base, reason: 'software_patch_job_already_active', jobId: activeBulk.rows[0].id })
+      continue
+    }
+
+    const observations = observationsByInventory.get(device.inventory_id) || []
+    const wingetCatalogueIds = new Set(
+      observations
+        .filter((item) => item.provider === 'winget' && item.patch_status === 'update_available' && item.catalogue_id)
+        .map((item) => clean(item.catalogue_id)),
+    )
+    const selectedIds = new Set(array(object(policy.software_rules).catalogueIds).map(clean))
+    const updates = software.deviceSoftware.filter((item) =>
+      item.agentDeviceId === device.agent_device_id
+      && item.patchStatus === 'update_available'
+      && item.catalogue?.id,
+    )
+
+    const candidateRows = updates.filter((item) => {
+      const catalogueId = clean(item.catalogue.id)
+      if (mode === 'selected_catalogue' && !selectedIds.has(catalogueId)) return false
+      if (mode === 'all_catalogue' && item.catalogue.installable !== true) return false
+      if (mode === 'all_winget' && !(wingetCatalogueIds.has(catalogueId) || item.catalogue.provider === 'winget')) return false
+
+      const raw = catalogueById.get(catalogueId)
+      const packageId = clean(item.catalogue.executionPackageId || item.catalogue.packageId)
+      const wingetCandidate = mode === 'all_winget' ? candidateByPackageId.get(lower(packageId)) : null
+      return softwarePolicyDelaySatisfied(policy, raw, wingetCandidate, at)
+    }).slice(0, 50)
+
+    const plans = []
+    const rejected = []
+    for (const item of candidateRows) {
+      const plan = await softwarePatchPlan(tenantId, device.agent_device_id, item.catalogue.id)
+      if (plan.error) rejected.push({ catalogueId: item.catalogue.id, error: plan.error })
+      else plans.push(plan)
+    }
+
+    if (!plans.length) {
+      decisions.push({
+        ...base,
+        eligibleCount: candidateRows.length,
+        rejectedCount: rejected.length,
+        reason: candidateRows.length ? 'no_deployable_software_updates' : 'no_eligible_software_updates',
+      })
+      continue
+    }
+
+    if (!dispatch) {
+      decisions.push({
+        ...base,
+        eligibleCount: plans.length,
+        rejectedCount: rejected.length,
+        reason: 'software_patch_schedule_ready',
+      })
+      continue
+    }
+
+    const systemSession = {
+      tenant_id: tenantId,
+      user_id: null,
+      name: 'SYSTEM · software patch schedule',
+      email: '',
+    }
+    const pushed = await createAndDispatchBulkSoftwarePatch(systemSession, plans, mode, {
+      initiatedBy: 'system',
+      source: 'software_patch_schedule',
+      policyId: policy.id,
+      policyName: policy.name,
+    })
+    decisions.push({
+      ...base,
+      eligibleCount: plans.length,
+      rejectedCount: rejected.length,
+      dispatched: pushed.dispatched === true,
+      jobId: clean(pushed?.job?.id),
+      reason: pushed.dispatched === true ? 'scheduled_software_patch_dispatched' : 'software_patch_dispatch_failed',
+    })
+  }
+  return decisions
+}
+
+let softwarePatchTimer = null
+async function runSoftwarePatchSchedules() {
+  const tenants = await pool.query(
+    'SELECT DISTINCT tenant_id FROM rmm_agent_devices WHERE disabled_at IS NULL AND tenant_id IS NOT NULL',
+  )
+  for (const row of tenants.rows) {
+    await evaluateSoftwarePatchPolicies(row.tenant_id, { dispatch: true })
+      .catch((error) => console.error('RMM software patch schedule evaluation failed', row.tenant_id, error.message))
   }
 }
 
@@ -3167,6 +3367,11 @@ export function registerRmmPatchingRoutes(app) {
     vulnerabilityPolicyTimer = setInterval(() => void runRealtimeVulnerabilityPolicies(), 60_000)
     vulnerabilityPolicyTimer.unref?.()
     setTimeout(() => void runRealtimeVulnerabilityPolicies(), 15_000).unref?.()
+  }
+  if (!softwarePatchTimer) {
+    softwarePatchTimer = setInterval(() => void runSoftwarePatchSchedules(), 60_000)
+    softwarePatchTimer.unref?.()
+    setTimeout(() => void runSoftwarePatchSchedules(), 25_000).unref?.()
   }
   if (!windowsPatchTimer) {
     windowsPatchTimer = setInterval(() => void runWindowsPatchSchedules(), 60_000)
