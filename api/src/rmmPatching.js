@@ -1365,12 +1365,12 @@ async function reconcileSupersededPatchDeployments(tenantId) {
 
 async function reconcileBulkPatchDeployments(tenantId) {
   const result = await pool.query(
-    `SELECT d.id,d.catalogue_id,d.inventory_id,d.agent_job_id,d.application_name,d.target_version,d.status,d.requested_by_user_id,
+    `SELECT d.id,d.catalogue_id,d.inventory_id,d.agent_job_id,d.application_name,d.provider_package_id,d.target_version,d.status,d.requested_by_user_id,
             j.status AS job_status,j.result AS job_result,j.error_message,j.completed_at,
             c.canonical_name,c.name_pattern,c.publisher_pattern,c.source_metadata,c.qualification_evidence,i.source_payload,a.id AS agent_device_id
        FROM rmm_patch_deployments d
        JOIN rmm_agent_jobs j ON j.id=d.agent_job_id AND j.tenant_id=d.tenant_id
-       JOIN rmm_software_catalogue c ON c.id=d.catalogue_id
+       LEFT JOIN rmm_software_catalogue c ON c.id=d.catalogue_id
        JOIN rmm_device_inventory i ON i.id=d.inventory_id
        JOIN rmm_agent_devices a ON a.inventory_id=i.id AND a.tenant_id=d.tenant_id AND a.disabled_at IS NULL
       WHERE d.tenant_id=$1
@@ -1384,17 +1384,26 @@ async function reconcileBulkPatchDeployments(tenantId) {
   for (const deployment of result.rows) {
     const jobResult = object(deployment.job_result)
     const items = array(jobResult.items)
-    const item = items.find((entry) => clean(entry?.catalogueId) === clean(deployment.catalogue_id))
+    const catalogueId = clean(deployment.catalogue_id)
+    const packageId = clean(deployment.provider_package_id)
+    const item = (catalogueId
+      ? items.find((entry) => clean(entry?.catalogueId) === catalogueId)
+      : null)
+      || (packageId
+        ? items.find((entry) => lower(entry?.packageId) === lower(packageId))
+        : null)
       || items.find((entry) => clean(entry?.applicationName) === clean(deployment.application_name)
         && clean(entry?.targetVersion) === clean(deployment.target_version))
       || null
 
-    const inventorySuperseded = supersededInventoryInstances(deployment.source_payload, deployment, deployment.target_version)
+    const inventorySuperseded = catalogueId
+      ? supersededInventoryInstances(deployment.source_payload, deployment, deployment.target_version)
+      : []
     const verificationVersions = array(object(item?.verification).installedVersions).map((value) => clean(value)).filter(Boolean)
     const targetObserved = verificationVersions.some((version) => compareVersions(version, deployment.target_version) >= 0)
-      || softwareItems({ source_payload: deployment.source_payload }).some((installed) => identityPhraseMatches(installed?.name, deployment.name_pattern)
+      || (catalogueId && softwareItems({ source_payload: deployment.source_payload }).some((installed) => identityPhraseMatches(installed?.name, deployment.name_pattern)
         && identityPhraseMatches(installed?.publisher, deployment.publisher_pattern)
-        && compareVersions(normalizeCatalogueVersion(installed?.version, deployment, 'installed'), deployment.target_version) >= 0)
+        && compareVersions(normalizeCatalogueVersion(installed?.version, deployment, 'installed'), deployment.target_version) >= 0))
     let status = 'failed'
     if (deployment.job_status === 'cancelled') status = 'cancelled'
     else if (item?.success === true && inventorySuperseded.length === 0) {
@@ -1427,13 +1436,13 @@ async function reconcileBulkPatchDeployments(tenantId) {
         [tenantId, deployment.id, JSON.stringify({ supersededRemediation: remediation, supersededInstances: inventorySuperseded.map((entry) => ({ name: clean(entry.name), version: clean(entry.version), scope: clean(entry.scope), registryKey: clean(entry.registry_key) })) })])
     }
 
-    if (['failed','verification_failed','cancelled'].includes(status)) {
+    if (catalogueId && ['failed','verification_failed','cancelled'].includes(status)) {
       await pool.query(
         `UPDATE rmm_vulnerability_exposures
             SET remediation_state='available',last_seen_at=now()
           WHERE tenant_id=$1 AND inventory_id=$2 AND catalogue_id=$3
             AND status='open' AND remediation_state='in_progress'`,
-        [tenantId, deployment.inventory_id, deployment.catalogue_id],
+        [tenantId, deployment.inventory_id, catalogueId],
       )
     }
   }
@@ -3611,9 +3620,9 @@ export async function patchAssignmentImpactPreview(tenantId, options = {}) {
     } else if (policyType === 'os' && !isWindows) {
       applicable = false
       notApplicableReason = 'OS patching applies to Windows endpoints'
-    } else if (policyType === 'os' && !agentVersionAtLeast(device.agent_version, '0.1.213')) {
+    } else if (policyType === 'os' && !agentVersionAtLeast(device.agent_version, '0.1.214')) {
       applicable = false
-      notApplicableReason = 'Agent 0.1.213 or later is required'
+      notApplicableReason = 'Agent 0.1.214 or later is required'
     }
 
     const online = hasAgent && clean(device.websocket_status).toLowerCase() === 'connected'
