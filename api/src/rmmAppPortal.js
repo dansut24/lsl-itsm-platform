@@ -114,7 +114,7 @@ async function adminBundle(tenantId) {
         WHERE q.tenant_id=$1 ORDER BY q.created_at DESC LIMIT 250`, [tenantId]),
     pool.query(
       `SELECT id,canonical_name,publisher,target_version,provider,provider_package_id,
-              installer_type,qualification_state,qualification_version,catalogue_source
+              installer_type,qualification_state,qualification_version,catalogue_source,icon_url
          FROM rmm_software_catalogue
         WHERE status='active' AND (tenant_id=$1 OR tenant_id IS NULL)
           AND qualification_state IN ('qualified','qualified_limited')
@@ -222,6 +222,7 @@ async function resolvedApps(agent, identity) {
     category: row.category,
     iconUrl: row.icon_url,
     sourceType: row.source_type,
+    catalogueId: row.catalogue_id,
     revisionId: row.revision_id,
     revision: row.revision,
     version: row.version,
@@ -493,7 +494,7 @@ export function registerRmmAppPortalRoutes(app) {
     let catalogue = null
     if (catalogueId) {
       const found = await pool.query(
-        `SELECT id,canonical_name,publisher,target_version FROM rmm_software_catalogue
+        `SELECT id,canonical_name,publisher,target_version,icon_url FROM rmm_software_catalogue
           WHERE id=$1 AND status='active' AND (tenant_id=$2 OR tenant_id IS NULL)
             AND qualification_state IN ('qualified','qualified_limited') LIMIT 1`,
         [catalogueId, auth.session.tenant_id])
@@ -508,8 +509,8 @@ export function registerRmmAppPortalRoutes(app) {
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9) RETURNING *`,
         [auth.session.tenant_id, catalogueId, sourceType, catalogue?.canonical_name || name,
           catalogue?.publisher || clean(body.publisher).slice(0,255), clean(body.description).slice(0,4000),
-          clean(body.category || 'Company software').slice(0,120), clean(body.iconUrl).slice(0,1000),
-          auth.session.user_id])
+          clean(body.category || 'Company software').slice(0,120),
+          clean(body.iconUrl || catalogue?.icon_url).slice(0,1000), auth.session.user_id])
       const portalApp = appResult.rows[0]
       if (sourceType !== 'catalogue') return portalApp
       const revisionResult = await client.query(
@@ -797,14 +798,48 @@ export function registerRmmAppPortalRoutes(app) {
     const identity = normalizedIdentity(body)
     await rememberIdentity(auth.agent, identity)
     const apps = await resolvedApps(auth.agent, identity)
-    const jobs = await pool.query(
-      `SELECT i.id,i.app_id,i.revision_id,i.status AS installation_status,i.created_at,i.completed_at,
-              j.id AS job_id,j.status AS job_status,j.result,j.error_message
-         FROM rmm_app_portal_installations i
-         LEFT JOIN rmm_agent_jobs j ON j.id=i.agent_job_id
-        WHERE i.tenant_id=$1 AND i.agent_device_id=$2
-        ORDER BY i.created_at DESC LIMIT 100`,
-      [auth.agent.tenant_id, auth.agent.id])
+    const [jobs, installed, device, softwareUpdates, windowsUpdates] = await Promise.all([
+      pool.query(
+        `SELECT i.id,i.app_id,i.revision_id,i.status AS installation_status,i.created_at,i.completed_at,
+                j.id AS job_id,j.status AS job_status,j.result,j.error_message
+           FROM rmm_app_portal_installations i
+           LEFT JOIN rmm_agent_jobs j ON j.id=i.agent_job_id
+          WHERE i.tenant_id=$1 AND i.agent_device_id=$2
+          ORDER BY i.created_at DESC LIMIT 100`,
+        [auth.agent.tenant_id, auth.agent.id]),
+      pool.query(
+        `SELECT DISTINCT catalogue_id
+           FROM rmm_software_patch_observations
+          WHERE tenant_id=$1 AND inventory_id=$2
+            AND catalogue_id IS NOT NULL AND installed_version<>''`,
+        [auth.agent.tenant_id, auth.agent.inventory_id]),
+      pool.query(
+        `SELECT i.name,i.manufacturer,i.model,i.operating_system,i.os_version,i.is_encrypted,
+                i.storage_total_bytes,i.storage_free_bytes,i.user_display_name,i.user_principal_name,
+                i.compliance_state,d.agent_version,d.websocket_status,d.last_telemetry_at,d.active_user
+           FROM rmm_device_inventory i
+           JOIN rmm_agent_devices d ON d.inventory_id=i.id AND d.tenant_id=i.tenant_id
+          WHERE i.id=$1 AND i.tenant_id=$2 LIMIT 1`,
+        [auth.agent.inventory_id, auth.agent.tenant_id]),
+      pool.query(
+        `SELECT application_name AS title,installed_version,available_version,
+                patch_status AS status,observed_at AS updated_at
+           FROM rmm_software_patch_observations
+          WHERE tenant_id=$1 AND inventory_id=$2 AND patch_status='update_available'
+          ORDER BY observed_at DESC LIMIT 8`,
+        [auth.agent.tenant_id, auth.agent.inventory_id]),
+      pool.query(
+        `SELECT title,update_class,severity,downloaded,reboot_required,last_seen_at AS updated_at
+           FROM rmm_windows_update_observations
+          WHERE tenant_id=$1 AND inventory_id=$2 AND pending=true
+          ORDER BY last_seen_at DESC LIMIT 8`,
+        [auth.agent.tenant_id, auth.agent.inventory_id]),
+    ])
+    const installedCatalogueIds = new Set(installed.rows.map((row) => clean(row.catalogue_id)))
+    const enrichedApps = apps.map((app) => ({
+      ...app,
+      installed: Boolean(app.catalogueId && installedCatalogueIds.has(clean(app.catalogueId))),
+    }))
     const requests = identity.sid || identity.upn
       ? await pool.query(
         `SELECT id,app_id,revision_id,status,requested_by_sid,requested_by_upn,
@@ -816,7 +851,18 @@ export function registerRmmAppPortalRoutes(app) {
           ORDER BY created_at DESC LIMIT 100`,
         [auth.agent.tenant_id, auth.agent.id, identity.sid, identity.upn])
       : { rows: [] }
-    return c.json({ success: true, apps, installations: jobs.rows, requests: requests.rows })
+    return c.json({
+      success: true,
+      apps: enrichedApps,
+      installations: jobs.rows,
+      requests: requests.rows,
+      device: device.rows[0] || {},
+      updates: {
+        software: softwareUpdates.rows,
+        windows: windowsUpdates.rows,
+        total: softwareUpdates.rowCount + windowsUpdates.rowCount,
+      },
+    })
   })
 
   app.post('/api/v1/agent/app-portal/install', async (c) => {
