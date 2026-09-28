@@ -5,6 +5,7 @@ import { hasPermission } from './access.js'
 import { originMatchesTenant } from './deploymentConfig.js'
 import { pool, withTransaction } from './db.js'
 import { recordJobCompletionActivity, recordRmmActivity } from './rmmActivity.js'
+import { reconcileNetworkDiscoveryJobResult } from './rmmNetworkDiscoveryCore.js'
 import { bitLockerRecoveryEscrowNeeded, ingestBitLockerRecoveryEscrow } from './rmmRecoveryKeys.js'
 import { recalculateTenantVulnerabilityExposures } from './rmmVulnerabilityExposure.js'
 import { ingestWindowsUpdateInventory, reconcileWindowsUpdateJobResult } from './rmmWindowsUpdates.js'
@@ -862,10 +863,38 @@ export function registerRmmAgentRoutes(app) {
     const agent = await authenticateAgent(c.req.header('x-hi5-device-id'), c.req.header('x-hi5-agent-secret'))
     if (!agent) return c.json({ success: false, error: 'Agent authentication failed.' }, 401)
     const jobs = await withTransaction(async (client) => {
+      const staleDiscovery = await client.query(
+        `UPDATE rmm_agent_jobs
+            SET status='failed',
+                error_message='Network discovery scan did not complete before the probe lease expired.',
+                completed_at=now(),
+                updated_at=now()
+          WHERE agent_device_id=$1
+            AND status='claimed'
+            AND job_type='network.discovery.scan'
+            AND claimed_at < now() - interval '30 minutes'
+        RETURNING id,tenant_id,request_metadata`,
+        [agent.id],
+      )
+      for (const stale of staleDiscovery.rows) {
+        const runId = clean(stale.request_metadata?.network_discovery_run_id)
+        if (!runId) continue
+        await client.query(
+          `UPDATE rmm_network_discovery_runs
+              SET status='failed',
+                  error_message='Network discovery scan did not complete before the probe lease expired.',
+                  completed_at=now(),
+                  updated_at=now()
+            WHERE id=$1 AND tenant_id=$2 AND status IN ('queued','running')`,
+          [runId, stale.tenant_id],
+        ).catch(() => null)
+      }
+
       await client.query(
         `UPDATE rmm_agent_jobs
             SET status='queued',claimed_at=NULL,updated_at=now()
           WHERE agent_device_id=$1 AND status='claimed'
+            AND job_type<>'network.discovery.scan'
             AND claimed_at < now() - CASE
               WHEN job_type='patch.software.bulk' THEN interval '6 hours'
               WHEN job_type='windows_update.install' THEN interval '3 hours'
@@ -916,6 +945,9 @@ export function registerRmmAgentRoutes(app) {
     const completedJob = { ...result.rows[0], inventory_id: agent.inventory_id }
     await reconcileWindowsUpdateJobResult(completedJob, resultPayload, success).catch((error) => {
       console.error('Windows Update job reconciliation failed', completedJob.id, error.message)
+    })
+    await reconcileNetworkDiscoveryJobResult(completedJob, resultPayload, success).catch((error) => {
+      console.error('Network discovery job reconciliation failed', completedJob.id, error.message)
     })
     const bulkSucceededCount = Number(resultPayload.succeededCount || 0)
     const bulkFailedCount = Number(resultPayload.failedCount || 0)

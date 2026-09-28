@@ -62,6 +62,7 @@ import {
   RmmSitesManagement,
 } from './RmmEstateManagement.jsx'
 import { RmmMonitoringPolicies } from './RmmMonitoringPolicies.jsx'
+import { RmmNetworkDiscovery } from './RmmNetworkDiscovery.jsx'
 import { RmmPatching as RmmPatchingWorkspace } from './RmmPatching.jsx'
 import { RmmAgentDeployment } from './RmmAgentDeployment.jsx'
 import { RmmAutomation } from './RmmAutomationWorkspace.jsx'
@@ -76,6 +77,7 @@ const navigation = [
   { id: 'devices', label: 'Devices', icon: Monitor, section: 'Manage' },
   { id: 'sites', label: 'Sites', icon: MapPin, section: 'Manage' },
   { id: 'groups', label: 'Device groups', icon: Users, section: 'Manage' },
+  { id: 'network-discovery', label: 'Network discovery', icon: Network, section: 'Manage' },
   { id: 'alerts', label: 'Alerts', icon: AlertTriangle, section: 'Manage' },
   { id: 'connect', label: 'Connect', icon: Cable, section: 'Operate', requiresRemote: true },
   { id: 'patching', label: 'Patching', icon: ShieldCheck, section: 'Operate' },
@@ -93,6 +95,7 @@ const pageMeta = {
   devices: ['Estate', 'Devices', 'Search and manage every endpoint, server and monitored network device.'],
   sites: ['Estate structure', 'Sites', 'Organise devices by location and define default management scope.'],
   groups: ['Estate structure', 'Device groups', 'Build static and dynamic scopes for policy and deployment targeting.'],
+  'network-discovery': ['Network management', 'Network discovery', 'Discover and inventory SNMP devices through managed on-site Agent probes.'],
   alerts: ['Monitoring', 'Alerts', 'Prioritise active monitoring conditions and device health exceptions.'],
   remote: ['Support', 'Remote access', 'Connect to managed endpoints using remote desktop, terminal and file tools.'],
   connect: ['Support', 'Hi5Central Connect', 'Create one-time support codes for unmanaged Windows computers.'],
@@ -2003,7 +2006,7 @@ function RmmSettings({ navigate }) {
     { icon: ShieldCheck, title: 'Maintenance windows', detail: 'Control when patching, restarts and automated remediation may run.' },
     { icon: KeyRound, title: 'Credentials & secrets', detail: 'Secure credentials used by remote actions, scripts and integrations.' },
     { icon: Bell, title: 'Alerting & notifications', detail: 'Thresholds, escalation targets and integrations for monitoring events.' },
-    { icon: Network, title: 'Network discovery', detail: 'Discovery ranges, SNMP credentials and monitored network devices.' },
+    { icon: Network, title: 'Network discovery', detail: 'Discovery ranges, SNMP credentials and monitored network devices.', target: 'network-discovery' },
   ]
   return <><PageHeading activeView="settings" /><div className="rmm-settings-grid">{settings.map(({ icon: Icon, title, detail, target }) => <button className="rmm-card" key={title} onClick={() => target && navigate(target)} type="button"><span><Icon size={19} /></span><div><strong>{title}</strong><small>{detail}</small></div><ChevronRight size={17} /></button>)}</div></>
 }
@@ -2083,11 +2086,12 @@ export function RmmPlatformApp({ accent, canAudit = false, canBackstageRemote = 
   }
 
   function renderPage() {
-    if (dataLoading && !selectedDevice && ['dashboard','devices','sites','groups','patching','software','reports'].includes(activeView)) return <RmmPageSkeleton />
+    if (dataLoading && !selectedDevice && ['dashboard','devices','sites','groups','network-discovery','patching','software','reports'].includes(activeView)) return <RmmPageSkeleton />
     if (selectedDevice) return <RmmDeviceDetail canBackstageRemote={canBackstageRemote} canRemote={canRemote} device={selectedDevice} initialSection={selectedDeviceSection} initialTool={selectedDeviceTool} navigate={navigate} onDeviceRoute={(nextSection, nextTool = '') => { setSelectedDeviceSection(nextSection || 'overview'); setSelectedDeviceTool(nextTool || ''); window.history.pushState({}, '', rmmDevicePath(undefined, selectedDevice.id, nextSection || 'overview', nextTool || '')) }} onBack={() => { setSelectedDeviceId(''); setSelectedDeviceSection('overview'); setSelectedDeviceTool(''); window.history.pushState({}, '', rmmPath(undefined, 'devices')) }} onCreateIncident={createItsmIncident} tickets={tickets} />
     if (activeView === 'devices') return <RmmDeviceInventory devices={devices} sites={sites} openDevice={openDevice} query={query} preset={inventoryPreset} onPresetApplied={() => setInventoryPreset(null)} />
     if (activeView === 'sites') return <RmmSitesManagement devices={devices} query={query} sites={sites} onSitesChange={onSitesChange} onViewDevices={openScopedInventory} />
     if (activeView === 'groups') return <RmmDeviceGroupsManagement devices={devices} query={query} sites={sites} onViewDevices={openScopedInventory} />
+    if (activeView === 'network-discovery') return <RmmNetworkDiscovery />
     if (activeView === 'alerts') return <RmmAlerts onCreateIncident={createItsmIncident} openDevice={openDevice} query={query} />
     if (activeView === 'connect') return <RmmConnect />
     if (activeView === 'remote') return <RmmDeviceInventory devices={devices} sites={sites} openDevice={openDevice} query={query} preset={inventoryPreset} onPresetApplied={() => setInventoryPreset(null)} />

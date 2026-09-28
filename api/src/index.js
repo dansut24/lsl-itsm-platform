@@ -18,6 +18,7 @@ import { attachRmmConnectWebSockets, registerRmmConnectRoutes } from './rmmConne
 import { registerRmmScopeRoutes } from './rmmScope.js'
 import { registerRmmPatchingRoutes } from './rmmPatching.js'
 import { registerRmmAppPortalRoutes } from './rmmAppPortal.js'
+import { registerRmmNetworkDiscoveryRoutes, startRmmNetworkDiscoveryScheduler } from './rmmNetworkDiscovery.js'
 import { registerRmmRecoveryKeyRoutes } from './rmmRecoveryKeys.js'
 import { startRmmVulnerabilitySyncScheduler } from './rmmVulnerabilityIntel.js'
 import { startSoftwareVendorSyncScheduler } from './rmmSoftwareVendorIntel.js'
@@ -402,6 +403,7 @@ registerRmmConnectRoutes(app)
 registerRmmScopeRoutes(app)
 registerRmmPatchingRoutes(app)
 registerRmmAppPortalRoutes(app)
+registerRmmNetworkDiscoveryRoutes(app)
 registerRmmRecoveryKeyRoutes(app)
 
 app.notFound((c) => c.json({ error: 'Not found' }, 404))
@@ -417,6 +419,7 @@ startMicrosoftSyncScheduler()
 startRmmVulnerabilitySyncScheduler()
 startSoftwareVendorSyncScheduler()
 startTenantVendorSourceScheduler()
+startRmmNetworkDiscoveryScheduler()
 const server = serve({ fetch: app.fetch, hostname: '0.0.0.0', port })
 attachRmmAgentWebSocket(server)
 attachRmmViewerWebSocket(server)
