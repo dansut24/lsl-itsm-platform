@@ -823,13 +823,14 @@ export function registerRmmAppPortalRoutes(app) {
         [auth.agent.inventory_id, auth.agent.tenant_id]),
       pool.query(
         `SELECT application_name AS title,installed_version,available_version,
-                patch_status AS status,observed_at AS updated_at
+                patch_status AS status,observed_at AS updated_at,count(*) OVER()::int AS total_count
            FROM rmm_software_patch_observations
           WHERE tenant_id=$1 AND inventory_id=$2 AND patch_status='update_available'
           ORDER BY observed_at DESC LIMIT 8`,
         [auth.agent.tenant_id, auth.agent.inventory_id]),
       pool.query(
-        `SELECT title,update_class,severity,downloaded,reboot_required,last_seen_at AS updated_at
+        `SELECT title,update_class,severity,downloaded,reboot_required,last_seen_at AS updated_at,
+                count(*) OVER()::int AS total_count
            FROM rmm_windows_update_observations
           WHERE tenant_id=$1 AND inventory_id=$2 AND pending=true
           ORDER BY last_seen_at DESC LIMIT 8`,
@@ -860,7 +861,8 @@ export function registerRmmAppPortalRoutes(app) {
       updates: {
         software: softwareUpdates.rows,
         windows: windowsUpdates.rows,
-        total: softwareUpdates.rowCount + windowsUpdates.rowCount,
+        total: Number(softwareUpdates.rows[0]?.total_count || 0)
+          + Number(windowsUpdates.rows[0]?.total_count || 0),
       },
     })
   })
