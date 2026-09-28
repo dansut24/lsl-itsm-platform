@@ -14,6 +14,17 @@ function asInteger(value, fallback = null) {
   return Number.isFinite(number) ? Math.trunc(number) : fallback
 }
 
+function normalizeMac(value = '') {
+  return clean(value, 64).replace(/[^0-9a-f]/gi, '').toUpperCase()
+}
+
+function usableMac(value = '') {
+  const mac = normalizeMac(value)
+  return mac.length === 12
+    && mac !== '000000000000'
+    && mac !== 'FFFFFFFFFFFF'
+}
+
 function discoveryMethods(raw = {}) {
   const methods = new Set(
     asArray(raw?.discoveryMethods ?? raw?.discovery_methods)
@@ -21,7 +32,8 @@ function discoveryMethods(raw = {}) {
       .filter(Boolean),
   )
   if (raw?.icmpReachable ?? raw?.icmp_reachable) methods.add('icmp')
-  if (clean(raw?.macAddress ?? raw?.mac_address, 64)) methods.add('arp')
+  if (usableMac(raw?.macAddress ?? raw?.mac_address)) methods.add('arp')
+  else methods.delete('arp')
   if (clean(raw?.snmpVersion ?? raw?.snmp_version, 32)) methods.add('snmp')
   return [...methods]
 }
@@ -104,28 +116,28 @@ export async function reconcileNetworkDiscoveryJobResult(completedJob, resultPay
   if (!runResult.rowCount) return
 
   const run = runResult.rows[0]
-  const devices = asArray(resultPayload.devices).slice(0, 4096)
+  const devices = asArray(resultPayload.devices)
+    .slice(0, 4096)
+    .filter((item) => {
+      const methods = discoveryMethods(item)
+      return Boolean(item?.icmpReachable ?? item?.icmp_reachable)
+        || methods.includes('snmp')
+        || usableMac(item?.macAddress ?? item?.mac_address)
+    })
   const status = success ? 'completed' : 'failed'
   const addressesTotal = asInteger(resultPayload.addressesTotal ?? resultPayload.addresses_total, 0) || 0
-  const addressesResponded = asInteger(
-    resultPayload.addressesResponded ?? resultPayload.addresses_responded,
-    devices.length,
-  ) || 0
+  const addressesResponded = devices.length
   const errorMessage = clean(
     completedJob.error_message || resultPayload.error || resultPayload.message,
     2000,
   )
-  const snmpEnrichedDevices = asInteger(
-    resultPayload.snmpEnrichedDevices ?? resultPayload.snmp_enriched_devices,
-    devices.filter((item) => discoveryMethods(item).includes('snmp')).length,
-  ) || 0
-  const presenceDevices = asInteger(
-    resultPayload.presenceDevices ?? resultPayload.presence_devices,
-    devices.filter((item) => {
-      const methods = discoveryMethods(item)
-      return methods.includes('arp') || methods.includes('icmp') || methods.includes('reverse_dns')
-    }).length,
-  ) || 0
+  const snmpEnrichedDevices = devices.filter(
+    (item) => discoveryMethods(item).includes('snmp'),
+  ).length
+  const presenceDevices = devices.filter((item) => {
+    const methods = discoveryMethods(item)
+    return methods.includes('arp') || methods.includes('icmp') || methods.includes('reverse_dns')
+  }).length
 
   await withTransaction(async (client) => {
     if (success) {
@@ -144,7 +156,8 @@ export async function reconcileNetworkDiscoveryJobResult(completedJob, resultPay
         const sysDescr = clean(raw?.sysDescr ?? raw?.sys_descr, 8192)
         const sysObjectId = clean(raw?.sysObjectId ?? raw?.sys_object_id, 512)
         const hostname = clean(raw?.hostname, 512)
-        const macAddress = clean(raw?.macAddress ?? raw?.mac_address, 64)
+        const rawMacAddress = raw?.macAddress ?? raw?.mac_address
+        const macAddress = usableMac(rawMacAddress) ? clean(rawMacAddress, 64) : ''
         const vendor = clean(raw?.vendor, 256)
           || inferVendor(sysObjectId, sysDescr, hostname)
           || lookupMacVendor(macAddress)
