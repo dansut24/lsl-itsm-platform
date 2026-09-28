@@ -42,7 +42,7 @@ import {
   loadSoftwareQualificationLab,
   planSoftwarePatches,
   remediateVulnerabilityExposure,
-  searchWingetRepository,
+  searchSoftwareCatalogue,
   testVendorSource,
   updatePatchPolicy,
   updateVendorSource,
@@ -1030,11 +1030,14 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
   const [softwareQualificationFilter, setSoftwareQualificationFilter] = useState('all')
   const [softwarePage, setSoftwarePage] = useState(1)
   const [softwarePageSize, setSoftwarePageSize] = useState(25)
-  const [wingetQuery, setWingetQuery] = useState('')
-  const [wingetPage, setWingetPage] = useState(1)
-  const [wingetPageSize, setWingetPageSize] = useState(50)
-  const [wingetRepository, setWingetRepository] = useState({ packages: [], total: 0, pages: 1, page: 1 })
-  const [wingetLoading, setWingetLoading] = useState(false)
+  const [catalogueQuery, setCatalogueQuery] = useState('')
+  const [catalogueSourceFilter, setCatalogueSourceFilter] = useState('all')
+  const [catalogueProviderFilter, setCatalogueProviderFilter] = useState('all')
+  const [cataloguePage, setCataloguePage] = useState(1)
+  const [cataloguePageSize, setCataloguePageSize] = useState(50)
+  const [catalogueFeed, setCatalogueFeed] = useState({ items: [], total: null, pages: 1, page: 1, sourceCounts: { hi5central: 0, winget: 0 } })
+  const [catalogueLoading, setCatalogueLoading] = useState(false)
+  const [catalogueRefreshKey, setCatalogueRefreshKey] = useState(0)
   const [showVendorSource, setShowVendorSource] = useState(false)
   const [editingVendorSource, setEditingVendorSource] = useState(null)
   const [showPolicy, setShowPolicy] = useState(false)
@@ -1055,6 +1058,7 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
       setBundle(patching)
       setScope(scopePayload || { groups: [] })
       setVulnerabilities(vulnPayload.vulnerabilities || [])
+      setCatalogueRefreshKey((value) => value + 1)
     } catch (requestError) {
       setError(requestError?.message || 'Unable to load patching data.')
     } finally {
@@ -1081,8 +1085,8 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
   }, [])
 
   useEffect(() => {
-    setWingetPage(1)
-  }, [wingetQuery, wingetPageSize])
+    setCataloguePage(1)
+  }, [catalogueQuery, catalogueSourceFilter, catalogueProviderFilter, cataloguePageSize])
 
   useEffect(() => {
     if (!catalogueMaintenanceId) return undefined
@@ -1114,14 +1118,29 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
     if (softwareOnly || tab !== 'catalogue') return undefined
     let active = true
     const timer = window.setTimeout(() => {
-      setWingetLoading(true)
-      searchWingetRepository(wingetQuery, wingetPage, wingetPageSize)
-        .then((result) => { if (active) setWingetRepository(result) })
-        .catch((requestError) => { if (active) setError(requestError?.message || 'Unable to load WinGet repository.') })
-        .finally(() => { if (active) setWingetLoading(false) })
+      setCatalogueLoading(true)
+      searchSoftwareCatalogue(
+        catalogueQuery,
+        catalogueSourceFilter,
+        catalogueProviderFilter,
+        cataloguePage,
+        cataloguePageSize,
+      )
+        .then((result) => { if (active) setCatalogueFeed(result) })
+        .catch((requestError) => { if (active) setError(requestError?.message || 'Unable to load software catalogue.') })
+        .finally(() => { if (active) setCatalogueLoading(false) })
     }, 250)
     return () => { active = false; window.clearTimeout(timer) }
-  }, [softwareOnly, tab, wingetQuery, wingetPage, wingetPageSize])
+  }, [
+    softwareOnly,
+    tab,
+    catalogueQuery,
+    catalogueSourceFilter,
+    catalogueProviderFilter,
+    cataloguePage,
+    cataloguePageSize,
+    catalogueRefreshKey,
+  ])
 
   const applications = bundle?.applications || []
   const catalogue = bundle?.catalogue || []
@@ -1830,13 +1849,13 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
 
     {!softwareOnly && <nav className="rmm-patch-tabs">
       {[
-        ['catalogue', 'Catalogue', catalogue.length || applications.length],
+        ['catalogue', 'Catalogue', catalogueFeed.total ?? catalogue.length],
         ['windows', 'Windows Update', windowsPending],
         ['policies', 'Policies', policies.length],
       ].map(([id, label, count]) => <button className={tab === id ? 'active' : ''} key={id} onClick={() => setTab(id)} type="button">{label}<b>{count}</b></button>)}
     </nav>}
 
-    {(tab === 'catalogue' || (softwareOnly && tab === 'software')) && <section className="rmm-patch-panel">
+    {softwareOnly && tab === 'software' && <section className="rmm-patch-panel">
       <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Software catalogue</span><h2>Catalogue</h2><p>Deploy and patch approved software from the Hi5Central catalogue. WinGet packages are included below as an additional searchable source.</p></div></div>
       <div className="rmm-catalogue-install-card">
         <div className="intro"><PackageCheck size={18} /><div><strong>Install from catalogue</strong><span>Install approved catalogue software on an online managed device. Existing installations stay in the normal Patch workflow.</span></div></div>
@@ -1966,24 +1985,47 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
     </section>}
 
     {!softwareOnly && tab === 'catalogue' && <section className="rmm-patch-panel">
-      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Catalogue source</span><h2>WinGet repository</h2><p>{wingetLoading ? 'Refreshing repository index…' : (wingetRepository.total || 0) + ' packages available from the current WinGet community source index.'} Search WinGet here as part of the wider Hi5Central catalogue.</p></div></div>
-      <div className="rmm-patch-security-banner inline"><PackageCheck size={18} /><div><strong>Repository ≠ automatic trust</strong><span>WinGet provides broad Windows package coverage. Hi5Central still keeps curated vendor sources and vulnerability identities separate, and only creates vulnerability exposures for software actually detected on an endpoint.</span></div><StatusPill tone="healthy">Live index</StatusPill></div>
-      <div className="rmm-winget-toolbar">
-        <label><Search size={14} /><input value={wingetQuery} onChange={(event) => setWingetQuery(event.target.value)} placeholder="Search all WinGet packages, IDs, monikers or publishers…" /></label>
-        <select value={wingetPageSize} onChange={(event) => setWingetPageSize(Number(event.target.value))}><option value={25}>25 / page</option><option value={50}>50 / page</option><option value={100}>100 / page</option></select>
-        <span>{wingetLoading ? 'Searching…' : (wingetRepository.total || 0) + ' matches'}</span>
+      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Software catalogue</span><h2>All software</h2><p>One catalogue containing Hi5Central-managed applications and the full WinGet repository. Use the filters to narrow the source or deployment provider.</p></div></div>
+      <div className="rmm-catalogue-toolbar">
+        <label className="search"><Search size={14} /><input value={catalogueQuery} onChange={(event) => setCatalogueQuery(event.target.value)} placeholder="Search application, publisher or package ID…" /></label>
+        <select aria-label="Catalogue source filter" value={catalogueSourceFilter} onChange={(event) => setCatalogueSourceFilter(event.target.value)}>
+          <option value="all">All sources</option>
+          <option value="hi5central">Hi5Central</option>
+          <option value="winget">WinGet</option>
+        </select>
+        <select aria-label="Catalogue provider filter" value={catalogueProviderFilter} onChange={(event) => setCatalogueProviderFilter(event.target.value)}>
+          <option value="all">All providers</option>
+          <option value="managed">Hi5Central managed</option>
+          <option value="winget">WinGet</option>
+          <option value="vendor">Vendor</option>
+        </select>
+        <select aria-label="Catalogue rows per page" value={cataloguePageSize} onChange={(event) => setCataloguePageSize(Number(event.target.value))}>
+          <option value={25}>25 / page</option>
+          <option value={50}>50 / page</option>
+          <option value={100}>100 / page</option>
+        </select>
+        <span className="summary">{catalogueLoading ? 'Loading…' : (catalogueFeed.total ?? 0) + ' software'}</span>
       </div>
-      <div className="rmm-patch-table winget-repository">
-        <div className="head"><span>Application</span><span>Package ID</span><span>Latest version</span><span>Publisher</span></div>
-        {(wingetRepository.packages || []).map((item) => <div className="row" key={item.id}>
-          <span><strong>{item.name || item.id}</strong><small>{item.moniker || 'No moniker'}</small></span>
-          <span><strong>{item.id}</strong><small>WinGet community source</small></span>
-          <span><strong>{item.version || 'Unknown'}</strong></span>
-          <span><strong>{item.publishers?.[0] || 'Not reported'}</strong><small>{item.publishers?.slice(1).join(' · ')}</small></span>
+      <div className="rmm-patch-table catalogue-unified">
+        <div className="head"><span>Application</span><span>Publisher</span><span>Source</span><span>Package ID</span><span>Version</span><span>Provider</span></div>
+        {(catalogueFeed.items || []).map((item) => <div className="row" key={item.key}>
+          <span><strong>{item.name || item.packageId}</strong><small>{item.moniker || (item.builtIn ? 'Hi5Central global catalogue' : item.source === 'hi5central' ? 'Tenant catalogue' : 'WinGet community repository')}</small></span>
+          <span><strong>{item.publisher || item.publishers?.[0] || 'Not reported'}</strong><small>{item.publishers?.slice(1).join(' · ')}</small></span>
+          <span><StatusPill tone={item.source === 'hi5central' ? 'healthy' : 'running'}>{item.sourceLabel || (item.source === 'hi5central' ? 'Hi5Central' : 'WinGet')}</StatusPill></span>
+          <span><strong>{item.packageId || 'Managed catalogue'}</strong></span>
+          <span><strong>{item.version || 'Not published'}</strong></span>
+          <span><strong>{item.provider === 'managed' ? 'Hi5Central managed' : item.provider === 'winget' ? 'WinGet' : item.provider === 'vendor' ? 'Vendor' : item.provider || '—'}</strong></span>
         </div>)}
       </div>
-      {!wingetLoading && !(wingetRepository.packages || []).length && <div className="rmm-empty compact"><Search size={22} /><strong>No WinGet packages matched</strong><span>Try another application name, package ID or publisher.</span></div>}
-      <div className="rmm-software-pagination"><span>Page {wingetRepository.page || wingetPage} of {wingetRepository.pages || 1}</span><div><button disabled={wingetLoading || Number(wingetRepository.page || wingetPage) <= 1} onClick={() => setWingetPage((page) => Math.max(1, page - 1))} type="button"><ChevronLeft size={14} /> Previous</button><strong>{wingetRepository.total || 0} packages</strong><button disabled={wingetLoading || Number(wingetRepository.page || wingetPage) >= Number(wingetRepository.pages || 1)} onClick={() => setWingetPage((page) => Math.min(Number(wingetRepository.pages || 1), page + 1))} type="button">Next <ChevronRight size={14} /></button></div></div>
+      {!catalogueLoading && !(catalogueFeed.items || []).length && <div className="rmm-empty compact"><Search size={22} /><strong>No software matched</strong><span>Clear the search or filters to see the full catalogue.</span></div>}
+      <div className="rmm-software-pagination">
+        <span>{catalogueFeed.total ? 'Showing ' + ((Number(catalogueFeed.page || cataloguePage) - 1) * Number(catalogueFeed.pageSize || cataloguePageSize) + 1) + '–' + Math.min(Number(catalogueFeed.page || cataloguePage) * Number(catalogueFeed.pageSize || cataloguePageSize), Number(catalogueFeed.total || 0)) + ' of ' + catalogueFeed.total : '0 software'}</span>
+        <div>
+          <button disabled={catalogueLoading || Number(catalogueFeed.page || cataloguePage) <= 1} onClick={() => setCataloguePage((page) => Math.max(1, page - 1))} type="button"><ChevronLeft size={14} /> Previous</button>
+          <strong>Page {catalogueFeed.page || cataloguePage} of {catalogueFeed.pages || 1}</strong>
+          <button disabled={catalogueLoading || Number(catalogueFeed.page || cataloguePage) >= Number(catalogueFeed.pages || 1)} onClick={() => setCataloguePage((page) => Math.min(Number(catalogueFeed.pages || 1), page + 1))} type="button">Next <ChevronRight size={14} /></button>
+        </div>
+      </div>
     </section>}
 
     {tab === 'windows' && <section className="rmm-patch-panel">

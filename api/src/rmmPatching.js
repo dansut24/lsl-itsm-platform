@@ -2872,6 +2872,153 @@ function priorityForScope(scopeType) {
   return ({ Estate: 100, Site: 220, Group: 340, Device: 900 })[scopeType] || 100
 }
 
+async function catalogueListRows(tenantId) {
+  const result = await pool.query(
+    `SELECT id,tenant_id,canonical_name,publisher,name_pattern,publisher_pattern,platform,provider,
+            provider_package_id,target_version,release_channel,installer_type,status,catalogue_source,
+            source_metadata,qualification_state,qualification_version
+       FROM rmm_software_catalogue
+      WHERE status<>'archived' AND (tenant_id=$1 OR tenant_id IS NULL)
+      ORDER BY lower(canonical_name),lower(COALESCE(publisher,'')),id`,
+    [tenantId],
+  )
+  return result.rows
+}
+
+function catalogueSearchRow(entry) {
+  const item = publicCatalogue(entry)
+  return {
+    key: 'hi5central:' + item.id,
+    source: 'hi5central',
+    sourceLabel: 'Hi5Central',
+    catalogueId: item.id,
+    name: clean(item.canonicalName),
+    publisher: clean(item.publisher),
+    packageId: clean(item.packageId || item.executionPackageId),
+    version: clean(item.targetVersion),
+    provider: clean(item.provider || 'managed'),
+    moniker: '',
+    installable: item.installable === true,
+    qualificationState: clean(item.qualificationState || 'intelligence_only'),
+    deploymentMode: clean(item.deploymentMode),
+    trustState: clean(item.trustState),
+    builtIn: item.builtIn === true,
+  }
+}
+
+function wingetSearchRow(item) {
+  return {
+    key: 'winget:' + clean(item.id),
+    source: 'winget',
+    sourceLabel: 'WinGet',
+    catalogueId: '',
+    name: clean(item.name || item.id),
+    publisher: clean(array(item.publishers)[0]),
+    publishers: array(item.publishers).map(clean).filter(Boolean),
+    packageId: clean(item.id),
+    version: clean(item.version),
+    provider: 'winget',
+    moniker: clean(item.moniker),
+    installable: false,
+    qualificationState: 'repository',
+    deploymentMode: 'winget_repository',
+    trustState: 'repository',
+    builtIn: false,
+  }
+}
+
+function catalogueSearchMatches(item, query) {
+  if (!query) return true
+  return [
+    item.name,
+    item.publisher,
+    item.packageId,
+    item.version,
+    item.provider,
+    item.qualificationState,
+    item.deploymentMode,
+  ].filter(Boolean).join(' ').toLowerCase().includes(query)
+}
+
+async function wingetRepositorySlice({ query = '', offset = 0, limit = 50 } = {}) {
+  const safeOffset = Math.max(0, Number(offset) || 0)
+  const safeLimit = Math.max(0, Math.min(100, Number(limit) || 0))
+  const chunkSize = 100
+  const firstPage = Math.floor(safeOffset / chunkSize) + 1
+  const firstIndex = safeOffset % chunkSize
+  const first = await wingetRepositorySearch({ query, page: firstPage, pageSize: chunkSize })
+  if (!safeLimit) return { total: first.total, packages: [] }
+  const packages = array(first.packages).slice(firstIndex, firstIndex + safeLimit)
+  if (packages.length < safeLimit && firstPage < Number(first.pages || 1)) {
+    const next = await wingetRepositorySearch({ query, page: firstPage + 1, pageSize: chunkSize })
+    packages.push(...array(next.packages).slice(0, safeLimit - packages.length))
+  }
+  return { total: Number(first.total || 0), packages }
+}
+
+export async function unifiedCatalogueSearch(tenantId, options = {}) {
+  const queryText = clean(options.query).slice(0, 160)
+  const query = queryText.toLowerCase()
+  const source = ['all','hi5central','winget'].includes(lower(options.source)) ? lower(options.source) : 'all'
+  const provider = ['all','managed','winget','vendor'].includes(lower(options.provider)) ? lower(options.provider) : 'all'
+  const pageSize = Math.max(10, Math.min(100, Number(options.pageSize) || 50))
+  const requestedPage = Math.max(1, Number(options.page) || 1)
+
+  let hi5Rows = []
+  if (source !== 'winget') {
+    hi5Rows = (await catalogueListRows(tenantId))
+      .map(catalogueSearchRow)
+      .filter((item) => provider === 'all' || item.provider === provider)
+      .filter((item) => catalogueSearchMatches(item, query))
+  }
+
+  const wingetAllowed = source !== 'hi5central' && (provider === 'all' || provider === 'winget')
+  let wingetTotal = 0
+  if (wingetAllowed) {
+    const count = await wingetRepositorySearch({ query: queryText, page: 1, pageSize: 10 })
+    wingetTotal = Number(count.total || 0)
+  }
+
+  const hi5Total = hi5Rows.length
+  const total = hi5Total + wingetTotal
+  const pages = Math.max(1, Math.ceil(total / pageSize))
+  const page = Math.min(requestedPage, pages)
+  const offset = (page - 1) * pageSize
+  const items = []
+
+  if (source === 'hi5central') {
+    items.push(...hi5Rows.slice(offset, offset + pageSize))
+  } else if (source === 'winget') {
+    if (wingetAllowed) {
+      const slice = await wingetRepositorySlice({ query: queryText, offset, limit: pageSize })
+      items.push(...slice.packages.map(wingetSearchRow))
+    }
+  } else {
+    if (offset < hi5Total) {
+      items.push(...hi5Rows.slice(offset, Math.min(hi5Total, offset + pageSize)))
+    }
+    const remaining = pageSize - items.length
+    if (remaining > 0 && wingetAllowed) {
+      const wingetOffset = Math.max(0, offset - hi5Total)
+      const slice = await wingetRepositorySlice({ query: queryText, offset: wingetOffset, limit: remaining })
+      items.push(...slice.packages.map(wingetSearchRow))
+    }
+  }
+
+  return {
+    query: queryText,
+    source,
+    provider,
+    page,
+    pageSize,
+    pages,
+    total,
+    sourceCounts: { hi5central: hi5Total, winget: wingetTotal },
+    sort: 'source_then_name',
+    items,
+  }
+}
+
 export function registerRmmPatchingRoutes(app) {
   if (!vulnerabilityPolicyTimer) {
     vulnerabilityPolicyTimer = setInterval(() => void runRealtimeVulnerabilityPolicies(), 60_000)
@@ -2915,6 +3062,22 @@ export function registerRmmPatchingRoutes(app) {
     const auth = await requirePatchAccess(c)
     if (auth.error) return auth.error
     return c.json(await patchBundle(auth.session.tenant_id))
+  })
+
+  app.get('/api/v1/rmm/patching/catalogue', async (c) => {
+    const auth = await requirePatchAccess(c)
+    if (auth.error) return auth.error
+    try {
+      return c.json(await unifiedCatalogueSearch(auth.session.tenant_id, {
+        query: c.req.query('q'),
+        source: c.req.query('source'),
+        provider: c.req.query('provider'),
+        page: c.req.query('page'),
+        pageSize: c.req.query('pageSize'),
+      }))
+    } catch (error) {
+      return c.json({ error: clean(error?.message || error) || 'Unable to read the software catalogue.' }, 503)
+    }
   })
 
   app.get('/api/v1/rmm/patching/winget/repository', async (c) => {

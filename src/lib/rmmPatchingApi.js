@@ -24,6 +24,17 @@ export function loadRmmPatching() {
   return request('/api/v1/rmm/patching')
 }
 
+export function searchSoftwareCatalogue(query = '', source = 'all', provider = 'all', page = 1, pageSize = 50) {
+  const params = new URLSearchParams({
+    q: query,
+    source,
+    provider,
+    page: String(page),
+    pageSize: String(pageSize),
+  })
+  return request('/api/v1/rmm/patching/catalogue?' + params.toString())
+}
+
 export function searchWingetRepository(query = '', page = 1, pageSize = 50) {
   const params = new URLSearchParams({ q: query, page: String(page), pageSize: String(pageSize) })
   return request('/api/v1/rmm/patching/winget/repository?' + params.toString())

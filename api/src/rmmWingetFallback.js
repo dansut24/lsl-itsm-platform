@@ -385,9 +385,10 @@ export async function wingetRepositorySearch({ query = '', page = 1, pageSize = 
       ? `WHERE lower(p.id) LIKE ?
           OR lower(p.name) LIKE ?
           OR lower(COALESCE(p.moniker,'')) LIKE ?
-          OR EXISTS (
-            SELECT 1 FROM norm_publishers2 np
-             WHERE np.package=p.rowid AND lower(np.norm_publisher) LIKE ?
+          OR p.rowid IN (
+            SELECT np.package
+              FROM norm_publishers2 np
+             WHERE lower(np.norm_publisher) LIKE ?
           )`
       : ''
     const args = q ? [pattern, pattern, pattern, pattern] : []
@@ -395,19 +396,30 @@ export async function wingetRepositorySearch({ query = '', page = 1, pageSize = 
     const pages = Math.max(1, Math.ceil(total / safePageSize))
     const resolvedPage = Math.min(safePage, pages)
     const rows = db.prepare(
-      `SELECT p.rowid,p.id,p.name,p.moniker,p.latest_version,
-              (SELECT group_concat(norm_publisher,' | ') FROM (
-                 SELECT DISTINCT norm_publisher
-                   FROM norm_publishers2
-                  WHERE package=p.rowid AND norm_publisher<>''
-                  ORDER BY norm_publisher
-                  LIMIT 4
-               )) AS publishers
+      `SELECT p.rowid,p.id,p.name,p.moniker,p.latest_version
          FROM packages p
          ${where}
         ORDER BY lower(p.name),lower(p.id)
         LIMIT ? OFFSET ?`,
     ).all(...args, safePageSize, (resolvedPage - 1) * safePageSize)
+
+    const publisherMap = new Map()
+    const rowids = rows.map((row) => Number(row.rowid)).filter(Number.isFinite)
+    if (rowids.length) {
+      const placeholders = rowids.map(() => '?').join(',')
+      const publisherRows = db.prepare(
+        `SELECT package,norm_publisher
+           FROM norm_publishers2
+          WHERE package IN (${placeholders}) AND norm_publisher<>''
+          ORDER BY package,norm_publisher`,
+      ).all(...rowids)
+      for (const row of publisherRows) {
+        const key = Number(row.package)
+        if (!publisherMap.has(key)) publisherMap.set(key, [])
+        const values = publisherMap.get(key)
+        if (values.length < 4 && !values.includes(clean(row.norm_publisher))) values.push(clean(row.norm_publisher))
+      }
+    }
 
     return {
       query: clean(query).slice(0, 160),
@@ -423,7 +435,7 @@ export async function wingetRepositorySearch({ query = '', page = 1, pageSize = 
         name: clean(row.name),
         moniker: clean(row.moniker),
         version: clean(row.latest_version),
-        publishers: clean(row.publishers).split(' | ').filter(Boolean),
+        publishers: publisherMap.get(Number(row.rowid)) || [],
       })),
     }
   } finally {

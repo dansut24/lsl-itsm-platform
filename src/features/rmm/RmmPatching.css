@@ -181,6 +181,12 @@
 .rmm-winget-toolbar select { min-height:36px; border:1px solid var(--rmm-border); border-radius:8px; padding:0 8px; background:var(--rmm-surface); color:var(--rmm-text); font:inherit; font-size:8px; }
 .rmm-winget-toolbar > span { color:var(--rmm-muted); font-size:7px; font-weight:800; white-space:nowrap; }
 .rmm-patch-table.winget-repository .head,.rmm-patch-table.winget-repository .row { grid-template-columns:1.15fr 1.25fr .55fr 1fr; }
+.rmm-catalogue-toolbar { display:grid; grid-template-columns:minmax(280px,1fr) auto auto auto auto; align-items:center; gap:8px; padding:10px 12px; border-bottom:1px solid var(--rmm-border); background:var(--rmm-soft); }
+.rmm-catalogue-toolbar .search { min-width:0; min-height:36px; display:flex; align-items:center; gap:7px; border:1px solid var(--rmm-border); border-radius:8px; padding:0 9px; background:var(--rmm-surface); color:var(--rmm-muted); }
+.rmm-catalogue-toolbar .search input { min-width:0; width:100%; border:0; outline:0; background:transparent; color:var(--rmm-text); font:inherit; font-size:8px; }
+.rmm-catalogue-toolbar select { min-height:36px; border:1px solid var(--rmm-border); border-radius:8px; padding:0 8px; background:var(--rmm-surface); color:var(--rmm-text); font:inherit; font-size:8px; }
+.rmm-catalogue-toolbar .summary { color:var(--rmm-muted); font-size:7px; font-weight:800; white-space:nowrap; }
+.rmm-patch-table.catalogue-unified .head,.rmm-patch-table.catalogue-unified .row { grid-template-columns:minmax(220px,1.35fr) minmax(180px,1fr) 105px minmax(200px,1.15fr) 120px 150px; min-width:1050px; }
 .rmm-patch-security-banner.inline { margin:0 12px 12px; }
 .rmm-bulk-patch-card { display:grid; gap:10px; padding:12px; border-bottom:1px solid var(--rmm-border); background:var(--rmm-surface); }
 .rmm-bulk-patch-card .intro { display:flex; align-items:flex-start; gap:9px; }
@@ -223,6 +229,9 @@
 @media (max-width: 900px) {
   .rmm-vulnerability-coverage { grid-template-columns:1fr; }
   .rmm-winget-toolbar { grid-template-columns:minmax(0,1fr) auto auto; }
+  .rmm-catalogue-toolbar { grid-template-columns:minmax(0,1fr) 1fr 1fr; }
+  .rmm-catalogue-toolbar .search { grid-column:1/-1; }
+  .rmm-catalogue-toolbar .summary { justify-self:end; }
   .rmm-software-toolbar { grid-template-columns:minmax(0,1fr) 1fr 1fr; }
   .rmm-software-toolbar .search { grid-column:1/-1; }
   .rmm-software-toolbar .summary { justify-self:end; }
@@ -241,6 +250,11 @@
   .rmm-patch-security-banner.inline { margin:0 8px 10px; }
   .rmm-winget-toolbar { grid-template-columns:1fr; padding:9px 8px; }
   .rmm-patch-table.winget-repository .row { grid-template-columns:1fr 1fr; }
+  .rmm-catalogue-toolbar { grid-template-columns:1fr; padding:9px 8px; }
+  .rmm-catalogue-toolbar .search,.rmm-catalogue-toolbar .summary { grid-column:auto; }
+  .rmm-catalogue-toolbar .summary { justify-self:start; }
+  .rmm-patch-table.catalogue-unified .row { min-width:0; grid-template-columns:1fr 1fr; }
+  .rmm-patch-table.catalogue-unified .row > span:first-child { grid-column:1/-1; }
   .rmm-vulnerability-coverage .stats { grid-template-columns:1fr 1fr; }
   .rmm-software-toolbar { grid-template-columns:1fr; padding:9px 8px; }
   .rmm-software-toolbar .search,.rmm-software-toolbar .summary { grid-column:auto; }
