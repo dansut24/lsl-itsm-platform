@@ -55,7 +55,7 @@ import {
 import { deploymentConfig } from '../../lib/deploymentConfig.js'
 import { resolveTenantSurface, rmmDevicePath, rmmPath, rmmRouteFromLocation } from '../../lib/tenantSurface.js'
 import { loadRmmScope } from '../../lib/rmmScopeApi.js'
-import { deploySoftwarePatch, deploySoftwarePatches, loadRmmPatching, rejectDeviceSoftwarePatch, restoreDeviceSoftwarePatch } from '../../lib/rmmPatchingApi.js'
+import { deploySoftwarePatch, deploySoftwarePatches, loadDevicePatchPolicyResolution, loadRmmPatching, rejectDeviceSoftwarePatch, restoreDeviceSoftwarePatch } from '../../lib/rmmPatchingApi.js'
 import {
   RmmDeviceGroupsManagement,
   RmmDeviceInventory,
@@ -484,7 +484,50 @@ function AgentMaintenance({ device }) {
   </section>
 }
 
-function DeviceOverview({ device, deviceAlerts, monitoringResolution, relatedTickets, navigate, onCreateIncident }) {
+
+function patchPolicyWindowLabel(window = {}) {
+  const start = window.start || '18:00'
+  const end = window.end || '05:00'
+  const timezone = window.timezone || 'Europe/London'
+  return start + '–' + end + ' · ' + timezone
+}
+
+function softwarePolicyScopeLabel(settings = {}) {
+  if (settings.targetMode === 'all_winget') return 'Use WinGet'
+  if (settings.targetMode === 'selected_catalogue') {
+    const count = Number(settings.selectedCount || 0)
+    return count + ' selected Hi5Central app' + (count === 1 ? '' : 's')
+  }
+  return 'All Hi5Central catalogue applications'
+}
+
+function AppliedPatchPolicyRow({ domain, resolution, loading = false }) {
+  const policy = resolution?.effective
+  const isOs = domain === 'os'
+  const Icon = isOs ? ShieldCheck : PackageCheck
+  if (loading) return <div className="rmm-device-applied-policy is-loading"><span><Icon size={16} /></span><div><strong>Loading {isOs ? 'OS' : 'software'} policy…</strong><small>Resolving scope precedence</small></div></div>
+  if (!policy) return <div className="rmm-device-applied-policy is-empty"><span><Icon size={16} /></span><div><strong>No {isOs ? 'OS patching' : 'software patching'} policy</strong><small>No matching Estate, Site, Group or Device assignment.</small></div><StatusPill tone="neutral">None</StatusPill></div>
+
+  const assignment = policy.assignment || {}
+  const scopeName = assignment.scopeName || assignment.scopeId || assignment.scopeType || 'Scope'
+  const inheritance = assignment.scopeType === 'Device' ? 'Direct device assignment' : 'Inherited from ' + (assignment.scopeType || 'scope')
+  const matchCount = Array.isArray(resolution?.matches) ? resolution.matches.length : 1
+  const detail = isOs
+    ? (policy.settings?.automaticInstall ? 'Automatic install' : 'Managed only') + ' · ' + patchPolicyWindowLabel(policy.settings?.maintenanceWindow)
+    : softwarePolicyScopeLabel(policy.settings) + ' · ' + patchPolicyWindowLabel(policy.settings?.maintenanceWindow)
+
+  return <div className="rmm-device-applied-policy">
+    <span><Icon size={16} /></span>
+    <div>
+      <strong>{policy.name}</strong>
+      <small>{detail}</small>
+      <small>{inheritance} · {scopeName} · priority {assignment.priority ?? 0}{matchCount > 1 ? ' · ' + matchCount + ' matching assignments' : ''}</small>
+    </div>
+    <StatusPill tone={assignment.scopeType === 'Device' ? 'warning' : 'healthy'}>{assignment.scopeType === 'Device' ? 'Direct' : 'Inherited'}</StatusPill>
+  </div>
+}
+
+function DeviceOverview({ device, deviceAlerts, monitoringResolution, patchPolicyResolution, patchPolicyLoading, relatedTickets, navigate, onCreateIncident }) {
   const security = device.security || {}
   return (
     <div className="rmm-device-overview-layout">
@@ -546,6 +589,16 @@ function DeviceOverview({ device, deviceAlerts, monitoringResolution, relatedTic
           <p>Resolved through estate, site, group and device precedence.</p>
           <div className="rmm-device-monitoring-effective"><span><SlidersHorizontal size={16} /></span><div><strong>{monitoringResolution?.policy?.name || 'No monitoring policy assigned'}</strong><small>{monitoringResolution?.policy ? `${monitoringResolution.policy.checks?.length || 0} checks · ${monitoringResolution.policy.evaluation || 'Evaluation not set'}` : 'Assign a tenant policy from Monitoring policies'}</small></div></div>
           <button onClick={() => navigate('policies')} type="button"><GitBranch size={14} /> View policy inheritance</button>
+        </section>
+
+        <section className="rmm-card rmm-device-policies-card">
+          <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Patching</span><h2>Applied policies</h2></div><StatusPill tone="neutral">Effective</StatusPill></div>
+          <p>OS and software policies are resolved independently through Estate → Site → Group → Device precedence.</p>
+          <div className="rmm-device-applied-policies">
+            <AppliedPatchPolicyRow domain="os" loading={patchPolicyLoading} resolution={patchPolicyResolution?.os} />
+            <AppliedPatchPolicyRow domain="software" loading={patchPolicyLoading} resolution={patchPolicyResolution?.software} />
+          </div>
+          <button onClick={() => navigate('patching')} type="button"><GitBranch size={14} /> Manage patch policies</button>
         </section>
 
         <AgentMaintenance device={device} />
@@ -1607,6 +1660,8 @@ function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device
   const [remoteBusy, setRemoteBusy] = useState(false)
   const [powerBusy, setPowerBusy] = useState(false)
   const [monitoringResolution, setMonitoringResolution] = useState(null)
+  const [patchPolicyResolution, setPatchPolicyResolution] = useState(null)
+  const [patchPolicyLoading, setPatchPolicyLoading] = useState(true)
   const deviceAlerts = rmmAlerts.filter((alert) => alert.deviceId === device.id)
   const relatedTickets = tickets.filter((ticket) => (
     ticket.rmmDeviceId === device.id
@@ -1649,6 +1704,25 @@ function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device
       .catch(() => { if (active) setMonitoringResolution(null) })
     return () => { active = false }
   }, [device.id])
+
+  useEffect(() => {
+    let active = true
+    setPatchPolicyLoading(true)
+    setPatchPolicyResolution(null)
+    loadDevicePatchPolicyResolution(device.agentDeviceId || device.id)
+      .then((payload) => {
+        if (!active) return
+        setPatchPolicyResolution(payload || null)
+      })
+      .catch(() => {
+        if (!active) return
+        setPatchPolicyResolution(null)
+      })
+      .finally(() => {
+        if (active) setPatchPolicyLoading(false)
+      })
+    return () => { active = false }
+  }, [device.id, device.agentDeviceId])
 
   const sections = [
     ['overview', 'Overview', CircleGauge],
@@ -1763,7 +1837,7 @@ function RmmDeviceDetail({ canBackstageRemote = false, canRemote = false, device
   else if (section === 'activity') content = <DeviceActivityTimeline device={device} />
   else if (section === 'jobs') content = <DeviceJobsPanel device={device} />
   else if (section === 'itsm') content = <DeviceItsm device={device} onCreateIncident={createIncident} relatedTickets={relatedTickets} />
-  else content = <DeviceOverview device={device} deviceAlerts={deviceAlerts} monitoringResolution={monitoringResolution} navigate={navigate} onCreateIncident={createIncident} relatedTickets={relatedTickets} />
+  else content = <DeviceOverview device={device} deviceAlerts={deviceAlerts} monitoringResolution={monitoringResolution} patchPolicyLoading={patchPolicyLoading} patchPolicyResolution={patchPolicyResolution} navigate={navigate} onCreateIncident={createIncident} relatedTickets={relatedTickets} />
 
   return (
     <div className={`rmm-device-detail ${deviceOnline ? 'is-online' : deviceOffline ? 'is-offline' : 'is-agentless'}`}>

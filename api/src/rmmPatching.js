@@ -2749,6 +2749,141 @@ function softwarePolicyMaintenance(policy, at = new Date()) {
   return windowsMaintenanceWindow({ maintenance_window: maintenanceWindow }, at)
 }
 
+
+async function patchPolicyMatchesForDevice(tenantId, inventoryId, policyType) {
+  const domainClause = policyType === 'os'
+    ? "p.windows_enabled=true AND p.software_enabled=false"
+    : "p.software_enabled=true AND p.windows_enabled=false"
+  const result = await pool.query(
+    `SELECT p.id,p.name,p.description,p.software_enabled,p.windows_enabled,p.approval_mode,
+            p.deployment_delay_days,p.maintenance_window,p.reboot_policy,p.max_retries,
+            p.software_rules,p.windows_rules,p.status,
+            x.id AS assignment_id,x.scope_type AS assignment_scope_type,
+            x.scope_id AS assignment_scope_id,x.scope_name AS assignment_scope_name,
+            x.priority AS assignment_priority,x.created_at AS assignment_created_at
+       FROM rmm_patch_assignments x
+       JOIN rmm_patch_policies p ON p.id=x.policy_id AND p.tenant_id=x.tenant_id
+         AND p.status='active' AND ${domainClause}
+       JOIN rmm_device_inventory i ON i.id=$2 AND i.tenant_id=x.tenant_id
+       LEFT JOIN organisation_people op ON op.tenant_id=i.tenant_id AND op.id=i.assigned_person_id
+       LEFT JOIN organisation_sites os ON os.tenant_id=i.tenant_id AND os.id=op.site_id
+      WHERE x.tenant_id=$1 AND x.enabled=true AND (
+        (x.scope_type='Estate' AND x.scope_id='ALL') OR
+        (x.scope_type='Device' AND x.scope_id IN (
+          i.id::text,
+          i.reference,
+          COALESCE((SELECT id::text FROM rmm_agent_devices WHERE inventory_id=i.id AND disabled_at IS NULL LIMIT 1),'')
+        )) OR
+        (x.scope_type='Site' AND x.scope_id IN (
+          COALESCE(os.id::text,''),
+          COALESCE(os.external_key,''),
+          COALESCE(os.name,'')
+        )) OR
+        (x.scope_type='Group' AND EXISTS (
+          SELECT 1
+            FROM rmm_device_group_memberships gm
+           WHERE gm.tenant_id=i.tenant_id
+             AND gm.inventory_id=i.id
+             AND gm.group_id::text=x.scope_id
+        ))
+      )
+      ORDER BY x.priority DESC,x.created_at DESC`,
+    [tenantId, inventoryId],
+  )
+  return result.rows
+}
+
+function patchPolicyResolutionItem(row, type) {
+  if (!row) return null
+  const assignment = {
+    id: clean(row.assignment_id),
+    scopeType: clean(row.assignment_scope_type),
+    scopeId: clean(row.assignment_scope_id),
+    scopeName: clean(row.assignment_scope_name),
+    priority: Number(row.assignment_priority || 0),
+    inherited: clean(row.assignment_scope_type) !== 'Device',
+  }
+
+  if (type === 'os') {
+    const rules = object(row.windows_rules)
+    const rollout = object(rules.rollout)
+    return {
+      id: clean(row.id),
+      type,
+      name: clean(row.name),
+      description: clean(row.description),
+      assignment,
+      settings: {
+        automaticInstall: rules.autoInstall === true,
+        maintenanceWindow: object(row.maintenance_window),
+        rolloutEnabled: rollout.enabled === true,
+        deadlineDays: Number(rollout.deadlineDays ?? 0),
+        includeFeatureUpdates: rules.includeFeatureUpdates === true,
+        includeDrivers: rules.includeDrivers === true,
+        includeDefinitions: rules.includeDefinitions !== false,
+        rebootPolicy: clean(row.reboot_policy || 'never'),
+      },
+    }
+  }
+
+  const rules = object(row.software_rules)
+  const targetMode = ['selected_catalogue', 'all_catalogue', 'all_winget'].includes(clean(rules.targetMode))
+    ? clean(rules.targetMode)
+    : 'all_catalogue'
+  return {
+    id: clean(row.id),
+    type,
+    name: clean(row.name),
+    description: clean(row.description),
+    assignment,
+    settings: {
+      targetMode,
+      catalogueIds: targetMode === 'selected_catalogue' ? array(rules.catalogueIds).map(clean).filter(Boolean) : [],
+      selectedCount: targetMode === 'selected_catalogue' ? array(rules.catalogueIds).filter(Boolean).length : 0,
+      maintenanceWindow: object(rules.maintenanceWindow),
+      approvalMode: clean(row.approval_mode || 'manual'),
+      deploymentDelayDays: Number(row.deployment_delay_days || 0),
+      maxRetries: Number(row.max_retries || 0),
+    },
+  }
+}
+
+export async function devicePatchPolicyResolution(tenantId, deviceKey) {
+  const device = await pool.query(
+    `SELECT i.id AS inventory_id,i.reference,i.name,a.id AS agent_device_id
+       FROM rmm_device_inventory i
+       LEFT JOIN rmm_agent_devices a
+         ON a.inventory_id=i.id AND a.tenant_id=i.tenant_id AND a.disabled_at IS NULL
+      WHERE i.tenant_id=$1
+        AND ($2 IN (i.id::text,i.reference,COALESCE(a.id::text,'')))
+      ORDER BY a.last_authenticated_at DESC NULLS LAST
+      LIMIT 1`,
+    [tenantId, clean(deviceKey)],
+  )
+  if (!device.rowCount) return null
+  const inventoryId = device.rows[0].inventory_id
+  const [osMatches, softwareMatches] = await Promise.all([
+    patchPolicyMatchesForDevice(tenantId, inventoryId, 'os'),
+    patchPolicyMatchesForDevice(tenantId, inventoryId, 'software'),
+  ])
+  return {
+    device: {
+      inventoryId: clean(device.rows[0].inventory_id),
+      agentDeviceId: clean(device.rows[0].agent_device_id),
+      reference: clean(device.rows[0].reference),
+      name: clean(device.rows[0].name),
+    },
+    os: {
+      effective: patchPolicyResolutionItem(osMatches[0], 'os'),
+      matches: osMatches.map((row) => patchPolicyResolutionItem(row, 'os')),
+    },
+    software: {
+      effective: patchPolicyResolutionItem(softwareMatches[0], 'software'),
+      matches: softwareMatches.map((row) => patchPolicyResolutionItem(row, 'software')),
+    },
+  }
+}
+
 async function effectiveSoftwarePolicy(tenantId, inventoryId) {
   const result = await pool.query(
     `SELECT p.* FROM rmm_patch_assignments x
@@ -3410,6 +3545,17 @@ export function registerRmmPatchingRoutes(app) {
     const auth = await requirePatchAccess(c)
     if (auth.error) return auth.error
     return c.json(await patchBundle(auth.session.tenant_id))
+  })
+
+  app.get('/api/v1/rmm/devices/:deviceId/patch-policy-resolution', async (c) => {
+    const auth = await requirePatchAccess(c)
+    if (auth.error) return auth.error
+    const resolution = await devicePatchPolicyResolution(
+      auth.session.tenant_id,
+      c.req.param('deviceId'),
+    )
+    if (!resolution) return c.json({ error: 'Managed device not found.' }, 404)
+    return c.json(resolution)
   })
 
   app.get('/api/v1/rmm/patching/catalogue', async (c) => {

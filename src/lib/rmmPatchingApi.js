@@ -24,6 +24,10 @@ export function loadRmmPatching() {
   return request('/api/v1/rmm/patching')
 }
 
+export function loadDevicePatchPolicyResolution(deviceId) {
+  return request('/api/v1/rmm/devices/' + encodeURIComponent(deviceId) + '/patch-policy-resolution')
+}
+
 export function searchSoftwareCatalogue(query = '', source = 'all', provider = 'all', page = 1, pageSize = 50) {
   const params = new URLSearchParams({
     q: query,
