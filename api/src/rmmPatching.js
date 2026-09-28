@@ -2894,7 +2894,7 @@ function catalogueSearchRow(entry) {
     catalogueId: item.id,
     name: clean(item.canonicalName),
     publisher: clean(item.publisher),
-    packageId: clean(item.packageId || item.executionPackageId),
+    packageId: clean(item.executionPackageId || item.packageId),
     version: clean(item.targetVersion),
     provider: clean(item.provider || 'managed'),
     moniker: '',

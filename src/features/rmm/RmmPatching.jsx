@@ -1032,7 +1032,6 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
   const [softwarePageSize, setSoftwarePageSize] = useState(25)
   const [catalogueQuery, setCatalogueQuery] = useState('')
   const [catalogueSourceFilter, setCatalogueSourceFilter] = useState('all')
-  const [catalogueProviderFilter, setCatalogueProviderFilter] = useState('all')
   const [cataloguePage, setCataloguePage] = useState(1)
   const [cataloguePageSize, setCataloguePageSize] = useState(50)
   const [catalogueFeed, setCatalogueFeed] = useState({ items: [], total: null, pages: 1, page: 1, sourceCounts: { hi5central: 0, winget: 0 } })
@@ -1086,7 +1085,7 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
 
   useEffect(() => {
     setCataloguePage(1)
-  }, [catalogueQuery, catalogueSourceFilter, catalogueProviderFilter, cataloguePageSize])
+  }, [catalogueQuery, catalogueSourceFilter, cataloguePageSize])
 
   useEffect(() => {
     if (!catalogueMaintenanceId) return undefined
@@ -1122,7 +1121,7 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
       searchSoftwareCatalogue(
         catalogueQuery,
         catalogueSourceFilter,
-        catalogueProviderFilter,
+        'all',
         cataloguePage,
         cataloguePageSize,
       )
@@ -1136,7 +1135,6 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
     tab,
     catalogueQuery,
     catalogueSourceFilter,
-    catalogueProviderFilter,
     cataloguePage,
     cataloguePageSize,
     catalogueRefreshKey,
@@ -1985,19 +1983,13 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
     </section>}
 
     {!softwareOnly && tab === 'catalogue' && <section className="rmm-patch-panel">
-      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Software catalogue</span><h2>All software</h2><p>One catalogue containing Hi5Central-managed applications and the full WinGet repository. Use the filters to narrow the source or deployment provider.</p></div></div>
+      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Software catalogue</span><h2>All software</h2><p>One catalogue containing Hi5Central-curated applications and the full WinGet repository. Filter by source to switch between the curated Hi5Central catalogue and raw WinGet packages.</p></div></div>
       <div className="rmm-catalogue-toolbar">
         <label className="search"><Search size={14} /><input value={catalogueQuery} onChange={(event) => setCatalogueQuery(event.target.value)} placeholder="Search application, publisher or package ID…" /></label>
         <select aria-label="Catalogue source filter" value={catalogueSourceFilter} onChange={(event) => setCatalogueSourceFilter(event.target.value)}>
           <option value="all">All sources ({Number(catalogueFeed.sourceCounts?.hi5central || 0) + Number(catalogueFeed.sourceCounts?.winget || 0)})</option>
           <option value="hi5central">Hi5Central ({catalogueFeed.sourceCounts?.hi5central || 0})</option>
           <option value="winget">WinGet ({catalogueFeed.sourceCounts?.winget || 0})</option>
-        </select>
-        <select aria-label="Catalogue provider filter" value={catalogueProviderFilter} onChange={(event) => setCatalogueProviderFilter(event.target.value)}>
-          <option value="all">All providers</option>
-          <option value="managed">Hi5Central managed</option>
-          <option value="winget">WinGet</option>
-          <option value="vendor">Vendor</option>
         </select>
         <select aria-label="Catalogue rows per page" value={cataloguePageSize} onChange={(event) => setCataloguePageSize(Number(event.target.value))}>
           <option value={25}>25 / page</option>
@@ -2007,14 +1999,13 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
         <span className="summary">{catalogueLoading ? 'Loading…' : (catalogueFeed.total ?? 0) + ' software'}</span>
       </div>
       <div className="rmm-patch-table catalogue-unified">
-        <div className="head"><span>Application</span><span>Publisher</span><span>Source</span><span>Package ID</span><span>Version</span><span>Provider</span></div>
+        <div className="head"><span>Application</span><span>Publisher</span><span>Source</span><span>Package ID</span><span>Version</span></div>
         {(catalogueFeed.items || []).map((item) => <div className="row" key={item.key}>
           <span><strong>{item.name || item.packageId}</strong><small>{item.moniker || (item.builtIn ? 'Hi5Central global catalogue' : item.source === 'hi5central' ? 'Tenant catalogue' : 'WinGet community repository')}</small></span>
           <span><strong>{item.publisher || item.publishers?.[0] || 'Not reported'}</strong><small>{item.publishers?.slice(1).join(' · ')}</small></span>
           <span><StatusPill tone={item.source === 'hi5central' ? 'healthy' : 'running'}>{item.sourceLabel || (item.source === 'hi5central' ? 'Hi5Central' : 'WinGet')}</StatusPill></span>
           <span><strong>{item.packageId || 'Managed catalogue'}</strong></span>
           <span><strong>{item.version || 'Not published'}</strong></span>
-          <span><strong>{item.provider === 'managed' ? 'Hi5Central managed' : item.provider === 'winget' ? 'WinGet' : item.provider === 'vendor' ? 'Vendor' : item.provider || '—'}</strong></span>
         </div>)}
       </div>
       {!catalogueLoading && !(catalogueFeed.items || []).length && <div className="rmm-empty compact"><Search size={22} /><strong>No software matched</strong><span>Clear the search or filters to see the full catalogue.</span></div>}
