@@ -213,7 +213,7 @@ export function RmmNetworkDiscovery() {
     <div className="rmm-network-metrics">
       <article className="rmm-card"><Radar size={19} /><span>Discovery profiles</span><strong>{summary.profiles ?? 0}</strong><small>Enabled network ranges</small></article>
       <article className="rmm-card"><Network size={19} /><span>Discovered devices</span><strong>{summary.devices ?? 0}</strong><small>{summary.onlineDevices ?? 0} online · {summary.offlineDevices ?? 0} offline</small></article>
-      <article className="rmm-card"><Server size={19} /><span>Available probes</span><strong>{summary.onlineProbes ?? 0}</strong><small>{probes.length} enrolled Agent endpoint{probes.length === 1 ? '' : 's'}</small></article>
+      <article className="rmm-card"><Server size={19} /><span>SNMP-capable probes</span><strong>{summary.snmpCapableProbes ?? 0}</strong><small>{summary.onlineProbes ?? 0} online · requires Agent {capabilities.minAgentVersion || '0.1.231'}+</small></article>
       <article className="rmm-card"><ShieldCheck size={19} /><span>SNMP support</span><strong>v1 / v2c</strong><small>{capabilities.snmpV3 ? 'SNMPv3 enabled' : 'SNMPv3 schema ready · probe support next'}</small></article>
     </div>
 
@@ -243,7 +243,7 @@ export function RmmNetworkDiscovery() {
         <form className="rmm-network-form" onSubmit={createProfile}>
           <label><span>Profile name</span><input value={profile.name} onChange={(e) => setProfile({ ...profile, name: e.target.value })} placeholder="e.g. Head Office LAN" required /></label>
           <label><span>IPv4 CIDR</span><input value={profile.cidr} onChange={(e) => setProfile({ ...profile, cidr: e.target.value })} placeholder="192.168.1.0/24" required /></label>
-          <label><span>Probe endpoint</span><select value={profile.probeAgentDeviceId} onChange={(e) => setProfile({ ...profile, probeAgentDeviceId: e.target.value })} required><option value="">Select probe…</option>{probes.map((item) => <option value={item.agent_device_id} key={item.agent_device_id}>{item.name || item.reference} {item.online ? '· Online' : '· Offline'}</option>)}</select></label>
+          <label><span>Probe endpoint</span><select value={profile.probeAgentDeviceId} onChange={(e) => setProfile({ ...profile, probeAgentDeviceId: e.target.value })} required><option value="">Select probe…</option>{probes.map((item) => <option value={item.agent_device_id} key={item.agent_device_id}>{item.name || item.reference} {item.online ? (item.snmp_capable ? '· SNMP ready' : '· Upgrade Agent') : '· Offline'}</option>)}</select></label>
           <label><span>Credential</span><select value={profile.credentialId} onChange={(e) => setProfile({ ...profile, credentialId: e.target.value })} required><option value="">Select credential…</option>{credentials.filter((item) => item.enabled).map((item) => <option value={item.id} key={item.id}>{item.name} · {item.snmpVersion.toUpperCase()}</option>)}</select></label>
           <label><span>Site</span><select value={profile.siteId} onChange={(e) => setProfile({ ...profile, siteId: e.target.value })}><option value="">No site assignment</option>{sites.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
           <label><span>Poll interval</span><select value={profile.scanIntervalMinutes} onChange={(e) => setProfile({ ...profile, scanIntervalMinutes: e.target.value })}><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">1 hour</option><option value="240">4 hours</option><option value="1440">Daily</option></select></label>
@@ -270,8 +270,8 @@ export function RmmNetworkDiscovery() {
             <span><strong>{item.probe_name || item.probe_reference}</strong><small>{probe?.agent_version || 'Agent'} · {probe?.online ? 'Online' : 'Offline'}</small></span>
             <span><strong>{item.credential_name}</strong><small>{String(item.snmp_version).toUpperCase()}</small></span>
             <span><strong>{when(item.last_scan_at)}</strong><small>Next: {item.enabled ? when(item.next_scan_at) : 'Disabled'}</small></span>
-            <span><StatusPill tone={item.enabled ? (probe?.online ? 'healthy' : 'warning') : 'neutral'}>{item.enabled ? (probe?.online ? 'Ready' : 'Probe offline') : 'Disabled'}</StatusPill></span>
-            <span className="actions"><button disabled={!item.enabled || !probe?.online || scanning || busy === 'scan:' + item.id} onClick={() => runScan(item.id)} type="button"><Play size={13} /> {scanning ? 'Scanning…' : 'Scan now'}</button><button disabled={busy === 'profile:' + item.id} onClick={() => toggleProfile(item)} type="button">{item.enabled ? 'Disable' : 'Enable'}</button></span>
+            <span><StatusPill tone={item.enabled ? (probe?.online && probe?.snmp_capable ? 'healthy' : 'warning') : 'neutral'}>{item.enabled ? (!probe?.online ? 'Probe offline' : probe?.snmp_capable ? 'Ready' : 'Upgrade Agent') : 'Disabled'}</StatusPill></span>
+            <span className="actions"><button disabled={!item.enabled || !probe?.online || !probe?.snmp_capable || scanning || busy === 'scan:' + item.id} onClick={() => runScan(item.id)} type="button"><Play size={13} /> {scanning ? 'Scanning…' : 'Scan now'}</button><button disabled={busy === 'profile:' + item.id} onClick={() => toggleProfile(item)} type="button">{item.enabled ? 'Disable' : 'Enable'}</button></span>
           </div>
         })}
       </div>

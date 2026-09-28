@@ -15,6 +15,25 @@ function isUuid(value = '') {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clean(value, 128))
 }
 
+function versionParts(value = '') {
+  return clean(value, 64).match(/\d+/g)?.slice(0, 4).map(Number) || []
+}
+
+function versionAtLeast(value, minimum) {
+  const left = versionParts(value)
+  const right = versionParts(minimum)
+  const length = Math.max(left.length, right.length)
+  for (let index = 0; index < length; index += 1) {
+    const a = left[index] || 0
+    const b = right[index] || 0
+    if (a > b) return true
+    if (a < b) return false
+  }
+  return true
+}
+
+const SNMP_MIN_AGENT_VERSION = '0.1.231'
+
 function parseKeyMaterial(rawValue, variableName) {
   const raw = clean(rawValue, 4096)
   if (!raw) return null
@@ -228,24 +247,30 @@ async function bundle(tenantId) {
   ])
 
   const onlineDevices = devices.rows.filter((row) => row.status === 'online').length
+  const probeRows = probes.rows.map((row) => ({
+    ...row,
+    snmp_capable: versionAtLeast(row.agent_version, SNMP_MIN_AGENT_VERSION),
+  }))
   return {
     credentials: credentials.rows.map(credentialSummary),
     profiles: profiles.rows,
     runs: runs.rows,
     devices: devices.rows,
-    probes: probes.rows,
+    probes: probeRows,
     sites: sites.rows,
     summary: {
       profiles: profiles.rows.filter((row) => row.enabled).length,
       devices: devices.rowCount,
       onlineDevices,
       offlineDevices: Math.max(0, devices.rowCount - onlineDevices),
-      onlineProbes: probes.rows.filter((row) => row.online).length,
+      onlineProbes: probeRows.filter((row) => row.online).length,
+      snmpCapableProbes: probeRows.filter((row) => row.online && row.snmp_capable).length,
     },
     capabilities: {
       snmpV1: true,
       snmpV2c: true,
       snmpV3: false,
+      minAgentVersion: SNMP_MIN_AGENT_VERSION,
       ipv4: true,
       ipv6: false,
       maxAddressesPerProfile: 4096,
@@ -274,7 +299,7 @@ async function loadProfileForDispatch(tenantId, profileId) {
     `SELECT p.*,c.name AS credential_name,c.snmp_version,c.community_encrypted,c.username,
             c.security_level,c.auth_protocol,c.auth_secret_encrypted,c.privacy_protocol,
             c.privacy_secret_encrypted,c.context_name,c.enabled AS credential_enabled,
-            a.websocket_status,a.last_telemetry_at,a.disabled_at,
+            a.websocket_status,a.last_telemetry_at,a.disabled_at,a.agent_version,
             i.name AS probe_name
        FROM rmm_network_discovery_profiles p
        JOIN rmm_network_discovery_credentials c
@@ -309,6 +334,14 @@ async function dispatchProfileScan(session, profileId, initiatedBy = 'technician
   }
   if (profile.snmp_version === 'v3') {
     const error = new Error('SNMPv3 credentials can be stored now, but SNMPv3 probe execution is not enabled in this Agent build yet.')
+    error.status = 409
+    throw error
+  }
+  if (!versionAtLeast(profile.agent_version, SNMP_MIN_AGENT_VERSION)) {
+    const error = new Error(
+      'The selected probe must be upgraded to Hi5Central Agent ' + SNMP_MIN_AGENT_VERSION
+      + ' or later before it can run SNMP discovery.',
+    )
     error.status = 409
     throw error
   }
@@ -474,7 +507,7 @@ async function cleanupStaleDiscoveryRuns() {
 async function dispatchDueNetworkDiscoveryProfiles() {
   await cleanupStaleDiscoveryRuns()
   const due = await pool.query(
-    `SELECT p.id,p.tenant_id
+    `SELECT p.id,p.tenant_id,a.agent_version
        FROM rmm_network_discovery_profiles p
        JOIN rmm_network_discovery_credentials c
          ON c.id=p.credential_id AND c.tenant_id=p.tenant_id AND c.enabled=true
@@ -497,6 +530,15 @@ async function dispatchDueNetworkDiscoveryProfiles() {
       LIMIT 10`,
   )
   for (const row of due.rows) {
+    if (!versionAtLeast(row.agent_version, SNMP_MIN_AGENT_VERSION)) {
+      await pool.query(
+        `UPDATE rmm_network_discovery_profiles
+            SET next_scan_at=now() + interval '15 minutes',updated_at=now()
+          WHERE id=$1 AND tenant_id=$2`,
+        [row.id, row.tenant_id],
+      ).catch(() => null)
+      continue
+    }
     const session = {
       tenant_id: row.tenant_id,
       user_id: null,
