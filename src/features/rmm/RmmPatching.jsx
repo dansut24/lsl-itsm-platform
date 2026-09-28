@@ -1000,7 +1000,7 @@ function QualificationWorkspace({
 }
 
 export function RmmPatching({ devices = [], softwareOnly = false }) {
-  const [tab, setTab] = useState('software')
+  const [tab, setTab] = useState(softwareOnly ? 'software' : 'catalogue')
   const [bundle, setBundle] = useState(null)
   const [scope, setScope] = useState({ groups: [] })
   const [vulnerabilities, setVulnerabilities] = useState([])
@@ -1111,7 +1111,7 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
   }, [catalogueMaintenanceId])
 
   useEffect(() => {
-    if (tab !== 'winget') return undefined
+    if (softwareOnly || tab !== 'catalogue') return undefined
     let active = true
     const timer = window.setTimeout(() => {
       setWingetLoading(true)
@@ -1121,7 +1121,7 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
         .finally(() => { if (active) setWingetLoading(false) })
     }, 250)
     return () => { active = false; window.clearTimeout(timer) }
-  }, [tab, wingetQuery, wingetPage, wingetPageSize])
+  }, [softwareOnly, tab, wingetQuery, wingetPage, wingetPageSize])
 
   const applications = bundle?.applications || []
   const catalogue = bundle?.catalogue || []
@@ -1828,78 +1828,16 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
     {!softwareOnly && <PageHeading action={<div className="rmm-patch-heading-actions"><button disabled={loading} onClick={refresh} type="button"><RefreshCw size={15} /> Refresh</button><button className="rmm-primary compact" onClick={() => { setEditingPolicy(null); setShowPolicy(true) }} type="button"><Plus size={15} /> New policy</button></div>} />}
     {error && <div className="rmm-patch-error"><AlertTriangle size={16} /><span>{error}</span></div>}
 
-    {!softwareOnly && <div className="rmm-patch-metrics">
-      <Metric icon={PackageCheck} label="Software installations" value={loading ? '…' : overview.softwareInstallations ?? 0} />
-      <Metric icon={AlertTriangle} label="Software updates available" value={loading ? '…' : overview.updateAvailable ?? 0} tone="warning" />
-      <Metric icon={ShieldCheck} label="Open CVE exposures" value={loading ? '…' : exposureSummary.open ?? 0} tone={Number(exposureSummary.open || 0) > 0 ? 'critical' : ''} />
-      <Metric icon={Monitor} label="Windows updates pending" value={windowsPending} />
-    </div>}
-    {!softwareOnly && <section className="rmm-patch-security-banner">
-      <ShieldCheck size={20} />
-      <div><strong>Server-authoritative patch intelligence</strong><span>The full software/CVE catalogue stays in Hi5Central. PatchHost receives only short-lived per-job manifests and never receives the estate-wide catalogue.</span></div>
-      <StatusPill tone="healthy">Protected design</StatusPill>
-    </section>}
-
     {!softwareOnly && <nav className="rmm-patch-tabs">
       {[
-        ['software', 'Software', exposedApps.length],
-        ['winget', 'WinGet Repository', wingetRepository.total || 0],
-        ['vendors', 'Vendors', vendorSources.length + tenantVendorSources.length],
-        ['vulnerabilities', 'Vulnerabilities', bundle?.vulnerabilities?.kev || 0],
+        ['catalogue', 'Catalogue', catalogue.length || applications.length],
         ['windows', 'Windows Update', windowsPending],
         ['policies', 'Policies', policies.length],
       ].map(([id, label, count]) => <button className={tab === id ? 'active' : ''} key={id} onClick={() => setTab(id)} type="button">{label}<b>{count}</b></button>)}
     </nav>}
 
-    {tab === 'software' && <section className="rmm-patch-panel">
-      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Software patch catalogue</span><h2>Patchability by application</h2><p>{mappedApps.length} mapped application{mappedApps.length === 1 ? '' : 's'} · {applications.length - mappedApps.length} awaiting mapping · {catalogueCandidates.length} automatically discovered package{catalogueCandidates.length === 1 ? '' : 's'} · {overview.fullyQualifiedCatalogue || 0} fully qualified · {overview.limitedQualifiedCatalogue || 0} limited · {overview.automaticAdmissionReadyCatalogue || 0} qualification-ready · {overview.candidateCatalogue || 0} deployment candidates.</p></div></div>
-      <div className="rmm-vulnerability-coverage"><div><ShieldCheck size={17} /><span><strong>Catalogue vulnerability identity validation</strong><small>{vulnerabilityCatalogue.covered ?? 0} of {vulnerabilityCatalogue.total ?? catalogue.length} catalogue applications have completed source validation. NVD CPE and exact OSV identities are checked independently; endpoint exposures are still created only when that software/version is actually installed.</small></span></div><div className="stats"><span><small>NVD mapped</small><strong>{vulnerabilityCatalogue.nvd ?? 0}</strong></span><span><small>OSV mapped</small><strong>{vulnerabilityCatalogue.osv ?? 0}</strong></span><span><small>Validated</small><strong>{vulnerabilityCatalogue.covered ?? 0}</strong></span><span><small>Unchecked</small><strong>{vulnerabilityCatalogue.unchecked ?? 0}</strong></span><span><small>Mapping to validate</small><strong>{vulnerabilityCatalogue.validationPending ?? 0}</strong></span><span><small>Needs identity</small><strong>{vulnerabilityCatalogue.needsIdentity ?? 0}</strong></span><span><small>Source pending</small><strong>{vulnerabilityCatalogue.sourcePending ?? 0}</strong></span></div></div>
-      {!!qualificationQueue.length && <div className="rmm-vulnerability-coverage"><div><PackageCheck size={17} /><span><strong>Automatic catalogue qualification</strong><small>One candidate at a time is clean-installed on the designated qualification runner, verified by PatchHost, uninstalled, then confirmed absent from inventory. Failures stop for review instead of retrying blindly.</small></span></div><div className="stats"><span><small>Queued</small><strong>{qualificationQueueCounts.queued || 0}</strong></span><span><small>Installing</small><strong>{qualificationQueueCounts.running || 0}</strong></span><span><small>Cleanup</small><strong>{(qualificationQueueCounts.cleanup_pending || 0) + (qualificationQueueCounts.cleanup_running || 0)}</strong></span><span><small>Passed</small><strong>{qualificationQueueCounts.passed || 0}</strong></span><span><small>Review</small><strong>{qualificationQueueCounts.review_required || 0}</strong></span></div>{!!qualificationReview.length && <div className="rmm-patch-candidate-footnote">{qualificationReview.slice(0, 5).map((item) => <span key={item.id}><strong>{item.canonical_name}</strong> · {item.target_version} · {readinessLabel(item.last_error || 'review required')}</span>)}</div>}</div>}
-      {!!qualificationQueue.length && <div className="rmm-vulnerability-coverage">
-        <div><PackageCheck size={17} /><span><strong>Deployment qualification and lifecycle coverage</strong><small>Current-version install, verification and clean removal determine deployment qualification. Upgrade and rollback are tracked separately as optional lifecycle evidence.</small></span></div>
-        <div className="stats">
-          <span><small>Install / removal passed</small><strong>{qualificationProgress.cleanInstallPassed || 0}</strong></span>
-          <span><small>Upgrade passed</small><strong>{qualificationProgress.upgradePassed || 0}</strong></span>
-          <span><small>Rollback passed</small><strong>{qualificationProgress.rollbackPassed || 0}</strong></span>
-          <span><small>Fully qualified</small><strong>{qualificationProgress.fullyQualified || 0}</strong></span>
-          <span><small>Qualified · limited</small><strong>{qualificationProgress.limitedQualified || 0}</strong></span>
-        </div>
-        {!!qualificationFailureGroups.length && <div style={{width: '100%', display: 'grid', gap: '8px'}}>
-          {qualificationFailureGroups.map(group => <details key={group.key}>
-            <summary>{group.label} · {group.count}</summary>
-            <p>{group.nextAction}</p>
-            <ul>{group.applications.map(item => <li key={item.id}><strong>{item.name}</strong> · {item.installerTechnology} · {readinessLabel(item.error || 'review required')}</li>)}</ul>
-          </details>)}
-        </div>}
-      </div>}
-
-      <section className="rmm-qualification-shell">
-        <div className="rmm-qualification-selector">
-          <div><Wrench size={18} /><span><strong>Catalogue qualification lab</strong><small>Qualify deployment with current-version install, independent verification and clean uninstall. Upgrade and rollback remain optional lifecycle tests.</small></span></div>
-          <label>Application<select value={catalogueMaintenanceId} onChange={(event) => selectCatalogueMaintenance(event.target.value)}>
-            <option value="">Select catalogue application</option>
-            {catalogueMaintenanceItems.map((item) => <option key={item.id} value={item.id}>{item.canonicalName} · {item.targetVersion || 'No target'} · {qualificationLabel(item.qualificationState)}</option>)}
-          </select></label>
-          {selectedCatalogueMaintenance && <div className="rmm-qualification-selector-meta">
-            <span><small>Target</small><strong>{selectedCatalogueMaintenance.targetVersion || '—'}</strong></span>
-            <span><small>Provider</small><strong>{selectedCatalogueMaintenance.deploymentMode?.replaceAll('_', ' ') || selectedCatalogueMaintenance.provider || '—'}</strong></span>
-            <span><small>Trust</small><StatusPill tone={readinessTone(selectedCatalogueMaintenance.trustState)}>{readinessLabel(selectedCatalogueMaintenance.trustState || 'pending')}</StatusPill></span>
-            <span><small>Qualification</small><StatusPill tone={qualificationTone(selectedCatalogueMaintenance.qualificationState)}>{qualificationLabel(selectedCatalogueMaintenance.qualificationState)}</StatusPill></span>
-          </div>}
-        </div>
-        <QualificationWorkspace
-          item={selectedCatalogueMaintenance}
-          lab={qualificationLab}
-          loading={qualificationLabLoading}
-          busyAction={qualificationAction}
-          onAction={runQualificationWorkspaceAction}
-          onEdit={() => selectedCatalogueMaintenanceApp && setValidationApp(selectedCatalogueMaintenanceApp)}
-          onRevalidate={() => selectedCatalogueMaintenanceApp && revalidateApplication(selectedCatalogueMaintenanceApp)}
-          onRefresh={refreshQualificationWorkspace}
-          onMarkLimited={markQualificationLimited}
-          onClearLimited={clearQualificationLimited}
-        />
-      </section>
+    {(tab === 'catalogue' || (softwareOnly && tab === 'software')) && <section className="rmm-patch-panel">
+      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Software catalogue</span><h2>Catalogue</h2><p>Deploy and patch approved software from the Hi5Central catalogue. WinGet packages are included below as an additional searchable source.</p></div></div>
       <div className="rmm-catalogue-install-card">
         <div className="intro"><PackageCheck size={18} /><div><strong>Install from catalogue</strong><span>Install approved catalogue software on an online managed device. Existing installations stay in the normal Patch workflow.</span></div></div>
         <div className="controls">
@@ -1988,13 +1926,9 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
             <span><strong>{application.catalogue?.provider || 'Unmapped'}</strong>{application.catalogue
               ? <><StatusPill tone={qualificationTone(application.catalogue.qualificationState)}>{qualificationLabel(application.catalogue.qualificationState)}</StatusPill><small>{application.catalogue.builtIn ? 'Hi5Central catalogue' : 'Tenant mapping'}{application.catalogue.qualificationVersion ? ' · tested ' + application.catalogue.qualificationVersion : ''}</small><small>{sourceState.type.replaceAll('_', ' ')} · source {sourceState.health.replaceAll('_', ' ')}</small></>
               : <small>Needs mapping</small>}</span>
-            <span className="actions">{application.catalogue ? <>
-              <button disabled={saving || application.updateAvailable < 1} onClick={() => setPatchApp(application)} type="button"><PackageCheck size={14} /> Patch</button>
-              <button disabled={saving} onClick={() => setValidationApp(application)} type="button"><Wrench size={14} /> Edit</button>
-              {application.catalogue.sourceKey && <button disabled={saving} onClick={() => revalidateApplication(application)} type="button"><RefreshCw size={14} /> Validate</button>}
-              {application.catalogue.deploymentMode === 'vendor_direct' && !['qualified','qualified_limited'].includes(application.catalogue.qualificationState) && <button disabled={saving} onClick={() => retryApplicationQualification(application)} type="button"><ShieldCheck size={14} /> Retry</button>}
-              {!application.catalogue.builtIn && <button aria-label={'Archive ' + application.name} disabled={saving} onClick={() => removeMapping(application)} type="button"><Trash2 size={14} /></button>}
-            </> : <button disabled={saving} onClick={() => setMappingApp(application)} type="button"><Plus size={14} /> Map</button>}</span>
+            <span className="actions">{application.catalogue
+              ? <button disabled={saving || application.updateAvailable < 1} onClick={() => setPatchApp(application)} type="button"><PackageCheck size={14} /> Patch</button>
+              : <StatusPill tone="neutral">Not in catalogue</StatusPill>}</span>
           </div>
         })}
       </div>
@@ -2031,8 +1965,8 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
       </div>}
     </section>}
 
-    {tab === 'winget' && <section className="rmm-patch-panel">
-      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Microsoft WinGet source</span><h2>Full WinGet repository</h2><p>{wingetLoading ? 'Refreshing repository index…' : (wingetRepository.total || 0) + ' packages available from the current WinGet community source index.'} This repository is searchable independently from the curated Hi5Central catalogue.</p></div></div>
+    {!softwareOnly && tab === 'catalogue' && <section className="rmm-patch-panel">
+      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Catalogue source</span><h2>WinGet repository</h2><p>{wingetLoading ? 'Refreshing repository index…' : (wingetRepository.total || 0) + ' packages available from the current WinGet community source index.'} Search WinGet here as part of the wider Hi5Central catalogue.</p></div></div>
       <div className="rmm-patch-security-banner inline"><PackageCheck size={18} /><div><strong>Repository ≠ automatic trust</strong><span>WinGet provides broad Windows package coverage. Hi5Central still keeps curated vendor sources and vulnerability identities separate, and only creates vulnerability exposures for software actually detected on an endpoint.</span></div><StatusPill tone="healthy">Live index</StatusPill></div>
       <div className="rmm-winget-toolbar">
         <label><Search size={14} /><input value={wingetQuery} onChange={(event) => setWingetQuery(event.target.value)} placeholder="Search all WinGet packages, IDs, monikers or publishers…" /></label>
@@ -2050,136 +1984,6 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
       </div>
       {!wingetLoading && !(wingetRepository.packages || []).length && <div className="rmm-empty compact"><Search size={22} /><strong>No WinGet packages matched</strong><span>Try another application name, package ID or publisher.</span></div>}
       <div className="rmm-software-pagination"><span>Page {wingetRepository.page || wingetPage} of {wingetRepository.pages || 1}</span><div><button disabled={wingetLoading || Number(wingetRepository.page || wingetPage) <= 1} onClick={() => setWingetPage((page) => Math.max(1, page - 1))} type="button"><ChevronLeft size={14} /> Previous</button><strong>{wingetRepository.total || 0} packages</strong><button disabled={wingetLoading || Number(wingetRepository.page || wingetPage) >= Number(wingetRepository.pages || 1)} onClick={() => setWingetPage((page) => Math.min(Number(wingetRepository.pages || 1), page + 1))} type="button">Next <ChevronRight size={14} /></button></div></div>
-    </section>}
-
-    {tab === 'vendors' && <section className="rmm-patch-panel">
-      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Vendor-first freshness</span><h2>Vendor software catalogue</h2><p>Built-in feeds provide Hi5Central-maintained intelligence. Tenant sources can use GitHub Releases, vendor JSON APIs, or manually entered vendor releases; every source must be tested and explicitly approved before it can influence patch targets.</p></div><button className="rmm-primary compact" onClick={() => { setEditingVendorSource(null); setShowVendorSource(true) }} type="button"><Plus size={14} /> Add vendor source</button></div>
-      <div className="rmm-patch-tenant-vendors">
-        <div className="rmm-patch-subheading"><div><span className="rmm-eyebrow">Self-service sources</span><h3>Tenant vendor sources</h3><p>Draft → Test → Approve. Editing an approved source resets it to draft so changed trust rules can never silently enter production.</p></div></div>
-        <div className="rmm-patch-table tenant-vendors">
-          <div className="head"><span>Source</span><span>Deployment</span><span>Latest</span><span>Trust</span><span>State</span><span /></div>
-          {tenantVendorSources.map((source) => {
-            const blockers = Array.isArray(source.last_test_result?.blockers) ? source.last_test_result.blockers : []
-            const stateTone = source.status === 'active' ? 'healthy' : source.status === 'quarantined' ? 'critical' : source.status === 'tested' ? 'running' : 'neutral'
-            const trustTone = source.trust_state === 'direct_ready' || source.trust_state === 'winget_ready' ? 'healthy' : source.trust_state === 'quarantined' ? 'critical' : 'neutral'
-            const recommendation = source.verification_recommendation
-            const recommendationLabel = recommendation?.recommendedVariant
-              ? recommendation.recommendedVariant.replaceAll('_', ' ')
-              : recommendation?.recommendedMethod?.replaceAll('_', ' ')
-            const recommendationState = recommendation?.validated
-              ? 'validated'
-              : recommendation?.autoProbeRecommended
-                ? 'probe needed'
-                : recommendation?.recommendedMethod
-                  ? 'awaiting endpoint'
-                  : 'not available'
-            return <div className="row" key={source.id}>
-              <span><strong>{source.display_name}</strong><small>{source.source_type === 'github_releases' ? source.repository : source.source_url || source.parser_config?.staticReleaseUrl || 'Manual release'} · {(source.source_type || 'github_releases').replaceAll('_', ' ')} · every {source.poll_minutes} min</small></span>
-              <span><strong>{(source.deployment_mode || '').replaceAll('_', ' ')}</strong><small>{source.provider_package_id || 'No WinGet fallback'} · configured {(source.verification_config?.method || 'winget').replaceAll('_', ' ')}</small>{recommendationLabel && <small><b>Recommended:</b> {recommendationLabel} · {recommendationState}</small>}</span>
-              <span><strong>{source.release_version || source.latest_version || 'Not tested'}</strong><small>{source.release_date ? new Date(source.release_date).toLocaleDateString() : source.last_success_at ? 'Tested ' + new Date(source.last_success_at).toLocaleString() : 'Awaiting test'}</small></span>
-              <span><StatusPill tone={trustTone}>{(source.trust_state || 'untested').replaceAll('_', ' ')}</StatusPill><small>{source.installer_sha256 ? (source.source_type === 'static_release' ? 'SHA-256 pinned from vendor release evidence' : 'SHA-256 verified from release metadata') : blockers[0] || (source.deployment_mode === 'vendor_direct' ? 'Direct-install trust incomplete' : 'Execution provider performs install verification')}</small></span>
-              <span><StatusPill tone={stateTone}>{source.status}</StatusPill><small>{source.last_error || (source.approved_at ? 'Approved ' + new Date(source.approved_at).toLocaleDateString() : '')}</small></span>
-              <span className="actions"><button disabled={saving} onClick={() => runVendorSourceTest(source)} type="button"><RefreshCw size={13} /> Test</button>{source.status === 'tested' && <button className="rmm-primary compact" disabled={saving} onClick={() => runVendorSourceApproval(source)} type="button"><ShieldCheck size={13} /> Approve</button>}<button disabled={saving} onClick={() => { setEditingVendorSource(source); setShowVendorSource(true) }} type="button">Edit</button><button aria-label={'Archive ' + source.display_name} disabled={saving} onClick={() => removeVendorSource(source)} type="button"><Trash2 size={13} /></button></span>
-            </div>
-          })}
-        </div>
-        {!tenantVendorSources.length && <div className="rmm-empty compact"><GitBranch size={22} /><strong>No self-service sources yet</strong><span>Add a public GitHub Releases or vendor JSON source to test vendor-first version intelligence without changing the global Hi5Central catalogue.</span></div>}
-      </div>
-      <div className="rmm-vendor-health-summary"><div><small>Sources</small><strong>{vendorHealth.total ?? vendorSources.length}</strong></div><div><small>Healthy</small><strong>{vendorHealth.healthy ?? 0}</strong></div><div><small>Needs attention</small><strong>{Number(vendorHealth.attention || 0) + Number(vendorHealth.stale || 0)}</strong></div><div><small>Unhealthy assets</small><strong>{vendorHealth.unhealthy_assets ?? 0}</strong></div><div><small>Awaiting asset check</small><strong>{vendorHealth.unknown_assets ?? 0}</strong></div></div>
-      <div className="rmm-patch-security-banner inline"><RefreshCw size={18} /><div><strong>Automatic VPS qualification</strong><span>Hi5Central continuously discovers releases, checks deployment transports, probes vendor assets and promotes only artifacts that satisfy the trust gates. Items that fail cryptographic, signer or installer-technology checks stay non-deployable and appear in Manual review below.</span></div><StatusPill tone={vendorReview.length ? 'warning' : 'healthy'}>{vendorReview.length ? vendorReview.length + ' to review' : 'No failures'}</StatusPill></div>
-      {!!vendorReadiness.length && <div className="rmm-patch-deployment-history"><div><span className="rmm-eyebrow">Readiness backlog</span><h3>Why software is not deployable yet</h3><p>This is the live automatic qualification backlog. Ecosystem packages remain useful for version and vulnerability intelligence without being treated as Windows installers.</p></div><div className="rmm-vendor-health-summary"><div><small>Automation backlog</small><strong>{vendorBacklog.length}</strong></div><div><small>Intelligence only</small><strong>{vendorIntelligenceOnly.length}</strong></div><div><small>Missing Windows asset</small><strong>{vendorReadinessCounts.vendor_windows_asset_missing || 0}</strong></div><div><small>Target missing</small><strong>{vendorReadinessCounts.target_version_missing || 0}</strong></div></div><div className="rmm-patch-table deployments"><div className="head"><span>Application</span><span>Target</span><span>Source</span><span>Platform</span><span>Blocker</span></div>{vendorReadiness.slice(0, 80).map((item) => <div className="row" key={'readiness:' + item.id + ':' + item.source_key}><span><strong>{item.canonical_name}</strong><small>{item.state.replaceAll('_', ' ')}</small></span><span><strong>{item.target_version || 'Not resolved'}</strong><small>{item.trust_state.replaceAll('_', ' ')}</small></span><span><strong>{item.registry || item.source_key?.replaceAll('_', ' ') || 'Inventory-derived'}</strong><small>{item.winget_package_id || 'No verified fallback'}</small></span><span><strong>{item.platform || 'Inventory'}</strong><small>{item.architecture || '—'}</small></span><span><StatusPill tone={item.state === 'manual_review' ? 'critical' : item.state === 'intelligence_only' ? 'neutral' : 'warning'}>{item.blocker.replaceAll('_', ' ')}</StatusPill></span></div>)}</div></div>}
-      {!!vendorReview.length && <div className="rmm-patch-deployment-history"><div><span className="rmm-eyebrow">Manual review</span><h3>Automatic qualification failures</h3><p>These releases remain intelligence-only. Review the evidence before changing a source or trust rule; Hi5Central will not deploy them automatically.</p></div><div className="rmm-vendor-health-summary"><div><small>Rejected</small><strong>{vendorReviewCounts.rejected || 0}</strong></div><div><small>Signer review</small><strong>{vendorReviewCounts.signer_review_required || 0}</strong></div><div><small>Installer review</small><strong>{vendorReviewCounts.installer_review_required || 0}</strong></div></div><div className="rmm-patch-table deployments"><div className="head"><span>Application</span><span>Version</span><span>Source</span><span>Installer</span><span>Review state</span></div>{vendorReview.map((item) => <div className="row" key={'review:' + item.source_key + ':' + item.provider_package_id}><span><strong>{item.canonical_name}</strong><small>{item.publisher || item.provider_package_id}</small></span><span><strong>{item.version}</strong><small>{item.channel} · {item.architecture}</small></span><span><strong>{item.source_key.replaceAll('_', ' ')}</strong><small>{item.release_date ? new Date(item.release_date).toLocaleDateString() : 'Current release'}</small></span><span><strong>{item.installer_type ? item.installer_type.toUpperCase() : 'Unknown'}</strong><small>{item.installer_sha256 ? 'SHA-256 recorded' : 'No published SHA-256'}</small></span><span><StatusPill tone={item.trust_state === 'rejected' ? 'critical' : 'warning'}>{item.trust_state.replaceAll('_', ' ')}</StatusPill><small>{item.trust_evidence?.reason || item.asset_health_error || 'Trust evidence requires review'}</small></span></div>)}</div></div>}
-      {!!vendorSourceHealth.length && <div className="rmm-patch-table source-health"><div className="head"><span>Source health</span><span>State</span><span>Releases</span><span>Assets</span><span>Last success</span></div>{vendorSourceHealth.map((item) => <div className="row" key={item.source_key}><span><strong>{item.display_name}</strong><small>{item.records_seen} records observed</small></span><span><StatusPill tone={item.state === 'healthy' ? 'healthy' : item.state === 'pending' ? 'neutral' : 'warning'}>{item.state}</StatusPill><small>{item.last_error || (item.stale ? 'Feed is older than its freshness window' : '')}</small></span><span><strong>{item.release_count}</strong></span><span><strong>{item.healthy_assets} healthy</strong><small>{item.unhealthy_assets} unhealthy · {item.unknown_assets} awaiting check</small></span><span><strong>{item.last_success_at ? new Date(item.last_success_at).toLocaleString() : 'Pending'}</strong></span></div>)}</div>}
-      <div className="rmm-patch-vendor-section standalone">
-        <div className="rmm-patch-vendor-grid">
-          {vendorSources.map((source) => {
-            const latest = vendorLatest.find((item) => item.source_key === source.source_key)
-            return <article key={source.source_key}>
-              <div><strong>{source.display_name}</strong><small>{source.source_type.replaceAll('_', ' ')} · every {source.poll_minutes} min</small></div>
-              <span><strong>{latest?.version || source.cursor_value || 'Pending first sync'}</strong><small>{latest?.channel || ''}{latest?.release_date ? ' · ' + new Date(latest.release_date).toLocaleDateString() : ''}</small></span>
-              <StatusPill tone={source.last_error ? 'warning' : source.last_success_at ? 'healthy' : 'neutral'}>{source.last_error ? 'Attention' : source.last_success_at ? 'Live' : 'Pending'}</StatusPill>
-            </article>
-          })}
-        </div>
-      </div>
-      <div className="rmm-patch-table vendors">
-        <div className="head"><span>Application</span><span>Package ID</span><span>Vendor latest</span><span>Published</span><span>Installer</span></div>
-        {vendorLatest.map((item) => <div className="row" key={item.source_key + ':' + item.provider_package_id}>
-          <span><strong>{item.canonical_name}</strong><small>{item.publisher || item.source_key}</small></span>
-          <span><strong>{item.provider_package_id}</strong><small>{item.channel} · {item.architecture}</small></span>
-          <span><strong>{item.version}</strong><small>{item.source_key.replaceAll('_', ' ')}</small></span>
-          <span><strong>{item.release_date ? new Date(item.release_date).toLocaleDateString() : 'Not published'}</strong><small>{item.last_seen_at ? 'Seen ' + new Date(item.last_seen_at).toLocaleString() : ''}</small></span>
-          <span>{item.installer_url ? <StatusPill tone="healthy">{item.installer_type ? item.installer_type.toUpperCase() : 'Vendor'}</StatusPill> : <StatusPill tone="neutral">Version feed</StatusPill>}<small>{item.installer_sha256 ? 'SHA-256 supplied' : 'Installer metadata via execution provider'}</small></span>
-        </div>)}
-      </div>
-      {!vendorSources.length && <div className="rmm-empty"><PackageCheck size={24} /><strong>No vendor sources configured</strong><span>Vendor adapters will appear here as they are added to the Hi5Central global catalogue.</span></div>}
-    </section>}
-
-    {tab === 'vulnerabilities' && <section className="rmm-patch-panel">
-      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Threat intelligence + remediation</span><h2>Endpoint vulnerability exposure</h2><p>Hi5Central correlates authoritative vulnerability intelligence to software actually installed on managed endpoints, then tracks whether a verified remediation is available and completed.</p></div></div>
-      <div className="rmm-vuln-exposure-summary">
-        <div><small>Open exposures</small><strong>{exposureSummary.open ?? 0}</strong></div>
-        <div><small>Known / active exploitation</small><strong>{exposureSummary.active_exploitation_open ?? exposureSummary.kev_open ?? 0}</strong></div>
-        <div><small>Fix available</small><strong>{exposureSummary.fix_available_open ?? 0}</strong></div>
-        <div><small>Provider blocked</small><strong>{exposureSummary.provider_blocked_open ?? 0}</strong></div>
-        <div><small>Overdue SLA</small><strong>{exposureSummary.overdue_open ?? 0}</strong></div>
-        <div><small>CISA KEV exposures</small><strong>{exposureSummary.kev_open ?? 0}</strong></div>
-        <div><small>Remediated</small><strong>{exposureSummary.remediated ?? 0}</strong></div>
-      </div>
-      <div className="rmm-vuln-source-grid">
-        {(bundle?.vulnerabilities?.sources || []).map((source) => <article key={source.source}><span><CheckCircle2 size={16} /></span><div><strong>{source.source.replaceAll('_', ' ').toUpperCase()}</strong><small>{source.last_success_at ? 'Last successful sync ' + new Date(source.last_success_at).toLocaleString() : 'Awaiting first successful sync'}</small></div><StatusPill tone={source.last_error ? 'warning' : source.last_success_at ? 'healthy' : 'neutral'}>{source.last_error ? 'Attention' : source.last_success_at ? 'Live' : 'Pending'}</StatusPill></article>)}
-      </div>
-
-      <div className="rmm-vuln-table exposures">
-        <div className="head"><span>CVE</span><span>Risk</span><span>CVSS</span><span>EPSS</span><span>CISA KEV</span><span>Exploitation</span><span>Published</span><span>Fix</span><span>Exposed devices</span><span>Vulnerable software</span><span>Remediation</span></div>
-        {vulnerabilityExposureRows.map((item) => {
-          const epss = item.epss_score == null ? null : Number(item.epss_score)
-          const percentile = item.epss_percentile == null ? null : Number(item.epss_percentile)
-          const exploitation = (item.ssvc_exploitation || '').toLowerCase()
-          const riskCritical = item.kev || exploitation === 'active' || Number(item.cvss_score || 0) >= 9
-          const providerBlocked = item.status === 'open' && item.patch_status === 'provider_blocked'
-          const canRemediate = item.status === 'open' && item.remediation_state === 'available' && !providerBlocked
-          const remediating = remediatingExposureId === item.id
-          const remediationTone = providerBlocked
-            ? 'critical'
-            : item.remediation_state === 'remediated'
-              ? 'healthy'
-              : item.remediation_state === 'in_progress'
-                ? 'running'
-                : item.remediation_state === 'available'
-                  ? 'warning'
-                  : 'neutral'
-          const remediationLabel = providerBlocked ? 'provider blocked' : (item.remediation_state || 'unavailable')
-          const blockedDetail = item.patch_evidence?.providerBlockedDetail || 'The selected provider cannot currently remediate this detected installation.'
-          return <div className="row" key={item.id}>
-            <span><strong>{item.cve_id}</strong><small>{item.source}</small></span>
-            <span><StatusPill tone={riskCritical ? 'critical' : Number(item.cvss_score || 0) >= 7 ? 'warning' : 'neutral'}>{item.severity || 'Observed'}</StatusPill><small>{item.remediation_sla_class ? item.remediation_sla_class.replaceAll('_', ' ') : ''}</small></span>
-            <span><strong>{item.cvss_score ?? '—'}</strong><small>{item.cvss_version || 'Score pending'}</small></span>
-            <span><strong>{epss == null ? '—' : (epss * 100).toFixed(1) + '%'}</strong><small>{percentile == null ? 'EPSS pending' : Math.round(percentile * 100) + 'th percentile'}</small></span>
-            <span>{item.kev ? <StatusPill tone="critical">Yes</StatusPill> : <StatusPill tone="neutral">No</StatusPill>}<small>{item.kev_due_at ? 'Due ' + new Date(item.kev_due_at).toLocaleDateString() : item.kev_added_at ? 'Added ' + new Date(item.kev_added_at).toLocaleDateString() : ''}</small></span>
-            <span>{item.kev ? <StatusPill tone="critical">Known exploited</StatusPill> : exploitation ? <StatusPill tone={exploitation === 'active' ? 'critical' : exploitation === 'poc' ? 'warning' : 'neutral'}>{exploitation === 'poc' ? 'PoC observed' : exploitation}</StatusPill> : <StatusPill tone="neutral">Not reported</StatusPill>}<small>{item.known_ransomware_use ? 'Ransomware: ' + item.known_ransomware_use : item.ssvc_automatable ? 'Automatable: ' + item.ssvc_automatable : ''}</small></span>
-            <span><strong>{item.published_at ? new Date(item.published_at).toLocaleDateString() : '—'}</strong><small>{item.modified_at ? 'Updated ' + new Date(item.modified_at).toLocaleDateString() : ''}</small></span>
-            <span><strong>{item.remediation_target_version || item.fixed_version || '—'}</strong><small>{item.remediation_provider ? 'via ' + item.remediation_provider : item.fixed_version ? 'Vendor fixed version' : 'No verified fix route yet'}</small></span>
-            <span><strong>{item.device_name}</strong><small>{item.device_online ? 'Online' : 'Offline'}</small></span>
-            <span><strong>{item.application_name}</strong><small>{item.installed_version ? 'Installed ' + item.installed_version : 'Version unavailable'}</small></span>
-            <span className="rmm-vuln-remediation"><StatusPill tone={remediationTone}>{remediationLabel.replaceAll('_', ' ')}</StatusPill><small>{item.remediation_due_at ? 'SLA due ' + new Date(item.remediation_due_at).toLocaleDateString() : ''}</small>{providerBlocked ? <small className="rmm-vuln-blocked-detail">{blockedDetail}</small> : canRemediate ? <button className="rmm-vuln-remediate" disabled={!item.device_online || remediating} onClick={() => remediateExposure(item)} type="button"><Wrench size={12} /> {remediating ? 'Starting…' : item.device_online ? 'Remediate' : 'Device offline'}</button> : null}</span>
-          </div>
-        })}
-      </div>
-      {!vulnerabilityExposureRows.length && <div className="rmm-empty"><ShieldCheck size={24} /><strong>{loading ? 'Correlating endpoint exposures…' : 'No endpoint vulnerability exposures'}</strong><span>Global vulnerability feeds remain active below; endpoint rows appear only after a verified catalogue identity matches installed software and an affected version range.</span></div>}
-
-      <div className="rmm-vuln-feed-heading"><span className="rmm-eyebrow">Global intelligence</span><h3>Recent CVE intelligence</h3><p>These records are supporting threat intelligence. They do not become endpoint exposures until a verified product identity and affected version match.</p></div>
-      <div className="rmm-vuln-table feed">
-        <div className="head"><span>CVE</span><span>Priority</span><span>CVSS / EPSS</span><span>Published / due</span><span>Summary</span></div>
-        {vulnerabilities.map((item) => <div className="row" key={item.cve_id}>
-          <span><strong>{item.cve_id}</strong><small>{item.source}</small></span>
-          <span>{item.kev ? <StatusPill tone="critical">CISA KEV</StatusPill> : item.ssvc_exploitation === 'active' ? <StatusPill tone="critical">Active exploitation</StatusPill> : <StatusPill tone="neutral">{item.severity || 'Observed'}</StatusPill>}</span>
-          <span><strong>{item.cvss_score ?? 'Pending'}</strong><small>{item.epss_score == null ? item.cvss_version || '' : 'EPSS ' + (Number(item.epss_score) * 100).toFixed(1) + '%'}</small></span>
-          <span><strong>{item.kev_added_at || item.published_at ? new Date(item.kev_added_at || item.published_at).toLocaleDateString() : 'Not reported'}</strong><small>{item.kev_due_at ? 'CISA due ' + new Date(item.kev_due_at).toLocaleDateString() : ''}</small></span>
-          <span><strong>{item.summary || 'Description pending enrichment'}</strong><small>{item.known_ransomware_use ? 'Ransomware use: ' + item.known_ransomware_use : item.required_action || ''}</small></span>
-        </div>)}
-      </div>
-      {!vulnerabilities.length && <div className="rmm-empty"><ShieldCheck size={24} /><strong>{loading ? 'Loading vulnerability feeds…' : 'No vulnerability records yet'}</strong><span>The first central intelligence sync runs automatically after deployment.</span></div>}
     </section>}
 
     {tab === 'windows' && <section className="rmm-patch-panel">
@@ -2281,9 +2085,6 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
 
     {typeof document !== 'undefined' && createPortal(
       <div className="rmm-patch-portal-theme" style={rmmPortalThemeStyle()}>
-        {mappingApp && <MappingModal application={mappingApp} onClose={() => setMappingApp(null)} onSave={saveMapping} />}
-        {validationApp && <SoftwareValidationModal application={validationApp} source={validationSource} saving={saving} onClose={() => setValidationApp(null)} onSave={saveSoftwareValidation} />}
-        {showVendorSource && <VendorSourceModal source={editingVendorSource} saving={saving} onClose={() => { setShowVendorSource(false); setEditingVendorSource(null) }} onSave={saveVendorSource} />}
         {patchApp && <SoftwarePatchModal
           application={patchApp}
           devices={bundle?.devices || []}
