@@ -805,7 +805,18 @@ export function registerRmmAppPortalRoutes(app) {
         WHERE i.tenant_id=$1 AND i.agent_device_id=$2
         ORDER BY i.created_at DESC LIMIT 100`,
       [auth.agent.tenant_id, auth.agent.id])
-    return c.json({ success: true, apps, installations: jobs.rows })
+    const requests = identity.sid || identity.upn
+      ? await pool.query(
+        `SELECT id,app_id,revision_id,status,requested_by_sid,requested_by_upn,
+                created_at,decided_at,decision_note
+           FROM rmm_app_portal_requests
+          WHERE tenant_id=$1 AND agent_device_id=$2
+            AND (($3<>'' AND requested_by_sid=$3)
+              OR ($4<>'' AND lower(requested_by_upn)=lower($4)))
+          ORDER BY created_at DESC LIMIT 100`,
+        [auth.agent.tenant_id, auth.agent.id, identity.sid, identity.upn])
+      : { rows: [] }
+    return c.json({ success: true, apps, installations: jobs.rows, requests: requests.rows })
   })
 
   app.post('/api/v1/agent/app-portal/install', async (c) => {
