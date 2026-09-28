@@ -856,12 +856,24 @@ export function registerRmmAppPortalRoutes(app) {
           ORDER BY created_at DESC LIMIT 100`,
         [auth.agent.tenant_id, auth.agent.id, identity.sid, identity.upn])
       : { rows: [] }
+    const deviceRow = device.rows[0]
+      ? {
+        ...device.rows[0],
+        storage_total_bytes: device.rows[0].storage_total_bytes == null
+          ? null
+          : Number(device.rows[0].storage_total_bytes),
+        storage_free_bytes: device.rows[0].storage_free_bytes == null
+          ? null
+          : Number(device.rows[0].storage_free_bytes),
+      }
+      : {}
+
     return c.json({
       success: true,
       apps: enrichedApps,
       installations: jobs.rows,
       requests: requests.rows,
-      device: device.rows[0] || {},
+      device: deviceRow,
       updates: {
         software: softwareUpdates.rows,
         windows: windowsUpdates.rows,
