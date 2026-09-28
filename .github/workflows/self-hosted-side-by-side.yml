@@ -1,23 +1,7 @@
 name: Self-hosted side-by-side smoke test
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'src/**'
-      - 'api/**'
-      - 'deployment/runtime-config-entrypoint.sh'
-      - 'deployment/self-hosted/**'
-      - 'Dockerfile.production'
-      - '.github/workflows/self-hosted-side-by-side.yml'
-  pull_request:
-    paths:
-      - 'src/**'
-      - 'api/**'
-      - 'deployment/runtime-config-entrypoint.sh'
-      - 'deployment/self-hosted/**'
-      - 'Dockerfile.production'
-      - '.github/workflows/self-hosted-side-by-side.yml'
+  workflow_dispatch:
 
 jobs:
   side-by-side:
