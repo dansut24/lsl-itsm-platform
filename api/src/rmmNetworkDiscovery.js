@@ -137,9 +137,18 @@ function suggestedCidrs(network = {}) {
     let prefix = netmaskPrefix(mask)
     if (!Number.isInteger(prefix)) prefix = 24
     if (prefix < 20 || prefix > 32) return
-    const hostBits = 32 - prefix
-    const maskNumber = prefix === 32 ? 0xffffffff : (0xffffffff << hostBits) >>> 0
-    suggestions.add(ipv4FromNumber((ip & maskNumber) >>> 0) + '/' + prefix)
+
+    const addPrefix = (targetPrefix) => {
+      const hostBits = 32 - targetPrefix
+      const maskNumber = targetPrefix === 32 ? 0xffffffff : (0xffffffff << hostBits) >>> 0
+      suggestions.add(ipv4FromNumber((ip & maskNumber) >>> 0) + '/' + targetPrefix)
+    }
+
+    // Prefer the local /24 as the quick interactive scan when the actual
+    // connected subnet is broader. Keep the full routed subnet as the
+    // secondary/deep-scan option.
+    if (prefix < 24) addPrefix(24)
+    addPrefix(prefix)
   }
 
   const configurations = Array.isArray(network?.configurations) ? network.configurations : []

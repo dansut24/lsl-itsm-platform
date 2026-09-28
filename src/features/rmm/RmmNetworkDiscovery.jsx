@@ -258,12 +258,12 @@ export function RmmNetworkDiscovery() {
 
       <section className="rmm-card rmm-network-config-card">
         <div className="rmm-card-heading">
-          <div><span className="rmm-eyebrow">Ranges & probes</span><h2>Create discovery profile</h2><p>Choose an Agent and private IPv4 range. Hi5Central discovers devices by ARP/ICMP/reverse DNS even when no SNMP credential is supplied.</p></div>
+          <div><span className="rmm-eyebrow">Ranges & probes</span><h2>Create discovery profile</h2><p>Choose an Agent and private IPv4 range. Hi5Central discovers devices quickly by ARP and ICMP; names and richer identity are enriched separately.</p></div>
           <Radar size={19} />
         </div>
         <form className="rmm-network-form" onSubmit={createProfile}>
           <label><span>Profile name</span><input value={profile.name} onChange={(e) => setProfile({ ...profile, name: e.target.value })} placeholder="e.g. Head Office LAN" required /></label>
-          <label><span>IPv4 CIDR</span><input value={profile.cidr} onChange={(e) => setProfile({ ...profile, cidr: e.target.value })} placeholder="192.168.1.0/24" required /><small>{suggestedRanges.length > 0 ? 'Suggested from probe inventory: ' + suggestedRanges.join(', ') : 'Private RFC1918 ranges only · /20 to /32'}</small></label>
+          <label><span>IPv4 CIDR</span><input value={profile.cidr} onChange={(e) => setProfile({ ...profile, cidr: e.target.value })} placeholder="192.168.1.0/24" required /><small>{suggestedRanges.length > 0 ? 'Fast/local suggestion first: ' + suggestedRanges.join(', ') : 'Private RFC1918 ranges only · /20 to /32'}</small></label>
           <label><span>Probe endpoint</span><select value={profile.probeAgentDeviceId} onChange={(e) => {
             const probeId = e.target.value
             const probe = probeById.get(probeId)
