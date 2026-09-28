@@ -5,7 +5,10 @@ import { hasPermission } from './access.js'
 import { originMatchesTenant } from './deploymentConfig.js'
 import { pool, withTransaction } from './db.js'
 import { recordJobCompletionActivity, recordRmmActivity } from './rmmActivity.js'
-import { reconcileNetworkDiscoveryJobResult } from './rmmNetworkDiscoveryCore.js'
+import {
+  reconcileNetworkDiscoveryEnrichmentJobResult,
+  reconcileNetworkDiscoveryJobResult,
+} from './rmmNetworkDiscoveryCore.js'
 import { bitLockerRecoveryEscrowNeeded, ingestBitLockerRecoveryEscrow } from './rmmRecoveryKeys.js'
 import { recalculateTenantVulnerabilityExposures } from './rmmVulnerabilityExposure.js'
 import { ingestWindowsUpdateInventory, reconcileWindowsUpdateJobResult } from './rmmWindowsUpdates.js'
@@ -948,6 +951,9 @@ export function registerRmmAgentRoutes(app) {
     })
     await reconcileNetworkDiscoveryJobResult(completedJob, resultPayload, success).catch((error) => {
       console.error('Network discovery job reconciliation failed', completedJob.id, error.message)
+    })
+    await reconcileNetworkDiscoveryEnrichmentJobResult(completedJob, resultPayload, success).catch((error) => {
+      console.error('Network discovery enrichment reconciliation failed', completedJob.id, error.message)
     })
     const bulkSucceededCount = Number(resultPayload.succeededCount || 0)
     const bulkFailedCount = Number(resultPayload.failedCount || 0)

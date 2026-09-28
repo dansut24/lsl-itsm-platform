@@ -1,9 +1,29 @@
+import { isIP } from 'node:net'
 import { pool, withTransaction } from './db.js'
 import { lookupMacVendor } from './rmmMacOui.js'
 
 function clean(value = '', max = 4096) {
   return String(value ?? '').trim().slice(0, max)
 }
+
+function versionParts(value = '') {
+  return clean(value, 64).match(/\d+/g)?.slice(0, 4).map(Number) || []
+}
+
+function versionAtLeast(value, minimum) {
+  const left = versionParts(value)
+  const right = versionParts(minimum)
+  const length = Math.max(left.length, right.length)
+  for (let index = 0; index < length; index += 1) {
+    const a = left[index] || 0
+    const b = right[index] || 0
+    if (a > b) return true
+    if (a < b) return false
+  }
+  return true
+}
+
+const NAME_ENRICHMENT_MIN_AGENT_VERSION = '0.1.236'
 
 function asArray(value) {
   return Array.isArray(value) ? value : []
@@ -105,10 +125,12 @@ export async function reconcileNetworkDiscoveryJobResult(completedJob, resultPay
   if (!runId) return
 
   const runResult = await pool.query(
-    `SELECT r.id,r.tenant_id,r.profile_id,r.agent_device_id,p.site_id
+    `SELECT r.id,r.tenant_id,r.profile_id,r.agent_device_id,p.site_id,a.agent_version
        FROM rmm_network_discovery_runs r
        JOIN rmm_network_discovery_profiles p
          ON p.id=r.profile_id AND p.tenant_id=r.tenant_id
+       JOIN rmm_agent_devices a
+         ON a.id=r.agent_device_id AND a.tenant_id=r.tenant_id
       WHERE r.id=$1 AND r.tenant_id=$2
       LIMIT 1`,
     [runId, completedJob.tenant_id],
@@ -131,6 +153,14 @@ export async function reconcileNetworkDiscoveryJobResult(completedJob, resultPay
     completedJob.error_message || resultPayload.error || resultPayload.message,
     2000,
   )
+  const enrichmentTargets = success && versionAtLeast(run.agent_version, NAME_ENRICHMENT_MIN_AGENT_VERSION)
+    ? [...new Set(
+      devices
+        .filter((item) => !clean(item?.hostname, 512))
+        .map((item) => clean(item?.ipAddress ?? item?.ip_address, 128))
+        .filter(Boolean),
+    )].slice(0, 512)
+    : []
   const snmpEnrichedDevices = devices.filter(
     (item) => discoveryMethods(item).includes('snmp'),
   ).length
@@ -283,5 +313,109 @@ export async function reconcileNetworkDiscoveryJobResult(completedJob, resultPay
         WHERE id=$1 AND tenant_id=$2`,
       [run.profile_id, run.tenant_id],
     )
+
+    if (enrichmentTargets.length) {
+      await client.query(
+        `INSERT INTO rmm_agent_jobs
+          (tenant_id,agent_device_id,job_type,payload,status,initiated_by,initiated_by_label,request_metadata)
+         SELECT $1,$2,'network.discovery.enrich',$3::jsonb,'queued','system',
+                'Network discovery enrichment',$4::jsonb
+          WHERE NOT EXISTS (
+            SELECT 1
+              FROM rmm_agent_jobs
+             WHERE tenant_id=$1
+               AND agent_device_id=$2
+               AND job_type='network.discovery.enrich'
+               AND status IN ('queued','claimed')
+               AND request_metadata->>'network_discovery_profile_id'=$5
+          )`,
+        [
+          run.tenant_id,
+          run.agent_device_id,
+          JSON.stringify({
+            protocolVersion: 1,
+            profileId: run.profile_id,
+            targets: enrichmentTargets,
+          }),
+          JSON.stringify({
+            source: 'network_discovery_enrichment',
+            network_discovery_run_id: run.id,
+            network_discovery_profile_id: run.profile_id,
+          }),
+          run.profile_id,
+        ],
+      )
+    }
+  })
+}
+
+
+export async function reconcileNetworkDiscoveryEnrichmentJobResult(
+  completedJob,
+  resultPayload = {},
+  success = false,
+) {
+  if (completedJob?.job_type !== 'network.discovery.enrich' || !success) return
+
+  const profileId = clean(
+    completedJob?.request_metadata?.network_discovery_profile_id
+      || completedJob?.payload?.profileId,
+    128,
+  )
+  if (!profileId) return
+
+  const devices = asArray(resultPayload.devices).slice(0, 512)
+  if (!devices.length) return
+
+  await withTransaction(async (client) => {
+    for (const raw of devices) {
+      const ipAddress = clean(raw?.ipAddress ?? raw?.ip_address, 128)
+      const hostname = clean(raw?.hostname, 512)
+      if (isIP(ipAddress) !== 4 || !hostname) continue
+
+      const current = await client.query(
+        `SELECT vendor,device_type,sys_descr,sys_object_id
+           FROM rmm_network_devices
+          WHERE tenant_id=$1 AND profile_id=$2 AND ip_address=$3::inet
+          LIMIT 1`,
+        [completedJob.tenant_id, profileId, ipAddress],
+      )
+      if (!current.rowCount) continue
+
+      const existing = current.rows[0]
+      const vendor = clean(existing.vendor, 256)
+        || inferVendor(existing.sys_object_id, existing.sys_descr, hostname)
+      const inferredType = inferDeviceType(
+        existing.sys_descr,
+        existing.sys_object_id,
+        hostname,
+        vendor,
+      )
+      const deviceType = clean(existing.device_type, 64)
+      const nextType = deviceType && deviceType !== 'network_device'
+        ? deviceType
+        : inferredType
+
+      await client.query(
+        `UPDATE rmm_network_devices
+            SET hostname=$4,
+                vendor=CASE WHEN vendor='' THEN $5 ELSE vendor END,
+                device_type=$6,
+                discovery_methods=CASE
+                  WHEN discovery_methods ? 'reverse_dns' THEN discovery_methods
+                  ELSE discovery_methods || '["reverse_dns"]'::jsonb
+                END,
+                updated_at=now()
+          WHERE tenant_id=$1 AND profile_id=$2 AND ip_address=$3::inet`,
+        [
+          completedJob.tenant_id,
+          profileId,
+          ipAddress,
+          hostname,
+          vendor,
+          nextType,
+        ],
+      )
+    }
   })
 }
