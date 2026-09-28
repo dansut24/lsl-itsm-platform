@@ -2964,10 +2964,20 @@ export async function unifiedCatalogueSearch(tenantId, options = {}) {
   const pageSize = Math.max(10, Math.min(100, Number(options.pageSize) || 50))
   const requestedPage = Math.max(1, Number(options.page) || 1)
 
-  const hi5Rows = (await catalogueListRows(tenantId))
+  const hi5RowsRaw = (await catalogueListRows(tenantId))
     .map(catalogueSearchRow)
     .filter((item) => provider === 'all' || item.provider === provider)
     .filter((item) => catalogueSearchMatches(item, query))
+
+  const hi5ByIdentity = new Map()
+  for (const item of hi5RowsRaw) {
+    const identity = [lower(item.packageId), lower(item.name)].filter(Boolean).join('|') || item.key
+    const current = hi5ByIdentity.get(identity)
+    if (!current || (current.builtIn && !item.builtIn)) hi5ByIdentity.set(identity, item)
+  }
+  const hi5Rows = [...hi5ByIdentity.values()].sort((a, b) =>
+    clean(a.name).localeCompare(clean(b.name), undefined, { sensitivity: 'base', numeric: true }),
+  )
 
   const hi5Total = hi5Rows.length
   const wingetAllowedByProvider = provider === 'all' || provider === 'winget'
