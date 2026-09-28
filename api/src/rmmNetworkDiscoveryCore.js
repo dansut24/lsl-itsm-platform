@@ -1,4 +1,5 @@
 import { pool, withTransaction } from './db.js'
+import { lookupMacVendor } from './rmmMacOui.js'
 
 function clean(value = '', max = 4096) {
   return String(value ?? '').trim().slice(0, max)
@@ -143,7 +144,10 @@ export async function reconcileNetworkDiscoveryJobResult(completedJob, resultPay
         const sysDescr = clean(raw?.sysDescr ?? raw?.sys_descr, 8192)
         const sysObjectId = clean(raw?.sysObjectId ?? raw?.sys_object_id, 512)
         const hostname = clean(raw?.hostname, 512)
-        const vendor = clean(raw?.vendor, 256) || inferVendor(sysObjectId, sysDescr, hostname)
+        const macAddress = clean(raw?.macAddress ?? raw?.mac_address, 64)
+        const vendor = clean(raw?.vendor, 256)
+          || inferVendor(sysObjectId, sysDescr, hostname)
+          || lookupMacVendor(macAddress)
         const deviceType = clean(raw?.deviceType ?? raw?.device_type, 64)
           || inferDeviceType(sysDescr, sysObjectId, hostname, vendor)
 
@@ -191,7 +195,7 @@ export async function reconcileNetworkDiscoveryJobResult(completedJob, resultPay
             run.site_id,
             run.agent_device_id,
             ipAddress,
-            clean(raw?.macAddress ?? raw?.mac_address, 64),
+            macAddress,
             clean(raw?.hostname, 512),
             clean(raw?.snmpVersion ?? raw?.snmp_version, 32),
             clean(raw?.sysName ?? raw?.sys_name, 1024),

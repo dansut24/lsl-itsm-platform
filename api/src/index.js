@@ -19,6 +19,7 @@ import { registerRmmScopeRoutes } from './rmmScope.js'
 import { registerRmmPatchingRoutes } from './rmmPatching.js'
 import { registerRmmAppPortalRoutes } from './rmmAppPortal.js'
 import { registerRmmNetworkDiscoveryRoutes, startRmmNetworkDiscoveryScheduler } from './rmmNetworkDiscovery.js'
+import { startRmmMacOuiScheduler } from './rmmMacOui.js'
 import { registerRmmRecoveryKeyRoutes } from './rmmRecoveryKeys.js'
 import { startRmmVulnerabilitySyncScheduler } from './rmmVulnerabilityIntel.js'
 import { startSoftwareVendorSyncScheduler } from './rmmSoftwareVendorIntel.js'
@@ -420,6 +421,7 @@ startRmmVulnerabilitySyncScheduler()
 startSoftwareVendorSyncScheduler()
 startTenantVendorSourceScheduler()
 startRmmNetworkDiscoveryScheduler()
+startRmmMacOuiScheduler()
 const server = serve({ fetch: app.fetch, hostname: '0.0.0.0', port })
 attachRmmAgentWebSocket(server)
 attachRmmViewerWebSocket(server)
