@@ -197,6 +197,13 @@ export function rollbackWindowsUpdateRelease(updateKey, agentDeviceIds = []) {
   })
 }
 
+export function previewPatchAssignment(assignment) {
+  return request('/api/v1/rmm/patch-assignments/preview', {
+    method: 'POST',
+    body: JSON.stringify(assignment),
+  })
+}
+
 export function createPatchAssignment(assignment) {
   return request('/api/v1/rmm/patch-assignments', {
     method: 'POST',

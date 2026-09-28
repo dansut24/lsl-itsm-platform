@@ -41,6 +41,7 @@ import {
   loadRmmVulnerabilities,
   loadSoftwareQualificationLab,
   planSoftwarePatches,
+  previewPatchAssignment,
   remediateVulnerabilityExposure,
   searchSoftwareCatalogue,
   testVendorSource,
@@ -832,6 +833,16 @@ function AssignmentModal({ devices, groups, onClose, onSave, policy }) {
         ? groups.map((group) => ({ id: group.id, name: group.name }))
         : devices.map((device) => ({ id: device.id, name: device.name }))
   const [scopeId, setScopeId] = useState('ALL')
+  const [preview, setPreview] = useState(null)
+  const [previewKey, setPreviewKey] = useState('')
+  const [previewBusy, setPreviewBusy] = useState(false)
+  const [previewError, setPreviewError] = useState('')
+
+  function invalidatePreview() {
+    setPreview(null)
+    setPreviewKey('')
+    setPreviewError('')
+  }
 
   function changeScopeType(nextType) {
     setScopeType(nextType)
@@ -843,13 +854,54 @@ function AssignmentModal({ devices, groups, onClose, onSave, policy }) {
           ? groups.map((group) => ({ id: group.id, name: group.name }))
           : devices.map((device) => ({ id: device.id, name: device.name }))
     setScopeId(nextOptions[0]?.id || '')
+    invalidatePreview()
   }
 
   const selected = options.find((item) => item.id === scopeId)
+  const currentPreviewKey = [policy.id, scopeType, selected?.id || ''].join('|')
+  const previewCurrent = Boolean(preview && previewKey === currentPreviewKey)
+
+  async function runPreview() {
+    if (!selected) return
+    setPreviewBusy(true)
+    setPreviewError('')
+    try {
+      const result = await previewPatchAssignment({
+        policyId: policy.id,
+        scopeType,
+        scopeId: selected.id,
+        scopeName: selected.name,
+      })
+      setPreview(result)
+      setPreviewKey(currentPreviewKey)
+    } catch (requestError) {
+      setPreview(null)
+      setPreviewKey('')
+      setPreviewError(requestError?.message || 'Unable to preview this assignment.')
+    } finally {
+      setPreviewBusy(false)
+    }
+  }
+
+  function resultLabel(result) {
+    return ({
+      will_apply: 'Will apply',
+      already_effective: 'Already effective',
+      overridden: 'Overridden',
+      not_applicable: 'Not applicable',
+    })[result] || result || 'Unknown'
+  }
+
+  function resultTone(result) {
+    if (result === 'will_apply' || result === 'already_effective') return 'healthy'
+    if (result === 'overridden') return 'warning'
+    return 'neutral'
+  }
+
   return <div className="rmm-patch-modal-backdrop">
-    <form className="rmm-patch-modal small" onSubmit={(event) => {
+    <form className="rmm-patch-modal assignment-impact" onSubmit={(event) => {
       event.preventDefault()
-      if (!selected) return
+      if (!selected || !previewCurrent) return
       onSave({
         policyId: policy.id,
         scopeType,
@@ -858,10 +910,42 @@ function AssignmentModal({ devices, groups, onClose, onSave, policy }) {
       })
     }}>
       <header><div><span className="rmm-eyebrow">Patch targeting</span><h2>Assign {policy.name}</h2></div><button aria-label="Close" onClick={onClose} type="button"><X size={17} /></button></header>
-      <label>Scope type<select value={scopeType} onChange={(event) => changeScopeType(event.target.value)}><option>Estate</option><option>Site</option><option>Group</option><option>Device</option></select></label>
-      <label>Target<select value={scopeId} onChange={(event) => setScopeId(event.target.value)}>{options.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-      <div className="rmm-patch-security-note"><GitBranch size={16} /><span>Precedence follows Estate → Site → Group → Device.</span></div>
-      <footer><button onClick={onClose} type="button">Cancel</button><button className="rmm-primary" disabled={!selected} type="submit">Assign policy</button></footer>
+      <div className="rmm-assignment-fields">
+        <label>Scope type<select value={scopeType} onChange={(event) => changeScopeType(event.target.value)}><option>Estate</option><option>Site</option><option>Group</option><option>Device</option></select></label>
+        <label>Target<select value={scopeId} onChange={(event) => { setScopeId(event.target.value); invalidatePreview() }}>{options.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+      </div>
+      <div className="rmm-patch-security-note"><GitBranch size={16} /><span>Precedence follows Estate → Site → Group → Device. Preview shows what will actually become effective before this assignment is saved.</span></div>
+
+      <div className="rmm-assignment-preview-action">
+        <button disabled={!selected || previewBusy} onClick={runPreview} type="button"><Search size={14} /> {previewBusy ? 'Calculating impact…' : previewCurrent ? 'Refresh impact preview' : 'Preview impact'}</button>
+        {!previewCurrent && !previewBusy && <small>Preview is required before assignment.</small>}
+      </div>
+
+      {previewError && <div className="rmm-patch-error compact"><AlertTriangle size={15} /><span>{previewError}</span></div>}
+
+      {previewCurrent && <section className="rmm-assignment-preview">
+        <div className="rmm-assignment-impact-metrics">
+          <span><strong>{preview.summary?.targeted || 0}</strong><small>Targeted</small></span>
+          <span><strong>{preview.summary?.willApply || 0}</strong><small>Will apply</small></span>
+          <span><strong>{preview.summary?.alreadyEffective || 0}</strong><small>Already effective</small></span>
+          <span><strong>{preview.summary?.replacing || 0}</strong><small>Replacing policy</small></span>
+          <span><strong>{preview.summary?.overridden || 0}</strong><small>Overridden</small></span>
+          <span><strong>{preview.summary?.notApplicable || 0}</strong><small>Not applicable</small></span>
+          <span><strong>{preview.summary?.offline || 0}</strong><small>Offline</small></span>
+        </div>
+        <div className="rmm-assignment-impact-table">
+          <div className="head"><span>Device</span><span>Impact</span><span>Current effective</span><span>After assignment</span></div>
+          {(preview.devices || []).slice(0, 25).map((device) => <div className="row" key={device.inventoryId}>
+            <span><strong>{device.name || device.reference}</strong><small>{device.reference || device.inventoryId} · {device.online ? 'Online' : device.agentDeviceId ? 'Offline' : 'No Agent'}</small></span>
+            <span><StatusPill tone={resultTone(device.result)}>{resultLabel(device.result)}</StatusPill>{device.notApplicableReason && <small>{device.notApplicableReason}</small>}</span>
+            <span><strong>{device.currentPolicy?.name || 'None'}</strong>{device.currentPolicy && <small>{device.currentPolicy.scopeType} · priority {device.currentPolicy.priority}</small>}</span>
+            <span><strong>{device.effectiveAfter?.name || 'None'}</strong>{device.effectiveAfter && <small>{device.effectiveAfter.scopeType} · priority {device.effectiveAfter.priority}</small>}</span>
+          </div>)}
+        </div>
+        {(preview.devices || []).length > 25 && <small className="rmm-assignment-preview-more">Showing the first 25 of {preview.devices.length} affected devices.</small>}
+      </section>}
+
+      <footer><button onClick={onClose} type="button">Cancel</button><button className="rmm-primary" disabled={!selected || !previewCurrent || previewBusy} type="submit">Assign policy</button></footer>
     </form>
   </div>
 }

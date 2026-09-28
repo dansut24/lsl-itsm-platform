@@ -2477,7 +2477,72 @@ async function createAndDispatchSoftwarePatch(session, plan, context = {}) {
 }
 
 
-async function bulkSoftwarePatchPlan(tenantId, agentDeviceId, mode = 'selected_catalogue', requestedCatalogueIds = []) {
+
+function rawWingetSoftwarePlan(device, observation) {
+  const capabilities = object(device?.patch_capabilities)
+  if (capabilities.softwareInstall !== true) {
+    return {
+      error: 'This device has not reported PatchHost software-install capability yet.',
+      status: 409,
+      capabilityMissing: true,
+    }
+  }
+  const packageId = clean(observation?.provider_package_id)
+  const targetVersion = clean(observation?.available_version)
+  const installedVersion = clean(observation?.installed_version)
+  if (!packageId) return { error: 'WinGet package ID is missing for this update.', status: 409 }
+  if (!targetVersion) return { error: 'WinGet did not report an available target version.', status: 409 }
+
+  return {
+    device: {
+      ...device,
+      device_name: clean(device?.device_name || device?.name),
+      catalogue_id: clean(observation?.catalogue_id) || null,
+    },
+    installed: {
+      name: clean(observation?.application_name),
+      publisher: clean(observation?.publisher),
+      version: installedVersion,
+    },
+    provider: 'winget',
+    installerContinuity: {
+      installedTechnology: '',
+      targetTechnology: '',
+      continuitySelected: false,
+    },
+    manifest: {
+      protocolVersion: 1,
+      action: 'software.install',
+      intent: 'update',
+      catalogueId: clean(observation?.catalogue_id),
+      applicationName: clean(observation?.application_name || packageId),
+      publisher: clean(observation?.publisher),
+      packageId,
+      installedVersion,
+      targetVersion,
+      provider: 'winget',
+      vendorSource: '',
+      downloadUrl: '',
+      sha256: '',
+      installerType: '',
+      installerTechnology: '',
+      installedInstallerTechnology: '',
+      installerContinuitySelected: false,
+      allowGenericStrategyFallback: false,
+      installArguments: '',
+      responseFile: {},
+      expectedSigner: '',
+      fallbackProvider: '',
+      verification: {
+        method: 'winget',
+        packageId,
+        targetVersion,
+      },
+    },
+  }
+}
+
+export async function bulkSoftwarePatchPlan(tenantId, agentDeviceId, mode = 'selected_catalogue', requestedCatalogueIds = []) {
   const resolvedMode = ['selected_catalogue', 'all_catalogue', 'all_winget'].includes(clean(mode))
     ? clean(mode)
     : 'selected_catalogue'
@@ -2508,6 +2573,95 @@ async function bulkSoftwarePatchPlan(tenantId, agentDeviceId, mode = 'selected_c
   const ignoredKey = new Set(
     rejectionRows.rows.map((item) => item.catalogue_id + '|' + clean(item.target_version)),
   )
+
+
+  if (resolvedMode === 'all_winget') {
+    const wingetUpdates = discovery.observations.filter((item) =>
+      item.inventory_id === device.inventory_id
+      && clean(item.provider) === 'winget'
+      && item.patch_status === 'update_available'
+      && clean(item.provider_package_id)
+      && clean(item.available_version),
+    )
+    const ignored = []
+    const candidates = wingetUpdates.filter((item) => {
+      const catalogueId = clean(item.catalogue_id)
+      if (!catalogueId) return true
+      const key = catalogueId + '|' + clean(item.available_version)
+      if (!ignoredKey.has(key)) return true
+      const rejection = rejectionRows.rows.find((row) =>
+        clean(row.catalogue_id) === catalogueId
+        && clean(row.target_version) === clean(item.available_version),
+      )
+      ignored.push({
+        catalogueId,
+        applicationName: clean(item.application_name),
+        targetVersion: clean(item.available_version),
+        reason: clean(rejection?.reason),
+        rejectedBy: clean(rejection?.rejected_by_label),
+        rejectedAt: rejection?.created_at || null,
+      })
+      return false
+    })
+
+    if (candidates.length > 50) {
+      return {
+        error: 'This WinGet patch set contains more than 50 applications. Refine the selection or run the next batch after this one completes.',
+        status: 409,
+        mode: resolvedMode,
+        candidateCount: candidates.length + ignored.length,
+        maxItems: 50,
+        ignored,
+      }
+    }
+
+    const plans = []
+    const rejected = []
+    for (const observation of candidates) {
+      const plan = rawWingetSoftwarePlan(device, observation)
+      if (plan.error) {
+        rejected.push({
+          catalogueId: clean(observation.catalogue_id),
+          applicationName: clean(observation.application_name),
+          packageId: clean(observation.provider_package_id),
+          error: plan.error,
+          capabilityMissing: Boolean(plan.capabilityMissing),
+        })
+      } else {
+        plans.push(plan)
+      }
+    }
+
+    return {
+      mode: resolvedMode,
+      device: {
+        agentDeviceId: device.agent_device_id,
+        inventoryId: device.inventory_id,
+        name: device.name,
+        reference: device.reference,
+        online: device.online,
+        patchCapabilities: object(device.patch_capabilities),
+      },
+      candidateCount: candidates.length + ignored.length,
+      eligibleCount: plans.length,
+      ignoredCount: ignored.length,
+      rejectedCount: rejected.length,
+      ignored,
+      rejected,
+      items: plans.map((plan) => ({
+        catalogueId: clean(plan.device.catalogue_id),
+        applicationName: plan.manifest.applicationName,
+        installedVersion: plan.manifest.installedVersion,
+        targetVersion: plan.manifest.targetVersion,
+        provider: plan.provider,
+        packageId: plan.manifest.packageId,
+        vendorSource: '',
+        installerType: '',
+        installerTechnology: '',
+      })),
+      plans,
+    }
+  }
 
   let catalogueIds = []
   if (resolvedMode === 'selected_catalogue') {
@@ -2628,6 +2782,7 @@ async function createAndDispatchBulkSoftwarePatch(session, plans, mode = 'select
   const actorType = initiatedBy === 'system' ? 'system' : 'technician'
   const source = clean(options.source || 'rmm_device_bulk_patching')
   const first = plans[0]
+  const linkedCatalogueIds = plans.map((plan) => clean(plan.device.catalogue_id)).filter(Boolean)
   const created = await withTransaction(async (client) => {
     const jobResult = await client.query(
       `INSERT INTO rmm_agent_jobs
@@ -2664,12 +2819,14 @@ async function createAndDispatchBulkSoftwarePatch(session, plans, mode = 'select
 
   await withTransaction(async (client) => {
     await client.query(`UPDATE rmm_patch_deployments SET status='running',started_at=now(),updated_at=now() WHERE agent_job_id=$1 AND tenant_id=$2`, [created.job.id, session.tenant_id])
-    await client.query(
-      `UPDATE rmm_vulnerability_exposures SET remediation_state='in_progress',last_seen_at=now()
-        WHERE tenant_id=$1 AND inventory_id=$2 AND catalogue_id = ANY($3::uuid[])
-          AND status='open' AND remediation_state='available'`,
-      [session.tenant_id, first.device.inventory_id, plans.map((plan) => plan.device.catalogue_id)],
-    )
+    if (linkedCatalogueIds.length) {
+      await client.query(
+        `UPDATE rmm_vulnerability_exposures SET remediation_state='in_progress',last_seen_at=now()
+          WHERE tenant_id=$1 AND inventory_id=$2 AND catalogue_id = ANY($3::uuid[])
+            AND status='open' AND remediation_state='available'`,
+        [session.tenant_id, first.device.inventory_id, linkedCatalogueIds],
+      )
+    }
   })
 
   const pushed = sendAgentMessage(first.device.agent_device_id, {
@@ -2680,7 +2837,9 @@ async function createAndDispatchBulkSoftwarePatch(session, plans, mode = 'select
     await withTransaction(async (client) => {
       await client.query(`UPDATE rmm_agent_jobs SET status='cancelled',claimed_at=NULL,completed_at=now(),error_message='Device went offline before the bulk patch could be dispatched. The job was not retained for reconnect.',updated_at=now() WHERE id=$1 AND tenant_id=$2 AND status='claimed'`, [created.job.id, session.tenant_id])
       await client.query(`UPDATE rmm_patch_deployments SET status='cancelled',completed_at=now(),updated_at=now(),result=result || '{"reason":"device_offline_before_dispatch"}'::jsonb WHERE agent_job_id=$1 AND tenant_id=$2`, [created.job.id, session.tenant_id])
-      await client.query(`UPDATE rmm_vulnerability_exposures SET remediation_state='available',last_seen_at=now() WHERE tenant_id=$1 AND inventory_id=$2 AND catalogue_id = ANY($3::uuid[]) AND status='open' AND remediation_state='in_progress'`, [session.tenant_id, first.device.inventory_id, plans.map((plan) => plan.device.catalogue_id)])
+      if (linkedCatalogueIds.length) {
+        await client.query(`UPDATE rmm_vulnerability_exposures SET remediation_state='available',last_seen_at=now() WHERE tenant_id=$1 AND inventory_id=$2 AND catalogue_id = ANY($3::uuid[]) AND status='open' AND remediation_state='in_progress'`, [session.tenant_id, first.device.inventory_id, linkedCatalogueIds])
+      }
     })
     return { ...created, dispatched: false, offline: true }
   }
@@ -2690,7 +2849,7 @@ async function createAndDispatchBulkSoftwarePatch(session, plans, mode = 'select
     actorUserId: session.user_id, actorType, actorLabel: label, eventType: 'patch.software.bulk.requested', category: 'patching',
     summary: label + ' started ' + plans.length + ' software patches', detail: plans.map((plan) => plan.manifest.applicationName + ' ' + plan.manifest.installedVersion + ' → ' + plan.manifest.targetVersion).join(' · '),
     outcome: 'requested', correlationId: created.job.correlation_id, jobId: created.job.id,
-    metadata: { source, policyId: clean(options.policyId), policyName: clean(options.policyName), mode, deploymentIds: created.deployments.map((deployment) => deployment.id), catalogueIds: plans.map((plan) => plan.device.catalogue_id) },
+    metadata: { source, policyId: clean(options.policyId), policyName: clean(options.policyName), mode, deploymentIds: created.deployments.map((deployment) => deployment.id), catalogueIds: linkedCatalogueIds },
   }).catch(() => null)
   return { ...created, dispatched: true }
 }
@@ -3188,11 +3347,6 @@ export async function evaluateSoftwarePatchPolicies(tenantId, { dispatch = true,
     }
 
     const observations = observationsByInventory.get(device.inventory_id) || []
-    const wingetCatalogueIds = new Set(
-      observations
-        .filter((item) => item.provider === 'winget' && item.patch_status === 'update_available' && item.catalogue_id)
-        .map((item) => clean(item.catalogue_id)),
-    )
     const selectedIds = new Set(array(object(policy.software_rules).catalogueIds).map(clean))
     const updates = software.deviceSoftware.filter((item) =>
       item.agentDeviceId === device.agent_device_id
@@ -3200,24 +3354,54 @@ export async function evaluateSoftwarePatchPolicies(tenantId, { dispatch = true,
       && item.catalogue?.id,
     )
 
-    const candidateRows = updates.filter((item) => {
-      const catalogueId = clean(item.catalogue.id)
-      if (mode === 'selected_catalogue' && !selectedIds.has(catalogueId)) return false
-      if (mode === 'all_catalogue' && item.catalogue.installable !== true) return false
-      if (mode === 'all_winget' && !(wingetCatalogueIds.has(catalogueId) || item.catalogue.provider === 'winget')) return false
-
-      const raw = catalogueById.get(catalogueId)
-      const packageId = clean(item.catalogue.executionPackageId || item.catalogue.packageId)
-      const wingetCandidate = mode === 'all_winget' ? candidateByPackageId.get(lower(packageId)) : null
-      return softwarePolicyDelaySatisfied(policy, raw, wingetCandidate, at)
-    }).slice(0, 50)
-
+    let candidateRows = []
     const plans = []
     const rejected = []
-    for (const item of candidateRows) {
-      const plan = await softwarePatchPlan(tenantId, device.agent_device_id, item.catalogue.id)
-      if (plan.error) rejected.push({ catalogueId: item.catalogue.id, error: plan.error })
-      else plans.push(plan)
+
+    if (mode === 'all_winget') {
+      candidateRows = observations
+        .filter((item) =>
+          clean(item.provider) === 'winget'
+          && item.patch_status === 'update_available'
+          && clean(item.provider_package_id)
+          && clean(item.available_version),
+        )
+        .filter((item) => {
+          const discovered = candidateByPackageId.get(lower(item.provider_package_id))
+          const releaseHint = discovered || { first_seen_at: item.observed_at }
+          return softwarePolicyDelaySatisfied(policy, null, releaseHint, at)
+        })
+        .slice(0, 50)
+
+      for (const observation of candidateRows) {
+        const plan = rawWingetSoftwarePlan(device, observation)
+        if (plan.error) {
+          rejected.push({
+            catalogueId: clean(observation.catalogue_id),
+            packageId: clean(observation.provider_package_id),
+            applicationName: clean(observation.application_name),
+            error: plan.error,
+          })
+        } else {
+          plans.push(plan)
+        }
+      }
+    } else {
+      candidateRows = updates
+        .filter((item) => {
+          const catalogueId = clean(item.catalogue.id)
+          if (mode === 'selected_catalogue' && !selectedIds.has(catalogueId)) return false
+          if (mode === 'all_catalogue' && item.catalogue.installable !== true) return false
+          const raw = catalogueById.get(catalogueId)
+          return softwarePolicyDelaySatisfied(policy, raw, null, at)
+        })
+        .slice(0, 50)
+
+      for (const item of candidateRows) {
+        const plan = await softwarePatchPlan(tenantId, device.agent_device_id, item.catalogue.id)
+        if (plan.error) rejected.push({ catalogueId: item.catalogue.id, error: plan.error })
+        else plans.push(plan)
+      }
     }
 
     if (!plans.length) {
@@ -3292,6 +3476,209 @@ async function runWindowsPatchSchedules() {
 function priorityForScope(scopeType) {
   return ({ Estate: 100, Site: 220, Group: 340, Device: 900 })[scopeType] || 100
 }
+
+function agentVersionAtLeast(current = '', required = '') {
+  const left = clean(current).match(/\d+/g)?.map(Number) || []
+  const right = clean(required).match(/\d+/g)?.map(Number) || []
+  const length = Math.max(left.length, right.length)
+  for (let index = 0; index < length; index += 1) {
+    const delta = Number(left[index] || 0) - Number(right[index] || 0)
+    if (delta !== 0) return delta > 0
+  }
+  return left.length > 0 && right.length > 0
+}
+
+async function patchAssignmentScopeDevices(tenantId, scopeType, scopeId) {
+  const result = await pool.query(
+    `SELECT i.id AS inventory_id,i.reference,i.name,i.operating_system,
+            a.id AS agent_device_id,a.agent_version,a.websocket_status,a.last_telemetry_at,
+            os.id AS site_id,os.name AS site_name
+       FROM rmm_device_inventory i
+       LEFT JOIN LATERAL (
+         SELECT ad.id,ad.agent_version,ad.websocket_status,ad.last_telemetry_at,ad.last_authenticated_at
+           FROM rmm_agent_devices ad
+          WHERE ad.tenant_id=i.tenant_id AND ad.inventory_id=i.id AND ad.disabled_at IS NULL
+          ORDER BY ad.last_authenticated_at DESC NULLS LAST
+          LIMIT 1
+       ) a ON true
+       LEFT JOIN organisation_people op ON op.tenant_id=i.tenant_id AND op.id=i.assigned_person_id
+       LEFT JOIN organisation_sites os ON os.tenant_id=i.tenant_id AND os.id=op.site_id
+      WHERE i.tenant_id=$1 AND (
+        ($2='Estate' AND $3='ALL') OR
+        ($2='Device' AND $3 IN (i.id::text,i.reference,COALESCE(a.id::text,''))) OR
+        ($2='Site' AND $3 IN (COALESCE(os.id::text,''),COALESCE(os.external_key,''),COALESCE(os.name,''))) OR
+        ($2='Group' AND EXISTS (
+          SELECT 1 FROM rmm_device_group_memberships gm
+           WHERE gm.tenant_id=i.tenant_id AND gm.inventory_id=i.id AND gm.group_id::text=$3
+        ))
+      )
+      ORDER BY lower(i.name),i.id`,
+    [tenantId, scopeType, scopeId],
+  )
+  return result.rows
+}
+
+async function effectivePatchPoliciesForDevices(tenantId, inventoryIds, policyType) {
+  if (!inventoryIds.length) return []
+  const result = await pool.query(
+    `SELECT DISTINCT ON (i.id)
+            i.id AS inventory_id,p.id AS policy_id,p.name AS policy_name,
+            x.id AS assignment_id,x.scope_type,x.scope_id,x.scope_name,x.priority,x.created_at
+       FROM rmm_device_inventory i
+       JOIN rmm_patch_assignments x ON x.tenant_id=i.tenant_id AND x.enabled=true
+       JOIN rmm_patch_policies p ON p.id=x.policy_id AND p.tenant_id=x.tenant_id AND p.status='active'
+         AND (
+           ($3='os' AND p.windows_enabled=true AND p.software_enabled=false) OR
+           ($3='software' AND p.software_enabled=true AND p.windows_enabled=false)
+         )
+       LEFT JOIN organisation_people op ON op.tenant_id=i.tenant_id AND op.id=i.assigned_person_id
+       LEFT JOIN organisation_sites os ON os.tenant_id=i.tenant_id AND os.id=op.site_id
+      WHERE i.tenant_id=$1 AND i.id=ANY($2::uuid[]) AND (
+        (x.scope_type='Estate' AND x.scope_id='ALL') OR
+        (x.scope_type='Device' AND x.scope_id IN (
+          i.id::text,
+          i.reference,
+          COALESCE((SELECT id::text FROM rmm_agent_devices WHERE inventory_id=i.id AND tenant_id=i.tenant_id AND disabled_at IS NULL ORDER BY last_authenticated_at DESC NULLS LAST LIMIT 1),'')
+        )) OR
+        (x.scope_type='Site' AND x.scope_id IN (COALESCE(os.id::text,''),COALESCE(os.external_key,''),COALESCE(os.name,''))) OR
+        (x.scope_type='Group' AND EXISTS (
+          SELECT 1 FROM rmm_device_group_memberships gm
+           WHERE gm.tenant_id=i.tenant_id AND gm.inventory_id=i.id AND gm.group_id::text=x.scope_id
+        ))
+      )
+      ORDER BY i.id,x.priority DESC,x.created_at DESC`,
+    [tenantId, inventoryIds, policyType],
+  )
+  return result.rows
+}
+
+export async function patchAssignmentImpactPreview(tenantId, options = {}) {
+  const policyId = clean(options.policyId)
+  const scopeType = clean(options.scopeType)
+  const scopeId = clean(options.scopeId || (scopeType === 'Estate' ? 'ALL' : ''))
+  if (!policyId) return { error: 'Patch policy is required.', status: 400 }
+  if (!['Estate','Site','Group','Device'].includes(scopeType)) return { error: 'Invalid patch scope.', status: 400 }
+  if (!scopeId) return { error: 'Patch scope target is required.', status: 400 }
+
+  const policyResult = await pool.query(
+    `SELECT id,name,software_enabled,windows_enabled,status
+       FROM rmm_patch_policies
+      WHERE tenant_id=$1 AND id=$2 AND status='active'
+      LIMIT 1`,
+    [tenantId, policyId],
+  )
+  if (!policyResult.rowCount) return { error: 'Patch policy not found.', status: 404 }
+  const policy = policyResult.rows[0]
+  const policyType = policy.windows_enabled === true && policy.software_enabled !== true ? 'os'
+    : policy.software_enabled === true && policy.windows_enabled !== true ? 'software'
+      : ''
+  if (!policyType) return { error: 'Patch policy type is invalid.', status: 409 }
+
+  const devices = await patchAssignmentScopeDevices(tenantId, scopeType, scopeId)
+  const inventoryIds = devices.map((device) => device.inventory_id)
+  const [currentRows, exactAssignment] = await Promise.all([
+    effectivePatchPoliciesForDevices(tenantId, inventoryIds, policyType),
+    pool.query(
+      `SELECT id,priority,created_at
+         FROM rmm_patch_assignments
+        WHERE tenant_id=$1 AND policy_id=$2 AND scope_type=$3 AND scope_id=$4
+        LIMIT 1`,
+      [tenantId, policyId, scopeType, scopeId],
+    ),
+  ])
+  const currentByInventory = new Map(currentRows.map((row) => [clean(row.inventory_id), row]))
+  const candidatePriority = priorityForScope(scopeType)
+  const exact = exactAssignment.rows[0] || null
+  const candidateCreatedAt = exact?.created_at ? new Date(exact.created_at).getTime() : Date.now()
+
+  const rows = devices.map((device) => {
+    const current = currentByInventory.get(clean(device.inventory_id)) || null
+    const currentPriority = Number(current?.priority || 0)
+    const currentCreatedAt = current?.created_at ? new Date(current.created_at).getTime() : 0
+    const samePolicy = clean(current?.policy_id) === policyId
+    const candidateWins = samePolicy
+      || !current
+      || candidatePriority > currentPriority
+      || (candidatePriority === currentPriority && candidateCreatedAt >= currentCreatedAt)
+
+    const hasAgent = Boolean(device.agent_device_id)
+    const isWindows = clean(device.operating_system).toLowerCase().includes('windows')
+    let applicable = hasAgent
+    let notApplicableReason = ''
+    if (!hasAgent) {
+      applicable = false
+      notApplicableReason = 'No active Hi5Central Agent'
+    } else if (policyType === 'os' && !isWindows) {
+      applicable = false
+      notApplicableReason = 'OS patching applies to Windows endpoints'
+    } else if (policyType === 'os' && !agentVersionAtLeast(device.agent_version, '0.1.213')) {
+      applicable = false
+      notApplicableReason = 'Agent 0.1.213 or later is required'
+    }
+
+    const online = hasAgent && clean(device.websocket_status).toLowerCase() === 'connected'
+    const result = !applicable ? 'not_applicable'
+      : samePolicy ? 'already_effective'
+        : candidateWins ? 'will_apply'
+          : 'overridden'
+
+    return {
+      inventoryId: clean(device.inventory_id),
+      agentDeviceId: clean(device.agent_device_id),
+      reference: clean(device.reference),
+      name: clean(device.name),
+      operatingSystem: clean(device.operating_system),
+      agentVersion: clean(device.agent_version),
+      online,
+      applicable,
+      notApplicableReason,
+      result,
+      candidatePriority,
+      currentPolicy: current ? {
+        id: clean(current.policy_id),
+        name: clean(current.policy_name),
+        scopeType: clean(current.scope_type),
+        scopeName: clean(current.scope_name || current.scope_id),
+        priority: currentPriority,
+      } : null,
+      effectiveAfter: candidateWins ? {
+        id: policyId,
+        name: clean(policy.name),
+        scopeType,
+        scopeName: clean(options.scopeName || scopeId),
+        priority: candidatePriority,
+      } : current ? {
+        id: clean(current.policy_id),
+        name: clean(current.policy_name),
+        scopeType: clean(current.scope_type),
+        scopeName: clean(current.scope_name || current.scope_id),
+        priority: currentPriority,
+      } : null,
+      replacesPolicy: candidateWins && current && !samePolicy ? {
+        id: clean(current.policy_id),
+        name: clean(current.policy_name),
+      } : null,
+    }
+  })
+
+  const count = (name) => rows.filter((row) => row.result === name).length
+  return {
+    policy: { id: policyId, name: clean(policy.name), type: policyType },
+    scope: { type: scopeType, id: scopeId, name: clean(options.scopeName || scopeId), priority: candidatePriority },
+    summary: {
+      targeted: rows.length,
+      willApply: count('will_apply'),
+      alreadyEffective: count('already_effective'),
+      overridden: count('overridden'),
+      notApplicable: count('not_applicable'),
+      offline: rows.filter((row) => row.applicable && !row.online).length,
+      online: rows.filter((row) => row.applicable && row.online).length,
+      replacing: rows.filter((row) => row.replacesPolicy).length,
+    },
+    devices: rows,
+  }
+}
+
 
 async function catalogueListRows(tenantId) {
   const result = await pool.query(
@@ -4872,6 +5259,15 @@ export function registerRmmPatchingRoutes(app) {
     if (!result.rowCount) return c.json({ error: 'Patch policy not found.' }, 404)
     await audit(auth.session, 'patch_policy.updated', 'Updated patch policy “' + name + '”', '', { policyId: result.rows[0].id })
     return c.json({ success: true, id: result.rows[0].id, bundle: await patchBundle(auth.session.tenant_id) })
+  })
+
+  app.post('/api/v1/rmm/patch-assignments/preview', async (c) => {
+    const auth = await requirePatchAccess(c, 'policy')
+    if (auth.error) return auth.error
+    const body = await c.req.json().catch(() => ({}))
+    const preview = await patchAssignmentImpactPreview(auth.session.tenant_id, body)
+    if (preview?.error) return c.json({ error: preview.error }, preview.status || 400)
+    return c.json(preview)
   })
 
   app.post('/api/v1/rmm/patch-assignments', async (c) => {

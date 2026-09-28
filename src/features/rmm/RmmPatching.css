@@ -149,6 +149,28 @@
 .rmm-validation-identity-state strong { color:var(--rmm-text); }
 .rmm-patch-security-note { display:flex; align-items:flex-start; gap:8px; margin-top:10px; border:1px solid rgba(35,158,99,.22); border-radius:8px; padding:9px; background:rgba(35,158,99,.06); color:var(--rmm-muted); font-size:7px; line-height:1.45; }
 .rmm-patch-security-note svg { flex:0 0 auto; color:#239e63; }
+.rmm-patch-modal.assignment-impact { width:min(980px,100%); }
+.rmm-assignment-fields { display:grid; grid-template-columns:1fr 1fr; gap:9px; margin-top:12px; }
+.rmm-assignment-fields label { display:grid; gap:4px; color:var(--rmm-muted); font-size:7px; font-weight:850; }
+.rmm-assignment-fields select { width:100%; min-height:38px; border:1px solid var(--rmm-border); border-radius:8px; padding:0 9px; background:var(--rmm-soft); color:var(--rmm-text); font:inherit; font-size:8px; }
+.rmm-assignment-preview-action { display:flex; align-items:center; gap:9px; margin-top:10px; }
+.rmm-assignment-preview-action button { min-height:36px; display:inline-flex; align-items:center; gap:6px; border:1px solid var(--rmm-border); border-radius:8px; padding:0 10px; background:var(--rmm-surface); color:var(--rmm-accent); font:inherit; font-size:8px; font-weight:850; cursor:pointer; }
+.rmm-assignment-preview-action button:disabled { cursor:not-allowed; opacity:.55; }
+.rmm-assignment-preview-action small { color:var(--rmm-muted); font-size:7px; }
+.rmm-patch-error.compact { margin-top:10px; }
+.rmm-assignment-preview { display:grid; gap:10px; margin-top:10px; border:1px solid var(--rmm-border); border-radius:10px; padding:10px; background:var(--rmm-soft); }
+.rmm-assignment-impact-metrics { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:6px; }
+.rmm-assignment-impact-metrics > span { min-width:0; display:grid; gap:1px; border:1px solid var(--rmm-border); border-radius:8px; padding:7px 8px; background:var(--rmm-surface); }
+.rmm-assignment-impact-metrics strong { font-size:11px; }
+.rmm-assignment-impact-metrics small { color:var(--rmm-muted); font-size:6px; white-space:nowrap; }
+.rmm-assignment-impact-table { overflow:auto; border:1px solid var(--rmm-border); border-radius:9px; background:var(--rmm-surface); }
+.rmm-assignment-impact-table .head,.rmm-assignment-impact-table .row { min-width:780px; display:grid; grid-template-columns:minmax(190px,1.2fr) 130px minmax(170px,1fr) minmax(170px,1fr); gap:8px; align-items:center; padding:8px 10px; }
+.rmm-assignment-impact-table .head { position:sticky; top:0; z-index:1; border-bottom:1px solid var(--rmm-border); background:var(--rmm-soft); color:var(--rmm-muted); font-size:7px; font-weight:850; }
+.rmm-assignment-impact-table .row + .row { border-top:1px solid var(--rmm-border); }
+.rmm-assignment-impact-table .row > span { min-width:0; display:grid; gap:2px; }
+.rmm-assignment-impact-table .row strong { overflow:hidden; font-size:8px; text-overflow:ellipsis; white-space:nowrap; }
+.rmm-assignment-impact-table .row small { overflow:hidden; color:var(--rmm-muted); font-size:6px; line-height:1.35; text-overflow:ellipsis; white-space:nowrap; }
+.rmm-assignment-preview-more { color:var(--rmm-muted); font-size:7px; }
 .rmm-validation-feedback { display:flex; align-items:flex-start; gap:8px; margin-top:10px; border:1px solid var(--rmm-border); border-radius:8px; padding:10px; font-size:8px; font-weight:800; line-height:1.4; }
 .rmm-validation-feedback svg { flex:0 0 auto; margin-top:1px; }
 .rmm-validation-feedback.success { border-color:rgba(35,158,99,.35); background:rgba(35,158,99,.10); color:#167a4a; }
@@ -890,9 +912,13 @@
 @media (max-width:900px) {
   .rmm-windows-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .rmm-policy-delay-grid { grid-template-columns:1fr 1fr; }
+  .rmm-assignment-impact-metrics { grid-template-columns:repeat(4,minmax(0,1fr)); }
 }
 @media (max-width:700px) {
   .rmm-windows-summary { grid-template-columns:1fr 1fr; padding:8px; }
+  .rmm-assignment-fields { grid-template-columns:1fr; }
+  .rmm-assignment-preview-action { align-items:flex-start; flex-direction:column; }
+  .rmm-assignment-impact-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .rmm-policy-domain-summary { grid-template-columns:1fr; }
   .rmm-patch-table.windows.scheduled .row { min-width:0; grid-template-columns:1fr 1fr; }
   .rmm-windows-update-detail-row { margin:0 8px 8px; padding:0; border:0; }
