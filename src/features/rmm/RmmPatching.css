@@ -82,6 +82,8 @@
 .rmm-patch-candidate-section h3 { margin:0; font-size:10px; }
 .rmm-patch-candidate-section p { margin:0; color:var(--rmm-muted); font-size:8px; line-height:1.45; }
 .rmm-patch-table.candidates .head,.rmm-patch-table.candidates .row { grid-template-columns:minmax(220px,1.4fr) minmax(220px,1.2fr) 80px 80px minmax(130px,.8fr); min-width:760px; }
+.rmm-patch-table.discovered-updates .head,.rmm-patch-table.discovered-updates .row { grid-template-columns:minmax(200px,1.35fr) minmax(150px,.9fr) minmax(110px,.7fr) minmax(110px,.7fr) minmax(200px,1.15fr) 120px; min-width:980px; }
+.rmm-discovered-update-section { background:color-mix(in srgb,var(--rmm-soft) 45%,transparent); }
 .rmm-patch-candidate-footnote { display:block; margin-top:7px; color:var(--rmm-muted); font-size:7px; }
 .rmm-patch-deployment-history { border-top:1px solid var(--rmm-border); padding:12px; }
 .rmm-patch-deployment-history > div:first-child { display:grid; gap:3px; margin-bottom:9px; }

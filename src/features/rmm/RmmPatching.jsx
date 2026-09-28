@@ -1338,6 +1338,10 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
   const patchDevices = bundle?.devices || []
   const catalogueCandidates = bundle?.catalogueCandidates || []
   const patchObservations = bundle?.patchObservations || []
+  const discoveredWingetUpdates = patchObservations
+    .filter((item) => item.provider === 'winget' && item.patch_status === 'update_available')
+    .sort((a, b) => String(a.application_name || '').localeCompare(String(b.application_name || ''))
+      || String(a.device_name || '').localeCompare(String(b.device_name || '')))
   const vendorSources = bundle?.vendorIntel?.sources || []
   const validationSource = validationApp?.catalogue?.sourceKey
     ? vendorSources.find((source) => source.source_key === validationApp.catalogue.sourceKey) || null
@@ -2087,6 +2091,27 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
         {bulkPatchDevice && !bulkPatchCapabilityReady && <small className="capability-note">This endpoint is online but has not reported verified bulk software-patch capability yet. Upgrade the Agent before executing a bulk plan.</small>}
         {bulkPatchPreview && <div className="rmm-bulk-patch-preview"><div className="stats"><span><small>Eligible</small><strong>{bulkPatchPreview.eligibleCount || 0}</strong></span><span><small>Ignored</small><strong>{bulkPatchPreview.ignoredCount || 0}</strong></span><span><small>Skipped</small><strong>{bulkPatchPreview.rejectedCount || 0}</strong></span></div><div className="items">{(bulkPatchPreview.items || []).map((item) => <span key={item.catalogueId}><strong>{item.applicationName}</strong><small>{item.installedVersion} → {item.targetVersion} · {item.provider}</small></span>)}</div><button className="rmm-primary" disabled={bulkPatchBusy || !bulkPatchCapabilityReady || !bulkPatchPreview.eligibleCount} onClick={executeBulkSoftwarePatch} type="button"><PackageCheck size={14} /> Patch {bulkPatchPreview.eligibleCount || 0} application{bulkPatchPreview.eligibleCount === 1 ? '' : 's'}</button></div>}
       </div>
+      {!!discoveredWingetUpdates.length && <div className="rmm-patch-candidate-section rmm-discovered-update-section">
+        <div>
+          <span className="rmm-eyebrow">Endpoint discovery</span>
+          <h3>WinGet-discovered updates · {discoveredWingetUpdates.length}</h3>
+          <p>PatchHost has detected newer WinGet versions on managed endpoints. These remain visible here even when they are not linked to an active qualified Hi5Central catalogue entry.</p>
+        </div>
+        <div className="rmm-patch-table discovered-updates">
+          <div className="head"><span>Application</span><span>Device</span><span>Installed</span><span>Available</span><span>WinGet package</span><span>Mapping</span></div>
+          {discoveredWingetUpdates.map((item) => <div className="row" key={[item.inventory_id,item.provider_package_id,item.application_name].join('|')}>
+            <span><strong>{item.application_name || item.display_name || item.provider_package_id}</strong><small>{item.publisher || 'Publisher not reported'}</small></span>
+            <span><strong>{item.device_name || item.device_reference || 'Managed device'}</strong><small>{item.device_reference || ''}</small></span>
+            <span><strong>{item.installed_version || 'Unknown'}</strong></span>
+            <span><strong>{item.available_version || 'Unknown'}</strong></span>
+            <span><strong>{item.provider_package_id || 'Not reported'}</strong><small>WinGet</small></span>
+            <span>{item.catalogue_id
+              ? <StatusPill tone="healthy">Catalogue linked</StatusPill>
+              : <StatusPill tone="warning">Discovery only</StatusPill>}</span>
+          </div>)}
+        </div>
+        <small className="rmm-patch-candidate-footnote">Discovery-only updates can be previewed and deployed through Bulk application patching → All WinGet updates. They are not shown as qualified catalogue patches until an active catalogue mapping exists.</small>
+      </div>}
       <div className="rmm-software-toolbar">
         <label className="search"><Search size={14} /><input value={softwareSearch} onChange={(event) => setSoftwareSearch(event.target.value)} placeholder="Search application, publisher, package ID, provider or version…" /></label>
         <select aria-label="Software state filter" value={softwareStateFilter} onChange={(event) => setSoftwareStateFilter(event.target.value)}><option value="all">All states</option><option value="updates">Updates / attention</option><option value="vulnerable">Vulnerable</option><option value="current">Current</option><option value="unmapped">Unmapped</option></select>
