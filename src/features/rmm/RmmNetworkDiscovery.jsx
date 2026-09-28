@@ -321,7 +321,7 @@ export function RmmNetworkDiscovery() {
           return <div className="row" key={item.id}>
             <span className="device"><i><Icon size={16} /></i><span><strong>{item.managed_device_name || item.sys_name || item.hostname || item.ip_address}</strong><small>{item.profile_name}{item.site_name ? ' · ' + item.site_name : ''}</small></span></span>
             <span><strong>{item.ip_address}</strong><small>{item.mac_address || 'MAC not resolved'}</small></span>
-            <span><strong>{item.vendor || 'Unknown vendor'}</strong><small>{String(item.device_type || 'network_device').replaceAll('_', ' ')}</small></span>
+            <span><strong>{item.vendor || 'Unknown vendor'}</strong><small>{item.model ? item.model + ' · ' : ''}{String(item.device_type || 'network_device').replaceAll('_', ' ')}</small></span>
             <span><strong>{methods.length ? methods.map((value) => String(value).toUpperCase()).join(' · ') : 'Presence'}</strong><small>{item.icmp_reachable ? 'ICMP reachable' + (item.latency_ms != null ? ' · ' + item.latency_ms + ' ms' : '') : item.snmp_version ? 'SNMP ' + String(item.snmp_version).toUpperCase() : 'Seen on local network'}</small></span>
             <span>{item.managed
               ? <><StatusPill tone="healthy">Agent installed</StatusPill><small>{item.managed_agent_version || item.managed_reference || ''}</small></>

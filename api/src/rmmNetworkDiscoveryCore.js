@@ -370,11 +370,27 @@ export async function reconcileNetworkDiscoveryEnrichmentJobResult(
   await withTransaction(async (client) => {
     for (const raw of devices) {
       const ipAddress = clean(raw?.ipAddress ?? raw?.ip_address, 128)
+      if (isIP(ipAddress) !== 4) continue
+
       const hostname = clean(raw?.hostname, 512)
-      if (isIP(ipAddress) !== 4 || !hostname) continue
+      const reportedVendor = clean(raw?.vendor, 256)
+      const reportedModel = clean(raw?.model, 512)
+      const reportedType = clean(raw?.deviceType ?? raw?.device_type, 64)
+      const methods = [...new Set(
+        asArray(raw?.discoveryMethods ?? raw?.discovery_methods)
+          .map((value) => clean(value, 32).toLowerCase())
+          .filter(Boolean),
+      )]
+      const metadata = raw?.metadata && typeof raw.metadata === 'object' && !Array.isArray(raw.metadata)
+        ? raw.metadata
+        : {}
+
+      if (!hostname && !reportedVendor && !reportedModel && !reportedType && !methods.length && !Object.keys(metadata).length) {
+        continue
+      }
 
       const current = await client.query(
-        `SELECT vendor,device_type,sys_descr,sys_object_id
+        `SELECT hostname,vendor,model,device_type,sys_descr,sys_object_id,discovery_methods,metadata
            FROM rmm_network_devices
           WHERE tenant_id=$1 AND profile_id=$2 AND ip_address=$3::inet
           LIMIT 1`,
@@ -383,37 +399,53 @@ export async function reconcileNetworkDiscoveryEnrichmentJobResult(
       if (!current.rowCount) continue
 
       const existing = current.rows[0]
-      const vendor = clean(existing.vendor, 256)
-        || inferVendor(existing.sys_object_id, existing.sys_descr, hostname)
+      const nextHostname = hostname || clean(existing.hostname, 512)
+      const vendor = reportedVendor
+        || clean(existing.vendor, 256)
+        || inferVendor(existing.sys_object_id, existing.sys_descr, nextHostname)
+      const model = reportedModel || clean(existing.model, 512)
       const inferredType = inferDeviceType(
         existing.sys_descr,
         existing.sys_object_id,
-        hostname,
+        nextHostname,
         vendor,
       )
-      const deviceType = clean(existing.device_type, 64)
-      const nextType = deviceType && deviceType !== 'network_device'
-        ? deviceType
-        : inferredType
+      const existingType = clean(existing.device_type, 64)
+      const nextType = reportedType && reportedType !== 'network_device'
+        ? reportedType
+        : (existingType && existingType !== 'network_device' ? existingType : inferredType)
+
+      const mergedMethods = [...new Set([
+        ...asArray(existing.discovery_methods).map((value) => clean(value, 32).toLowerCase()).filter(Boolean),
+        ...methods,
+      ])]
+      const mergedMetadata = {
+        ...(existing.metadata && typeof existing.metadata === 'object' && !Array.isArray(existing.metadata)
+          ? existing.metadata
+          : {}),
+        ...metadata,
+      }
 
       await client.query(
         `UPDATE rmm_network_devices
             SET hostname=$4,
-                vendor=CASE WHEN vendor='' THEN $5 ELSE vendor END,
-                device_type=$6,
-                discovery_methods=CASE
-                  WHEN discovery_methods ? 'reverse_dns' THEN discovery_methods
-                  ELSE discovery_methods || '["reverse_dns"]'::jsonb
-                END,
+                vendor=$5,
+                model=$6,
+                device_type=$7,
+                discovery_methods=$8::jsonb,
+                metadata=$9::jsonb,
                 updated_at=now()
           WHERE tenant_id=$1 AND profile_id=$2 AND ip_address=$3::inet`,
         [
           completedJob.tenant_id,
           profileId,
           ipAddress,
-          hostname,
+          nextHostname,
           vendor,
+          model,
           nextType,
+          JSON.stringify(mergedMethods),
+          JSON.stringify(mergedMetadata),
         ],
       )
     }
