@@ -221,7 +221,7 @@ export function RmmNetworkDiscovery() {
       <div>
         <span className="rmm-eyebrow">Network management</span>
         <h1>Network discovery</h1>
-        <p>Use a managed Agent as an on-site probe to discover devices quickly by ARP and ICMP, then enrich identity separately with MAC vendor data, names and optional SNMP.</p>
+        <p>Use a managed Agent as an on-site probe to discover devices quickly by ARP and ICMP, then enrich identity separately with MAC vendor data, reverse DNS, SSDP, mDNS and optional SNMP.</p>
       </div>
       <button className="rmm-primary compact" disabled={loading} onClick={() => load()} type="button">
         <RefreshCw size={14} className={loading ? 'spin' : ''} /> Refresh

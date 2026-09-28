@@ -434,7 +434,7 @@ async function bundle(tenantId) {
       minSnmpAgentVersion: SNMP_MIN_AGENT_VERSION,
       minPresenceAgentVersion: PRESENCE_MIN_AGENT_VERSION,
       presenceDiscovery: true,
-      methods: ['arp','icmp','snmp'],
+      methods: ['arp','icmp','reverse_dns','ssdp','mdns','snmp'],
       nameEnrichmentDeferred: true,
       ipv4: true,
       ipv6: false,
