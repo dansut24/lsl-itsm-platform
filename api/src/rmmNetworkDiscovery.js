@@ -11,6 +11,10 @@ function clean(value = '', max = 4096) {
   return String(value ?? '').trim().slice(0, max)
 }
 
+function isUuid(value = '') {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clean(value, 128))
+}
+
 function parseKeyMaterial(rawValue, variableName) {
   const raw = clean(rawValue, 4096)
   if (!raw) return null
@@ -250,11 +254,12 @@ async function bundle(tenantId) {
 }
 
 async function audit(session, eventType, summary, detail = '', metadata = {}) {
+  const systemActor = !session.user_id
   await recordRmmActivity({
     tenantId: session.tenant_id,
-    actorUserId: session.user_id,
-    actorType: 'technician',
-    actorLabel: session.name || session.email || 'Technician',
+    actorUserId: session.user_id || null,
+    actorType: systemActor ? 'system' : 'technician',
+    actorLabel: systemActor ? 'SYSTEM' : (session.name || session.email || 'Technician'),
     eventType,
     category: 'network',
     summary,
@@ -602,6 +607,7 @@ export function registerRmmNetworkDiscoveryRoutes(app) {
     if (auth.error) return auth.error
     const body = await c.req.json().catch(() => ({}))
     const credentialId = clean(c.req.param('credentialId'), 128)
+    if (!isUuid(credentialId)) return c.json({ error: 'Credential id is invalid.' }, 400)
     const current = await pool.query(
       `SELECT * FROM rmm_network_discovery_credentials
         WHERE id=$1 AND tenant_id=$2 LIMIT 1`,
@@ -649,8 +655,10 @@ export function registerRmmNetworkDiscoveryRoutes(app) {
     if (!probeAgentDeviceId || !credentialId) {
       return c.json({ error: 'Select a probe endpoint and SNMP credential.' }, 400)
     }
-
     const siteId = clean(body.siteId, 128) || null
+    if (!isUuid(probeAgentDeviceId) || !isUuid(credentialId) || (siteId && !isUuid(siteId))) {
+      return c.json({ error: 'Probe, credential or site identifier is invalid.' }, 400)
+    }
     const references = await validateProfileReferences(
       auth.session.tenant_id,
       probeAgentDeviceId,
@@ -695,6 +703,7 @@ export function registerRmmNetworkDiscoveryRoutes(app) {
     if (auth.error) return auth.error
     const body = await c.req.json().catch(() => ({}))
     const profileId = clean(c.req.param('profileId'), 128)
+    if (!isUuid(profileId)) return c.json({ error: 'Discovery profile id is invalid.' }, 400)
     const current = await pool.query(
       `SELECT * FROM rmm_network_discovery_profiles
         WHERE id=$1 AND tenant_id=$2 LIMIT 1`,
@@ -754,7 +763,9 @@ export function registerRmmNetworkDiscoveryRoutes(app) {
     const auth = await requireAccess(c, true)
     if (auth.error) return auth.error
     try {
-      const started = await dispatchProfileScan(auth.session, clean(c.req.param('profileId'), 128))
+      const profileId = clean(c.req.param('profileId'), 128)
+      if (!isUuid(profileId)) return c.json({ error: 'Discovery profile id is invalid.' }, 400)
+      const started = await dispatchProfileScan(auth.session, profileId)
       return c.json({ success: true, ...started, bundle: await bundle(auth.session.tenant_id) }, 202)
     } catch (error) {
       return c.json({ error: clean(error?.message || error) || 'Unable to start discovery scan.' }, error?.status || 500)
