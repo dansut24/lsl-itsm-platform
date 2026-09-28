@@ -368,10 +368,20 @@ async function ensureWindowsUpdateManagement(tenantId, device, policy, state, op
   const policyId = policy?.id || null
   const policyName = clean(policy?.name)
   const previous = state || {}
+  const previousResult = object(previous.last_result)
+  const previousResultStatus = clean(previousResult.status || object(previousResult.parsed).status).toLowerCase()
+  const checkedAt = parseDate(previous.last_applied_at) || parseDate(previous.updated_at)
+  const samePolicy = clean(previous.policy_id) === clean(policyId)
+  const notApplicableRecent = desired
+    && previous.applied_managed !== true
+    && samePolicy
+    && ['conflict', 'unsupported', 'not_applicable'].includes(previousResultStatus)
+    && checkedAt
+    && Date.now() - checkedAt.getTime() <= 24 * 60 * 60 * 1000
   const appliedAt = parseDate(previous.last_applied_at)
   const verificationStale = desired && (!appliedAt || Date.now() - appliedAt.getTime() > 24 * 60 * 60 * 1000)
   const needsChange = desired
-    ? previous.applied_managed !== true || clean(previous.policy_id) !== clean(policyId) || verificationStale
+    ? !notApplicableRecent && (previous.applied_managed !== true || !samePolicy || verificationStale)
     : previous.applied_managed === true || previous.desired_managed === true
 
   await pool.query(
@@ -398,17 +408,19 @@ async function ensureWindowsUpdateManagement(tenantId, device, policy, state, op
     return {
       desired,
       applied: previous.applied_managed === true,
-      state: desired ? 'managed' : 'unmanaged',
-      blocking: false,
+      state: notApplicableRecent ? 'not_applicable' : (desired ? 'managed' : 'unmanaged'),
+      blocking: notApplicableRecent ? desired : false,
+      reason: notApplicableRecent ? 'windows_update_management_not_applicable' : '',
+      detail: notApplicableRecent ? clean(previousResult.message) : '',
       policyId,
       policyName,
     }
   }
 
-  if (!versionAtLeast(device.agent_version, '0.1.213')) {
+  if (!versionAtLeast(device.agent_version, '0.1.214')) {
     await pool.query(
       'UPDATE rmm_windows_update_management SET last_error=$3,updated_at=now() WHERE tenant_id=$1 AND inventory_id=$2',
-      [tenantId, device.inventory_id, 'Agent 0.1.213 or later is required for managed Windows Update mode.'],
+      [tenantId, device.inventory_id, 'Agent 0.1.214 or later is required for managed Windows Update mode.'],
     )
     return {
       desired,
@@ -416,7 +428,7 @@ async function ensureWindowsUpdateManagement(tenantId, device, policy, state, op
       state: 'blocked',
       blocking: desired,
       reason: 'windows_update_management_agent_upgrade_required',
-      requiredAgentVersion: '0.1.213',
+      requiredAgentVersion: '0.1.214',
       currentAgentVersion: clean(device.agent_version),
       policyId,
       policyName,
@@ -1040,13 +1052,15 @@ export async function dispatchWindowsUpdateRollback(tenantId, updateKey, options
 export async function reconcileWindowsUpdateJobResult(job, resultPayload = {}, success = false) {
   const jobType = clean(job?.job_type)
   if (jobType === 'windows_update.manage') {
+    const resultStatus = clean(resultPayload.status || object(resultPayload.parsed).status).toLowerCase()
+    const notApplicable = ['conflict', 'unsupported', 'not_applicable'].includes(resultStatus)
     const managedKnown = typeof resultPayload.managed === 'boolean'
     const appliedManaged = managedKnown ? resultPayload.managed : null
     const detail = [
       clean(resultPayload.message),
       array(resultPayload.conflicts).join(', '),
       array(resultPayload.mdm_signals).join(', '),
-      clean(job.error_message),
+      !notApplicable ? clean(job.error_message) : '',
     ].filter(Boolean).join(' · ')
     await pool.query(
       'UPDATE rmm_windows_update_management SET ' +
@@ -1060,8 +1074,8 @@ export async function reconcileWindowsUpdateJobResult(job, resultPayload = {}, s
         appliedManaged,
         job.id,
         JSON.stringify(resultPayload),
-        success ? '' : (detail || 'Windows Update management policy could not be applied.'),
-        success,
+        notApplicable || success ? '' : (detail || 'Windows Update management policy could not be applied.'),
+        notApplicable || success,
       ],
     )
     await recordRmmActivity({
@@ -1070,16 +1084,20 @@ export async function reconcileWindowsUpdateJobResult(job, resultPayload = {}, s
       inventoryId: job.inventory_id || null,
       actorType: 'system',
       actorLabel: 'SYSTEM',
-      eventType: success
-        ? (appliedManaged ? 'windows_updates.management_applied' : 'windows_updates.management_removed')
-        : 'windows_updates.management_failed',
+      eventType: notApplicable
+        ? 'windows_updates.management_not_applicable'
+        : success
+          ? (appliedManaged ? 'windows_updates.management_applied' : 'windows_updates.management_removed')
+          : 'windows_updates.management_failed',
       category: 'updates',
-      summary: success
-        ? (appliedManaged ? 'SYSTEM: Windows Update is now managed by Hi5Central' : 'SYSTEM: Hi5Central Windows Update management removed')
-        : 'SYSTEM: Windows Update management could not be applied',
+      summary: notApplicable
+        ? 'SYSTEM: Windows Update management is not applicable'
+        : success
+          ? (appliedManaged ? 'SYSTEM: Windows Update is now managed by Hi5Central' : 'SYSTEM: Hi5Central Windows Update management removed')
+          : 'SYSTEM: Windows Update management could not be applied',
       detail,
-      outcome: success ? 'success' : 'failed',
-      severity: success ? 'info' : 'warning',
+      outcome: notApplicable ? 'not_applicable' : (success ? 'success' : 'failed'),
+      severity: notApplicable || success ? 'info' : 'warning',
       jobId: job.id,
       metadata: { result: resultPayload, request: object(job.request_metadata) },
     }).catch(() => null)

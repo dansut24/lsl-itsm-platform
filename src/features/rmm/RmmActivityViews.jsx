@@ -59,6 +59,7 @@ function jobLabel(type = '') {
     'events.list': 'Read event log',
     'files.list': 'Read files',
     'inventory.scan': 'Refresh inventory',
+    'windows_update.manage': 'Windows Update management',
   }
   return map[type] || String(type || 'Device job').replaceAll('.', ' ')
 }
@@ -68,7 +69,14 @@ function outcomeTone(value = '') {
   if (['failed', 'critical', 'verification_failed'].includes(normalized)) return 'critical'
   if (['running', 'claimed'].includes(normalized)) return 'running'
   if (['queued', 'requested', 'warning', 'reboot_required', 'remediation_required', 'completed_with_issues'].includes(normalized)) return 'warning'
+  if (normalized === 'not_applicable') return 'neutral'
   return 'neutral'
+}
+function outcomeLabel(value = '') {
+  const normalized = String(value || '').toLowerCase()
+  if (normalized === 'not_applicable') return 'Not applicable'
+  if (!normalized) return 'Info'
+  return normalized.replaceAll('_', ' ').replace(/\b\w/g, (character) => character.toUpperCase())
 }
 function comparePatchVersions(left = '', right = '') {
   const a = String(left).match(/\d+/g)?.map(Number) || []
@@ -106,7 +114,14 @@ function bulkPatchSummary(result = {}) {
   }
 }
 function jobVisualStatus(job = {}) {
-  if (job.job_type !== 'patch.software.bulk') return { label: job.status || 'unknown', tone: outcomeTone(job.status) }
+  if (job.job_type === 'windows_update.manage') {
+    const result = job.result && typeof job.result === 'object' ? job.result : {}
+    const status = String(result.status || result.parsed?.status || '').toLowerCase()
+    if (['conflict', 'unsupported', 'not_applicable'].includes(status)) {
+      return { label: 'Not applicable', tone: 'neutral', notApplicable: true }
+    }
+  }
+  if (job.job_type !== 'patch.software.bulk') return { label: outcomeLabel(job.status || 'unknown'), tone: outcomeTone(job.status) }
   const summary = bulkPatchSummary(job.result || {})
   if (!summary.items.length) return { label: job.status || 'unknown', tone: outcomeTone(job.status) }
   return { label: summary.label, tone: summary.needsAttention ? 'warning' : 'healthy', summary }
@@ -162,6 +177,16 @@ function jobDetailRows(job = {}) {
   const rows = []
   const add = (label, value) => { const text = textValue(value); if (text) rows.push({ label, value: text }) }
 
+  if (type === 'windows_update.manage') {
+    const status = String(result.status || result.parsed?.status || '').toLowerCase()
+    const notApplicable = ['conflict', 'unsupported', 'not_applicable'].includes(status)
+    add('Action', 'Windows Update management')
+    add('Result', notApplicable ? 'Not applicable' : (job.status === 'completed' ? 'Completed successfully' : 'Failed'))
+    add('Management channel', result.management_channel || result.parsed?.management_channel)
+    add('Reason', result.message || result.parsed?.message)
+    if (Array.isArray(result.conflicts) && result.conflicts.length) add('Detected policy', result.conflicts.join(', ').replaceAll('_', ' '))
+    return rows
+  }
   if (type === 'patch.software') {
     add('Application', result.applicationName || request.applicationName || request.packageId)
     const installed = result.installedVersion || request.installedVersion
@@ -330,7 +355,7 @@ function DetailModal({ detail, loading, onClose }) {
           <pre>{payload.transcript || 'No terminal output was captured for this session.'}</pre>
         </div> : <>
           <HumanJobDetails job={payload} />
-          {payload.error_message && <div className="rmm-audit-error"><AlertTriangle size={15} />{payload.error_message}</div>}
+          {payload.error_message && !visualStatus?.notApplicable && <div className="rmm-audit-error"><AlertTriangle size={15} />{payload.error_message}</div>}
         </>}
       </>}
     </section>
@@ -338,17 +363,31 @@ function DetailModal({ detail, loading, onClose }) {
   return createPortal(modal, document.querySelector('.rmm-app') || document.body)
 }
 
+function activityVisualOutcome(event = {}) {
+  const result = event?.metadata?.result && typeof event.metadata.result === 'object' ? event.metadata.result : {}
+  const resultStatus = String(result.status || result.parsed?.status || '').toLowerCase()
+  if (
+    ['conflict', 'unsupported', 'not_applicable'].includes(resultStatus)
+    && (
+      event.event_type === 'windows_update.manage'
+      || String(event.event_type || '').startsWith('windows_updates.management')
+      || String(event.summary || '').toLowerCase().includes('windows update management')
+    )
+  ) return 'not_applicable'
+  return event.outcome || 'info'
+}
 function ActivityRow({ event, onDetails }) {
   const Icon = activityIcon(event.category)
   const canOpen = Boolean(event.job_id || event.tool_session_id)
+  const visualOutcome = activityVisualOutcome(event)
   return <article className="rmm-audit-event">
-    <span className={'rmm-audit-event-icon ' + outcomeTone(event.outcome)}><Icon size={16} /></span>
+    <span className={'rmm-audit-event-icon ' + outcomeTone(visualOutcome)}><Icon size={16} /></span>
     <div className="rmm-audit-event-copy">
       <strong>{event.summary}</strong>
       {event.detail && <p>{event.detail}</p>}
       <small>{formatWhen(event.created_at)} · {event.device_name || 'Device'} · {event.actor_label || 'SYSTEM'}</small>
     </div>
-    <span className={'rmm-audit-outcome ' + outcomeTone(event.outcome)}>{event.outcome || 'info'}</span>
+    <span className={'rmm-audit-outcome ' + outcomeTone(visualOutcome)}>{outcomeLabel(visualOutcome)}</span>
     {canOpen && <button className="rmm-audit-details-button" onClick={() => onDetails(event)} type="button">Details <ChevronRight size={13} /></button>}
   </article>
 }
@@ -597,7 +636,7 @@ export function RmmAuditActivity({ activityCategory = '', activityId = '', devic
       <label><User size={14} /><input value={filters.actor} onChange={(event) => setFilters((current) => ({ ...current, actor: event.target.value }))} placeholder="Technician" /></label>
       <select value={filters.agentDeviceId} onChange={(event) => setFilters((current) => ({ ...current, agentDeviceId: event.target.value }))}><option value="">All devices</option>{devices.filter((device) => device.agentDeviceId).map((device) => <option key={device.agentDeviceId} value={device.agentDeviceId}>{device.name}</option>)}</select>
       <select value={filters.category} onChange={(event) => setFilters((current) => ({ ...current, category: event.target.value }))}><option value="">All categories</option>{categories.map((value) => <option key={value} value={value}>{value[0].toUpperCase() + value.slice(1)}</option>)}</select>
-      <select value={filters.outcome} onChange={(event) => setFilters((current) => ({ ...current, outcome: event.target.value }))}><option value="">All outcomes</option><option value="success">Success</option><option value="failed">Failed</option><option value="requested">Requested</option><option value="running">Running</option><option value="info">Info</option></select>
+      <select value={filters.outcome} onChange={(event) => setFilters((current) => ({ ...current, outcome: event.target.value }))}><option value="">All outcomes</option><option value="success">Success</option><option value="failed">Failed</option><option value="not_applicable">Not applicable</option><option value="requested">Requested</option><option value="running">Running</option><option value="info">Info</option></select>
       <label><Clock3 size={14} /><input type="date" value={filters.from} onChange={(event) => setFilters((current) => ({ ...current, from: event.target.value }))} /></label>
       <label><Clock3 size={14} /><input type="date" value={filters.to} onChange={(event) => setFilters((current) => ({ ...current, to: event.target.value }))} /></label>
       <button className="rmm-primary compact" type="submit"><Filter size={14} /> Apply</button>

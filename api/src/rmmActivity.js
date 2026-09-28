@@ -10,7 +10,7 @@ function boundedInteger(value, min, max) {
   return Math.min(max, Math.max(min, Math.trunc(number)))
 }
 function normaliseOutcome(value = 'info') {
-  return ['info', 'requested', 'running', 'success', 'failed', 'cancelled'].includes(value) ? value : 'info'
+  return ['info', 'requested', 'running', 'success', 'failed', 'cancelled', 'not_applicable'].includes(value) ? value : 'info'
 }
 function normaliseSeverity(value = 'info') {
   return ['info', 'warning', 'critical'].includes(value) ? value : 'info'
@@ -66,6 +66,31 @@ export function jobActivityDescriptor(job, success, result = {}, errorMessage = 
   const outcome = ok ? 'success' : 'failed'
   const suffix = ok ? 'Job completed · See details' : 'Job failed' + (errorMessage ? ' · ' + clean(errorMessage).slice(0, 260) : '') + ' · See details'
   const common = { ...actor, outcome, severity: ok ? 'info' : 'warning', category: 'job' }
+
+  if (type === 'windows_update.manage') {
+    const resultStatus = clean(result.status || (result.parsed && result.parsed.status)).toLowerCase()
+    const notApplicable = ['conflict', 'unsupported', 'not_applicable'].includes(resultStatus)
+    if (notApplicable) {
+      return {
+        ...actor,
+        outcome: 'not_applicable',
+        severity: 'info',
+        eventType: 'windows_updates.management_not_applicable',
+        category: 'updates',
+        summary: actor.actorLabel + ': Windows Update management not applicable',
+        detail: [clean(result.message), Array.isArray(result.conflicts) ? result.conflicts.join(', ') : '', 'See details'].filter(Boolean).join(' · '),
+        metadata: { result },
+      }
+    }
+    return {
+      ...common,
+      eventType: ok ? 'windows_updates.management_completed' : 'windows_updates.management_failed',
+      category: 'updates',
+      summary: ok ? actor.actorLabel + ': Windows Update management evaluated' : actor.actorLabel + ': Windows Update management failed',
+      detail: [clean(result.message), suffix].filter(Boolean).join(' · '),
+      metadata: { result },
+    }
+  }
 
   if (type === 'software.uninstall') {
     const name = clean(result.name || payload.name) || 'software'

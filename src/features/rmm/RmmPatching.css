@@ -825,7 +825,24 @@
 .rmm-policy-section-title { display:grid; gap:3px; }
 .rmm-policy-section-title strong { font-size:9px; }
 .rmm-policy-section-title small { color:var(--rmm-muted); font-size:7px; line-height:1.45; }
+.rmm-policy-subsection-title { display:grid; gap:2px; padding-top:2px; }
+.rmm-policy-subsection-title strong { font-size:8px; }
+.rmm-policy-subsection-title small { color:var(--rmm-muted); font-size:7px; line-height:1.4; }
 .rmm-policy-schedule .rmm-patch-checks { margin-top:0; }
+.rmm-policy-app-picker { display:grid; gap:8px; border:1px solid var(--rmm-border); border-radius:9px; padding:10px; background:var(--rmm-surface); }
+.rmm-policy-app-picker-head { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
+.rmm-policy-app-picker-head > div { display:grid; gap:2px; }
+.rmm-policy-app-picker-head strong { font-size:8px; }
+.rmm-policy-app-picker-head small,.rmm-policy-app-hint { color:var(--rmm-muted); font-size:7px; line-height:1.4; }
+.rmm-policy-app-search { min-height:36px; display:flex; align-items:center; gap:7px; border:1px solid var(--rmm-border); border-radius:8px; padding:0 9px; background:var(--rmm-soft); color:var(--rmm-muted); }
+.rmm-policy-app-search input { width:100%; min-width:0; border:0; outline:0; background:transparent; color:var(--rmm-text); font:inherit; font-size:8px; }
+.rmm-policy-app-list { max-height:290px; overflow:auto; display:grid; gap:5px; padding-right:3px; }
+.rmm-policy-app-list > label { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:flex-start; gap:8px; border:1px solid var(--rmm-border); border-radius:8px; padding:8px; background:var(--rmm-soft); cursor:pointer; }
+.rmm-policy-app-list > label > input { margin-top:2px; }
+.rmm-policy-app-list > label > span { min-width:0; display:grid; gap:2px; }
+.rmm-policy-app-list strong { overflow:hidden; font-size:8px; text-overflow:ellipsis; white-space:nowrap; }
+.rmm-policy-app-list small { overflow:hidden; color:var(--rmm-muted); font-size:7px; text-overflow:ellipsis; white-space:nowrap; }
+.rmm-policy-inline-error { display:flex; align-items:center; gap:6px; color:var(--rmm-danger); font-size:7px; font-weight:800; }
 .rmm-policy-days { display:grid; gap:5px; color:var(--rmm-muted); font-size:7px; font-weight:850; }
 .rmm-policy-days > div { display:grid; grid-template-columns:repeat(7,1fr); gap:5px; }
 .rmm-policy-days button {
@@ -860,6 +877,11 @@
 .rmm-policy-software-rules .rmm-patch-form-grid { border-top:1px solid var(--rmm-border); padding:10px; }
 .rmm-policy-card-schedule { display:grid; gap:3px; margin-top:7px; border-radius:7px; padding:7px; background:var(--rmm-surface); }
 .rmm-policy-card-schedule small { color:var(--rmm-muted); font-size:7px; line-height:1.4; }
+.rmm-policy-domain-summary { display:grid; grid-template-columns:1fr 1fr; gap:7px; margin-top:8px; }
+.rmm-policy-domain-summary > div { min-width:0; display:grid; gap:4px; border:1px solid var(--rmm-border); border-radius:8px; padding:8px; background:var(--rmm-surface); }
+.rmm-policy-domain-summary .domain-head { display:flex; align-items:center; justify-content:space-between; gap:6px; }
+.rmm-policy-domain-summary .domain-head strong { font-size:8px; }
+.rmm-policy-domain-summary small { color:var(--rmm-muted); font-size:7px; line-height:1.4; }
 .rmm-patch-policy-grid footer > div { display:flex; gap:6px; }
 
 @media (max-width:900px) {
@@ -868,6 +890,7 @@
 }
 @media (max-width:700px) {
   .rmm-windows-summary { grid-template-columns:1fr 1fr; padding:8px; }
+  .rmm-policy-domain-summary { grid-template-columns:1fr; }
   .rmm-patch-table.windows.scheduled .row { min-width:0; grid-template-columns:1fr 1fr; }
   .rmm-windows-update-detail-row { margin:0 8px 8px; padding:0; border:0; }
   .rmm-windows-update-list > div { grid-template-columns:1fr; }

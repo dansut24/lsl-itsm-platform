@@ -522,7 +522,7 @@ function SoftwarePatchModal({ application, installs, devices, onClose, onPatch, 
   </div>
 }
 
-function PolicyModal({ policy, onClose, onSave }) {
+function PolicyModal({ policy, catalogue = [], onClose, onSave }) {
   const maintenance = policy?.maintenance_window || {}
   const windowsRules = policy?.windows_rules || {}
   const windowsDelays = windowsRules.delayDays || {}
@@ -533,16 +533,24 @@ function PolicyModal({ policy, onClose, onSave }) {
   const earlyWave = rolloutWave('early', { percentage: 15, delayDays: 1 })
   const broadWave = rolloutWave('broad', { percentage: 60, delayDays: 3 })
   const finalWave = rolloutWave('final', { percentage: 20, delayDays: 5 })
-  const vulnerabilityRules = policy?.software_rules?.vulnerabilityRules || {}
+  const softwareRules = policy?.software_rules || {}
+  const softwareMaintenance = softwareRules.maintenanceWindow || maintenance
+  const vulnerabilityRules = softwareRules.vulnerabilityRules || {}
   const detectedTimezone = typeof Intl !== 'undefined'
     ? Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/London'
     : 'Europe/London'
+  const softwareTargetMode = ['selected_catalogue', 'all_catalogue', 'all_winget'].includes(softwareRules.targetMode)
+    ? softwareRules.targetMode
+    : 'all_catalogue'
+  const [softwareAppSearch, setSoftwareAppSearch] = useState('')
   const [form, setForm] = useState({
     name: policy?.name || '',
     description: policy?.description || '',
     approvalMode: policy?.approval_mode || 'manual',
     deploymentDelayDays: policy?.deployment_delay_days ?? 3,
     softwareEnabled: policy ? policy.software_enabled !== false : true,
+    softwareTargetMode,
+    softwareCatalogueIds: Array.isArray(softwareRules.catalogueIds) ? softwareRules.catalogueIds : [],
     windowsEnabled: policy ? policy.windows_enabled === true : true,
     rebootPolicy: policy?.reboot_policy || 'never',
     maxRetries: policy?.max_retries ?? 2,
@@ -550,6 +558,10 @@ function PolicyModal({ policy, onClose, onSave }) {
     maintenanceEnd: maintenance.end || '05:00',
     maintenanceTimezone: maintenance.timezone && maintenance.timezone !== 'tenant' ? maintenance.timezone : detectedTimezone,
     maintenanceDays: Array.isArray(maintenance.days) && maintenance.days.length ? maintenance.days : [1, 2, 3, 4, 5],
+    softwareMaintenanceStart: softwareMaintenance.start || '18:00',
+    softwareMaintenanceEnd: softwareMaintenance.end || '05:00',
+    softwareMaintenanceTimezone: softwareMaintenance.timezone && softwareMaintenance.timezone !== 'tenant' ? softwareMaintenance.timezone : detectedTimezone,
+    softwareMaintenanceDays: Array.isArray(softwareMaintenance.days) && softwareMaintenance.days.length ? softwareMaintenance.days : [1, 2, 3, 4, 5],
     windowsAutoInstall: windowsRules.autoInstall === true,
     includeDrivers: windowsRules.includeDrivers === true,
     includeFeatureUpdates: windowsRules.includeFeatureUpdates === true,
@@ -583,12 +595,44 @@ function PolicyModal({ policy, onClose, onSave }) {
       ? current.maintenanceDays.filter((item) => item !== day)
       : [...current.maintenanceDays, day].sort(),
   }))
+  const toggleSoftwareDay = (day) => setForm((current) => ({
+    ...current,
+    softwareMaintenanceDays: current.softwareMaintenanceDays.includes(day)
+      ? current.softwareMaintenanceDays.filter((item) => item !== day)
+      : [...current.softwareMaintenanceDays, day].sort(),
+  }))
+  const toggleSoftwareApp = (id) => setForm((current) => ({
+    ...current,
+    softwareCatalogueIds: current.softwareCatalogueIds.includes(id)
+      ? current.softwareCatalogueIds.filter((item) => item !== id)
+      : [...current.softwareCatalogueIds, id],
+  }))
   const dayLabels = [['M', 1], ['T', 2], ['W', 3], ['T', 4], ['F', 5], ['S', 6], ['S', 7]]
+  const softwareCatalogueOptions = useMemo(
+    () => [...catalogue]
+      .filter((item) => item?.id && item?.canonicalName)
+      .sort((left, right) => String(left.canonicalName).localeCompare(String(right.canonicalName))),
+    [catalogue],
+  )
+  const searchText = softwareAppSearch.trim().toLowerCase()
+  const visibleSoftwareApps = softwareCatalogueOptions
+    .filter((item) => !searchText || [item.canonicalName, item.publisher, item.packageId, item.executionPackageId].filter(Boolean).join(' ').toLowerCase().includes(searchText))
+    .sort((left, right) => {
+      const selectedDelta = Number(form.softwareCatalogueIds.includes(right.id)) - Number(form.softwareCatalogueIds.includes(left.id))
+      return selectedDelta || String(left.canonicalName).localeCompare(String(right.canonicalName))
+    })
+    .slice(0, 80)
+  const softwareSelectionInvalid = form.softwareEnabled
+    && form.softwareTargetMode === 'selected_catalogue'
+    && !form.softwareCatalogueIds.length
 
   return <div className="rmm-patch-modal-backdrop">
     <form className="rmm-patch-modal rmm-patch-policy-modal" onSubmit={(event) => {
       event.preventDefault()
-      if (form.name.trim().length < 2 || !form.maintenanceDays.length) return
+      if (form.name.trim().length < 2) return
+      if (form.windowsEnabled && !form.maintenanceDays.length) return
+      if (form.softwareEnabled && !form.softwareMaintenanceDays.length) return
+      if (softwareSelectionInvalid) return
       onSave({
         ...form,
         maintenanceWindow: {
@@ -622,6 +666,14 @@ function PolicyModal({ policy, onClose, onSave }) {
           },
         },
         softwareRules: {
+          targetMode: form.softwareTargetMode,
+          catalogueIds: form.softwareTargetMode === 'selected_catalogue' ? form.softwareCatalogueIds : [],
+          maintenanceWindow: {
+            start: form.softwareMaintenanceStart,
+            end: form.softwareMaintenanceEnd,
+            timezone: form.softwareMaintenanceTimezone,
+            days: form.softwareMaintenanceDays,
+          },
           vulnerabilityRules: {
             critical_exploited: form.criticalExploited,
             critical: form.critical,
@@ -637,83 +689,131 @@ function PolicyModal({ policy, onClose, onSave }) {
         <div><span className="rmm-eyebrow">Reusable targeting</span><h2>{policy ? 'Edit patch policy' : 'New patch policy'}</h2></div>
         <button aria-label="Close" onClick={onClose} type="button"><X size={17} /></button>
       </header>
+
       <div className="rmm-patch-form-grid">
         <label className="wide">Policy name<input autoFocus value={form.name} onChange={(event) => update('name', event.target.value)} placeholder="Standard workstations" /></label>
         <label className="wide">Description<textarea rows="2" value={form.description} onChange={(event) => update('description', event.target.value)} /></label>
-        <label>Software approval<select value={form.approvalMode} onChange={(event) => update('approvalMode', event.target.value)}><option value="manual">Manual approval</option><option value="automatic">Automatic</option><option value="pilot">Pilot → production</option><option value="blocked">Blocked</option></select></label>
-        <label>Software/default delay<input min="0" max="365" type="number" value={form.deploymentDelayDays} onChange={(event) => update('deploymentDelayDays', event.target.value)} /></label>
       </div>
 
-      <section className="rmm-policy-schedule">
-        <div className="rmm-policy-section-title"><strong>Windows Update schedule</strong><small>Applicable updates remain visible immediately. Installation waits for both the configured delay and this maintenance window.</small></div>
+      <section className="rmm-policy-schedule rmm-policy-domain">
+        <div className="rmm-policy-section-title"><strong>OS patching</strong><small>Controls Windows Update ownership, deferrals, deployment waves and the OS maintenance window.</small></div>
         <div className="rmm-patch-checks">
-          <label><input checked={form.windowsEnabled} onChange={(event) => update('windowsEnabled', event.target.checked)} type="checkbox" /><span><strong>Windows Update policy</strong><small>Apply this schedule to assigned Windows endpoints.</small></span></label>
-          <label><input checked={form.windowsAutoInstall} onChange={(event) => update('windowsAutoInstall', event.target.checked)} type="checkbox" /><span><strong>Automatically install eligible updates</strong><small>Only while the maintenance window is open.</small></span></label>
+          <label><input checked={form.windowsEnabled} onChange={(event) => update('windowsEnabled', event.target.checked)} type="checkbox" /><span><strong>Enable OS patching</strong><small>Hi5Central manages Windows Update on assigned Windows endpoints.</small></span></label>
+          {form.windowsEnabled && <label><input checked={form.windowsAutoInstall} onChange={(event) => update('windowsAutoInstall', event.target.checked)} type="checkbox" /><span><strong>Automatically install eligible updates</strong><small>Only while the OS maintenance window is open.</small></span></label>}
         </div>
-        <div className="rmm-patch-form-grid">
-          <label>Window starts<input type="time" value={form.maintenanceStart} onChange={(event) => update('maintenanceStart', event.target.value)} /></label>
-          <label>Window ends<input type="time" value={form.maintenanceEnd} onChange={(event) => update('maintenanceEnd', event.target.value)} /></label>
-          <label className="wide">Timezone<input value={form.maintenanceTimezone} onChange={(event) => update('maintenanceTimezone', event.target.value)} placeholder="Europe/London" /></label>
-          <div className="wide rmm-policy-days"><span>Patch days</span><div>{dayLabels.map(([label, day]) => <button className={form.maintenanceDays.includes(day) ? 'active' : ''} key={day} onClick={() => toggleDay(day)} type="button">{label}</button>)}</div></div>
-        </div>
-        <div className="rmm-policy-delay-grid">
-          {[
-            ['windowsCriticalDelay', 'Critical', 'Immediate by default'],
-            ['windowsSecurityDelay', 'Security', 'Security fixes'],
-            ['windowsQualityDelay', 'Quality', 'Cumulative / quality'],
-            ['windowsFeatureDelay', 'Feature', 'Feature releases'],
-            ['windowsDriverDelay', 'Drivers', 'Driver updates'],
-            ['windowsDefinitionDelay', 'Definitions', 'Defender intelligence'],
-          ].map(([key, label, detail]) => <label key={key}><span><strong>{label}</strong><small>{detail}</small></span><input min="0" max="365" type="number" value={form[key]} onChange={(event) => update(key, event.target.value)} /><em>days</em></label>)}
-        </div>
-        <div className="rmm-policy-section-title"><strong>Staged rollout</strong><small>Keep a stable percentage of devices in each wave. The compliance deadline releases any remaining devices even if their wave has not opened yet.</small></div>
-        <div className="rmm-patch-checks">
-          <label><input checked={form.rolloutEnabled} onChange={(event) => update('rolloutEnabled', event.target.checked)} type="checkbox" /><span><strong>Use deployment waves</strong><small>Definitions bypass waves so Defender intelligence can stay current.</small></span></label>
-        </div>
-        {form.rolloutEnabled && <>
-          <div className="rmm-patch-form-grid">
-            <label>Pilot devices (%)<input min="0" max="100" type="number" value={form.rolloutPilotPercent} onChange={(event) => update('rolloutPilotPercent', event.target.value)} /></label>
-            <label>Pilot starts after<input min="0" max="365" type="number" value={form.rolloutPilotDelay} onChange={(event) => update('rolloutPilotDelay', event.target.value)} /><small>Days after the category deferral.</small></label>
-            <label>Early devices (%)<input min="0" max="100" type="number" value={form.rolloutEarlyPercent} onChange={(event) => update('rolloutEarlyPercent', event.target.value)} /></label>
-            <label>Early starts after<input min="0" max="365" type="number" value={form.rolloutEarlyDelay} onChange={(event) => update('rolloutEarlyDelay', event.target.value)} /></label>
-            <label>Broad devices (%)<input min="0" max="100" type="number" value={form.rolloutBroadPercent} onChange={(event) => update('rolloutBroadPercent', event.target.value)} /></label>
-            <label>Broad starts after<input min="0" max="365" type="number" value={form.rolloutBroadDelay} onChange={(event) => update('rolloutBroadDelay', event.target.value)} /></label>
-            <label>Final devices (%)<input readOnly type="number" value={Math.max(0, 100 - (Number(form.rolloutPilotPercent) || 0) - (Number(form.rolloutEarlyPercent) || 0) - (Number(form.rolloutBroadPercent) || 0))} /></label>
-            <label>Final starts after<input min="0" max="365" type="number" value={form.rolloutFinalDelay} onChange={(event) => update('rolloutFinalDelay', event.target.value)} /></label>
-            <label>Compliance deadline<input min="0" max="365" type="number" value={form.rolloutDeadlineDays} onChange={(event) => update('rolloutDeadlineDays', event.target.value)} /><small>Days after the category deferral.</small></label>
-          </div>
-          <div className="rmm-patch-security-note"><ShieldCheck size={16} /><span>Ring membership is deterministic per device and policy, so the same endpoints remain in Pilot/Early/Broad/Final instead of moving randomly each scheduler run.</span></div>
-        </>}
 
-        <div className="rmm-patch-checks">
-          <label><input checked={form.includeFeatureUpdates} onChange={(event) => update('includeFeatureUpdates', event.target.checked)} type="checkbox" /><span><strong>Feature updates</strong><small>Off by default for controlled rollout.</small></span></label>
-          <label><input checked={form.includeDrivers} onChange={(event) => update('includeDrivers', event.target.checked)} type="checkbox" /><span><strong>Driver updates</strong><small>Off by default.</small></span></label>
-          <label><input checked={form.includeDefinitions} onChange={(event) => update('includeDefinitions', event.target.checked)} type="checkbox" /><span><strong>Defender definitions</strong><small>Enabled by default with no delay.</small></span></label>
-        </div>
-        <div className="rmm-patch-form-grid">
-          <label>Reboot handling<select value={form.rebootPolicy} onChange={(event) => update('rebootPolicy', event.target.value)}><option value="never">Do not reboot automatically</option><option value="maintenance_window">Reboot during maintenance window</option><option value="notify_user">Notify user before reboot</option></select></label>
-          <label>Retries<input min="0" max="10" type="number" value={form.maxRetries} onChange={(event) => update('maxRetries', event.target.value)} /></label>
-        </div>
-        <div className="rmm-patch-security-note"><ShieldCheck size={16} /><span>Phase one installs Windows updates silently but does not force an automatic reboot. Reboot-required endpoints remain flagged until reboot automation is enabled separately.</span></div>
+        {form.windowsEnabled && <>
+          <div className="rmm-policy-subsection-title"><strong>OS maintenance window</strong><small>Windows updates wait for this window after their category deferral and rollout wave open.</small></div>
+          <div className="rmm-patch-form-grid">
+            <label>Window starts<input type="time" value={form.maintenanceStart} onChange={(event) => update('maintenanceStart', event.target.value)} /></label>
+            <label>Window ends<input type="time" value={form.maintenanceEnd} onChange={(event) => update('maintenanceEnd', event.target.value)} /></label>
+            <label className="wide">Timezone<input value={form.maintenanceTimezone} onChange={(event) => update('maintenanceTimezone', event.target.value)} placeholder="Europe/London" /></label>
+            <div className="wide rmm-policy-days"><span>OS patch days</span><div>{dayLabels.map(([label, day]) => <button className={form.maintenanceDays.includes(day) ? 'active' : ''} key={day} onClick={() => toggleDay(day)} type="button">{label}</button>)}</div></div>
+          </div>
+
+          <div className="rmm-policy-subsection-title"><strong>Update deferrals</strong><small>Delay each Windows Update class before staged rollout begins.</small></div>
+          <div className="rmm-policy-delay-grid">
+            {[
+              ['windowsCriticalDelay', 'Critical', 'Immediate by default'],
+              ['windowsSecurityDelay', 'Security', 'Security fixes'],
+              ['windowsQualityDelay', 'Quality', 'Cumulative / quality'],
+              ['windowsFeatureDelay', 'Feature', 'Feature releases'],
+              ['windowsDriverDelay', 'Drivers', 'Driver updates'],
+              ['windowsDefinitionDelay', 'Definitions', 'Defender intelligence'],
+            ].map(([key, label, detail]) => <label key={key}><span><strong>{label}</strong><small>{detail}</small></span><input min="0" max="365" type="number" value={form[key]} onChange={(event) => update(key, event.target.value)} /><em>days</em></label>)}
+          </div>
+
+          <div className="rmm-policy-section-title"><strong>Staged rollout</strong><small>Keep a stable percentage of devices in each wave. The compliance deadline releases remaining devices once due.</small></div>
+          <div className="rmm-patch-checks">
+            <label><input checked={form.rolloutEnabled} onChange={(event) => update('rolloutEnabled', event.target.checked)} type="checkbox" /><span><strong>Use deployment waves</strong><small>Definitions bypass waves so Defender intelligence can stay current.</small></span></label>
+          </div>
+          {form.rolloutEnabled && <>
+            <div className="rmm-patch-form-grid">
+              <label>Pilot devices (%)<input min="0" max="100" type="number" value={form.rolloutPilotPercent} onChange={(event) => update('rolloutPilotPercent', event.target.value)} /></label>
+              <label>Pilot starts after<input min="0" max="365" type="number" value={form.rolloutPilotDelay} onChange={(event) => update('rolloutPilotDelay', event.target.value)} /><small>Days after the category deferral.</small></label>
+              <label>Early devices (%)<input min="0" max="100" type="number" value={form.rolloutEarlyPercent} onChange={(event) => update('rolloutEarlyPercent', event.target.value)} /></label>
+              <label>Early starts after<input min="0" max="365" type="number" value={form.rolloutEarlyDelay} onChange={(event) => update('rolloutEarlyDelay', event.target.value)} /></label>
+              <label>Broad devices (%)<input min="0" max="100" type="number" value={form.rolloutBroadPercent} onChange={(event) => update('rolloutBroadPercent', event.target.value)} /></label>
+              <label>Broad starts after<input min="0" max="365" type="number" value={form.rolloutBroadDelay} onChange={(event) => update('rolloutBroadDelay', event.target.value)} /></label>
+              <label>Final devices (%)<input readOnly type="number" value={Math.max(0, 100 - (Number(form.rolloutPilotPercent) || 0) - (Number(form.rolloutEarlyPercent) || 0) - (Number(form.rolloutBroadPercent) || 0))} /></label>
+              <label>Final starts after<input min="0" max="365" type="number" value={form.rolloutFinalDelay} onChange={(event) => update('rolloutFinalDelay', event.target.value)} /></label>
+              <label>Compliance deadline<input min="0" max="365" type="number" value={form.rolloutDeadlineDays} onChange={(event) => update('rolloutDeadlineDays', event.target.value)} /><small>Days after the category deferral.</small></label>
+            </div>
+            <div className="rmm-patch-security-note"><ShieldCheck size={16} /><span>Ring membership is deterministic per device and policy, so the same endpoints remain in Pilot/Early/Broad/Final.</span></div>
+          </>}
+
+          <div className="rmm-patch-checks">
+            <label><input checked={form.includeFeatureUpdates} onChange={(event) => update('includeFeatureUpdates', event.target.checked)} type="checkbox" /><span><strong>Feature updates</strong><small>Off by default for controlled rollout.</small></span></label>
+            <label><input checked={form.includeDrivers} onChange={(event) => update('includeDrivers', event.target.checked)} type="checkbox" /><span><strong>Driver updates</strong><small>Off by default.</small></span></label>
+            <label><input checked={form.includeDefinitions} onChange={(event) => update('includeDefinitions', event.target.checked)} type="checkbox" /><span><strong>Defender definitions</strong><small>Enabled by default with no delay.</small></span></label>
+          </div>
+          <div className="rmm-patch-form-grid">
+            <label>Reboot handling<select value={form.rebootPolicy} onChange={(event) => update('rebootPolicy', event.target.value)}><option value="never">Do not reboot automatically</option><option value="maintenance_window">Reboot during maintenance window</option><option value="notify_user">Notify user before reboot</option></select></label>
+          </div>
+          <div className="rmm-patch-security-note"><ShieldCheck size={16} /><span>Windows updates install without forcing an automatic restart today. Reboot-required endpoints remain flagged until coordinated reboot automation is enabled.</span></div>
+        </>}
       </section>
 
-      <details className="rmm-policy-software-rules">
-        <summary>Software vulnerability approvals</summary>
-        <div className="rmm-patch-form-grid">
-          {[
-            ['criticalExploited', 'Critical / known exploited'],
-            ['critical', 'Critical (CVSS ≥ 9.0)'],
-            ['high', 'High (CVSS 7.0–8.9)'],
-            ['medium', 'Medium (CVSS 4.0–6.9)'],
-            ['low', 'Low (CVSS < 4.0)'],
-            ['advisory', 'Advisory / no scored CVE'],
-          ].map(([key, label]) => <label key={key}>{label}<select value={form[key]} onChange={(event) => update(key, event.target.value)}><option value="automatic">Auto approve</option><option value="manual">Manual approval</option><option value="skip">Skip automatic patching</option></select></label>)}
+      <section className="rmm-policy-schedule rmm-policy-domain">
+        <div className="rmm-policy-section-title"><strong>Software patching</strong><small>Choose exactly which software source this policy may patch and when automatic software remediation can run.</small></div>
+        <div className="rmm-patch-checks">
+          <label><input checked={form.softwareEnabled} onChange={(event) => update('softwareEnabled', event.target.checked)} type="checkbox" /><span><strong>Enable software patching</strong><small>Applies only to the software scope selected below.</small></span></label>
         </div>
-      </details>
-      <div className="rmm-patch-checks">
-        <label><input checked={form.softwareEnabled} onChange={(event) => update('softwareEnabled', event.target.checked)} type="checkbox" /><span><strong>Software patching</strong><small>Use this policy for qualified third-party applications too.</small></span></label>
-      </div>
-      <footer><button onClick={onClose} type="button">Cancel</button><button className="rmm-primary" type="submit"><PackageCheck size={15} /> {policy ? 'Save policy' : 'Create policy'}</button></footer>
+
+        {form.softwareEnabled && <>
+          <div className="rmm-patch-form-grid">
+            <label className="wide">Application scope<select value={form.softwareTargetMode} onChange={(event) => update('softwareTargetMode', event.target.value)}>
+              <option value="selected_catalogue">Selected Hi5Central catalogue applications</option>
+              <option value="all_catalogue">All Hi5Central catalogue applications</option>
+              <option value="all_winget">Use WinGet</option>
+            </select></label>
+            <label>Software approval<select value={form.approvalMode} onChange={(event) => update('approvalMode', event.target.value)}><option value="manual">Manual approval</option><option value="automatic">Automatic</option><option value="pilot">Pilot → production</option><option value="blocked">Blocked</option></select></label>
+            <label>Default software delay<input min="0" max="365" type="number" value={form.deploymentDelayDays} onChange={(event) => update('deploymentDelayDays', event.target.value)} /></label>
+            <label>Retries<input min="0" max="10" type="number" value={form.maxRetries} onChange={(event) => update('maxRetries', event.target.value)} /></label>
+          </div>
+
+          {form.softwareTargetMode === 'selected_catalogue' && <div className="rmm-policy-app-picker">
+            <div className="rmm-policy-app-picker-head"><div><strong>Selected applications</strong><small>{form.softwareCatalogueIds.length} selected · choose only apps this policy may patch.</small></div></div>
+            <label className="rmm-policy-app-search"><Search size={14} /><input value={softwareAppSearch} onChange={(event) => setSoftwareAppSearch(event.target.value)} placeholder="Search Hi5Central catalogue…" /></label>
+            <div className="rmm-policy-app-list">
+              {visibleSoftwareApps.map((item) => <label key={item.id}>
+                <input checked={form.softwareCatalogueIds.includes(item.id)} onChange={() => toggleSoftwareApp(item.id)} type="checkbox" />
+                <span><strong>{item.canonicalName}</strong><small>{[item.publisher, item.targetVersion, item.executionPackageId || item.packageId].filter(Boolean).join(' · ')}</small></span>
+              </label>)}
+              {!visibleSoftwareApps.length && <div className="rmm-empty compact"><Search size={20} /><strong>No catalogue applications found</strong><span>Change the search to select software.</span></div>}
+            </div>
+            {softwareSelectionInvalid && <div className="rmm-policy-inline-error"><AlertTriangle size={14} /> Select at least one catalogue application.</div>}
+            {softwareCatalogueOptions.length > visibleSoftwareApps.length && <small className="rmm-policy-app-hint">Showing up to 80 matches. Search to narrow the catalogue.</small>}
+          </div>}
+
+          {form.softwareTargetMode === 'all_catalogue' && <div className="rmm-patch-security-note"><PackageCheck size={16} /><span>All qualified Hi5Central catalogue applications are in scope. Raw WinGet-only packages are not included.</span></div>}
+          {form.softwareTargetMode === 'all_winget' && <div className="rmm-patch-security-note"><PackageCheck size={16} /><span>Uses endpoint WinGet discovery as the software patch source. Raw WinGet packages remain separate from Hi5Central qualification.</span></div>}
+
+          <div className="rmm-policy-subsection-title"><strong>Software maintenance window</strong><small>Automatic software remediation waits for this independent window.</small></div>
+          <div className="rmm-patch-form-grid">
+            <label>Window starts<input type="time" value={form.softwareMaintenanceStart} onChange={(event) => update('softwareMaintenanceStart', event.target.value)} /></label>
+            <label>Window ends<input type="time" value={form.softwareMaintenanceEnd} onChange={(event) => update('softwareMaintenanceEnd', event.target.value)} /></label>
+            <label className="wide">Timezone<input value={form.softwareMaintenanceTimezone} onChange={(event) => update('softwareMaintenanceTimezone', event.target.value)} placeholder="Europe/London" /></label>
+            <div className="wide rmm-policy-days"><span>Software patch days</span><div>{dayLabels.map(([label, day]) => <button className={form.softwareMaintenanceDays.includes(day) ? 'active' : ''} key={day} onClick={() => toggleSoftwareDay(day)} type="button">{label}</button>)}</div></div>
+          </div>
+
+          <details className="rmm-policy-software-rules">
+            <summary>Vulnerability approval rules</summary>
+            <div className="rmm-patch-form-grid">
+              {[
+                ['criticalExploited', 'Critical / known exploited'],
+                ['critical', 'Critical (CVSS ≥ 9.0)'],
+                ['high', 'High (CVSS 7.0–8.9)'],
+                ['medium', 'Medium (CVSS 4.0–6.9)'],
+                ['low', 'Low (CVSS < 4.0)'],
+                ['advisory', 'Advisory / no scored CVE'],
+              ].map(([key, label]) => <label key={key}>{label}<select value={form[key]} onChange={(event) => update(key, event.target.value)}><option value="automatic">Auto approve</option><option value="manual">Manual approval</option><option value="skip">Skip automatic patching</option></select></label>)}
+            </div>
+          </details>
+        </>}
+      </section>
+
+      <footer><button onClick={onClose} type="button">Cancel</button><button className="rmm-primary" disabled={softwareSelectionInvalid} type="submit"><PackageCheck size={15} /> {policy ? 'Save policy' : 'Create policy'}</button></footer>
     </form>
   </div>
 }
@@ -2099,17 +2199,45 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
       <div className="rmm-patch-security-note"><ShieldCheck size={16} /><span>Scheduled installs are server-authoritative. Offline devices are not left with queued update jobs; they are re-evaluated when online. Feature and driver updates remain excluded unless the assigned policy explicitly enables them.</span></div>
     </section>}
     {tab === 'policies' && <section className="rmm-patch-panel">
-      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Targeting</span><h2>Patch policies</h2><p>Policies use the same Estate → Site → Group → Device targeting model as Monitoring. Windows schedules combine release delays with a maintenance window.</p></div><button className="rmm-primary compact" onClick={() => { setEditingPolicy(null); setShowPolicy(true) }} type="button"><Plus size={14} /> New policy</button></div>
+      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Targeting</span><h2>Patch policies</h2><p>OS patching and software patching are configured independently inside each policy, then assigned through Estate → Site → Group → Device scope.</p></div><button className="rmm-primary compact" onClick={() => { setEditingPolicy(null); setShowPolicy(true) }} type="button"><Plus size={14} /> New policy</button></div>
       <div className="rmm-patch-policy-grid">
-        {policies.map((policy) => <article key={policy.id}>
-          <header><div><span className="rmm-eyebrow">{policy.approval_mode}</span><h3>{policy.name}</h3></div><StatusPill tone={policy.status === 'active' ? 'healthy' : 'neutral'}>{policy.status}</StatusPill></header>
-          <p>{policy.description || 'No description provided.'}</p>
-          <div className="meta"><span><small>Software</small><strong>{policy.software_enabled ? 'Enabled' : 'Disabled'}</strong></span><span><small>Windows</small><strong>{policy.windows_enabled ? policy.windows_rules?.autoInstall ? 'Automatic' : 'Manual' : 'Disabled'}</strong></span><span><small>Window</small><strong>{policy.maintenance_window?.start || '18:00'}–{policy.maintenance_window?.end || '05:00'}</strong></span><span><small>Reboot</small><strong>{readinessLabel(policy.reboot_policy)}</strong></span></div>
-          {policy.windows_enabled && <div className="rmm-policy-card-schedule"><small>{(policy.maintenance_window?.days || [1,2,3,4,5]).map((day) => ['','Mon','Tue','Wed','Thu','Fri','Sat','Sun'][day]).join(' · ')} · {policy.maintenance_window?.timezone || 'Europe/London'}</small><small>Critical {policy.windows_rules?.delayDays?.critical ?? 0}d · Security {policy.windows_rules?.delayDays?.security ?? policy.deployment_delay_days}d · Quality {policy.windows_rules?.delayDays?.quality ?? policy.deployment_delay_days}d · Feature {policy.windows_rules?.includeFeatureUpdates ? (policy.windows_rules?.delayDays?.feature ?? 14) + 'd' : 'off'} · Drivers {policy.windows_rules?.includeDrivers ? (policy.windows_rules?.delayDays?.driver ?? 14) + 'd' : 'off'}</small>{policy.windows_rules?.rollout?.enabled && <small>Rollout · {(policy.windows_rules.rollout.waves || []).map((wave) => (wave.name || wave.id) + ' ' + wave.percentage + '% @ +' + wave.delayDays + 'd').join(' · ')} · deadline +' + (policy.windows_rules.rollout.deadlineDays ?? 7) + 'd</small>}</div>}
-          <footer><span>{assignments.filter((assignment) => assignment.policy_id === policy.id && assignment.enabled !== false).length} assignments</span><div><button disabled={saving} onClick={() => { setEditingPolicy(policy); setShowPolicy(true) }} type="button"><Wrench size={14} /> Edit</button><button disabled={saving} onClick={() => setAssignPolicy(policy)} type="button"><GitBranch size={14} /> Assign scope</button></div></footer>
-        </article>)}
+        {policies.map((policy) => {
+          const softwareRules = policy.software_rules || {}
+          const softwareMode = ['selected_catalogue', 'all_catalogue', 'all_winget'].includes(softwareRules.targetMode) ? softwareRules.targetMode : 'all_catalogue'
+          const softwareWindow = softwareRules.maintenanceWindow || policy.maintenance_window || {}
+          const softwareScope = !policy.software_enabled
+            ? 'Disabled'
+            : softwareMode === 'selected_catalogue'
+              ? (softwareRules.catalogueIds || []).length + ' selected application' + ((softwareRules.catalogueIds || []).length === 1 ? '' : 's')
+              : softwareMode === 'all_winget'
+                ? 'Use WinGet'
+                : 'All Hi5Central catalogue applications'
+          return <article key={policy.id}>
+            <header><div><span className="rmm-eyebrow">Patch policy</span><h3>{policy.name}</h3></div><StatusPill tone={policy.status === 'active' ? 'healthy' : 'neutral'}>{policy.status}</StatusPill></header>
+            <p>{policy.description || 'No description provided.'}</p>
+            <div className="rmm-policy-domain-summary">
+              <div>
+                <div className="domain-head"><strong>OS patching</strong><StatusPill tone={policy.windows_enabled ? 'healthy' : 'neutral'}>{policy.windows_enabled ? (policy.windows_rules?.autoInstall ? 'Automatic' : 'Managed') : 'Disabled'}</StatusPill></div>
+                {policy.windows_enabled && <>
+                  <small>{policy.maintenance_window?.start || '18:00'}–{policy.maintenance_window?.end || '05:00'} · {(policy.maintenance_window?.days || [1,2,3,4,5]).map((day) => ['','Mon','Tue','Wed','Thu','Fri','Sat','Sun'][day]).join(' · ')} · {policy.maintenance_window?.timezone || 'Europe/London'}</small>
+                  <small>Critical {policy.windows_rules?.delayDays?.critical ?? 0}d · Security {policy.windows_rules?.delayDays?.security ?? policy.deployment_delay_days}d · Quality {policy.windows_rules?.delayDays?.quality ?? policy.deployment_delay_days}d · Feature {policy.windows_rules?.includeFeatureUpdates ? (policy.windows_rules?.delayDays?.feature ?? 14) + 'd' : 'off'} · Drivers {policy.windows_rules?.includeDrivers ? (policy.windows_rules?.delayDays?.driver ?? 14) + 'd' : 'off'}</small>
+                  {policy.windows_rules?.rollout?.enabled && <small>Rollout · {(policy.windows_rules.rollout.waves || []).map((wave) => (wave.name || wave.id) + ' ' + wave.percentage + '% @ +' + wave.delayDays + 'd').join(' · ')} · deadline +{policy.windows_rules.rollout.deadlineDays ?? 7}d</small>}
+                </>}
+              </div>
+              <div>
+                <div className="domain-head"><strong>Software patching</strong><StatusPill tone={policy.software_enabled ? 'healthy' : 'neutral'}>{policy.software_enabled ? 'Enabled' : 'Disabled'}</StatusPill></div>
+                {policy.software_enabled && <>
+                  <small>{softwareScope}</small>
+                  <small>{softwareWindow.start || '18:00'}–{softwareWindow.end || '05:00'} · {(softwareWindow.days || [1,2,3,4,5]).map((day) => ['','Mon','Tue','Wed','Thu','Fri','Sat','Sun'][day]).join(' · ')} · {softwareWindow.timezone || 'Europe/London'}</small>
+                  <small>Approval {readinessLabel(policy.approval_mode)} · default delay {policy.deployment_delay_days ?? 0}d · retries {policy.max_retries ?? 2}</small>
+                </>}
+              </div>
+            </div>
+            <footer><span>{assignments.filter((assignment) => assignment.policy_id === policy.id && assignment.enabled !== false).length} assignments</span><div><button disabled={saving} onClick={() => { setEditingPolicy(policy); setShowPolicy(true) }} type="button"><Wrench size={14} /> Edit</button><button disabled={saving} onClick={() => setAssignPolicy(policy)} type="button"><GitBranch size={14} /> Assign scope</button></div></footer>
+          </article>
+        })}
       </div>
-      {!policies.length && <div className="rmm-empty"><GitBranch size={24} /><strong>No patch policies yet</strong><span>Create a software-first policy, then target it to Estate, Site, Group or Device.</span></div>}
+      {!policies.length && <div className="rmm-empty"><GitBranch size={24} /><strong>No patch policies yet</strong><span>Create an OS/software patch policy, then target it to Estate, Site, Group or Device.</span></div>}
       {!!assignments.length && <div className="rmm-patch-assignments">
         <div className="head"><span>Scope</span><span>Policy</span><span>Priority</span><span /></div>
         {assignments.map((assignment) => <div className="row" key={assignment.id}><span><strong>{assignment.scope_name || assignment.scope_id}</strong><small>{assignment.scope_type}</small></span><span><strong>{policies.find((policy) => policy.id === assignment.policy_id)?.name || assignment.policy_id}</strong></span><span><strong>{assignment.priority}</strong></span><span><button disabled={saving} onClick={() => removeAssignment(assignment)} type="button"><Trash2 size={14} /></button></span></div>)}
@@ -2126,7 +2254,7 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
           onPatch={runSoftwarePatch}
           saving={saving}
         />}
-        {showPolicy && <PolicyModal policy={editingPolicy} onClose={() => { setShowPolicy(false); setEditingPolicy(null) }} onSave={savePolicy} />}
+        {showPolicy && <PolicyModal catalogue={catalogue} policy={editingPolicy} onClose={() => { setShowPolicy(false); setEditingPolicy(null) }} onSave={savePolicy} />}
         {assignPolicy && <AssignmentModal devices={bundle?.devices || devices} groups={scope.groups || []} onClose={() => setAssignPolicy(null)} onSave={saveAssignment} policy={assignPolicy} />}
       </div>,
       document.body,

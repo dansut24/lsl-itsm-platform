@@ -31,7 +31,7 @@ import {
 } from './rmmTenantVendorSources.js'
 import { recalculateTenantVulnerabilityExposures, syncGithubRepositoryAdvisoriesForCatalogue, vulnerabilityExposureByInstallation, vulnerabilityExposureRows, vulnerabilityExposureSummary } from './rmmVulnerabilityExposure.js'
 import { resolveSession } from './session.js'
-import { dispatchWindowsUpdateRollback, evaluateWindowsUpdatePolicies, setWindowsUpdateControl, windowsUpdateBundle } from './rmmWindowsUpdates.js'
+import { dispatchWindowsUpdateRollback, evaluateWindowsUpdatePolicies, setWindowsUpdateControl, windowsMaintenanceWindow, windowsUpdateBundle } from './rmmWindowsUpdates.js'
 
 function clean(value = '') { return String(value ?? '').trim() }
 function lower(value = '') { return clean(value).toLowerCase() }
@@ -2716,6 +2716,30 @@ function vulnerabilityPolicyAction(policy, exposure) {
   return { category, action: 'manual' }
 }
 
+function softwarePolicyTarget(policy, exposure) {
+  if (!policy) return { targeted: false, mode: 'none' }
+  const rules = object(policy.software_rules)
+  const mode = ['selected_catalogue', 'all_catalogue', 'all_winget'].includes(clean(rules.targetMode))
+    ? clean(rules.targetMode)
+    : 'all_catalogue'
+  if (mode === 'selected_catalogue') {
+    const selected = new Set(array(rules.catalogueIds).map(clean))
+    return { targeted: selected.has(clean(exposure.catalogue_id)), mode }
+  }
+  if (mode === 'all_winget') {
+    return { targeted: clean(exposure.catalogue_provider) === 'winget', mode }
+  }
+  return { targeted: true, mode }
+}
+
+function softwarePolicyMaintenance(policy, at = new Date()) {
+  const rules = object(policy?.software_rules)
+  const configured = object(rules.maintenanceWindow)
+  const fallback = object(policy?.maintenance_window)
+  const maintenanceWindow = Object.keys(configured).length ? configured : fallback
+  return windowsMaintenanceWindow({ maintenance_window: maintenanceWindow }, at)
+}
+
 async function effectiveVulnerabilityPolicy(tenantId, exposure) {
   const result = await pool.query(
     `SELECT p.* FROM rmm_patch_assignments x
@@ -2735,7 +2759,8 @@ async function effectiveVulnerabilityPolicy(tenantId, exposure) {
 export async function evaluateRealtimeVulnerabilityPolicies(tenantId, { dispatch = true } = {}) {
   const exposures = await pool.query(
     `SELECT e.*,v.cvss_score,v.severity,v.kev,v.epss_score,v.epss_percentile,v.ssvc_exploitation,
-            a.id AS agent_device_id,a.websocket_status,a.last_telemetry_at,c.source_metadata,c.qualification_state
+            a.id AS agent_device_id,a.websocket_status,a.last_telemetry_at,
+            c.source_metadata,c.qualification_state,c.provider AS catalogue_provider
        FROM rmm_vulnerability_exposures e JOIN rmm_vulnerabilities v ON v.cve_id=e.cve_id
        LEFT JOIN rmm_agent_devices a ON a.inventory_id=e.inventory_id AND a.tenant_id=e.tenant_id AND a.disabled_at IS NULL
        LEFT JOIN rmm_software_catalogue c ON c.id=e.catalogue_id
@@ -2744,15 +2769,20 @@ export async function evaluateRealtimeVulnerabilityPolicies(tenantId, { dispatch
   for (const exposure of exposures.rows) {
     const policy=await effectiveVulnerabilityPolicy(tenantId, exposure)
     const decision=vulnerabilityPolicyAction(policy, exposure)
+    const target=softwarePolicyTarget(policy, exposure)
+    const maintenance=policy ? softwarePolicyMaintenance(policy) : { open: false }
+    const effectiveAction = policy && target.targeted ? decision.action : 'skip'
     const installable=catalogueDeployabilityWeight(exposure)>0 && clean(exposure.remediation_state)==='available' && clean(exposure.catalogue_id)
     let reason = policy ? 'Matched patch policy '+clean(policy.name) : 'No assigned patch policy; manual review required'
-    if (decision.action==='automatic' && !installable) reason += ' · trusted remediation is not currently deployable'
+    if (policy && !target.targeted) reason += ' · application is outside this software patch policy'
+    if (effectiveAction==='automatic' && !maintenance.open) reason += ' · waiting for software maintenance window'
+    if (effectiveAction==='automatic' && !installable) reason += ' · trusted remediation is not currently deployable'
     const saved=await pool.query(`INSERT INTO rmm_vulnerability_policy_decisions (tenant_id,exposure_id,policy_id,risk_category,policy_action,reason,evaluated_at)
       VALUES ($1,$2,$3,$4,$5,$6,now()) ON CONFLICT (tenant_id,exposure_id) DO UPDATE SET policy_id=EXCLUDED.policy_id,risk_category=EXCLUDED.risk_category,policy_action=EXCLUDED.policy_action,reason=EXCLUDED.reason,evaluated_at=now() RETURNING *`,
-      [tenantId,exposure.id,policy?.id||null,decision.category,decision.action,reason])
+      [tenantId,exposure.id,policy?.id||null,decision.category,effectiveAction,reason])
     let jobId=''
     const online=exposure.websocket_status==='Connected' && exposure.last_telemetry_at && Date.now()-new Date(exposure.last_telemetry_at).getTime()<=90000
-    if (dispatch && decision.action==='automatic' && installable && online && !saved.rows[0].dispatched_job_id) {
+    if (dispatch && effectiveAction==='automatic' && maintenance.open && installable && online && !saved.rows[0].dispatched_job_id) {
       const active=await pool.query(`SELECT 1 FROM rmm_patch_deployments WHERE tenant_id=$1 AND inventory_id=$2 AND catalogue_id=$3 AND status IN ('eligible','running','remediation_required') LIMIT 1`,[tenantId,exposure.inventory_id,exposure.catalogue_id])
       if (!active.rowCount) {
         const plan=await softwarePatchPlan(tenantId,exposure.agent_device_id,exposure.catalogue_id)
@@ -2764,7 +2794,20 @@ export async function evaluateRealtimeVulnerabilityPolicies(tenantId, { dispatch
         }
       }
     }
-    decisions.push({exposureId:exposure.id,cveId:exposure.cve_id,applicationName:exposure.application_name,riskCategory:decision.category,action:decision.action,policyName:policy?.name||'',installable,online,jobId})
+    decisions.push({
+      exposureId:exposure.id,
+      cveId:exposure.cve_id,
+      applicationName:exposure.application_name,
+      riskCategory:decision.category,
+      action:effectiveAction,
+      policyName:policy?.name||'',
+      targetMode:target.mode,
+      targeted:target.targeted,
+      maintenanceOpen:Boolean(maintenance.open),
+      installable,
+      online,
+      jobId,
+    })
   }
   return decisions
 }
@@ -2799,6 +2842,49 @@ function normalizeMaintenanceWindow(value = {}) {
     timezone,
     days: days.length ? days : [1, 2, 3, 4, 5],
   }
+}
+
+function normalizeSoftwareRules(value = {}, fallbackMaintenance = {}) {
+  const source = object(value)
+  const mode = ['selected_catalogue', 'all_catalogue', 'all_winget'].includes(clean(source.targetMode))
+    ? clean(source.targetMode)
+    : 'all_catalogue'
+  const catalogueIds = [...new Set(array(source.catalogueIds)
+    .map(clean)
+    .filter((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)))]
+    .slice(0, 500)
+  const vulnerabilitySource = object(source.vulnerabilityRules)
+  const vulnerabilityAction = (key, fallback) => {
+    const action = clean(vulnerabilitySource[key])
+    return ['automatic', 'manual', 'skip'].includes(action) ? action : fallback
+  }
+  return {
+    targetMode: mode,
+    catalogueIds: mode === 'selected_catalogue' ? catalogueIds : [],
+    maintenanceWindow: normalizeMaintenanceWindow(source.maintenanceWindow || fallbackMaintenance),
+    vulnerabilityRules: {
+      critical_exploited: vulnerabilityAction('critical_exploited', 'automatic'),
+      critical: vulnerabilityAction('critical', 'automatic'),
+      high: vulnerabilityAction('high', 'manual'),
+      medium: vulnerabilityAction('medium', 'manual'),
+      low: vulnerabilityAction('low', 'skip'),
+      advisory: vulnerabilityAction('advisory', 'skip'),
+    },
+  }
+}
+
+async function validateSoftwareRuleCatalogueIds(tenantId, rules, softwareEnabled = true) {
+  if (!softwareEnabled || rules.targetMode !== 'selected_catalogue') return { rules }
+  if (!rules.catalogueIds.length) return { error: 'Select at least one Hi5Central catalogue application for this software patch policy.' }
+  const result = await pool.query(
+    `SELECT id FROM rmm_software_catalogue
+      WHERE id=ANY($2::uuid[]) AND status<>'archived' AND (tenant_id=$1 OR tenant_id IS NULL)`,
+    [tenantId, rules.catalogueIds],
+  )
+  const valid = new Set(result.rows.map((row) => clean(row.id)))
+  const invalid = rules.catalogueIds.filter((id) => !valid.has(id))
+  if (invalid.length) return { error: 'One or more selected software catalogue applications are no longer available.' }
+  return { rules }
 }
 
 function normalizeWindowsRollout(value = {}) {
@@ -4360,6 +4446,10 @@ export function registerRmmPatchingRoutes(app) {
     const deploymentDelayDays = Math.max(0, Math.min(365, Number(body.deploymentDelayDays) || 0))
     const maintenanceWindow = normalizeMaintenanceWindow(body.maintenanceWindow)
     const windowsRules = normalizeWindowsRules(body.windowsRules, deploymentDelayDays)
+    const softwareEnabled = body.softwareEnabled !== false
+    const softwareRules = normalizeSoftwareRules(body.softwareRules, maintenanceWindow)
+    const softwareValidation = await validateSoftwareRuleCatalogueIds(auth.session.tenant_id, softwareRules, softwareEnabled)
+    if (softwareValidation.error) return c.json({ error: softwareValidation.error }, 400)
     const result = await pool.query(
       `INSERT INTO rmm_patch_policies
         (tenant_id,name,description,software_enabled,windows_enabled,approval_mode,deployment_delay_days,
@@ -4367,11 +4457,11 @@ export function registerRmmPatchingRoutes(app) {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11::jsonb,$12::jsonb,$13,$13)
        RETURNING id`,
       [
-        auth.session.tenant_id, name, clean(body.description), body.softwareEnabled !== false,
+        auth.session.tenant_id, name, clean(body.description), softwareEnabled,
         Boolean(body.windowsEnabled), validApproval(clean(body.approvalMode)), deploymentDelayDays,
         JSON.stringify(maintenanceWindow), validReboot(clean(body.rebootPolicy)),
         Math.max(0, Math.min(10, Number(body.maxRetries) || 2)),
-        JSON.stringify(object(body.softwareRules)), JSON.stringify(windowsRules),
+        JSON.stringify(softwareRules), JSON.stringify(windowsRules),
         auth.session.user_id,
       ],
     )
@@ -4388,6 +4478,10 @@ export function registerRmmPatchingRoutes(app) {
     const deploymentDelayDays = Math.max(0, Math.min(365, Number(body.deploymentDelayDays) || 0))
     const maintenanceWindow = normalizeMaintenanceWindow(body.maintenanceWindow)
     const windowsRules = normalizeWindowsRules(body.windowsRules, deploymentDelayDays)
+    const softwareEnabled = body.softwareEnabled !== false
+    const softwareRules = normalizeSoftwareRules(body.softwareRules, maintenanceWindow)
+    const softwareValidation = await validateSoftwareRuleCatalogueIds(auth.session.tenant_id, softwareRules, softwareEnabled)
+    if (softwareValidation.error) return c.json({ error: softwareValidation.error }, 400)
     const result = await pool.query(
       `UPDATE rmm_patch_policies SET
          name=$3,description=$4,software_enabled=$5,windows_enabled=$6,approval_mode=$7,
@@ -4397,10 +4491,10 @@ export function registerRmmPatchingRoutes(app) {
        RETURNING id,name`,
       [
         clean(c.req.param('policyId')), auth.session.tenant_id, name, clean(body.description),
-        body.softwareEnabled !== false, Boolean(body.windowsEnabled), validApproval(clean(body.approvalMode)),
+        softwareEnabled, Boolean(body.windowsEnabled), validApproval(clean(body.approvalMode)),
         deploymentDelayDays, JSON.stringify(maintenanceWindow), validReboot(clean(body.rebootPolicy)),
         Math.max(0, Math.min(10, Number(body.maxRetries) || 2)),
-        JSON.stringify(object(body.softwareRules)), JSON.stringify(windowsRules), auth.session.user_id,
+        JSON.stringify(softwareRules), JSON.stringify(windowsRules), auth.session.user_id,
       ],
     )
     if (!result.rowCount) return c.json({ error: 'Patch policy not found.' }, 404)
