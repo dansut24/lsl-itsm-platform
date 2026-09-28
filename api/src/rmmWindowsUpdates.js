@@ -363,8 +363,216 @@ async function dispatchInstall(tenantId, device, policy, eligible, sendAgentMess
   return { dispatched: true, jobId: job.id }
 }
 
+async function ensureWindowsUpdateManagement(tenantId, device, policy, state, options = {}) {
+  const desired = Boolean(policy)
+  const policyId = policy?.id || null
+  const policyName = clean(policy?.name)
+  const previous = state || {}
+  const appliedAt = parseDate(previous.last_applied_at)
+  const verificationStale = desired && (!appliedAt || Date.now() - appliedAt.getTime() > 24 * 60 * 60 * 1000)
+  const needsChange = desired
+    ? previous.applied_managed !== true || clean(previous.policy_id) !== clean(policyId) || verificationStale
+    : previous.applied_managed === true || previous.desired_managed === true
+
+  await pool.query(
+    'INSERT INTO rmm_windows_update_management ' +
+    '(tenant_id,inventory_id,agent_device_id,desired_managed,applied_managed,policy_id,policy_name,last_result,last_error,updated_at) ' +
+    'VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,now()) ' +
+    'ON CONFLICT (tenant_id,inventory_id) DO UPDATE SET ' +
+    'agent_device_id=EXCLUDED.agent_device_id,desired_managed=EXCLUDED.desired_managed,policy_id=EXCLUDED.policy_id,' +
+    'policy_name=EXCLUDED.policy_name,updated_at=now()',
+    [
+      tenantId,
+      device.inventory_id,
+      device.agent_device_id,
+      desired,
+      previous.applied_managed ?? null,
+      policyId,
+      policyName,
+      JSON.stringify(object(previous.last_result)),
+      clean(previous.last_error),
+    ],
+  )
+
+  if (!needsChange) {
+    return {
+      desired,
+      applied: previous.applied_managed === true,
+      state: desired ? 'managed' : 'unmanaged',
+      blocking: false,
+      policyId,
+      policyName,
+    }
+  }
+
+  if (!versionAtLeast(device.agent_version, '0.1.210')) {
+    await pool.query(
+      'UPDATE rmm_windows_update_management SET last_error=$3,updated_at=now() WHERE tenant_id=$1 AND inventory_id=$2',
+      [tenantId, device.inventory_id, 'Agent 0.1.210 or later is required for managed Windows Update mode.'],
+    )
+    return {
+      desired,
+      applied: previous.applied_managed === true,
+      state: 'blocked',
+      blocking: desired,
+      reason: 'windows_update_management_agent_upgrade_required',
+      requiredAgentVersion: '0.1.210',
+      currentAgentVersion: clean(device.agent_version),
+      policyId,
+      policyName,
+    }
+  }
+
+  const socket = typeof options.agentSocketForDevice === 'function'
+    ? options.agentSocketForDevice(device.agent_device_id)
+    : null
+  if (!socket || socket.readyState !== 1) {
+    return {
+      desired,
+      applied: previous.applied_managed === true,
+      state: 'offline',
+      blocking: desired,
+      reason: 'windows_update_management_device_offline',
+      policyId,
+      policyName,
+    }
+  }
+
+  const active = await pool.query(
+    "SELECT id,status FROM rmm_agent_jobs WHERE tenant_id=$1 AND agent_device_id=$2 AND job_type='windows_update.manage' " +
+    "AND status IN ('queued','claimed') AND request_metadata->>'source'='windows_update_management' ORDER BY created_at DESC LIMIT 1",
+    [tenantId, device.agent_device_id],
+  )
+  if (active.rowCount) {
+    return {
+      desired,
+      applied: previous.applied_managed === true,
+      state: 'running',
+      blocking: desired,
+      reason: 'windows_update_management_pending',
+      jobId: active.rows[0].id,
+      policyId,
+      policyName,
+    }
+  }
+
+  if (options.dispatch === false || typeof options.sendAgentMessage !== 'function') {
+    return {
+      desired,
+      applied: previous.applied_managed === true,
+      state: 'ready',
+      blocking: desired,
+      reason: 'windows_update_management_ready',
+      policyId,
+      policyName,
+    }
+  }
+
+  const payload = {
+    enabled: desired,
+    policy_id: policyId || '',
+    policy_name: policyName,
+    timeout_seconds: 120,
+  }
+  const metadata = {
+    source: 'windows_update_management',
+    desired_managed: desired,
+    policy_id: policyId,
+    policy_name: policyName,
+  }
+  const inserted = await pool.query(
+    "INSERT INTO rmm_agent_jobs " +
+    "(tenant_id,agent_device_id,job_type,payload,initiated_by,initiated_by_label,request_metadata) " +
+    "VALUES ($1,$2,'windows_update.manage',$3::jsonb,'system','SYSTEM · Windows Update management',$4::jsonb) " +
+    "ON CONFLICT DO NOTHING RETURNING id,status,created_at",
+    [tenantId, device.agent_device_id, JSON.stringify(payload), JSON.stringify(metadata)],
+  )
+  if (!inserted.rowCount) {
+    return {
+      desired,
+      applied: previous.applied_managed === true,
+      state: 'running',
+      blocking: desired,
+      reason: 'windows_update_management_pending',
+      policyId,
+      policyName,
+    }
+  }
+
+  const job = inserted.rows[0]
+  const claimed = await pool.query(
+    "UPDATE rmm_agent_jobs SET status='claimed',claimed_at=now(),updated_at=now() WHERE id=$1 AND status='queued' RETURNING id",
+    [job.id],
+  )
+  if (!claimed.rowCount) {
+    return {
+      desired,
+      applied: previous.applied_managed === true,
+      state: 'failed',
+      blocking: desired,
+      reason: 'windows_update_management_claim_failed',
+      jobId: job.id,
+      policyId,
+      policyName,
+    }
+  }
+
+  const pushed = options.sendAgentMessage(device.agent_device_id, {
+    type: 'job_execute',
+    job: { id: job.id, job_type: 'windows_update.manage', payload, created_at: job.created_at },
+  })
+  if (!pushed) {
+    await pool.query(
+      "UPDATE rmm_agent_jobs SET status='cancelled',completed_at=now(),error_message='Device went offline before Windows Update management dispatch.',updated_at=now() WHERE id=$1",
+      [job.id],
+    )
+    return {
+      desired,
+      applied: previous.applied_managed === true,
+      state: 'offline',
+      blocking: desired,
+      reason: 'windows_update_management_device_offline',
+      jobId: job.id,
+      policyId,
+      policyName,
+    }
+  }
+
+  await pool.query(
+    'UPDATE rmm_windows_update_management SET agent_job_id=$3,last_error=$4,updated_at=now() WHERE tenant_id=$1 AND inventory_id=$2',
+    [tenantId, device.inventory_id, job.id, ''],
+  )
+  await recordRmmActivity({
+    tenantId,
+    agentDeviceId: device.agent_device_id,
+    inventoryId: device.inventory_id,
+    actorType: 'system',
+    actorLabel: 'SYSTEM',
+    eventType: desired ? 'windows_updates.management_requested' : 'windows_updates.management_remove_requested',
+    category: 'updates',
+    summary: desired
+      ? 'SYSTEM: applying Hi5Central Windows Update management'
+      : 'SYSTEM: removing Hi5Central Windows Update management',
+    detail: desired ? policyName : 'No effective Windows patch policy remains on this device.',
+    outcome: 'requested',
+    jobId: job.id,
+    metadata,
+  }).catch(() => null)
+
+  return {
+    desired,
+    applied: previous.applied_managed === true,
+    state: 'dispatched',
+    blocking: desired,
+    reason: 'windows_update_management_pending',
+    jobId: job.id,
+    policyId,
+    policyName,
+  }
+}
+
 export async function evaluateWindowsUpdatePolicies(tenantId, options = {}) {
-  const [devices, controlResult] = await Promise.all([
+  const [devices, controlResult, managementResult] = await Promise.all([
     pool.query(
       'SELECT a.id AS agent_device_id,a.inventory_id,a.agent_version,a.websocket_status,a.last_telemetry_at,i.name,i.reference ' +
       'FROM rmm_agent_devices a JOIN rmm_device_inventory i ON i.id=a.inventory_id AND i.active=true ' +
@@ -375,11 +583,25 @@ export async function evaluateWindowsUpdatePolicies(tenantId, options = {}) {
       "SELECT update_key,state,reason,paused_at,resumed_at,updated_at FROM rmm_windows_update_controls WHERE tenant_id=$1",
       [tenantId],
     ),
+    pool.query(
+      'SELECT * FROM rmm_windows_update_management WHERE tenant_id=$1',
+      [tenantId],
+    ),
   ])
   const controls = new Map(controlResult.rows.map((row) => [row.update_key, row]))
+  const management = new Map(managementResult.rows.map((row) => [row.inventory_id, row]))
   const decisions = []
 
   for (const device of devices.rows) {
+    const policy = await effectiveWindowsPolicy(tenantId, device.inventory_id)
+    const managed = await ensureWindowsUpdateManagement(
+      tenantId,
+      device,
+      policy,
+      management.get(device.inventory_id) || null,
+      options,
+    )
+
     const pendingResult = await pool.query(
       'SELECT * FROM rmm_windows_update_observations WHERE tenant_id=$1 AND inventory_id=$2 AND pending=true ORDER BY first_seen_at,lower(title)',
       [tenantId, device.inventory_id],
@@ -388,17 +610,28 @@ export async function evaluateWindowsUpdatePolicies(tenantId, options = {}) {
     if (!pending.length) {
       await saveDecision({
         tenantId, inventoryId: device.inventory_id, agentDeviceId: device.agent_device_id,
-        state: 'waiting', reason: 'no_pending_updates', decision: { pending: 0 },
+        policyId: policy?.id || null,
+        state: managed.blocking ? 'blocked' : 'waiting',
+        reason: managed.blocking ? managed.reason : 'no_pending_updates',
+        decision: { pending: 0, management: managed },
       })
       continue
     }
 
-    const policy = await effectiveWindowsPolicy(tenantId, device.inventory_id)
     if (!policy) {
       await saveDecision({
         tenantId, inventoryId: device.inventory_id, agentDeviceId: device.agent_device_id,
-        state: 'waiting', reason: 'no_windows_patch_policy', decision: { pending: pending.length },
+        state: 'waiting', reason: 'no_windows_patch_policy', decision: { pending: pending.length, management: managed },
       })
+      continue
+    }
+
+    if (managed.blocking) {
+      await saveDecision({
+        tenantId, inventoryId: device.inventory_id, agentDeviceId: device.agent_device_id, policyId: policy.id,
+        state: 'blocked', reason: managed.reason, decision: { pending: pending.length, management: managed },
+      })
+      decisions.push({ inventoryId: device.inventory_id, policyId: policy.id, state: 'blocked', reason: managed.reason })
       continue
     }
 
@@ -418,7 +651,7 @@ export async function evaluateWindowsUpdatePolicies(tenantId, options = {}) {
     const eligible = evaluated.filter((item) => item.eligibility.eligible).map((item) => item.row)
     const decision = {
       policyId: policy.id, policyName: policy.name, pending: pending.length, eligible: eligible.length,
-      window, rules,
+      window, rules, management: managed,
       updates: evaluated.map(({ row, eligibility }) => ({
         updateKey: row.update_key, title: row.title, updateClass: row.update_class, ...eligibility,
       })),
@@ -441,12 +674,12 @@ export async function evaluateWindowsUpdatePolicies(tenantId, options = {}) {
       continue
     }
 
-    if (!versionAtLeast(device.agent_version, '0.1.206')) {
+    if (!versionAtLeast(device.agent_version, '0.1.210')) {
       await saveDecision({
         tenantId, inventoryId: device.inventory_id, agentDeviceId: device.agent_device_id, policyId: policy.id,
         state: 'blocked', reason: 'agent_upgrade_required',
         eligibleKeys: eligible.map((row) => row.update_key),
-        decision: { ...decision, requiredAgentVersion: '0.1.206', currentAgentVersion: clean(device.agent_version) },
+        decision: { ...decision, requiredAgentVersion: '0.1.210', currentAgentVersion: clean(device.agent_version) },
       })
       decisions.push({ inventoryId: device.inventory_id, policyId: policy.id, state: 'blocked', reason: 'agent_upgrade_required' })
       continue
@@ -498,7 +731,7 @@ export async function evaluateWindowsUpdatePolicies(tenantId, options = {}) {
 }
 
 export async function windowsUpdateBundle(tenantId) {
-  const [observations, decisions, controlsResult, jobsResult] = await Promise.all([
+  const [observations, decisions, controlsResult, jobsResult, managementResult] = await Promise.all([
     pool.query(
       'SELECT o.*,i.reference AS device_reference,i.name AS device_name,a.agent_version,a.websocket_status,a.last_telemetry_at ' +
       'FROM rmm_windows_update_observations o JOIN rmm_device_inventory i ON i.id=o.inventory_id ' +
@@ -525,6 +758,13 @@ export async function windowsUpdateBundle(tenantId) {
       "LEFT JOIN rmm_device_inventory i ON i.id=a.inventory_id " +
       "WHERE j.tenant_id=$1 AND j.job_type IN ('windows_update.install','windows_update.rollback') " +
       "AND j.created_at > now()-interval '90 days' ORDER BY j.created_at DESC",
+      [tenantId],
+    ),
+    pool.query(
+      'SELECT m.*,i.name AS device_name,i.reference AS device_reference,a.agent_version,a.websocket_status,a.last_telemetry_at ' +
+      'FROM rmm_windows_update_management m JOIN rmm_device_inventory i ON i.id=m.inventory_id ' +
+      'LEFT JOIN rmm_agent_devices a ON a.id=m.agent_device_id AND a.disabled_at IS NULL ' +
+      'WHERE m.tenant_id=$1 ORDER BY lower(i.name)',
       [tenantId],
     ),
   ])
@@ -607,7 +847,7 @@ export async function windowsUpdateBundle(tenantId) {
         deviceReference: job.device_reference,
         agentVersion: job.agent_version,
         online,
-        rollbackReady: versionAtLeast(job.agent_version, '0.1.207'),
+        rollbackReady: versionAtLeast(job.agent_version, '0.1.210'),
         installJobId: job.id,
         installedAt: job.completed_at,
       })
@@ -632,11 +872,14 @@ export async function windowsUpdateBundle(tenantId) {
       other: byClass.other || 0,
       pausedReleases: releases.filter((row) => row.paused).length,
       rollbackAvailable: releases.reduce((sum, row) => sum + row.rollbackAvailableDevices, 0),
+      managedDevices: managementResult.rows.filter((row) => row.applied_managed === true).length,
+      managementConflicts: managementResult.rows.filter((row) => row.desired_managed === true && clean(row.last_error)).length,
       rebootRequired: decisions.rows.filter((row) => row.state === 'reboot_required').length,
     },
     observations: observations.rows,
     decisions: decisions.rows,
     controls: controlsResult.rows,
+    management: managementResult.rows,
     releases,
   }
 }
@@ -697,7 +940,7 @@ export async function dispatchWindowsUpdateRollback(tenantId, updateKey, options
   const results = []
   for (const target of targets) {
     if (!target.rollbackReady) {
-      results.push({ agentDeviceId: target.agentDeviceId, status: 'blocked', reason: 'agent_upgrade_required', requiredAgentVersion: '0.1.207' })
+      results.push({ agentDeviceId: target.agentDeviceId, status: 'blocked', reason: 'agent_upgrade_required', requiredAgentVersion: '0.1.210' })
       continue
     }
     const socket = typeof options.agentSocketForDevice === 'function' ? options.agentSocketForDevice(target.agentDeviceId) : null
@@ -796,6 +1039,52 @@ export async function dispatchWindowsUpdateRollback(tenantId, updateKey, options
 
 export async function reconcileWindowsUpdateJobResult(job, resultPayload = {}, success = false) {
   const jobType = clean(job?.job_type)
+  if (jobType === 'windows_update.manage') {
+    const managedKnown = typeof resultPayload.managed === 'boolean'
+    const appliedManaged = managedKnown ? resultPayload.managed : null
+    const detail = [
+      clean(resultPayload.message),
+      array(resultPayload.conflicts).join(', '),
+      array(resultPayload.mdm_signals).join(', '),
+      clean(job.error_message),
+    ].filter(Boolean).join(' · ')
+    await pool.query(
+      'UPDATE rmm_windows_update_management SET ' +
+      'applied_managed=CASE WHEN $3::boolean IS NULL THEN applied_managed ELSE $3 END,' +
+      'agent_job_id=$4,last_result=$5::jsonb,last_error=$6,' +
+      'last_applied_at=CASE WHEN $7 THEN now() ELSE last_applied_at END,updated_at=now() ' +
+      'WHERE tenant_id=$1 AND inventory_id=$2',
+      [
+        job.tenant_id,
+        job.inventory_id,
+        appliedManaged,
+        job.id,
+        JSON.stringify(resultPayload),
+        success ? '' : (detail || 'Windows Update management policy could not be applied.'),
+        success,
+      ],
+    )
+    await recordRmmActivity({
+      tenantId: job.tenant_id,
+      agentDeviceId: job.agent_device_id,
+      inventoryId: job.inventory_id || null,
+      actorType: 'system',
+      actorLabel: 'SYSTEM',
+      eventType: success
+        ? (appliedManaged ? 'windows_updates.management_applied' : 'windows_updates.management_removed')
+        : 'windows_updates.management_failed',
+      category: 'updates',
+      summary: success
+        ? (appliedManaged ? 'SYSTEM: Windows Update is now managed by Hi5Central' : 'SYSTEM: Hi5Central Windows Update management removed')
+        : 'SYSTEM: Windows Update management could not be applied',
+      detail,
+      outcome: success ? 'success' : 'failed',
+      severity: success ? 'info' : 'warning',
+      jobId: job.id,
+      metadata: { result: resultPayload, request: object(job.request_metadata) },
+    }).catch(() => null)
+    return
+  }
   if (jobType === 'windows_update.rollback') {
     const rebootRequired = resultPayload.reboot_required === true || resultPayload.rebootRequired === true
     await recordRmmActivity({

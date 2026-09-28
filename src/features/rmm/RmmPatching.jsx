@@ -1174,6 +1174,7 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
   const windowsPendingRows = (windowsUpdates.observations || []).filter((item) => item.pending)
   const windowsDecisions = windowsUpdates.decisions || []
   const windowsReleases = windowsUpdates.releases || []
+  const windowsManagement = windowsUpdates.management || []
   const windowsByDevice = [...new Map(windowsPendingRows.map((item) => [item.inventory_id, {
     inventoryId: item.inventory_id,
     agentDeviceId: item.agent_device_id,
@@ -2189,7 +2190,23 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
         <article><small>Quality</small><strong>{windowsSummary.quality || 0}</strong><span>Cumulative and servicing updates</span></article>
         <article><small>Feature / driver</small><strong>{Number(windowsSummary.feature || 0) + Number(windowsSummary.driver || 0)}</strong><span>{windowsSummary.feature || 0} feature · {windowsSummary.driver || 0} driver</span></article>
         <article><small>Reboot required</small><strong>{windowsSummary.rebootRequired || 0}</strong><span>{windowsSummary.pausedReleases || 0} paused release{Number(windowsSummary.pausedReleases || 0) === 1 ? '' : 's'}</span></article>
+        <article><small>Managed by Hi5Central</small><strong>{windowsSummary.managedDevices || 0}</strong><span>{windowsSummary.managementConflicts || 0} management conflict{Number(windowsSummary.managementConflicts || 0) === 1 ? '' : 's'}</span></article>
       </div>
+
+      {!!windowsManagement.length && <>
+        <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Windows ownership</span><h3>Update management state</h3><p>Hi5Central applies a minimal local Windows Update policy only when an OS patch policy is assigned. Existing WSUS, Group Policy or MDM update management is never overwritten.</p></div></div>
+        <div className="rmm-patch-table windows scheduled">
+          <div className="head"><span>Device</span><span>Desired</span><span>Applied</span><span>Policy</span><span>Last applied</span><span>Status</span></div>
+          {windowsManagement.map((item) => <div className="row" key={item.inventory_id}>
+            <span><strong>{item.device_name}</strong><small>{item.device_reference}</small></span>
+            <span><StatusPill tone={item.desired_managed ? 'running' : 'neutral'}>{item.desired_managed ? 'Managed' : 'Unmanaged'}</StatusPill><small>{item.desired_managed ? 'OS patch policy assigned' : 'No Windows patch policy'}</small></span>
+            <span><StatusPill tone={item.applied_managed ? 'healthy' : item.desired_managed ? 'warning' : 'neutral'}>{item.applied_managed ? 'Managed by Hi5Central' : 'Not applied'}</StatusPill><small>{item.agent_version ? 'Agent ' + item.agent_version : ''}</small></span>
+            <span><strong>{item.policy_name || 'None'}</strong><small>{item.policy_id || ''}</small></span>
+            <span><strong>{item.last_applied_at ? new Date(item.last_applied_at).toLocaleString() : 'Not yet'}</strong><small>{item.websocket_status === 'Connected' ? 'Online' : 'Offline'}</small></span>
+            <span><StatusPill tone={item.last_error ? 'critical' : item.applied_managed === item.desired_managed ? 'healthy' : 'warning'}>{item.last_error ? 'Conflict / error' : item.applied_managed === item.desired_managed ? 'In sync' : 'Pending'}</StatusPill><small>{item.last_error || (item.applied_managed ? 'Windows Update is organisation-managed' : 'Windows default behaviour')}</small></span>
+          </div>)}
+        </div>
+      </>}
 
       {!!windowsReleases.length && <>
         <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Release control</span><h3>Windows update rollouts</h3><p>Pause a problematic release without disabling Windows patching for the rest of the estate. In-flight installs are allowed to finish; no new scheduled install will include a paused release.</p></div></div>
@@ -2201,7 +2218,7 @@ export function RmmPatching({ devices = [], softwareOnly = false }) {
             <span><StatusPill tone={['critical','security'].includes(release.updateClass) ? 'warning' : 'neutral'}>{release.updateClass}</StatusPill><small>{release.severity || 'No MSRC severity'}</small></span>
             <span><strong>{release.releaseAt ? new Date(release.releaseAt).toLocaleDateString() : 'Observed'}</strong><small>{release.firstSeenAt ? 'First seen ' + new Date(release.firstSeenAt).toLocaleDateString() : ''}</small></span>
             <span><StatusPill tone={release.paused ? 'critical' : 'healthy'}>{release.paused ? 'Paused' : 'Active'}</StatusPill><small>{release.paused ? (release.control?.reason || 'Manual rollout pause') : 'Following assigned rollout waves'}</small></span>
-            <span><div className="rmm-row-actions"><button disabled={windowsControlBusy === release.updateKey} onClick={() => setWindowsReleaseControl(release, release.paused ? 'active' : 'paused')} type="button">{windowsControlBusy === release.updateKey ? 'Saving…' : release.paused ? 'Resume' : 'Pause'}</button><button disabled={windowsControlBusy === release.updateKey || !release.rollbackOnlineDevices} onClick={() => rollbackWindowsRelease(release)} title={release.rollbackAvailableDevices && !release.rollbackOnlineDevices ? 'Rollback-capable devices are offline or require Agent 0.1.207' : ''} type="button"><RotateCcw size={13} /> Rollback{release.rollbackAvailableDevices ? ' (' + release.rollbackAvailableDevices + ')' : ''}</button></div></span>
+            <span><div className="rmm-row-actions"><button disabled={windowsControlBusy === release.updateKey} onClick={() => setWindowsReleaseControl(release, release.paused ? 'active' : 'paused')} type="button">{windowsControlBusy === release.updateKey ? 'Saving…' : release.paused ? 'Resume' : 'Pause'}</button><button disabled={windowsControlBusy === release.updateKey || !release.rollbackOnlineDevices} onClick={() => rollbackWindowsRelease(release)} title={release.rollbackAvailableDevices && !release.rollbackOnlineDevices ? 'Rollback-capable devices are offline or require Agent 0.1.210' : ''} type="button"><RotateCcw size={13} /> Rollback{release.rollbackAvailableDevices ? ' (' + release.rollbackAvailableDevices + ')' : ''}</button></div></span>
           </div>)}
         </div>
       </>}
