@@ -373,6 +373,68 @@ export async function syncAutomaticWingetFallbacks({ force = false, dryRun = fal
   }
 }
 
+export async function wingetRepositoryAllSearch({ query = '', forceRefresh = false } = {}) {
+  const index = await ensureIndexDatabase(forceRefresh)
+  const db = new DatabaseSync(index.path, { readOnly: true })
+  try {
+    const q = clean(query).slice(0, 160).toLowerCase()
+    const pattern = '%' + q + '%'
+    const where = q
+      ? `WHERE lower(p.id) LIKE ?
+          OR lower(p.name) LIKE ?
+          OR lower(COALESCE(p.moniker,'')) LIKE ?
+          OR p.rowid IN (
+            SELECT np.package
+              FROM norm_publishers2 np
+             WHERE lower(np.norm_publisher) LIKE ?
+          )`
+      : ''
+    const args = q ? [pattern, pattern, pattern, pattern] : []
+    const rows = db.prepare(
+      `SELECT p.rowid,p.id,p.name,p.moniker,p.latest_version
+         FROM packages p
+         ${where}
+        ORDER BY lower(p.name),lower(p.id)`,
+    ).all(...args)
+
+    const wanted = new Set(rows.map((row) => Number(row.rowid)))
+    const publisherMap = new Map()
+    if (wanted.size) {
+      const publisherRows = db.prepare(
+        `SELECT package,norm_publisher
+           FROM norm_publishers2
+          WHERE norm_publisher<>''
+          ORDER BY package,norm_publisher`,
+      ).all()
+      for (const row of publisherRows) {
+        const key = Number(row.package)
+        if (!wanted.has(key)) continue
+        if (!publisherMap.has(key)) publisherMap.set(key, [])
+        const values = publisherMap.get(key)
+        const publisher = clean(row.norm_publisher)
+        if (publisher && values.length < 4 && !values.includes(publisher)) values.push(publisher)
+      }
+    }
+
+    return {
+      query: clean(query).slice(0, 160),
+      total: rows.length,
+      source: SOURCE_URL,
+      indexRefreshed: index.refreshed,
+      indexRefreshedAt: lastIndexRefreshAt ? new Date(lastIndexRefreshAt).toISOString() : null,
+      packages: rows.map((row) => ({
+        id: clean(row.id),
+        name: clean(row.name),
+        moniker: clean(row.moniker),
+        version: clean(row.latest_version),
+        publishers: publisherMap.get(Number(row.rowid)) || [],
+      })),
+    }
+  } finally {
+    db.close()
+  }
+}
+
 export async function wingetRepositorySearch({ query = '', page = 1, pageSize = 50, forceRefresh = false } = {}) {
   const index = await ensureIndexDatabase(forceRefresh)
   const db = new DatabaseSync(index.path, { readOnly: true })

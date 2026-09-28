@@ -18,7 +18,7 @@ import {
   retrySoftwareQualification,
 } from './rmmSoftwareQualification.js'
 import { queueVendorArtifactInspectionForCatalogue } from './rmmVendorReleaseEnrichment.js'
-import { wingetRepositorySearch } from './rmmWingetFallback.js'
+import { wingetRepositoryAllSearch, wingetRepositorySearch } from './rmmWingetFallback.js'
 import { normalizeCatalogueVersion, verificationVersionForRelease } from './rmmSoftwareVersioning.js'
 import {
   approveTenantVendorSource,
@@ -2964,46 +2964,90 @@ export async function unifiedCatalogueSearch(tenantId, options = {}) {
   const pageSize = Math.max(10, Math.min(100, Number(options.pageSize) || 50))
   const requestedPage = Math.max(1, Number(options.page) || 1)
 
-  let hi5Rows = []
-  if (source !== 'winget') {
-    hi5Rows = (await catalogueListRows(tenantId))
+  const hi5Rows = source === 'winget'
+    ? []
+    : (await catalogueListRows(tenantId))
       .map(catalogueSearchRow)
       .filter((item) => provider === 'all' || item.provider === provider)
       .filter((item) => catalogueSearchMatches(item, query))
-  }
-
-  const wingetAllowed = source !== 'hi5central' && (provider === 'all' || provider === 'winget')
-  let wingetTotal = 0
-  if (wingetAllowed) {
-    const count = await wingetRepositorySearch({ query: queryText, page: 1, pageSize: 10 })
-    wingetTotal = Number(count.total || 0)
-  }
 
   const hi5Total = hi5Rows.length
-  const total = hi5Total + wingetTotal
+  const wingetAllowed = source !== 'hi5central' && (provider === 'all' || provider === 'winget')
+
+  if (source === 'hi5central') {
+    const total = hi5Total
+    const pages = Math.max(1, Math.ceil(total / pageSize))
+    const page = Math.min(requestedPage, pages)
+    const offset = (page - 1) * pageSize
+    return {
+      query: queryText,
+      source,
+      provider,
+      page,
+      pageSize,
+      pages,
+      total,
+      sourceCounts: { hi5central: hi5Total, winget: 0 },
+      sort: 'name',
+      items: hi5Rows.slice(offset, offset + pageSize),
+    }
+  }
+
+  if (source === 'winget') {
+    if (!wingetAllowed) {
+      return {
+        query: queryText,
+        source,
+        provider,
+        page: 1,
+        pageSize,
+        pages: 1,
+        total: 0,
+        sourceCounts: { hi5central: 0, winget: 0 },
+        sort: 'name',
+        items: [],
+      }
+    }
+    const result = await wingetRepositorySearch({
+      query: queryText,
+      page: requestedPage,
+      pageSize,
+    })
+    const items = array(result.packages).map(wingetSearchRow)
+    return {
+      query: queryText,
+      source,
+      provider,
+      page: Number(result.page || 1),
+      pageSize: Number(result.pageSize || pageSize),
+      pages: Number(result.pages || 1),
+      total: Number(result.total || 0),
+      sourceCounts: { hi5central: 0, winget: Number(result.total || 0) },
+      sort: 'name',
+      items,
+    }
+  }
+
+  let wingetRows = []
+  if (wingetAllowed) {
+    const result = await wingetRepositoryAllSearch({ query: queryText })
+    wingetRows = array(result.packages).map(wingetSearchRow)
+  }
+
+  const combined = [...hi5Rows, ...wingetRows].sort((a, b) => {
+    const name = clean(a.name).localeCompare(clean(b.name), undefined, { sensitivity: 'base', numeric: true })
+    if (name) return name
+    const publisher = clean(a.publisher).localeCompare(clean(b.publisher), undefined, { sensitivity: 'base', numeric: true })
+    if (publisher) return publisher
+    if (a.source !== b.source) return a.source === 'hi5central' ? -1 : 1
+    return clean(a.packageId).localeCompare(clean(b.packageId), undefined, { sensitivity: 'base', numeric: true })
+  })
+
+  const wingetTotal = wingetRows.length
+  const total = combined.length
   const pages = Math.max(1, Math.ceil(total / pageSize))
   const page = Math.min(requestedPage, pages)
   const offset = (page - 1) * pageSize
-  const items = []
-
-  if (source === 'hi5central') {
-    items.push(...hi5Rows.slice(offset, offset + pageSize))
-  } else if (source === 'winget') {
-    if (wingetAllowed) {
-      const slice = await wingetRepositorySlice({ query: queryText, offset, limit: pageSize })
-      items.push(...slice.packages.map(wingetSearchRow))
-    }
-  } else {
-    if (offset < hi5Total) {
-      items.push(...hi5Rows.slice(offset, Math.min(hi5Total, offset + pageSize)))
-    }
-    const remaining = pageSize - items.length
-    if (remaining > 0 && wingetAllowed) {
-      const wingetOffset = Math.max(0, offset - hi5Total)
-      const slice = await wingetRepositorySlice({ query: queryText, offset: wingetOffset, limit: remaining })
-      items.push(...slice.packages.map(wingetSearchRow))
-    }
-  }
 
   return {
     query: queryText,
@@ -3014,8 +3058,8 @@ export async function unifiedCatalogueSearch(tenantId, options = {}) {
     pages,
     total,
     sourceCounts: { hi5central: hi5Total, winget: wingetTotal },
-    sort: 'source_then_name',
-    items,
+    sort: 'name',
+    items: combined.slice(offset, offset + pageSize),
   }
 }
 
