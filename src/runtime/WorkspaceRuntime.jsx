@@ -976,6 +976,13 @@ function WorkspaceRuntime() {
   const breadcrumbs = getBreadcrumbs(activeTab, selectedTicket, selectedAsset, selectedArticle, selectedProject)
   const sidebarCollapsed = sidebarMode === 'collapsed'
   const sidebarHidden = sidebarMode === 'hidden'
+  const shellUserInitials = String(session?.name || session?.user?.name || 'HC')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join('') || 'HC'
+  const shellPageTitle = activeTab?.title || viewMeta[activeNavId]?.label || 'Dashboard'
 
   useEffect(() => {
     const title = activeTab?.title || 'Hi5Central'
@@ -2747,7 +2754,10 @@ function WorkspaceRuntime() {
         <div className="sidebar-top">
           <div className="brand">
             <img src={`${import.meta.env.BASE_URL}hi5central-logo.png`} alt="Hi5Central" />
-            <span>Hi5Central</span>
+            <div className="brand-copy">
+              <strong>{session?.tenant?.companyName || session?.tenant?.name || 'Hi5Central'}</strong>
+              <span>ITSM</span>
+            </div>
           </div>
           <button
             className="sidebar-toggle desktop-sidebar-toggle"
@@ -2846,6 +2856,70 @@ function WorkspaceRuntime() {
                 : 'Pull to refresh'}
           </span>
         </div>
+
+        <header className="itsm-topbar">
+          <div className="itsm-topbar-title">
+            <button
+              className="itsm-menu-button"
+              onClick={() => setMobileNavOpen(true)}
+              title="Open navigation"
+              type="button"
+            >
+              <PanelLeftOpen size={19} aria-hidden="true" />
+            </button>
+            <div>
+              <span>ITSM</span>
+              <strong>{shellPageTitle}</strong>
+            </div>
+          </div>
+
+          <label className="itsm-global-search">
+            <Search size={17} aria-hidden="true" />
+            <input
+              aria-label="Search Hi5Central ITSM"
+              onChange={(event) => {
+                setGlobalSearchQuery(event.target.value)
+                setGlobalSearchOpen(true)
+                setNotificationsOpen(false)
+              }}
+              onFocus={() => {
+                setGlobalSearchOpen(true)
+                setNotificationsOpen(false)
+              }}
+              placeholder="Search incidents, requests, problems, changes…"
+              type="search"
+              value={globalSearchQuery}
+            />
+          </label>
+
+          <div className="itsm-topbar-actions">
+            <button
+              onClick={() => setTheme(resolvedTheme === 'light' ? 'dark' : 'light')}
+              title={resolvedTheme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+              type="button"
+            >
+              {resolvedTheme === 'light' ? <Moon size={17} /> : <Sun size={17} />}
+            </button>
+            <button
+              aria-expanded={notificationsOpen}
+              className="itsm-notification-button notification-trigger"
+              onClick={toggleNotifications}
+              title="Notifications"
+              type="button"
+            >
+              <Bell size={17} aria-hidden="true" />
+              {unreadNotificationCount > 0 && <b>{unreadNotificationCount}</b>}
+            </button>
+            <button className="itsm-user" onClick={handleLogout} title="Sign out" type="button">
+              <span>{shellUserInitials}</span>
+              <div>
+                <strong>{session?.name || session?.user?.name || 'Hi5Central user'}</strong>
+                <small>Sign out</small>
+              </div>
+              <LogOut size={14} aria-hidden="true" />
+            </button>
+          </div>
+        </header>
 
         <header className="tabbar" aria-label="Open workspace tabs">
           <div className="tabbar-tab-zone">

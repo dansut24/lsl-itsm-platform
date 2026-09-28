@@ -70,6 +70,7 @@ import './production/ProductionUniversalPeekV2.css'
 import './production/ProductionRecordInspectorClassic.css'
 import './production/ProductionRecordExperienceFinal.css'
 import './production/ProductionWorkflowGuard.css'
+import './production/ProductionItsmUnifiedShell.css'
 
 installWorkspaceTabSessionIsolation()
 
