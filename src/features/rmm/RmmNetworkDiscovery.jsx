@@ -221,7 +221,7 @@ export function RmmNetworkDiscovery() {
       <div>
         <span className="rmm-eyebrow">Network management</span>
         <h1>Network discovery</h1>
-        <p>Use a managed Agent as an on-site probe to discover devices by network presence, then enrich supported hardware with SNMP identity and monitoring data.</p>
+        <p>Use a managed Agent as an on-site probe to discover devices quickly by ARP and ICMP, then enrich identity separately with MAC vendor data, names and optional SNMP.</p>
       </div>
       <button className="rmm-primary compact" disabled={loading} onClick={() => load()} type="button">
         <RefreshCw size={14} className={loading ? 'spin' : ''} /> Refresh
@@ -299,7 +299,7 @@ export function RmmNetworkDiscovery() {
           const probeReady = Boolean(probe?.online && (presenceRequired ? probe?.presence_capable : probe?.snmp_capable))
           return <div className="row" key={item.id}>
             <span><strong>{item.name}</strong><small>{item.site_name || 'No site assigned'} · every {item.scan_interval_minutes} min</small></span>
-            <span><strong>{item.cidr}</strong><small>{presenceRequired ? 'ARP + ICMP + reverse DNS' : 'SNMP only'} · {item.concurrency} workers</small></span>
+            <span><strong>{item.cidr}</strong><small>{presenceRequired ? 'ARP + ICMP · names enrich separately' : 'SNMP only'} · {item.concurrency} workers</small></span>
             <span><strong>{item.probe_name || item.probe_reference}</strong><small>{probe?.agent_version || 'Agent'} · {probe?.online ? 'Online' : 'Offline'}</small></span>
             <span><strong>{item.credential_name || 'No SNMP credential'}</strong><small>{item.credential_name ? String(item.snmp_version || '').toUpperCase() + ' enrichment' : 'Presence discovery only'}</small></span>
             <span><strong>{when(item.last_scan_at)}</strong><small>Next: {item.enabled ? when(item.next_scan_at) : 'Disabled'}</small></span>
