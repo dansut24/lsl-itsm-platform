@@ -312,17 +312,28 @@ export function RmmNetworkDiscovery() {
     </section>
 
     <section className="rmm-table-card rmm-network-devices-card">
-      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Network inventory</span><h2>Discovered network devices</h2><p>Presence discovery identifies devices by IP, MAC and hostname. SNMP adds richer identity when available.</p></div><span>{devices.length} device{devices.length === 1 ? '' : 's'}</span></div>
+      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Network inventory</span><h2>Discovered network devices</h2><p>Presence discovery identifies devices by IP and MAC. DNS-SD/mDNS adds friendly names, models, device types and capabilities; SNMP remains optional for deeper managed-network identity.</p></div><span>{devices.length} device{devices.length === 1 ? '' : 's'}</span></div>
       <div className="rmm-network-table devices">
         <div className="head"><span>Device</span><span>Address</span><span>Vendor / type</span><span>Discovery</span><span>Management</span><span>Last seen</span><span>Status</span></div>
         {devices.map((item) => {
           const Icon = deviceIcon(item.device_type)
           const methods = Array.isArray(item.discovery_methods) ? item.discovery_methods : []
+          const mdnsCapabilities = Array.isArray(item.metadata?.mdns?.capabilities)
+            ? item.metadata.mdns.capabilities.slice(0, 4)
+            : []
+          const discoveryDetail = item.icmp_reachable
+            ? 'ICMP reachable' + (item.latency_ms != null ? ' · ' + item.latency_ms + ' ms' : '')
+            : item.snmp_version
+              ? 'SNMP ' + String(item.snmp_version).toUpperCase()
+              : 'Seen on local network'
+          const capabilityDetail = mdnsCapabilities.length
+            ? ' · ' + mdnsCapabilities.map((value) => String(value).replaceAll('_', ' ')).join(' · ')
+            : ''
           return <div className="row" key={item.id}>
             <span className="device"><i><Icon size={16} /></i><span><strong>{item.managed_device_name || item.sys_name || item.hostname || item.ip_address}</strong><small>{item.profile_name}{item.site_name ? ' · ' + item.site_name : ''}</small></span></span>
             <span><strong>{item.ip_address}</strong><small>{item.mac_address || 'MAC not resolved'}</small></span>
             <span><strong>{item.vendor || 'Unknown vendor'}</strong><small>{item.model ? item.model + ' · ' : ''}{String(item.device_type || 'network_device').replaceAll('_', ' ')}</small></span>
-            <span><strong>{methods.length ? methods.map((value) => String(value).toUpperCase()).join(' · ') : 'Presence'}</strong><small>{item.icmp_reachable ? 'ICMP reachable' + (item.latency_ms != null ? ' · ' + item.latency_ms + ' ms' : '') : item.snmp_version ? 'SNMP ' + String(item.snmp_version).toUpperCase() : 'Seen on local network'}</small></span>
+            <span><strong>{methods.length ? methods.map((value) => String(value).toUpperCase()).join(' · ') : 'Presence'}</strong><small>{discoveryDetail}{capabilityDetail}</small></span>
             <span>{item.managed
               ? <><StatusPill tone="healthy">Agent installed</StatusPill><small>{item.managed_agent_version || item.managed_reference || ''}</small></>
               : <><StatusPill tone="warning">Unmanaged</StatusPill><small>Eligible for assessment / deployment</small></>}</span>

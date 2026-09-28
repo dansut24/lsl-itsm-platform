@@ -114,6 +114,36 @@ function inferDeviceType(sysDescr = '', sysObjectId = '', hostname = '', vendor 
   return 'network_device'
 }
 
+function networkNameScore(value = '', metadata = {}, methods = []) {
+  const name = clean(value, 512)
+  if (!name) return -1
+  const lower = name.toLowerCase()
+  if (['none', 'none-2', 'linux', 'localhost', 'unknown', 'device', 'network device'].includes(lower)) return 0
+
+  let score = 10
+  if (lower === 'spotifyconnect' || /^spotifyconnect\s+#\d+$/i.test(name)) score = 4
+  else if (/^[0-9a-f]{10,}$/i.test(name)) score = 4
+  else if (/^[A-Z0-9]{12,}$/.test(name)) score = 5
+  if (/\s/.test(name)) score += 2
+
+  const mdnsScore = Number(metadata?.mdns?.friendlyNameScore)
+  if (Number.isFinite(mdnsScore)) score = Math.max(score, mdnsScore)
+  if (asArray(methods).map((item) => clean(item, 32).toLowerCase()).includes('reverse_dns')) {
+    score += 20
+  }
+  return score
+}
+
+function preferNetworkHostname(existingName, existingMetadata, existingMethods, reportedName, reportedMetadata, reportedMethods) {
+  const current = clean(existingName, 512)
+  const reported = clean(reportedName, 512)
+  if (!current) return reported
+  if (!reported) return current
+  const currentScore = networkNameScore(current, existingMetadata, existingMethods)
+  const reportedScore = networkNameScore(reported, reportedMetadata, reportedMethods)
+  return reportedScore > currentScore ? reported : current
+}
+
 export async function reconcileNetworkDiscoveryJobResult(completedJob, resultPayload = {}, success = false) {
   if (completedJob?.job_type !== 'network.discovery.scan') return
 
@@ -399,7 +429,17 @@ export async function reconcileNetworkDiscoveryEnrichmentJobResult(
       if (!current.rowCount) continue
 
       const existing = current.rows[0]
-      const nextHostname = hostname || clean(existing.hostname, 512)
+      const existingMethods = asArray(existing.discovery_methods)
+        .map((value) => clean(value, 32).toLowerCase())
+        .filter(Boolean)
+      const nextHostname = preferNetworkHostname(
+        existing.hostname,
+        existing.metadata,
+        existingMethods,
+        hostname,
+        metadata,
+        methods,
+      )
       const vendor = reportedVendor
         || clean(existing.vendor, 256)
         || inferVendor(existing.sys_object_id, existing.sys_descr, nextHostname)
