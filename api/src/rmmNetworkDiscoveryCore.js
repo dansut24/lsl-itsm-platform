@@ -25,9 +25,9 @@ function discoveryMethods(raw = {}) {
   return [...methods]
 }
 
-function inferVendor(sysObjectId = '', sysDescr = '') {
+function inferVendor(sysObjectId = '', sysDescr = '', hostname = '') {
   const oid = clean(sysObjectId, 256)
-  const descr = clean(sysDescr, 4096).toLowerCase()
+  const identity = (clean(sysDescr, 4096) + ' ' + clean(hostname, 1024)).toLowerCase()
   const enterprise = [
     ['1.3.6.1.4.1.9', 'Cisco'],
     ['1.3.6.1.4.1.11', 'HPE'],
@@ -51,21 +51,33 @@ function inferVendor(sysObjectId = '', sysDescr = '') {
     ['cisco', 'Cisco'], ['hewlett', 'HPE'], ['aruba', 'Aruba'], ['fortinet', 'Fortinet'],
     ['mikrotik', 'MikroTik'], ['ubiquiti', 'Ubiquiti'], ['synology', 'Synology'],
     ['qnap', 'QNAP'], ['brother', 'Brother'], ['xerox', 'Xerox'], ['epson', 'Epson'],
-    ['canon', 'Canon'], ['dell', 'Dell'], ['apc', 'APC'],
+    ['canon', 'Canon'], ['dell', 'Dell'], ['apc', 'APC'], ['eero', 'eero'],
+    ['apple', 'Apple'], ['iphone', 'Apple'], ['ipad', 'Apple'], ['samsung', 'Samsung'],
+    ['roku', 'Roku'], ['sonos', 'Sonos'], ['ring', 'Ring'], ['netgear', 'NETGEAR'],
+    ['tp-link', 'TP-Link'], ['tplink', 'TP-Link'], ['raspberrypi', 'Raspberry Pi'],
   ]
-  return words.find(([needle]) => descr.includes(needle))?.[1] || ''
+  return words.find(([needle]) => identity.includes(needle))?.[1] || ''
 }
 
-function inferDeviceType(sysDescr = '', sysObjectId = '') {
-  const value = (clean(sysDescr, 4096) + ' ' + clean(sysObjectId, 256)).toLowerCase()
+function inferDeviceType(sysDescr = '', sysObjectId = '', hostname = '', vendor = '') {
+  const value = (
+    clean(sysDescr, 4096) + ' '
+    + clean(sysObjectId, 256) + ' '
+    + clean(hostname, 1024) + ' '
+    + clean(vendor, 256)
+  ).toLowerCase()
   if (/firewall|fortigate|security appliance/.test(value)) return 'firewall'
-  if (/wireless|access point|wifi|wi-fi/.test(value)) return 'access_point'
-  if (/switch/.test(value)) return 'switch'
-  if (/router|routing/.test(value)) return 'router'
-  if (/printer|laserjet|officejet|imageclass/.test(value)) return 'printer'
-  if (/ups|uninterruptible/.test(value)) return 'ups'
-  if (/nas|storage|synology|qnap/.test(value)) return 'storage'
-  if (/server/.test(value)) return 'server'
+  if (/\beero\b|\brouter\b|routing|gateway/.test(value)) return 'router'
+  if (/wireless|access point|wi-fi access|\bwlan ap\b/.test(value)) return 'access_point'
+  if (/\bswitch\b/.test(value)) return 'switch'
+  if (/printer|laserjet|officejet|imageclass|brother.*hl-|epson.*wf-/.test(value)) return 'printer'
+  if (/\bups\b|uninterruptible/.test(value)) return 'ups'
+  if (/\bnas\b|synology|qnap|network attached storage/.test(value)) return 'storage'
+  if (/iphone|ipad|android|pixel|galaxy.*phone/.test(value)) return 'mobile_device'
+  if (/smart.?tv|bravia|roku|chromecast|fire.?tv|apple.?tv|sonos/.test(value)) return 'media_device'
+  if (/camera|doorbell|\bring\b|arlo|reolink/.test(value)) return 'camera'
+  if (/server|proliant|poweredge/.test(value)) return 'server'
+  if (/windows|macbook|imac|desktop|laptop|workstation/.test(value)) return 'computer'
   return 'network_device'
 }
 
@@ -130,9 +142,10 @@ export async function reconcileNetworkDiscoveryJobResult(completedJob, resultPay
         const snmpObserved = methods.includes('snmp')
         const sysDescr = clean(raw?.sysDescr ?? raw?.sys_descr, 8192)
         const sysObjectId = clean(raw?.sysObjectId ?? raw?.sys_object_id, 512)
-        const vendor = clean(raw?.vendor, 256) || inferVendor(sysObjectId, sysDescr)
+        const hostname = clean(raw?.hostname, 512)
+        const vendor = clean(raw?.vendor, 256) || inferVendor(sysObjectId, sysDescr, hostname)
         const deviceType = clean(raw?.deviceType ?? raw?.device_type, 64)
-          || inferDeviceType(sysDescr, sysObjectId)
+          || inferDeviceType(sysDescr, sysObjectId, hostname, vendor)
 
         await client.query(
           `INSERT INTO rmm_network_devices

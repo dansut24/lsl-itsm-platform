@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
+  Camera,
   CircleDot,
   KeyRound,
+  Monitor,
   Network,
   Play,
   Radar,
@@ -9,6 +11,8 @@ import {
   Router,
   Server,
   ShieldCheck,
+  Smartphone,
+  Tv,
   Wifi,
 } from 'lucide-react'
 import { deploymentConfig } from '../../lib/deploymentConfig.js'
@@ -45,6 +49,10 @@ function deviceIcon(type = '') {
   if (normalized === 'access_point') return Wifi
   if (normalized === 'firewall') return ShieldCheck
   if (normalized === 'server' || normalized === 'storage') return Server
+  if (normalized === 'computer') return Monitor
+  if (normalized === 'mobile_device') return Smartphone
+  if (normalized === 'media_device') return Tv
+  if (normalized === 'camera') return Camera
   return Network
 }
 
