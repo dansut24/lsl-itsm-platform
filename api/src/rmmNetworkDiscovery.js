@@ -98,6 +98,15 @@ function parseIpv4(value) {
   return value.split('.').reduce((number, octet) => ((number << 8) | Number(octet)) >>> 0, 0)
 }
 
+function isPrivateIpv4Number(value) {
+  const number = Number(value) >>> 0
+  const first = (number >>> 24) & 255
+  const second = (number >>> 16) & 255
+  return first === 10
+    || (first === 172 && second >= 16 && second <= 31)
+    || (first === 192 && second === 168)
+}
+
 function ipv4FromNumber(value) {
   const number = Number(value) >>> 0
   return [
@@ -155,6 +164,9 @@ function validateCidr(value) {
   const ip = parseIpv4(address)
   if (ip == null || !Number.isInteger(prefix) || prefix < 20 || prefix > 32) {
     return { ok: false, error: 'Enter an IPv4 CIDR between /20 and /32 (maximum 4,096 addresses per profile).' }
+  }
+  if (!isPrivateIpv4Number(ip)) {
+    return { ok: false, error: 'Network discovery is limited to private RFC1918 IPv4 ranges.' }
   }
   const hostBits = 32 - prefix
   const size = 2 ** hostBits
