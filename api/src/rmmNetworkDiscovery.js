@@ -799,11 +799,15 @@ export function registerRmmNetworkDiscoveryRoutes(app) {
     let communityEncrypted = ''
     let authEncrypted = ''
     let privacyEncrypted = ''
-    const username = clean(body.username, 32)
     const securityLevel = clean(body.securityLevel || 'noAuthNoPriv', 32)
-    const authProtocol = normalizeSnmpV3AuthProtocol(body.authProtocol)
-    const privacyProtocol = normalizeSnmpV3PrivacyProtocol(body.privacyProtocol)
-    const contextName = clean(body.contextName, 256)
+    const username = snmpVersion === 'v3' ? clean(body.username, 32) : ''
+    const authProtocol = snmpVersion === 'v3' && securityLevel !== 'noAuthNoPriv'
+      ? normalizeSnmpV3AuthProtocol(body.authProtocol)
+      : ''
+    const privacyProtocol = snmpVersion === 'v3' && securityLevel === 'authPriv'
+      ? normalizeSnmpV3PrivacyProtocol(body.privacyProtocol)
+      : ''
+    const contextName = snmpVersion === 'v3' ? clean(body.contextName, 256) : ''
 
     if (snmpVersion === 'v1' || snmpVersion === 'v2c') {
       const community = secretValue(body.community, 2048)
