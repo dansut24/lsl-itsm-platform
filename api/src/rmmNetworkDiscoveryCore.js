@@ -144,6 +144,38 @@ function preferNetworkHostname(existingName, existingMetadata, existingMethods, 
   return reportedScore > currentScore ? reported : current
 }
 
+function matterDeviceTypeName(metadata = {}) {
+  const dt = clean(metadata?.mdns?.txt?.dt, 32)
+  const names = {
+    '34': 'Speaker',
+    '35': 'Casting Video Player',
+    '36': 'Content App',
+    '40': 'Basic Video Player',
+    '41': 'Casting Video Client',
+    '42': 'Video Remote Control',
+  }
+  return names[dt] || ''
+}
+
+function inferDiscoveryMetadataType(metadata = {}) {
+  const mdns = metadata?.mdns && typeof metadata.mdns === 'object' ? metadata.mdns : {}
+  const capabilities = new Set(
+    asArray(mdns.capabilities).map((value) => clean(value, 64).toLowerCase()).filter(Boolean),
+  )
+  const matterName = matterDeviceTypeName(metadata)
+
+  if (capabilities.has('gateway') || capabilities.has('eero')) return 'router'
+  if (capabilities.has('printing')) return 'printer'
+  if (matterName && /speaker|video|content app/i.test(matterName)) return 'media_device'
+  if (capabilities.has('google_cast')
+      || capabilities.has('airplay')
+      || capabilities.has('airplay_audio')
+      || capabilities.has('spotify_connect')) return 'media_device'
+  if (capabilities.has('workstation') || capabilities.has('smb') || capabilities.has('ssh')) return 'computer'
+  if (capabilities.has('homekit') || capabilities.has('matter')) return 'smart_home'
+  return 'network_device'
+}
+
 export async function reconcileNetworkDiscoveryJobResult(completedJob, resultPayload = {}, success = false) {
   if (completedJob?.job_type !== 'network.discovery.scan') return
 
@@ -450,20 +482,37 @@ export async function reconcileNetworkDiscoveryEnrichmentJobResult(
         nextHostname,
         vendor,
       )
+      const metadataType = inferDiscoveryMetadataType(metadata)
       const existingType = clean(existing.device_type, 64)
-      const nextType = reportedType && reportedType !== 'network_device'
-        ? reportedType
-        : (existingType && existingType !== 'network_device' ? existingType : inferredType)
+      const nextType = inferredType && inferredType !== 'network_device'
+        ? inferredType
+        : metadataType && metadataType !== 'network_device'
+          ? metadataType
+          : reportedType && reportedType !== 'network_device'
+            ? reportedType
+            : (existingType && existingType !== 'network_device' ? existingType : 'network_device')
 
       const mergedMethods = [...new Set([
         ...asArray(existing.discovery_methods).map((value) => clean(value, 32).toLowerCase()).filter(Boolean),
         ...methods,
       ])]
+      const matterType = matterDeviceTypeName(metadata)
       const mergedMetadata = {
         ...(existing.metadata && typeof existing.metadata === 'object' && !Array.isArray(existing.metadata)
           ? existing.metadata
           : {}),
         ...metadata,
+        ...(metadata?.mdns && typeof metadata.mdns === 'object'
+          ? {
+            mdns: {
+              ...(existing.metadata?.mdns && typeof existing.metadata.mdns === 'object'
+                ? existing.metadata.mdns
+                : {}),
+              ...metadata.mdns,
+              ...(matterType ? { matterDeviceType: matterType } : {}),
+            },
+          }
+          : {}),
       }
 
       await client.query(

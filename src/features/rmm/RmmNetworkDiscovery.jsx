@@ -326,8 +326,13 @@ export function RmmNetworkDiscovery() {
             : item.snmp_version
               ? 'SNMP ' + String(item.snmp_version).toUpperCase()
               : 'Seen on local network'
-          const capabilityDetail = mdnsCapabilities.length
-            ? ' · ' + mdnsCapabilities.map((value) => String(value).replaceAll('_', ' ')).join(' · ')
+          const matterDeviceType = item.metadata?.mdns?.matterDeviceType || ''
+          const capabilityLabels = [
+            ...mdnsCapabilities.map((value) => String(value).replaceAll('_', ' ')),
+            ...(matterDeviceType ? [matterDeviceType] : []),
+          ]
+          const capabilityDetail = capabilityLabels.length
+            ? ' · ' + [...new Set(capabilityLabels)].join(' · ')
             : ''
           return <div className="row" key={item.id}>
             <span className="device"><i><Icon size={16} /></i><span><strong>{item.managed_device_name || item.sys_name || item.hostname || item.ip_address}</strong><small>{item.profile_name}{item.site_name ? ' · ' + item.site_name : ''}</small></span></span>
