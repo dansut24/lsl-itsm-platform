@@ -37,7 +37,7 @@ function versionAtLeast(value, minimum) {
 }
 
 const SNMP_MIN_AGENT_VERSION = '0.1.232'
-const SNMP_V3_MIN_AGENT_VERSION = '0.1.244'
+const SNMP_V3_MIN_AGENT_VERSION = '0.1.245'
 const PRESENCE_MIN_AGENT_VERSION = '0.1.233'
 const DYNAMIC_DNSSD_MIN_AGENT_VERSION = '0.1.239'
 
