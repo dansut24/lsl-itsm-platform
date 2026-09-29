@@ -76,6 +76,17 @@ function inferVendor(sysObjectId = '', sysDescr = '', hostname = '') {
     ['1.3.6.1.4.1.24681', 'QNAP'],
     ['1.3.6.1.4.1.2435', 'Brother'],
     ['1.3.6.1.4.1.1602', 'Canon'],
+    ['1.3.6.1.4.1.2636', 'Juniper'],
+    ['1.3.6.1.4.1.25461', 'Palo Alto Networks'],
+    ['1.3.6.1.4.1.29671', 'Cisco Meraki'],
+    ['1.3.6.1.4.1.4526', 'NETGEAR'],
+    ['1.3.6.1.4.1.11863', 'TP-Link'],
+    ['1.3.6.1.4.1.1916', 'Extreme Networks'],
+    ['1.3.6.1.4.1.25053', 'Ruckus'],
+    ['1.3.6.1.4.1.367', 'Ricoh'],
+    ['1.3.6.1.4.1.1347', 'Kyocera'],
+    ['1.3.6.1.4.1.641', 'Lexmark'],
+    ['1.3.6.1.4.1.10642', 'Zebra'],
   ]
   for (const [prefix, vendor] of enterprise) {
     if (oid === prefix || oid.startsWith(prefix + '.')) return vendor
@@ -90,6 +101,44 @@ function inferVendor(sysObjectId = '', sysDescr = '', hostname = '') {
     ['tp-link', 'TP-Link'], ['tplink', 'TP-Link'], ['raspberrypi', 'Raspberry Pi'],
   ]
   return words.find(([needle]) => identity.includes(needle))?.[1] || ''
+}
+
+function inferModel(sysDescr = '', hostname = '', vendor = '') {
+  const description = clean(sysDescr, 4096)
+  const identity = (description + ' ' + clean(hostname, 1024)).trim()
+  const vendorName = clean(vendor, 256).toLowerCase()
+  if (!identity) return ''
+
+  const directPatterns = [
+    /\b(Forti(?:Gate|Switch|AP)[- ]?[A-Z0-9-]+)\b/i,
+    /\b(PA-\d{3,5}[A-Z0-9-]*)\b/i,
+    /\b(WS-C\d+[A-Z0-9-]*|C\d{3,5}[A-Z0-9-]*)\b/i,
+    /\b(MS\d{2,3}-\d+[A-Z0-9-]*|MX\d{2,3}[A-Z0-9-]*|MR\d{2,3}[A-Z0-9-]*)\b/i,
+    /\b(EX\d{4,5}[A-Z0-9-]*|SRX\d+[A-Z0-9-]*)\b/i,
+    /\b(UAP-[A-Z0-9-]+|USW-[A-Z0-9-]+|UDM-[A-Z0-9-]+|UXG-[A-Z0-9-]+)\b/i,
+    /\b(DS\d{2,4}[A-Z0-9+.-]*|RS\d{2,4}[A-Z0-9+.-]*)\b/i,
+    /\b(TS-\d+[A-Z0-9-]*|TVS-[A-Z0-9-]+)\b/i,
+  ]
+  for (const pattern of directPatterns) {
+    const match = identity.match(pattern)
+    if (match?.[1]) return clean(match[1].replace(/\s+/g, '-'), 160)
+  }
+
+  if (vendorName.includes('mikrotik')) {
+    const match = description.match(/RouterOS[^\n]*?\son\s+([^,;()]+)/i)
+    if (match?.[1]) return clean(match[1], 160)
+  }
+
+  if (['brother', 'xerox', 'epson', 'canon', 'ricoh', 'kyocera', 'lexmark', 'zebra'].some((name) => vendorName.includes(name))) {
+    const candidates = description
+      .split(/[;,|]/)
+      .map((value) => clean(value, 160))
+      .filter((value) => value && !/firmware|version|network|printer|server|ethernet/i.test(value))
+    const modelish = candidates.find((value) => /[A-Z].*\d|\d.*[A-Z]/i.test(value))
+    if (modelish) return modelish
+  }
+
+  return ''
 }
 
 function inferDeviceType(sysDescr = '', sysObjectId = '', hostname = '', vendor = '') {
@@ -253,6 +302,8 @@ export async function reconcileNetworkDiscoveryJobResult(completedJob, resultPay
         const vendor = clean(raw?.vendor, 256)
           || inferVendor(sysObjectId, sysDescr, hostname)
           || lookupMacVendor(macAddress)
+        const model = clean(raw?.model, 512)
+          || inferModel(sysDescr, hostname, vendor)
         const deviceType = clean(raw?.deviceType ?? raw?.device_type, 64)
           || inferDeviceType(sysDescr, sysObjectId, hostname, vendor)
 
@@ -311,7 +362,7 @@ export async function reconcileNetworkDiscoveryJobResult(completedJob, resultPay
             asInteger(raw?.uptimeTicks ?? raw?.uptime_ticks),
             asInteger(raw?.interfaceCount ?? raw?.interface_count),
             vendor,
-            clean(raw?.model, 512),
+            model,
             deviceType,
             JSON.stringify(asArray(raw?.interfaces).slice(0, 1024)),
             JSON.stringify(raw?.metadata && typeof raw.metadata === 'object' && !Array.isArray(raw.metadata)

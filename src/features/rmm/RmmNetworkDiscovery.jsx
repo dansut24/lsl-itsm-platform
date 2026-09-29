@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   Camera,
+  ChevronDown,
+  ChevronUp,
   CircleDot,
   KeyRound,
   Monitor,
@@ -43,6 +45,33 @@ function when(value) {
 
 function StatusPill({ children, tone = 'neutral' }) {
   return <span className={'rmm-network-pill ' + tone}>{children}</span>
+}
+
+function formatSpeed(value) {
+  const speed = Number(value)
+  if (!Number.isFinite(speed) || speed <= 0) return 'Unknown'
+  const units = [['Tbps', 1e12], ['Gbps', 1e9], ['Mbps', 1e6], ['Kbps', 1e3]]
+  for (const [label, size] of units) {
+    if (speed >= size) {
+      const result = speed / size
+      return (result >= 10 || Number.isInteger(result) ? result.toFixed(0) : result.toFixed(1)) + ' ' + label
+    }
+  }
+  return speed + ' bps'
+}
+
+function formatUptimeTicks(value) {
+  const ticks = Number(value)
+  if (!Number.isFinite(ticks) || ticks < 0) return 'Unknown'
+  let seconds = Math.floor(ticks / 100)
+  const days = Math.floor(seconds / 86400)
+  seconds %= 86400
+  const hours = Math.floor(seconds / 3600)
+  seconds %= 3600
+  const minutes = Math.floor(seconds / 60)
+  if (days) return days + 'd ' + hours + 'h ' + minutes + 'm'
+  if (hours) return hours + 'h ' + minutes + 'm'
+  return minutes + 'm'
 }
 
 function deviceIcon(type = '') {
@@ -185,6 +214,7 @@ export function RmmNetworkDiscovery() {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [expandedDeviceId, setExpandedDeviceId] = useState('')
   const [credential, setCredential] = useState({ name: '', snmpVersion: 'v2c', community: '', username: '', securityLevel: 'authPriv', authProtocol: 'sha256', authSecret: '', privacyProtocol: 'aes128', privacySecret: '', contextName: '' })
   const [profile, setProfile] = useState({
     name: '',
@@ -469,19 +499,63 @@ export function RmmNetworkDiscovery() {
               : 'Seen on local network'
           const management = managementPresentation(item)
           const privateMac = isPrivateMac(item.mac_address)
-          return <div className="row" key={item.id}>
-            <span className="device"><i><Icon size={16} /></i><span><strong>{item.managed_device_name || item.sys_name || item.hostname || item.ip_address}</strong><small>{presentation.label}{item.profile_name ? ' · ' + item.profile_name : ''}{item.site_name ? ' · ' + item.site_name : ''}</small></span></span>
-            <span><strong>{item.ip_address}</strong><small>{item.mac_address || 'MAC not resolved'}</small>{privateMac && <em className="rmm-network-private-mac">Private/randomized MAC</em>}</span>
-            <span><strong>{presentation.label}</strong><small>{item.vendor || (privateMac ? 'Vendor hidden by private MAC' : 'Unknown vendor')}{item.model ? ' · ' + item.model : ''}</small></span>
-            <span className="rmm-network-discovery-cell">
-              <strong>{methods.length ? methods.map((value) => String(value).toUpperCase()).join(' · ') : 'Presence'}</strong>
-              <small>{discoveryDetail}</small>
-              {!!capabilityLabels.length && <span className="rmm-network-capabilities">{capabilityLabels.map((value) => <b key={value}>{value}</b>)}</span>}
-              {!!spotifyGroups.length && <small className="rmm-network-groups">Groups: {spotifyGroups.join(', ')}</small>}
-            </span>
-            <span className="rmm-network-management"><StatusPill tone={management.tone}>{management.label}</StatusPill><small>{management.detail}</small></span>
-            <span><strong>{when(item.last_seen_at)}</strong><small>{item.hostname || item.sys_location || 'No hostname reported'}</small></span>
-            <span><StatusPill tone={item.status === 'online' ? 'healthy' : 'offline'}>{item.status}</StatusPill></span>
+          const interfaces = Array.isArray(item.interfaces) ? item.interfaces : []
+          const snmpMeta = item.metadata?.snmp || {}
+          const expanded = expandedDeviceId === item.id
+          const upInterfaces = interfaces.filter((entry) => entry?.operStatus === 'up' || entry?.up === true).length
+          const downInterfaces = interfaces.filter((entry) => entry?.operStatus && entry?.operStatus !== 'up').length
+          const toggleExpanded = () => setExpandedDeviceId(expanded ? '' : item.id)
+
+          return <div className={'rmm-network-device-entry' + (expanded ? ' expanded' : '')} key={item.id}>
+            <div
+              className="row rmm-network-device-row"
+              role="button"
+              tabIndex={0}
+              aria-expanded={expanded}
+              onClick={toggleExpanded}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  toggleExpanded()
+                }
+              }}
+            >
+              <span className="device"><i><Icon size={16} /></i><span><strong>{item.managed_device_name || item.sys_name || item.hostname || item.ip_address}</strong><small>{presentation.label}{item.profile_name ? ' · ' + item.profile_name : ''}{item.site_name ? ' · ' + item.site_name : ''}</small></span></span>
+              <span><strong>{item.ip_address}</strong><small>{item.mac_address || 'MAC not resolved'}</small>{privateMac && <em className="rmm-network-private-mac">Private/randomized MAC</em>}</span>
+              <span><strong>{presentation.label}</strong><small>{item.vendor || (privateMac ? 'Vendor hidden by private MAC' : 'Unknown vendor')}{item.model ? ' · ' + item.model : ''}</small></span>
+              <span className="rmm-network-discovery-cell">
+                <strong>{methods.length ? methods.map((value) => String(value).toUpperCase()).join(' · ') : 'Presence'}</strong>
+                <small>{discoveryDetail}</small>
+                {!!capabilityLabels.length && <span className="rmm-network-capabilities">{capabilityLabels.map((value) => <b key={value}>{value}</b>)}</span>}
+                {!!spotifyGroups.length && <small className="rmm-network-groups">Groups: {spotifyGroups.join(', ')}</small>}
+              </span>
+              <span className="rmm-network-management"><StatusPill tone={management.tone}>{management.label}</StatusPill><small>{management.detail}</small></span>
+              <span><strong>{when(item.last_seen_at)}</strong><small>{item.hostname || item.sys_location || 'No hostname reported'}</small></span>
+              <span className="rmm-network-status-expand"><StatusPill tone={item.status === 'online' ? 'healthy' : 'offline'}>{item.status}</StatusPill>{expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}</span>
+            </div>
+
+            {expanded && <div className="rmm-network-device-detail">
+              <div className="rmm-network-device-facts">
+                <div><span>SNMP</span><strong>{item.snmp_version ? String(item.snmp_version).toUpperCase() : 'Not enriched'}</strong><small>{item.last_snmp_at ? 'Last SNMP: ' + when(item.last_snmp_at) : 'No SNMP response stored'}</small></div>
+                <div><span>System name</span><strong>{item.sys_name || item.hostname || 'Not reported'}</strong><small>{item.vendor || 'Vendor unknown'}{item.model ? ' · ' + item.model : ''}</small></div>
+                <div><span>Object ID</span><strong>{item.sys_object_id || 'Not reported'}</strong><small>{item.sys_descr || 'No system description'}</small></div>
+                <div><span>Uptime</span><strong>{formatUptimeTicks(item.uptime_ticks)}</strong><small>{item.interface_count != null ? item.interface_count + ' interfaces reported' : 'Interface count unavailable'}</small></div>
+                <div><span>Location</span><strong>{item.sys_location || 'Not set'}</strong><small>{item.sys_contact ? 'Contact: ' + item.sys_contact : 'No SNMP contact set'}</small></div>
+                <div><span>Interface state</span><strong>{interfaces.length ? upInterfaces + ' up · ' + downInterfaces + ' other' : 'No interface inventory'}</strong><small>{interfaces.length + ' collected'}{snmpMeta.interfacesTruncated ? ' · capped at collection limit' : ''}</small></div>
+              </div>
+
+              {!!interfaces.length && <div className="rmm-network-interface-table">
+                <div className="head"><span>Interface</span><span>Type</span><span>MAC</span><span>Link</span><span>Speed</span><span>MTU</span></div>
+                {interfaces.map((entry) => <div className="row" key={entry.index ?? entry.name}>
+                  <span><strong>{entry.name || 'Interface ' + entry.index}</strong><small>{entry.alias || entry.description || ('ifIndex ' + entry.index)}</small></span>
+                  <span><strong>{niceLabel(entry.type || 'unknown')}</strong><small>ifIndex {entry.index}{entry.typeCode != null ? ' · type ' + entry.typeCode : ''}</small></span>
+                  <span><strong>{entry.macAddress || '—'}</strong><small>{entry.adminStatus ? 'Admin ' + niceLabel(entry.adminStatus) : 'Admin state unknown'}</small></span>
+                  <span><StatusPill tone={entry.operStatus === 'up' ? 'healthy' : entry.operStatus === 'down' ? 'offline' : 'neutral'}>{niceLabel(entry.operStatus || 'unknown')}</StatusPill><small>{entry.up === true ? 'Forwarding' : entry.up === false ? 'Not forwarding' : ''}</small></span>
+                  <span><strong>{formatSpeed(entry.speedBps)}</strong><small>{entry.description || ''}</small></span>
+                  <span><strong>{entry.mtu || '—'}</strong><small>{entry.alias || ''}</small></span>
+                </div>)}
+              </div>}
+            </div>}
           </div>
         })}
       </div>
