@@ -78,3 +78,32 @@
   .rmm-network-form .wide { grid-column:auto; }
   .rmm-network-advanced > div { grid-template-columns:1fr; }
 }
+
+.rmm-network-private-mac {
+  width:max-content;
+  margin-top:2px;
+  border-radius:999px;
+  padding:2px 5px;
+  background:var(--rmm-soft);
+  color:var(--rmm-muted);
+  font-size:6px;
+  font-style:normal;
+  font-weight:800;
+  white-space:nowrap;
+}
+.rmm-network-discovery-cell { align-content:center; }
+.rmm-network-capabilities { display:flex; flex-wrap:wrap; gap:3px; margin-top:2px; }
+.rmm-network-capabilities b {
+  border:1px solid color-mix(in srgb,var(--rmm-accent) 16%,var(--rmm-border));
+  border-radius:999px;
+  padding:2px 5px;
+  background:color-mix(in srgb,var(--rmm-accent-soft) 55%,var(--rmm-surface));
+  color:var(--rmm-text);
+  font-size:6px;
+  font-weight:800;
+  line-height:1.2;
+  white-space:nowrap;
+}
+.rmm-network-groups { margin-top:1px; color:var(--rmm-accent) !important; }
+.rmm-network-management { align-content:center; }
+.rmm-network-management small { white-space:normal !important; line-height:1.25; }

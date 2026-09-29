@@ -12,6 +12,8 @@ import {
   Server,
   ShieldCheck,
   Smartphone,
+  Speaker,
+  Tablet,
   Tv,
   Wifi,
 } from 'lucide-react'
@@ -54,6 +56,127 @@ function deviceIcon(type = '') {
   if (normalized === 'media_device') return Tv
   if (normalized === 'camera') return Camera
   return Network
+}
+
+function niceLabel(value = '') {
+  return String(value || '').replaceAll('_', ' ').split(' ').filter(Boolean).map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')
+}
+
+function isPrivateMac(value = '') {
+  const first = Number.parseInt(String(value).split(':')[0], 16)
+  return Number.isFinite(first) && Boolean(first & 0x02)
+}
+
+function capabilityLabel(value = '') {
+  const normalized = String(value).toLowerCase()
+  const known = {
+    airplay: 'AirPlay',
+    airplay_audio: 'AirPlay Audio',
+    amazon_echo: 'Amazon Echo',
+    amazon_echo_remote: 'Echo Remote',
+    amazon_fire_tv: 'Amazon Fire TV',
+    amazon_wplay: 'Amazon WPlay',
+    companion_link: 'Apple Continuity',
+    eero: 'eero',
+    gateway: 'Gateway',
+    google_cast: 'Google Cast',
+    homekit: 'HomeKit',
+    matter: 'Matter',
+    printing: 'Printing',
+    smb: 'SMB',
+    spotify_connect: 'Spotify Connect',
+    spotify_zeroconf: 'Spotify identity',
+    ssh: 'SSH',
+    web_service: 'Web service',
+    workstation: 'Workstation',
+  }
+  return known[normalized] || niceLabel(normalized)
+}
+
+function devicePresentation(item = {}) {
+  const vendor = String(item.vendor || '').toLowerCase()
+  const model = String(item.model || '').toLowerCase()
+  const hostname = String(item.hostname || item.sys_name || '').toLowerCase()
+  const type = String(item.device_type || 'network_device').toLowerCase()
+  const capabilities = new Set(
+    Array.isArray(item.metadata?.mdns?.capabilities)
+      ? item.metadata.mdns.capabilities.map((value) => String(value).toLowerCase())
+      : [],
+  )
+
+  if (model === 'echo_dot' || capabilities.has('amazon_echo')) {
+    return { label: 'Amazon Echo Dot', Icon: Speaker }
+  }
+  if (capabilities.has('amazon_fire_tv')
+      || model.startsWith('aft')
+      || hostname.includes('firetv')
+      || hostname.includes('fire tv')) {
+    return { label: 'Amazon Fire TV', Icon: Tv }
+  }
+  if (vendor.includes('apple') && hostname.includes('ipad')) {
+    return { label: 'Apple iPad', Icon: Tablet }
+  }
+  if (vendor.includes('apple') && type === 'mobile_device') {
+    return { label: 'Apple mobile device', Icon: Smartphone }
+  }
+  if (vendor.includes('ring') || type === 'camera') {
+    return { label: vendor.includes('ring') ? 'Ring Camera' : 'Network Camera', Icon: Camera }
+  }
+  if (vendor.includes('eero') || capabilities.has('eero')) {
+    return { label: 'eero Router', Icon: Router }
+  }
+  if (type === 'computer') return { label: 'Computer', Icon: Monitor }
+  if (type === 'router') return { label: 'Router', Icon: Router }
+  if (type === 'media_device') return { label: 'Media device', Icon: Tv }
+  if (type === 'mobile_device') return { label: 'Mobile device', Icon: Smartphone }
+  return { label: niceLabel(type || 'network_device'), Icon: deviceIcon(type) }
+}
+
+function managementPresentation(item = {}) {
+  if (item.managed) {
+    return {
+      label: 'Agent installed',
+      tone: 'healthy',
+      detail: item.managed_agent_version
+        ? 'Agent ' + item.managed_agent_version
+        : (item.managed_reference || 'Managed endpoint'),
+    }
+  }
+
+  const type = String(item.device_type || 'network_device').toLowerCase()
+  if (type === 'computer') {
+    return {
+      label: 'Endpoint candidate',
+      tone: 'warning',
+      detail: 'Assess OS, then deploy Hi5Central Agent',
+    }
+  }
+  if (type === 'mobile_device') {
+    return {
+      label: 'Mobile device',
+      tone: 'neutral',
+      detail: 'Observed only · endpoint Agent not applicable',
+    }
+  }
+  if (['router', 'switch', 'access_point', 'firewall', 'server', 'storage'].includes(type)) {
+    return {
+      label: 'Network managed',
+      tone: 'neutral',
+      detail: 'Manage through discovery / network credentials',
+    }
+  }
+  if (['media_device', 'camera', 'printer', 'smart_home'].includes(type)) {
+    return {
+      label: 'Network only',
+      tone: 'neutral',
+      detail: 'No endpoint Agent expected',
+    }
+  }
+  return {
+    label: 'Needs assessment',
+    tone: 'warning',
+    detail: 'Identify device class before Agent deployment',
+  }
 }
 
 export function RmmNetworkDiscovery() {
@@ -314,34 +437,40 @@ export function RmmNetworkDiscovery() {
     <section className="rmm-table-card rmm-network-devices-card">
       <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Network inventory</span><h2>Discovered network devices</h2><p>Presence discovery identifies devices by IP and MAC. DNS-SD/mDNS adds friendly names, models, device types and capabilities; SNMP remains optional for deeper managed-network identity.</p></div><span>{devices.length} device{devices.length === 1 ? '' : 's'}</span></div>
       <div className="rmm-network-table devices">
-        <div className="head"><span>Device</span><span>Address</span><span>Vendor / type</span><span>Discovery</span><span>Management</span><span>Last seen</span><span>Status</span></div>
-        {devices.map((item) => {
-          const Icon = deviceIcon(item.device_type)
+        <div className="head"><span>Device</span><span>Address</span><span>Identity</span><span>Capabilities / discovery</span><span>Management</span><span>Last seen</span><span>Status</span></div>
+       {devices.map((item) => {
+          const presentation = devicePresentation(item)
+          const Icon = presentation.Icon
           const methods = Array.isArray(item.discovery_methods) ? item.discovery_methods : []
           const mdnsCapabilities = Array.isArray(item.metadata?.mdns?.capabilities)
-            ? item.metadata.mdns.capabilities.slice(0, 4)
+            ? item.metadata.mdns.capabilities
+            : []
+          const matterDeviceType = item.metadata?.mdns?.matterDeviceType || ''
+          const capabilityLabels = [...new Set([
+            ...mdnsCapabilities.map(capabilityLabel),
+            ...(matterDeviceType ? [matterDeviceType] : []),
+          ])].slice(0, 5)
+          const spotifyGroups = Array.isArray(item.metadata?.mdns?.spotifyConnect?.groupAliases)
+            ? item.metadata.mdns.spotifyConnect.groupAliases
             : []
           const discoveryDetail = item.icmp_reachable
             ? 'ICMP reachable' + (item.latency_ms != null ? ' · ' + item.latency_ms + ' ms' : '')
             : item.snmp_version
               ? 'SNMP ' + String(item.snmp_version).toUpperCase()
               : 'Seen on local network'
-          const matterDeviceType = item.metadata?.mdns?.matterDeviceType || ''
-          const capabilityLabels = [
-            ...mdnsCapabilities.map((value) => String(value).replaceAll('_', ' ')),
-            ...(matterDeviceType ? [matterDeviceType] : []),
-          ]
-          const capabilityDetail = capabilityLabels.length
-            ? ' · ' + [...new Set(capabilityLabels)].join(' · ')
-            : ''
+          const management = managementPresentation(item)
+          const privateMac = isPrivateMac(item.mac_address)
           return <div className="row" key={item.id}>
-            <span className="device"><i><Icon size={16} /></i><span><strong>{item.managed_device_name || item.sys_name || item.hostname || item.ip_address}</strong><small>{item.profile_name}{item.site_name ? ' · ' + item.site_name : ''}</small></span></span>
-            <span><strong>{item.ip_address}</strong><small>{item.mac_address || 'MAC not resolved'}</small></span>
-            <span><strong>{item.vendor || 'Unknown vendor'}</strong><small>{item.model ? item.model + ' · ' : ''}{String(item.device_type || 'network_device').replaceAll('_', ' ')}</small></span>
-            <span><strong>{methods.length ? methods.map((value) => String(value).toUpperCase()).join(' · ') : 'Presence'}</strong><small>{discoveryDetail}{capabilityDetail}</small></span>
-            <span>{item.managed
-              ? <><StatusPill tone="healthy">Agent installed</StatusPill><small>{item.managed_agent_version || item.managed_reference || ''}</small></>
-              : <><StatusPill tone="warning">Unmanaged</StatusPill><small>Eligible for assessment / deployment</small></>}</span>
+            <span className="device"><i><Icon size={16} /></i><span><strong>{item.managed_device_name || item.sys_name || item.hostname || item.ip_address}</strong><small>{presentation.label}{item.profile_name ? ' · ' + item.profile_name : ''}{item.site_name ? ' · ' + item.site_name : ''}</small></span></span>
+            <span><strong>{item.ip_address}</strong><small>{item.mac_address || 'MAC not resolved'}</small>{privateMac && <em className="rmm-network-private-mac">Private/randomized MAC</em>}</span>
+            <span><strong>{presentation.label}</strong><small>{item.vendor || (privateMac ? 'Vendor hidden by private MAC' : 'Unknown vendor')}{item.model ? ' · ' + item.model : ''}</small></span>
+            <span className="rmm-network-discovery-cell">
+              <strong>{methods.length ? methods.map((value) => String(value).toUpperCase()).join(' · ') : 'Presence'}</strong>
+              <small>{discoveryDetail}</small>
+              {!!capabilityLabels.length && <span className="rmm-network-capabilities">{capabilityLabels.map((value) => <b key={value}>{value}</b>)}</span>}
+              {!!spotifyGroups.length && <small className="rmm-network-groups">Groups: {spotifyGroups.join(', ')}</small>}
+            </span>
+            <span className="rmm-network-management"><StatusPill tone={management.tone}>{management.label}</StatusPill><small>{management.detail}</small></span>
             <span><strong>{when(item.last_seen_at)}</strong><small>{item.hostname || item.sys_location || 'No hostname reported'}</small></span>
             <span><StatusPill tone={item.status === 'online' ? 'healthy' : 'offline'}>{item.status}</StatusPill></span>
           </div>
