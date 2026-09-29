@@ -185,7 +185,7 @@ export function RmmNetworkDiscovery() {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
-  const [credential, setCredential] = useState({ name: '', snmpVersion: 'v2c', community: '' })
+  const [credential, setCredential] = useState({ name: '', snmpVersion: 'v2c', community: '', username: '', securityLevel: 'authPriv', authProtocol: 'sha256', authSecret: '', privacyProtocol: 'aes128', privacySecret: '', contextName: '' })
   const [profile, setProfile] = useState({
     name: '',
     cidr: '',
@@ -235,6 +235,9 @@ export function RmmNetworkDiscovery() {
     [probes],
   )
   const selectedProbe = probeById.get(profile.probeAgentDeviceId)
+  const selectedCredential = credentials.find((item) => item.id === profile.credentialId)
+  const selectedCredentialNeedsV3 = selectedCredential?.snmpVersion === 'v3'
+  const selectedProbeSupportsCredential = !selectedCredentialNeedsV3 || Boolean(selectedProbe?.snmp_v3_capable)
   const suggestedRanges = Array.isArray(selectedProbe?.suggested_cidrs)
     ? selectedProbe.suggested_cidrs
     : []
@@ -250,7 +253,7 @@ export function RmmNetworkDiscovery() {
         body: JSON.stringify(credential),
       })
       setBundle(payload.bundle)
-      setCredential({ name: '', snmpVersion: 'v2c', community: '' })
+      setCredential({ name: '', snmpVersion: 'v2c', community: '', username: '', securityLevel: 'authPriv', authProtocol: 'sha256', authSecret: '', privacyProtocol: 'aes128', privacySecret: '', contextName: '' })
       setNotice('SNMP credential saved securely.')
     } catch (err) {
       setError(err.message || String(err))
@@ -364,17 +367,23 @@ export function RmmNetworkDiscovery() {
     <div className="rmm-network-config-grid">
       <section className="rmm-card rmm-network-config-card">
         <div className="rmm-card-heading">
-          <div><span className="rmm-eyebrow">Optional enrichment</span><h2>SNMP credentials</h2><p>Presence discovery does not require SNMP. Add credentials only when you want richer identity, uptime and interface data from supported devices.</p></div>
+          <div><span className="rmm-eyebrow">Optional enrichment</span><h2>SNMP credentials</h2><p>Presence discovery does not require SNMP. Add credentials for richer identity, uptime and interface data. SNMPv3 USM requires Agent {capabilities.minSnmpV3AgentVersion || '0.1.244'}+.</p></div>
           <KeyRound size={19} />
         </div>
         <form className="rmm-network-form" onSubmit={createCredential}>
           <label><span>Name</span><input value={credential.name} onChange={(e) => setCredential({ ...credential, name: e.target.value })} placeholder="e.g. Site A network" required /></label>
-          <label><span>Version</span><select value={credential.snmpVersion} onChange={(e) => setCredential({ ...credential, snmpVersion: e.target.value })}><option value="v2c">SNMP v2c</option><option value="v1">SNMP v1</option><option value="v3" disabled>SNMP v3 — probe support next</option></select></label>
-          <label className="wide"><span>Community string</span><input type="password" value={credential.community} onChange={(e) => setCredential({ ...credential, community: e.target.value })} autoComplete="new-password" placeholder="Stored encrypted — never displayed again" required /></label>
+          <label><span>Version</span><select value={credential.snmpVersion} onChange={(e) => setCredential({ ...credential, snmpVersion: e.target.value })}><option value="v3">SNMP v3</option><option value="v2c">SNMP v2c</option><option value="v1">SNMP v1</option></select>{credential.snmpVersion === 'v3' && <small>Requires probe Agent {capabilities.minSnmpV3AgentVersion || '0.1.244'}+ · SHA-256 + AES-128 recommended</small>}</label>
+          {credential.snmpVersion === 'v3' ? <>
+            <label><span>Username</span><input value={credential.username} onChange={(e) => setCredential({ ...credential, username: e.target.value })} required /></label>
+            <label><span>Security level</span><select value={credential.securityLevel} onChange={(e) => setCredential({ ...credential, securityLevel: e.target.value })}><option value="authPriv">Authentication + privacy</option><option value="authNoPriv">Authentication only</option><option value="noAuthNoPriv">No authentication / no privacy</option></select></label>
+            {credential.securityLevel !== 'noAuthNoPriv' && <><label><span>Authentication</span><select value={credential.authProtocol} onChange={(e) => setCredential({ ...credential, authProtocol: e.target.value })}><option value="sha256">SHA-256</option><option value="sha1">SHA-1 (legacy)</option></select></label><label><span>Authentication secret</span><input type="password" value={credential.authSecret} onChange={(e) => setCredential({ ...credential, authSecret: e.target.value })} autoComplete="new-password" required /></label></>}
+            {credential.securityLevel === 'authPriv' && <><label><span>Privacy</span><select value={credential.privacyProtocol} onChange={(e) => setCredential({ ...credential, privacyProtocol: e.target.value })}><option value="aes128">AES-128</option></select></label><label><span>Privacy secret</span><input type="password" value={credential.privacySecret} onChange={(e) => setCredential({ ...credential, privacySecret: e.target.value })} autoComplete="new-password" required /></label></>}
+            <label className="wide"><span>Context name (optional)</span><input value={credential.contextName} onChange={(e) => setCredential({ ...credential, contextName: e.target.value })} placeholder="Default SNMP context" /></label>
+          </> : <label className="wide"><span>Community string</span><input type="password" value={credential.community} onChange={(e) => setCredential({ ...credential, community: e.target.value })} autoComplete="new-password" placeholder="Stored encrypted — never displayed again" required /></label>}
           <button className="rmm-primary" disabled={busy === 'credential'} type="submit">{busy === 'credential' ? 'Saving…' : 'Save credential'}</button>
         </form>
         <div className="rmm-network-credential-list">
-          {credentials.map((item) => <div key={item.id}><span><strong>{item.name}</strong><small>{item.snmpVersion.toUpperCase()} · secret {item.secretConfigured ? 'configured' : 'missing'}</small></span><StatusPill tone={item.enabled ? 'healthy' : 'neutral'}>{item.enabled ? 'Enabled' : 'Disabled'}</StatusPill></div>)}
+          {credentials.map((item) => <div key={item.id}><span><strong>{item.name}</strong><small>{item.snmpVersion.toUpperCase()}{item.snmpVersion === 'v3' ? ' · ' + item.securityLevel + (item.authProtocol ? ' · ' + item.authProtocol.toUpperCase() : '') + (item.privacyProtocol ? ' · ' + item.privacyProtocol.toUpperCase() : '') : ''} · secret {item.secretConfigured ? 'configured' : 'missing'}</small></span><StatusPill tone={item.enabled ? 'healthy' : 'neutral'}>{item.enabled ? 'Enabled' : 'Disabled'}</StatusPill></div>)}
           {!credentials.length && <div className="rmm-network-mini-empty">No SNMP credentials configured. Presence discovery will still work.</div>}
         </div>
       </section>
@@ -397,7 +406,7 @@ export function RmmNetworkDiscovery() {
               cidr: current.cidr || suggested || '',
             }))
           }} required><option value="">Select probe…</option>{probes.map((item) => <option value={item.agent_device_id} key={item.agent_device_id}>{item.name || item.reference} {item.online ? (item.presence_capable ? '· Discovery ready' : item.snmp_capable ? '· SNMP only · upgrade for presence' : '· Upgrade Agent') : '· Offline'}</option>)}</select></label>
-          <label><span>SNMP credential (optional)</span><select value={profile.credentialId} onChange={(e) => setProfile({ ...profile, credentialId: e.target.value })}><option value="">None · presence discovery only</option>{credentials.filter((item) => item.enabled).map((item) => <option value={item.id} key={item.id}>{item.name} · {item.snmpVersion.toUpperCase()}</option>)}</select><small>Attach a credential only to enrich devices that expose SNMP.</small></label>
+          <label><span>SNMP credential (optional)</span><select value={profile.credentialId} onChange={(e) => setProfile({ ...profile, credentialId: e.target.value })}><option value="">None · presence discovery only</option>{credentials.filter((item) => item.enabled).map((item) => <option value={item.id} key={item.id}>{item.name} · {item.snmpVersion.toUpperCase()}</option>)}</select><small>{selectedCredentialNeedsV3 && !selectedProbeSupportsCredential ? 'SNMPv3 requires probe Agent ' + (capabilities.minSnmpV3AgentVersion || '0.1.244') + '+.' : 'Attach a credential only to enrich devices that expose SNMP.'}</small></label>
           <label><span>Site</span><select value={profile.siteId} onChange={(e) => setProfile({ ...profile, siteId: e.target.value })}><option value="">No site assignment</option>{sites.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
           <label><span>Poll interval</span><select value={profile.scanIntervalMinutes} onChange={(e) => setProfile({ ...profile, scanIntervalMinutes: e.target.value })}><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">1 hour</option><option value="240">4 hours</option><option value="1440">Daily</option></select></label>
           <details className="wide rmm-network-advanced"><summary>Advanced scan settings</summary><div>
@@ -406,7 +415,7 @@ export function RmmNetworkDiscovery() {
             <label><span>Retries</span><input type="number" min="0" max="5" value={profile.retries} onChange={(e) => setProfile({ ...profile, retries: e.target.value })} /></label>
             <label><span>Concurrency</span><input type="number" min="1" max="128" value={profile.concurrency} onChange={(e) => setProfile({ ...profile, concurrency: e.target.value })} /></label>
           </div></details>
-          <button className="rmm-primary" disabled={busy === 'profile' || !probes.length} type="submit">{busy === 'profile' ? 'Creating…' : 'Create profile'}</button>
+          <button className="rmm-primary" disabled={busy === 'profile' || !probes.length || !selectedProbeSupportsCredential} type="submit">{busy === 'profile' ? 'Creating…' : 'Create profile'}</button>
         </form>
       </section>
     </div>

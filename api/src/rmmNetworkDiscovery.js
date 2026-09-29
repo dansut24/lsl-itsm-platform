@@ -11,6 +11,10 @@ function clean(value = '', max = 4096) {
   return String(value ?? '').trim().slice(0, max)
 }
 
+function secretValue(value = '', max = 8192) {
+  return String(value ?? '').slice(0, max)
+}
+
 function isUuid(value = '') {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clean(value, 128))
 }
@@ -33,8 +37,21 @@ function versionAtLeast(value, minimum) {
 }
 
 const SNMP_MIN_AGENT_VERSION = '0.1.232'
+const SNMP_V3_MIN_AGENT_VERSION = '0.1.244'
 const PRESENCE_MIN_AGENT_VERSION = '0.1.233'
 const DYNAMIC_DNSSD_MIN_AGENT_VERSION = '0.1.239'
+
+function normalizeSnmpV3AuthProtocol(value = '') {
+  const normalized = clean(value, 32).toLowerCase().replaceAll('-', '')
+  if (['sha', 'sha1', 'hmacsha96'].includes(normalized)) return 'sha1'
+  if (['sha256', 'hmacsha256'].includes(normalized)) return 'sha256'
+  return ''
+}
+
+function normalizeSnmpV3PrivacyProtocol(value = '') {
+  const normalized = clean(value, 32).toLowerCase().replaceAll('-', '')
+  return ['aes', 'aes128', 'cfb128aes128'].includes(normalized) ? 'aes128' : ''
+}
 
 function parseKeyMaterial(rawValue, variableName) {
   const raw = clean(rawValue, 4096)
@@ -71,7 +88,7 @@ function snmpEncryptionKey() {
 }
 
 function encryptSecret(secret) {
-  const value = clean(secret, 8192)
+  const value = secretValue(secret, 8192)
   if (!value) return ''
   const iv = randomBytes(12)
   const cipher = createCipheriv('aes-256-gcm', snmpEncryptionKey(), iv)
@@ -225,7 +242,9 @@ function credentialSummary(row) {
     authProtocol: row.auth_protocol,
     privacyProtocol: row.privacy_protocol,
     contextName: row.context_name,
-    secretConfigured: Boolean(row.community_encrypted || row.auth_secret_encrypted || row.privacy_secret_encrypted),
+    secretConfigured: row.snmp_version === 'v3' && row.security_level === 'noAuthNoPriv'
+      ? true
+      : Boolean(row.community_encrypted || row.auth_secret_encrypted || row.privacy_secret_encrypted),
     enabled: row.enabled,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -405,6 +424,7 @@ async function bundle(tenantId) {
     return {
       ...probe,
       snmp_capable: versionAtLeast(row.agent_version, SNMP_MIN_AGENT_VERSION),
+      snmp_v3_capable: versionAtLeast(row.agent_version, SNMP_V3_MIN_AGENT_VERSION),
       presence_capable: versionAtLeast(row.agent_version, PRESENCE_MIN_AGENT_VERSION),
       dynamic_dnssd_capable: versionAtLeast(row.agent_version, DYNAMIC_DNSSD_MIN_AGENT_VERSION),
       suggested_cidrs: suggestedCidrs(network || {}),
@@ -431,9 +451,10 @@ async function bundle(tenantId) {
     capabilities: {
       snmpV1: true,
       snmpV2c: true,
-      snmpV3: false,
+      snmpV3: true,
       minAgentVersion: PRESENCE_MIN_AGENT_VERSION,
       minSnmpAgentVersion: SNMP_MIN_AGENT_VERSION,
+      minSnmpV3AgentVersion: SNMP_V3_MIN_AGENT_VERSION,
       minPresenceAgentVersion: PRESENCE_MIN_AGENT_VERSION,
       minDynamicDnsSdAgentVersion: DYNAMIC_DNSSD_MIN_AGENT_VERSION,
       presenceDiscovery: true,
@@ -508,12 +529,9 @@ async function dispatchProfileScan(session, profileId, initiatedBy = 'technician
     error.status = 409
     throw error
   }
-  if (snmpEnabled && profile.snmp_version === 'v3') {
-    const error = new Error('SNMPv3 credentials can be stored now, but SNMPv3 probe execution is not enabled in this Agent build yet.')
-    error.status = 409
-    throw error
-  }
-  const requiredAgentVersion = presenceEnabled ? PRESENCE_MIN_AGENT_VERSION : SNMP_MIN_AGENT_VERSION
+  const requiredAgentVersion = profile.snmp_version === 'v3'
+    ? SNMP_V3_MIN_AGENT_VERSION
+    : (presenceEnabled ? PRESENCE_MIN_AGENT_VERSION : SNMP_MIN_AGENT_VERSION)
   if (!versionAtLeast(profile.agent_version, requiredAgentVersion)) {
     const error = new Error(
       'The selected probe must be upgraded to Hi5Central Agent ' + requiredAgentVersion
@@ -702,7 +720,7 @@ async function dispatchDueNetworkDiscoveryProfiles() {
         AND p.next_scan_at IS NOT NULL
         AND (
           p.presence_enabled=true
-          OR (p.snmp_enabled=true AND c.id IS NOT NULL AND c.enabled=true AND c.snmp_version IN ('v1','v2c'))
+          OR (p.snmp_enabled=true AND c.id IS NOT NULL AND c.enabled=true AND c.snmp_version IN ('v1','v2c','v3'))
         )
         AND p.next_scan_at<=now()
         AND a.disabled_at IS NULL
@@ -718,9 +736,9 @@ async function dispatchDueNetworkDiscoveryProfiles() {
       LIMIT 10`,
   )
   for (const row of due.rows) {
-    const requiredAgentVersion = row.presence_enabled
-      ? PRESENCE_MIN_AGENT_VERSION
-      : SNMP_MIN_AGENT_VERSION
+    const requiredAgentVersion = row.snmp_version === 'v3'
+      ? SNMP_V3_MIN_AGENT_VERSION
+      : (row.presence_enabled ? PRESENCE_MIN_AGENT_VERSION : SNMP_MIN_AGENT_VERSION)
     if (!versionAtLeast(row.agent_version, requiredAgentVersion)) {
       await pool.query(
         `UPDATE rmm_network_discovery_profiles
@@ -781,32 +799,35 @@ export function registerRmmNetworkDiscoveryRoutes(app) {
     let communityEncrypted = ''
     let authEncrypted = ''
     let privacyEncrypted = ''
-    const username = clean(body.username, 256)
+    const username = clean(body.username, 32)
     const securityLevel = clean(body.securityLevel || 'noAuthNoPriv', 32)
-    const authProtocol = clean(body.authProtocol, 32)
-    const privacyProtocol = clean(body.privacyProtocol, 32)
+    const authProtocol = normalizeSnmpV3AuthProtocol(body.authProtocol)
+    const privacyProtocol = normalizeSnmpV3PrivacyProtocol(body.privacyProtocol)
     const contextName = clean(body.contextName, 256)
 
     if (snmpVersion === 'v1' || snmpVersion === 'v2c') {
-      const community = clean(body.community, 2048)
+      const community = secretValue(body.community, 2048)
       if (!community) return c.json({ error: 'Community string is required.' }, 400)
       communityEncrypted = encryptSecret(community)
     } else {
       if (!username) return c.json({ error: 'SNMPv3 username is required.' }, 400)
+      if (Buffer.byteLength(username, 'utf8') > 32) return c.json({ error: 'SNMPv3 username must not exceed 32 octets.' }, 400)
       if (!['noAuthNoPriv', 'authNoPriv', 'authPriv'].includes(securityLevel)) {
         return c.json({ error: 'Invalid SNMPv3 security level.' }, 400)
       }
       if (securityLevel !== 'noAuthNoPriv') {
-        if (!authProtocol || !clean(body.authSecret, 8192)) {
-          return c.json({ error: 'SNMPv3 authentication protocol and secret are required.' }, 400)
+        const authSecret = secretValue(body.authSecret, 8192)
+        if (!['sha1', 'sha256'].includes(authProtocol) || authSecret.length < 8) {
+          return c.json({ error: 'SNMPv3 authentication requires SHA-1 or SHA-256 and a passphrase of at least 8 characters.' }, 400)
         }
-        authEncrypted = encryptSecret(body.authSecret)
+        authEncrypted = encryptSecret(authSecret)
       }
       if (securityLevel === 'authPriv') {
-        if (!privacyProtocol || !clean(body.privacySecret, 8192)) {
-          return c.json({ error: 'SNMPv3 privacy protocol and secret are required.' }, 400)
+        const privacySecret = secretValue(body.privacySecret, 8192)
+        if (privacyProtocol !== 'aes128' || privacySecret.length < 8) {
+          return c.json({ error: 'SNMPv3 privacy requires AES-128 and a passphrase of at least 8 characters.' }, 400)
         }
-        privacyEncrypted = encryptSecret(body.privacySecret)
+        privacyEncrypted = encryptSecret(privacySecret)
       }
     }
 
@@ -854,9 +875,9 @@ export function registerRmmNetworkDiscoveryRoutes(app) {
     let communityEncrypted = row.community_encrypted
     let authEncrypted = row.auth_secret_encrypted
     let privacyEncrypted = row.privacy_secret_encrypted
-    if (clean(body.community, 8192)) communityEncrypted = encryptSecret(body.community)
-    if (clean(body.authSecret, 8192)) authEncrypted = encryptSecret(body.authSecret)
-    if (clean(body.privacySecret, 8192)) privacyEncrypted = encryptSecret(body.privacySecret)
+    if (secretValue(body.community, 8192)) communityEncrypted = encryptSecret(body.community)
+    if (secretValue(body.authSecret, 8192)) authEncrypted = encryptSecret(body.authSecret)
+    if (secretValue(body.privacySecret, 8192)) privacyEncrypted = encryptSecret(body.privacySecret)
 
     await pool.query(
       `UPDATE rmm_network_discovery_credentials
