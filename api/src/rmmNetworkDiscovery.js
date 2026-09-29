@@ -617,9 +617,9 @@ async function dispatchProfileScan(session, profileId, initiatedBy = 'technician
             version: profile.snmp_version,
             username: profile.username,
             securityLevel: profile.security_level,
-            authProtocol: profile.auth_protocol,
+            authProtocol: normalizeSnmpV3AuthProtocol(profile.auth_protocol),
             authSecret: decryptSecret(profile.auth_secret_encrypted),
-            privacyProtocol: profile.privacy_protocol,
+            privacyProtocol: normalizeSnmpV3PrivacyProtocol(profile.privacy_protocol),
             privacySecret: decryptSecret(profile.privacy_secret_encrypted),
             contextName: profile.context_name,
           }
