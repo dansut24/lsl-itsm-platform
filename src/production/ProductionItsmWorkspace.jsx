@@ -365,6 +365,7 @@ function ProductionQueue({ route }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [mobileFilters, setMobileFilters] = useState(false)
+  const [isMobileQueue, setIsMobileQueue] = useState(() => window.matchMedia?.('(max-width: 760px)').matches ?? false)
   const [revision, setRevision] = useState(0)
   const [savedViews, setSavedViews] = useState(Array.isArray(allSavedViews?.[route.type]) ? allSavedViews[route.type] : [])
   const [columnOrder, setColumnOrder] = useState(Array.isArray(storedColumns.order) && storedColumns.order.length ? storedColumns.order : COLUMN_DEFINITIONS.map((column) => column.key))
@@ -379,6 +380,15 @@ function ProductionQueue({ route }) {
     .map((key) => COLUMN_DEFINITIONS.find((column) => column.key === key))
     .filter(Boolean)
     .filter((column) => column.locked || !hiddenColumns.includes(column.key)), [columnOrder, hiddenColumns])
+
+  useEffect(() => {
+    const query = window.matchMedia?.('(max-width: 760px)')
+    if (!query) return undefined
+    const sync = () => setIsMobileQueue(query.matches)
+    sync()
+    query.addEventListener?.('change', sync)
+    return () => query.removeEventListener?.('change', sync)
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -502,7 +512,8 @@ function ProductionQueue({ route }) {
   const pageCount = Math.max(1, Math.ceil(Number(payload.total || 0) / pageSize))
   const start = payload.total ? page * pageSize + 1 : 0
   const end = Math.min((page + 1) * pageSize, Number(payload.total || 0))
-  const ActiveViewIcon = VIEW_STYLES.find((item) => item.id === viewStyle)?.icon || TableProperties
+  const renderedViewStyle = isMobileQueue ? 'cards' : viewStyle
+  const ActiveViewIcon = VIEW_STYLES.find((item) => item.id === renderedViewStyle)?.icon || TableProperties
 
   return (
     <section className="production-record-shell production-motion-enter production-record-shell-enhanced">
@@ -529,13 +540,13 @@ function ProductionQueue({ route }) {
         <div className="production-record-result-line"><span><strong>{payload.total || 0}</strong> {Number(payload.total) === 1 ? route.singular : route.title.toLowerCase()}</span><span>{start}–{end} of {payload.total || 0}</span></div>
 
         <div className="production-record-content" ref={contentRef}>
-          {loading ? <QueueSkeleton viewStyle={viewStyle} /> : null}
+          {loading ? <QueueSkeleton viewStyle={renderedViewStyle} /> : null}
           {!loading && error ? <div className="production-record-state is-error"><strong>Could not load this queue</strong><span>{error}</span><button onClick={() => setRevision((value) => value + 1)} type="button">Retry</button></div> : null}
           {!loading && !error && !payload.items?.length ? <div className="production-record-state"><strong>No {route.title.toLowerCase()} in this view</strong><span>Change the filters or create the first {route.singular}.</span></div> : null}
           {!loading && !error && payload.items?.length ? (
             <div className="production-motion-enter production-motion-enter-fast">
-              {viewStyle === 'compact' ? <CompactList items={payload.items} onOpen={openRecord} returnRecord={returnRecord} />
-                : viewStyle === 'cards' ? <CardList items={payload.items} onOpen={openRecord} returnRecord={returnRecord} />
+              {renderedViewStyle === 'compact' ? <CompactList items={payload.items} onOpen={openRecord} returnRecord={returnRecord} />
+                : renderedViewStyle === 'cards' ? <CardList items={payload.items} onOpen={openRecord} returnRecord={returnRecord} />
                   : <RecordTable items={payload.items} onOpen={openRecord} columns={visibleColumns} widths={columnWidths} onWidthChange={(key, width) => setColumnWidths((current) => ({ ...current, [key]: width }))} returnRecord={returnRecord} />}
             </div>
           ) : null}
