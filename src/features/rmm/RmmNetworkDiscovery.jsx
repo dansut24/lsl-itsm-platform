@@ -435,7 +435,7 @@ export function RmmNetworkDiscovery() {
     </section>
 
     <section className="rmm-table-card rmm-network-devices-card">
-      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Network inventory</span><h2>Discovered network devices</h2><p>Presence discovery identifies devices by IP and MAC. DNS-SD/mDNS adds friendly names, models, device types and capabilities; SNMP remains optional for deeper managed-network identity.</p></div><span>{devices.length} device{devices.length === 1 ? '' : 's'}</span></div>
+      <div className="rmm-card-heading"><div><span className="rmm-eyebrow">Network inventory</span><h2>Discovered network devices</h2><p>Presence discovery identifies devices by IP and MAC. DNS-SD/mDNS adds friendly names, models, device families and capabilities; private/randomized MACs are flagged rather than guessed. SNMP remains optional for deeper managed-network identity.</p></div><span>{devices.length} device{devices.length === 1 ? '' : 's'}</span></div>
       <div className="rmm-network-table devices">
         <div className="head"><span>Device</span><span>Address</span><span>Identity</span><span>Capabilities / discovery</span><span>Management</span><span>Last seen</span><span>Status</span></div>
        {devices.map((item) => {

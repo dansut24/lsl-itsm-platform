@@ -50,7 +50,7 @@
 .rmm-network-table .row strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:8px; }
 .rmm-network-table .row small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--rmm-muted); font-size:7px; }
 .rmm-network-table.profiles .head,.rmm-network-table.profiles .row { grid-template-columns:minmax(165px,1fr) minmax(150px,.95fr) minmax(160px,1fr) minmax(125px,.8fr) minmax(155px,.95fr) 100px 165px; }
-.rmm-network-table.devices .head,.rmm-network-table.devices .row { grid-template-columns:minmax(185px,1.1fr) minmax(135px,.8fr) minmax(140px,.8fr) minmax(240px,1.35fr) 85px minmax(155px,.95fr) 80px; }
+.rmm-network-table.devices .head,.rmm-network-table.devices .row { grid-template-columns:minmax(190px,1.1fr) minmax(145px,.8fr) minmax(170px,.95fr) minmax(270px,1.45fr) minmax(150px,.9fr) minmax(155px,.9fr) 80px; }
 .rmm-network-table .actions { display:flex; gap:6px; justify-content:flex-end; }
 .rmm-network-table .actions button { display:inline-flex; align-items:center; gap:4px; border:1px solid var(--rmm-border); border-radius:7px; padding:5px 7px; background:var(--rmm-surface); color:var(--rmm-text); font:inherit; font-size:7px; font-weight:800; cursor:pointer; }
 .rmm-network-table .actions button:first-child { border-color:color-mix(in srgb,var(--rmm-accent) 30%,var(--rmm-border)); color:var(--rmm-accent); }
