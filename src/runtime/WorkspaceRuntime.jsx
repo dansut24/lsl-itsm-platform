@@ -14,6 +14,7 @@ import {
   Search,
   Settings,
   Sun,
+  UserRound,
   X,
 } from 'lucide-react'
 import {
@@ -406,6 +407,7 @@ function WorkspaceRuntime() {
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [globalSearchQuery, setGlobalSearchQuery] = useState('')
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false)
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const [tabContextMenu, setTabContextMenu] = useState(null)
   const [newComment, setNewComment] = useState('')
   const [portalQuery, setPortalQuery] = useState('')
@@ -2386,17 +2388,26 @@ function WorkspaceRuntime() {
 
   function toggleNotifications() {
     setGlobalSearchOpen(false)
+    setProfileMenuOpen(false)
     setNotificationsOpen((open) => !open)
   }
 
   function toggleGlobalSearch() {
     setNotificationsOpen(false)
+    setProfileMenuOpen(false)
     setGlobalSearchOpen((open) => !open)
+  }
+
+  function toggleProfileMenu() {
+    setNotificationsOpen(false)
+    setGlobalSearchOpen(false)
+    setProfileMenuOpen((open) => !open)
   }
 
   function closeHeaderOverlays() {
     setNotificationsOpen(false)
     setGlobalSearchOpen(false)
+    setProfileMenuOpen(false)
   }
 
   function openTicketRecord(ticket) {
@@ -2873,32 +2884,15 @@ function WorkspaceRuntime() {
             </div>
           </div>
 
-          <label className="itsm-global-search">
-            <Search size={17} aria-hidden="true" />
-            <input
-              aria-label="Search Hi5Central ITSM"
-              onChange={(event) => {
-                setGlobalSearchQuery(event.target.value)
-                setGlobalSearchOpen(true)
-                setNotificationsOpen(false)
-              }}
-              onFocus={() => {
-                setGlobalSearchOpen(true)
-                setNotificationsOpen(false)
-              }}
-              placeholder="Search incidents, requests, problems, changes…"
-              type="search"
-              value={globalSearchQuery}
-            />
-          </label>
-
           <div className="itsm-topbar-actions">
             <button
-              onClick={() => setTheme(resolvedTheme === 'light' ? 'dark' : 'light')}
-              title={resolvedTheme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+              aria-expanded={globalSearchOpen}
+              className="itsm-search-button"
+              onClick={toggleGlobalSearch}
+              title="Search"
               type="button"
             >
-              {resolvedTheme === 'light' ? <Moon size={17} /> : <Sun size={17} />}
+              <Search size={17} aria-hidden="true" />
             </button>
             <button
               aria-expanded={notificationsOpen}
@@ -2910,14 +2904,60 @@ function WorkspaceRuntime() {
               <Bell size={17} aria-hidden="true" />
               {unreadNotificationCount > 0 && <b>{unreadNotificationCount}</b>}
             </button>
-            <button className="itsm-user" onClick={handleLogout} title="Sign out" type="button">
+            <button
+              aria-expanded={profileMenuOpen}
+              aria-haspopup="menu"
+              className="itsm-user"
+              onClick={toggleProfileMenu}
+              title="Profile"
+              type="button"
+            >
               <span>{shellUserInitials}</span>
-              <div>
-                <strong>{session?.name || session?.user?.name || 'Hi5Central user'}</strong>
-                <small>Sign out</small>
-              </div>
-              <LogOut size={14} aria-hidden="true" />
             </button>
+            {profileMenuOpen && (
+              <div className="itsm-profile-menu" role="menu">
+                <div className="itsm-profile-summary">
+                  <span>{shellUserInitials}</span>
+                  <div>
+                    <strong>{session?.name || session?.user?.name || 'Hi5Central user'}</strong>
+                    <small>{session?.email || session?.user?.email || 'ITSM user'}</small>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setProfileMenuOpen(false)
+                    openTab('profile')
+                  }}
+                  role="menuitem"
+                  type="button"
+                >
+                  <UserRound size={15} aria-hidden="true" />
+                  Profile
+                </button>
+                <button
+                  onClick={() => {
+                    setProfileMenuOpen(false)
+                    openTab('settings')
+                  }}
+                  role="menuitem"
+                  type="button"
+                >
+                  <Settings size={15} aria-hidden="true" />
+                  Settings
+                </button>
+                <button
+                  onClick={() => {
+                    setProfileMenuOpen(false)
+                    handleLogout()
+                  }}
+                  role="menuitem"
+                  type="button"
+                >
+                  <LogOut size={15} aria-hidden="true" />
+                  Sign out
+                </button>
+              </div>
+            )}
           </div>
         </header>
 
@@ -3184,7 +3224,7 @@ function WorkspaceRuntime() {
           </div>
         </nav>
 
-        {(notificationsOpen || globalSearchOpen) && (
+        {(notificationsOpen || globalSearchOpen || profileMenuOpen) && (
           <button
             aria-label="Close header panel"
             className="header-overlay-backdrop"
@@ -3212,6 +3252,17 @@ function WorkspaceRuntime() {
               </div>
               <button onClick={() => setGlobalSearchQuery('')} type="button">Clear</button>
             </div>
+            <label className="global-search-panel-input">
+              <Search size={16} aria-hidden="true" />
+              <input
+                autoFocus
+                aria-label="Search Hi5Central ITSM"
+                onChange={(event) => setGlobalSearchQuery(event.target.value)}
+                placeholder="Search incidents, requests, problems, changes…"
+                type="search"
+                value={globalSearchQuery}
+              />
+            </label>
             {!globalSearchQuery.trim() ? (
               <div className="global-search-empty">Search incidents, requests, problems, changes, CIs and knowledge.</div>
             ) : (
