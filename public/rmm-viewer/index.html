@@ -687,7 +687,8 @@
       }
       #mobile-view-controls.visible { display: flex; flex-wrap: wrap; justify-content: flex-end; max-width: min(94vw, 430px); transition: opacity 160ms ease, transform 160ms ease; }
       body.mobile-toolbar-collapsed #mobile-view-controls { opacity: 0; transform: translateY(12px); pointer-events: none; }
-      #mobile-view-controls button {
+      #mobile-view-controls button,
+      #mobile-view-controls select {
         min-width: 38px;
         height: 34px;
         border: 1px solid rgba(255,255,255,.11);
@@ -697,6 +698,12 @@
         font: inherit;
         font-size: 13px;
         font-weight: 750;
+      }
+      #mobile-view-controls select {
+        min-width: 76px;
+        padding: 0 8px;
+        color-scheme: dark;
+        touch-action: manipulation;
       }
       #mobile-view-controls #mobile-zoom-fit { min-width: 48px; font-size: 11px; }
       #mobile-view-controls button.active {
@@ -964,6 +971,13 @@
     <button id="mobile-input-mode" type="button" aria-label="Switch touch mode">Touch</button>
     <button id="mobile-pan-mode" type="button" aria-label="Pan viewport" title="Pan viewport">✋</button>
     <button id="mobile-precision-mode" type="button" aria-label="Precision targeting" title="Precision targeting">⌖</button>
+    <select id="mobile-video-codec-pref" aria-label="Video codec" title="Video codec">
+      <option value="auto">Codec: Auto</option>
+      <option value="h264">H.264</option>
+      <option value="vp8">VP8</option>
+      <option value="vp9">VP9</option>
+      <option value="av1">AV1</option>
+    </select>
     <button id="mobile-zoom-out" type="button" aria-label="Zoom out">−</button>
     <button id="mobile-zoom-fit" type="button">Fit</button>
     <button id="mobile-zoom-in" type="button" aria-label="Zoom in">+</button>
@@ -1034,6 +1048,16 @@
             <option value="720p">720p (performance)</option>
           </select>
         </div>
+        <div class="settings-control">
+          <label for="video-codec-pref">Video codec</label>
+          <select id="video-codec-pref" class="settings-select">
+            <option value="auto">Auto</option>
+            <option value="h264">H.264</option>
+            <option value="vp8">VP8</option>
+            <option value="vp9">VP9</option>
+            <option value="av1">AV1</option>
+          </select>
+        </div>
         <div class="settings-control mobile-only-setting">
           <label for="mobile-input-pref">Mobile input</label>
           <select id="mobile-input-pref" class="settings-select">
@@ -1060,7 +1084,7 @@
       <div class="settings-card">
         <h3>Session</h3>
         <div class="diag-row"><span>Resolution</span><span id="stat-res">—</span></div>
-        <div class="diag-row"><span>Codec</span><span id="stat-codec">VP8</span></div>
+        <div class="diag-row"><span>Codec</span><span id="stat-codec">—</span></div>
         <div class="diag-row"><span>State</span><span id="stat-state">—</span></div>
       </div>
       <div class="settings-card">
@@ -1087,7 +1111,7 @@
       <div class="settings-card">
         <h3>Hi5Central Viewer</h3>
         <div class="diag-row"><span>Build</span><span>Development</span></div>
-        <div class="diag-row"><span>Mode</span><span>WebRTC VP8</span></div>
+        <div class="diag-row"><span>Mode</span><span>WebRTC adaptive video</span></div>
       </div>
     </div>
   </div>

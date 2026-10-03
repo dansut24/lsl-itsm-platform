@@ -21,6 +21,7 @@
     wss_url: params.get('wss_url') || '',
     ice_servers: Array.isArray(iceServers) ? iceServers : [],
     viewer_client: 'browser',
+    video_codec: params.get('video_codec') || params.get('codec') || 'auto',
   };
 
   const valid = !!(launch.session_id && launch.device_id && launch.token && launch.wss_url);

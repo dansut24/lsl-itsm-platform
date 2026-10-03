@@ -33,6 +33,10 @@ const VIEWER_MESSAGE_TYPES = new Set([
 ])
 
 function clean(value = '') { return String(value ?? '').trim() }
+function normalizeVideoCodec(value = 'auto') {
+  const codec = clean(value).toLowerCase()
+  return ['h264','vp8','vp9','av1'].includes(codec) ? codec : 'auto'
+}
 function sha256(value = '') { return createHash('sha256').update(String(value)).digest('hex') }
 function randomSecret(prefix) { return `${prefix}_${randomBytes(32).toString('base64url')}` }
 function isPortableUserAgent(value = '') {
@@ -104,7 +108,7 @@ function ensureSessionModeAccess(c, session, mode) {
 async function agentForRemoteSession(tenantId, agentDeviceId) {
   const result = await pool.query(
     `SELECT a.id,a.tenant_id,a.inventory_id,a.websocket_status,a.last_telemetry_at,
-            i.reference,i.name,i.serial_number
+            i.reference,i.name,i.serial_number,i.platform,i.operating_system,i.source_payload
        FROM rmm_agent_devices a
        JOIN rmm_device_inventory i ON i.id=a.inventory_id
       WHERE a.id::text=$1 AND a.tenant_id=$2 AND a.disabled_at IS NULL AND i.active=true
@@ -112,6 +116,27 @@ async function agentForRemoteSession(tenantId, agentDeviceId) {
     [clean(agentDeviceId), tenantId],
   )
   return result.rows[0] || null
+}
+
+function endpointRemoteModeError(agent, mode) {
+  const platform = clean(agent?.platform || agent?.operating_system).toLowerCase()
+  if (!platform || platform.includes('windows')) return ''
+
+  const payload = agent?.source_payload && typeof agent.source_payload === 'object' ? agent.source_payload : {}
+  const remote = payload.remote_desktop && typeof payload.remote_desktop === 'object' ? payload.remote_desktop : {}
+  const backend = clean(remote.backend) || 'none'
+
+  if (remote.implementation_ready !== true) {
+    if (remote.headless === true || backend === 'none') return 'This endpoint has no supported graphical desktop session.'
+    if (backend === 'wayland_portal') return 'Wayland remote control is not available in the installed Hi5Central Agent build yet.'
+    if (backend === 'macos_screencapturekit') return 'macOS remote control is not available in the installed Hi5Central Agent build yet.'
+    return 'Remote desktop is not available for this endpoint in the installed Hi5Central Agent build.'
+  }
+
+  if (mode === 'backstage' && remote.backstage_supported !== true) return 'Background remote mode is not supported by this endpoint.'
+  if (remote.screen_capture?.available === false) return 'Screen capture is not available in the current graphical session.'
+  if (remote.input_control?.available === false) return 'Remote input control is not available in the current graphical session.'
+  return ''
 }
 
 function browserLaunchUrl(slug, payload) {
@@ -209,6 +234,8 @@ export function registerRmmRemoteRoutes(app) {
     const mode = clean(body.mode).toLowerCase() === 'backstage' ? 'backstage' : 'console'
     const modeError = ensureSessionModeAccess(c, auth.session, mode)
     if (modeError) return modeError
+    const endpointModeError = endpointRemoteModeError(agent, mode)
+    if (endpointModeError) return c.json({ error: endpointModeError }, 409)
 
     // A technician starting a new same-device/same-mode session is an explicit
     // replacement of their prior session. Tear the previous Agent/WebRTC
@@ -364,6 +391,11 @@ export function attachRmmViewerWebSocket(server) {
       url.searchParams.get('device_id'),
       url.searchParams.get('token'),
     ).catch(() => null)
+    if (viewerSession) {
+      viewerSession.video_codec = normalizeVideoCodec(
+        url.searchParams.get('video_codec') || url.searchParams.get('codec') || 'auto',
+      )
+    }
     if (viewerSession?.viewer_client === 'browser') {
       const requestedClient = clean(url.searchParams.get('client')).toLowerCase()
       // The session itself already authorises the browser Viewer. Do not
@@ -420,6 +452,7 @@ export function attachRmmViewerWebSocket(server) {
       viewerWs, agentWs: null, tenantId: remote.tenant_id, agentDeviceId: String(remote.agent_device_id),
       cleanupTimer: null, agentRestartTimer: null, relayFromAgent: null,
       mode: remote.mode, technicianName: clean(remote.technician_name || remote.technician_email) || 'Hi5Central technician',
+      videoCodec: normalizeVideoCodec(remote.video_codec),
       iceAgent: ice.agent, finalized: false, onAgentConnected: null, onAgentDisconnected: null, finalize: null,
       agentDisconnectedAt: 0,
     }
@@ -500,7 +533,9 @@ export function attachRmmViewerWebSocket(server) {
       if (restarted) safeSend(active.viewerWs, { type: 'agent_reconnected', session_id: sessionId })
       const sent = safeSend(nextAgentWs, {
         type: 'start_webrtc', session_id: sessionId, mode: remote.mode,
-        technician_name: active.technicianName, iceServers: active.iceAgent,
+        technician_name: active.technicianName,
+        video_codec: active.videoCodec,
+        iceServers: active.iceAgent,
       })
       if (sent) safeSend(active.viewerWs, { type: 'start_webrtc_sent', session_id: sessionId, restarted })
       return sent

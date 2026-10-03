@@ -80,6 +80,8 @@ const elSettingsPanel = document.getElementById("settings-panel");
 const elSettingsClose = document.getElementById("settings-close");
 const elViewerScaleMode = document.getElementById("viewer-scale-mode");
 const elRemoteResolutionPref = document.getElementById("remote-resolution-pref");
+const elVideoCodecPref = document.getElementById("video-codec-pref");
+const elMobileVideoCodecPref = document.getElementById("mobile-video-codec-pref");
 const elMobileInputPref = document.getElementById("mobile-input-pref");
 const elMobileToolbarPref = document.getElementById("mobile-toolbar-pref");
 const elMobileAdaptivePref = document.getElementById("mobile-adaptive-pref");
@@ -166,9 +168,14 @@ let mobileViewportResumeToken = 0;
 let mobileViewportResumeUntil = 0;
 
 const MOBILE_PREFS_KEY = "hi5central.viewer.mobile.v2";
-const MOBILE_PREF_DEFAULTS = { inputMode: "direct", toolbar: "auto", resolution: "auto", scale: "fit", adaptive: "on", diagnostics: "off", monitorIndex: 0 };
+const MOBILE_PREF_DEFAULTS = { inputMode: "direct", toolbar: "auto", resolution: "auto", scale: "fit", codec: "auto", adaptive: "on", diagnostics: "off", monitorIndex: 0 };
 let mobilePrefsStore = { devices: {}, fallback: { ...MOBILE_PREF_DEFAULTS } };
 let mobilePrefs = { ...MOBILE_PREF_DEFAULTS };
+
+function normalizeVideoCodecPreference(value) {
+  const codec = String(value || 'auto').trim().toLowerCase();
+  return ['h264','vp8','vp9','av1'].includes(codec) ? codec : 'auto';
+}
 
 function normalizeMobilePrefs(value) {
   const p = { ...MOBILE_PREF_DEFAULTS, ...(value && typeof value === 'object' ? value : {}) };
@@ -176,6 +183,7 @@ function normalizeMobilePrefs(value) {
   if (!['auto','always'].includes(p.toolbar)) p.toolbar = 'auto';
   if (!['auto','native','1080p','720p'].includes(p.resolution)) p.resolution = 'auto';
   if (!['fit','stretch'].includes(p.scale)) p.scale = 'fit';
+  p.codec = normalizeVideoCodecPreference(p.codec);
   if (!['on','off'].includes(p.adaptive)) p.adaptive = 'on';
   if (!['on','off'].includes(p.diagnostics)) p.diagnostics = 'off';
   p.monitorIndex = Number.isInteger(Number(p.monitorIndex)) ? Math.max(-1, Math.min(31, Number(p.monitorIndex))) : 0;
@@ -223,6 +231,7 @@ function saveMobilePrefs() {
     toolbar: mobilePrefs.toolbar,
     resolution: mobilePrefs.resolution,
     scale: mobilePrefs.scale,
+    codec: mobilePrefs.codec,
     adaptive: mobilePrefs.adaptive,
     diagnostics: mobilePrefs.diagnostics,
     monitorIndex: mobilePrefs.monitorIndex
@@ -759,6 +768,9 @@ function updateMobileModeUi() {
   if (elMobileAdaptivePref) elMobileAdaptivePref.value = mobilePrefs.adaptive;
   if (elMobileDiagnosticsPref) elMobileDiagnosticsPref.value = mobilePrefs.diagnostics;
   if (elRemoteResolutionPref) elRemoteResolutionPref.value = mobilePrefs.resolution;
+  const codec = normalizeVideoCodecPreference(currentSession?.videoCodec || mobilePrefs.codec);
+  if (elVideoCodecPref) elVideoCodecPref.value = codec;
+  if (elMobileVideoCodecPref) elMobileVideoCodecPref.value = codec;
   if (elViewerScaleMode) elViewerScaleMode.value = mobilePrefs.scale;
   if (elMobileScrollRail) elMobileScrollRail.classList.toggle('visible', !!currentSession && isMobileViewerSurface() && mobileInputMode === 'trackpad');
   updateMobileReticle();
@@ -841,6 +853,45 @@ elRemoteResolutionPref?.addEventListener('change', () => {
   saveMobilePrefs();
   sendViewerStreamProfile();
 });
+
+function switchVideoCodecPreference(value) {
+  const codec = normalizeVideoCodecPreference(value);
+  mobilePrefs.codec = codec;
+  saveMobilePrefs();
+  if (elVideoCodecPref) elVideoCodecPref.value = codec;
+  if (elMobileVideoCodecPref) elMobileVideoCodecPref.value = codec;
+  if (!currentSession || currentSession.videoCodec === codec) return;
+
+  currentSession.videoCodec = codec;
+  setStatus('', 'Switching video codec…');
+  showOverlay('Switching video codec', codec === 'auto' ? 'Selecting the best available codec…' : 'Negotiating ' + codec.toUpperCase() + '…', { spinner: true, keepVideo: true, passive: true });
+
+  teardownPeerForReconnect();
+
+  const oldSocket = ws;
+  ws = null;
+  if (oldSocket) {
+    try {
+      oldSocket.onclose = null;
+      oldSocket.onerror = null;
+      oldSocket.onmessage = null;
+      oldSocket.close(4002, 'Codec change');
+    } catch {}
+  }
+
+  window.setTimeout(() => {
+    if (!currentSession) return;
+    connectViewerSignaling('codec-change');
+  }, 250);
+}
+
+elVideoCodecPref?.addEventListener('change', () => {
+  switchVideoCodecPreference(elVideoCodecPref.value);
+});
+elMobileVideoCodecPref?.addEventListener('change', () => {
+  switchVideoCodecPreference(elMobileVideoCodecPref.value);
+});
+
 elViewerScaleMode?.addEventListener('change', () => {
   mobilePrefs.scale = elViewerScaleMode.value === 'stretch' ? 'stretch' : 'fit';
   saveMobilePrefs();
@@ -2916,7 +2967,7 @@ function bindRemoteInput() {
     const p = getNormalizedPointer(ev);
     moveRemoteCursorByNorm(p.x_norm, p.y_norm);
     sendInput("mouse_move", p);
-    sendInput("mouse_down", { button: ev.button });
+    sendInput("mouse_down", { ...p, button: ev.button });
 
     ev.preventDefault();
   });
@@ -2924,7 +2975,9 @@ function bindRemoteInput() {
   window.addEventListener("mouseup", (ev) => {
     if (compatibilityMouseSuppressed()) return;
     if (!controlActive) return;
-    sendInput("mouse_up", { button: ev.button });
+    const p = getNormalizedPointer(ev);
+    lastCursorNorm = p;
+    sendInput("mouse_up", { ...p, button: ev.button });
   });
 
   elVideo.addEventListener("mousemove", (ev) => {
@@ -3777,12 +3830,16 @@ async function handleOffer(msg) {
       const vp8 = codecs.filter(c => String(c.mimeType).toLowerCase() === "video/vp8");
       const h264 = codecs.filter(c => String(c.mimeType).toLowerCase() === "video/h264");
       const vp9 = codecs.filter(c => String(c.mimeType).toLowerCase() === "video/vp9");
+      const av1 = codecs.filter(c => {
+        const mt = String(c.mimeType).toLowerCase();
+        return mt === "video/av1" || mt === "video/av01";
+      });
       const rest = codecs.filter(c => {
         const mt = String(c.mimeType).toLowerCase();
-        return mt !== "video/vp8" && mt !== "video/h264" && mt !== "video/vp9";
+        return mt !== "video/vp8" && mt !== "video/h264" && mt !== "video/vp9" && mt !== "video/av1" && mt !== "video/av01";
       });
-      console.log("[codec] viewer codec preference", { vp8: vp8.length, h264: h264.length, vp9: vp9.length, rest: rest.length });
-      transceiver.setCodecPreferences([...vp8, ...h264, ...vp9, ...rest]);
+      console.log("[codec] viewer codec preference", { vp8: vp8.length, h264: h264.length, vp9: vp9.length, av1: av1.length, rest: rest.length });
+      transceiver.setCodecPreferences([...vp8, ...h264, ...vp9, ...av1, ...rest]);
     }
   } catch (e) {
     console.warn("[webrtc] codec preference step failed:", e?.message || e);
@@ -4334,6 +4391,11 @@ async function onSignalMessage(raw) {
 
     case "session_state": {
       const state = msg.state || "";
+      if (msg.codec) {
+        const codec = String(msg.codec).toUpperCase();
+        if (currentSession) currentSession.activeCodec = String(msg.codec).toLowerCase();
+        setViewerCodecLabel(codec);
+      }
 
       if (state === "connect_uac_customer_action_required") {
         connectElevationPending = true;
@@ -4481,11 +4543,13 @@ function connectViewerSignaling(reason = 'initial') {
   if (!currentSession) return false;
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return true;
   const { sessionId, deviceId, token, wssUrl, viewerClient } = currentSession;
+  const videoCodec = normalizeVideoCodecPreference(currentSession.videoCodec || 'auto');
   const url =
     `${wssUrl}?session_id=${encodeURIComponent(sessionId)}` +
     `&device_id=${encodeURIComponent(deviceId)}` +
     (token ? `&token=${encodeURIComponent(token)}` : '') +
-    (viewerClient ? `&client=${encodeURIComponent(viewerClient)}` : '');
+    (viewerClient ? `&client=${encodeURIComponent(viewerClient)}` : '') +
+    `&video_codec=${encodeURIComponent(videoCodec)}`;
   console.log('[viewer] opening signaling socket', { sessionId, deviceId, reason, attempt: mobileRecoveryAttempts });
   const socket = new WebSocket(url);
   ws = socket;
@@ -4605,6 +4669,7 @@ function startSession(params) {
   const wssUrl = params.wss_url || params.wssUrl || params.signaling_url || params.signalingUrl || "";
   const iceServers = normalizeIceServers(params.ice_servers || params.iceServers || []);
   const viewerClient = params.viewer_client || params.viewerClient || '';
+  const launchCodec = normalizeVideoCodecPreference(params.video_codec || params.videoCodec || params.codec || 'auto');
   const modeValue = String(params.mode || params.session_mode || params.sessionMode || "console").toLowerCase();
   const launchMode = (modeValue === "backstage" || modeValue === "background" || modeValue === "background_mode") ? "backstage" : "console";
 
@@ -4621,6 +4686,7 @@ function startSession(params) {
     wssUrl,
     iceServers,
     viewerClient,
+    videoCodec: launchCodec,
     launchMode,
     isConnectSession: /\/connect\/viewer\/ws(?:\?|$)/i.test(String(wssUrl || ''))
   };
@@ -4633,11 +4699,14 @@ function startSession(params) {
 
   if (isMobileViewerSurface()) activateMobileHistoryGuard();
   loadMobilePrefsForDevice(deviceId);
+  if (launchCodec === 'auto' && mobilePrefs.codec !== 'auto') {
+    currentSession.videoCodec = normalizeVideoCodecPreference(mobilePrefs.codec);
+  }
   resetMobileAdaptiveState();
+  updateMobileModeUi();
 
   if (isMobileViewerSurface()) {
     setMobileToolbarCollapsed(false);
-    updateMobileModeUi();
     applyViewerScalePreference();
     scheduleMobileToolbarHide(6500);
   }
