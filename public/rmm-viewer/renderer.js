@@ -81,6 +81,7 @@ const elSettingsClose = document.getElementById("settings-close");
 const elViewerScaleMode = document.getElementById("viewer-scale-mode");
 const elRemoteResolutionPref = document.getElementById("remote-resolution-pref");
 const elVideoCodecPref = document.getElementById("video-codec-pref");
+const elMobileVideoCodecPref = document.getElementById("mobile-video-codec-pref");
 const elMobileInputPref = document.getElementById("mobile-input-pref");
 const elMobileToolbarPref = document.getElementById("mobile-toolbar-pref");
 const elMobileAdaptivePref = document.getElementById("mobile-adaptive-pref");
@@ -767,7 +768,9 @@ function updateMobileModeUi() {
   if (elMobileAdaptivePref) elMobileAdaptivePref.value = mobilePrefs.adaptive;
   if (elMobileDiagnosticsPref) elMobileDiagnosticsPref.value = mobilePrefs.diagnostics;
   if (elRemoteResolutionPref) elRemoteResolutionPref.value = mobilePrefs.resolution;
-  if (elVideoCodecPref) elVideoCodecPref.value = normalizeVideoCodecPreference(currentSession?.videoCodec || mobilePrefs.codec);
+  const codec = normalizeVideoCodecPreference(currentSession?.videoCodec || mobilePrefs.codec);
+  if (elVideoCodecPref) elVideoCodecPref.value = codec;
+  if (elMobileVideoCodecPref) elMobileVideoCodecPref.value = codec;
   if (elViewerScaleMode) elViewerScaleMode.value = mobilePrefs.scale;
   if (elMobileScrollRail) elMobileScrollRail.classList.toggle('visible', !!currentSession && isMobileViewerSurface() && mobileInputMode === 'trackpad');
   updateMobileReticle();
@@ -856,6 +859,7 @@ function switchVideoCodecPreference(value) {
   mobilePrefs.codec = codec;
   saveMobilePrefs();
   if (elVideoCodecPref) elVideoCodecPref.value = codec;
+  if (elMobileVideoCodecPref) elMobileVideoCodecPref.value = codec;
   if (!currentSession || currentSession.videoCodec === codec) return;
 
   currentSession.videoCodec = codec;
@@ -883,6 +887,9 @@ function switchVideoCodecPreference(value) {
 
 elVideoCodecPref?.addEventListener('change', () => {
   switchVideoCodecPreference(elVideoCodecPref.value);
+});
+elMobileVideoCodecPref?.addEventListener('change', () => {
+  switchVideoCodecPreference(elMobileVideoCodecPref.value);
 });
 
 elViewerScaleMode?.addEventListener('change', () => {
