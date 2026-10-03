@@ -1034,6 +1034,16 @@
             <option value="720p">720p (performance)</option>
           </select>
         </div>
+        <div class="settings-control">
+          <label for="video-codec-pref">Video codec</label>
+          <select id="video-codec-pref" class="settings-select">
+            <option value="auto">Auto</option>
+            <option value="h264">H.264</option>
+            <option value="vp8">VP8</option>
+            <option value="vp9">VP9</option>
+            <option value="av1">AV1</option>
+          </select>
+        </div>
         <div class="settings-control mobile-only-setting">
           <label for="mobile-input-pref">Mobile input</label>
           <select id="mobile-input-pref" class="settings-select">
@@ -1060,7 +1070,7 @@
       <div class="settings-card">
         <h3>Session</h3>
         <div class="diag-row"><span>Resolution</span><span id="stat-res">—</span></div>
-        <div class="diag-row"><span>Codec</span><span id="stat-codec">VP8</span></div>
+        <div class="diag-row"><span>Codec</span><span id="stat-codec">—</span></div>
         <div class="diag-row"><span>State</span><span id="stat-state">—</span></div>
       </div>
       <div class="settings-card">
@@ -1087,7 +1097,7 @@
       <div class="settings-card">
         <h3>Hi5Central Viewer</h3>
         <div class="diag-row"><span>Build</span><span>Development</span></div>
-        <div class="diag-row"><span>Mode</span><span>WebRTC VP8</span></div>
+        <div class="diag-row"><span>Mode</span><span>WebRTC adaptive video</span></div>
       </div>
     </div>
   </div>
